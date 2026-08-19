@@ -55,7 +55,7 @@ type HomeData = {
   generated_at: string;
 };
 
-type View = "overview" | "focus" | "clients" | "onboarding" | "campaigns" | "preclients" | "conversations" | "team" | "clickup" | "evidence" | "audit" | "alerts";
+type View = "overview" | "focus" | "clients" | "onboarding" | "campaigns" | "preclients" | "conversations" | "team" | "diary" | "clickup" | "evidence" | "audit" | "alerts";
 
 const pt: Record<string,string> = { ATTENTION:"Atenção",FOLLOW_UP:"Acompanhamento",UNDETERMINED:"Indeterminado",DATA_INCOMPLETE:"Dados incompletos",OK:"OK",ACTIVE:"Ativo",ONBOARDING:"Onboarding",CHURNED:"Churned",COMPLETE:"Completa",PARTIAL:"Parcial",INCOMPLETE:"Incompleta",SUCCESS:"Sucesso",ERROR:"Erro",RUNNING:"Em execução",OPEN:"Aberto",COMPLETED:"Concluído",ABORTED:"Encerrado",CRITICAL:"Crítico",HIGH:"Alto",MEDIUM:"Médio",LOW:"Baixo",CONNECTED:"Conectado",CONECTADO:"Conectado" };
 
@@ -405,7 +405,7 @@ export default function Dashboard() {
 
       <nav className="view-nav" aria-label="Visões do dashboard">
         {([
-          ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"],
+          ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"],
         ] as [View, string][]).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)}>{label}</button>)}
       </nav>
 
@@ -427,6 +427,7 @@ export default function Dashboard() {
       {view === "preclients" && <PreClientCenter rows={data?.preclients || []} won={data?.won_events || []} />}
       {view === "conversations" && <ConversationCenter conversations={data?.conversations || []} clients={allClients} openClient={openClient} />}
       {view === "team" && <TeamCenter team={data?.team || []} teamMembers={Number(kpis.team_members || 0)} unassigned={data?.unassigned_clients || []} openClient={openClient} />}
+      {view === "diary" && <DiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />}
       {view === "clickup" && <ClickUpCenter clickup={data?.clickup || {}} reload={load} token={session.access_token} />}
       {view === "evidence" && <EvidenceCenter clients={allClients} operations={data?.operations || {}} openClient={openClient} />}
       {view === "audit" && <AuditCenter runs={data?.audit_runs || []} issues={data?.audit_issues || []} />}
@@ -807,6 +808,142 @@ function ClickUpRangeExplorer({ token, people }: { token: string; people: string
     </section>
   );
 }
+
+
+function DiaryCenter({ clients, adjustments, taskLog, profile, token, reload }: { clients: Row[]; adjustments: Row[]; taskLog: Row; profile: Row; token: string; reload: () => Promise<void> }) {
+  const [tab, setTab] = useState<"ajustes" | "tasklog">("ajustes");
+
+  const activeClientsSorted = useMemo(
+    () => clients.filter((client) => ["ACTIVE", "ONBOARDING"].includes(client.lifecycle)).sort((a, b) => String(a.display_name ?? "").localeCompare(String(b.display_name ?? ""), "pt-BR")),
+    [clients]
+  );
+
+  const [adjClient, setAdjClient] = useState("");
+  const [adjTipo, setAdjTipo] = useState("Ajuste");
+  const [adjDescricao, setAdjDescricao] = useState("");
+  const [adjSaving, setAdjSaving] = useState(false);
+  const [adjError, setAdjError] = useState("");
+
+  async function submitAdjustment() {
+    if (!adjClient || !adjDescricao.trim()) { setAdjError("Selecione o cliente e escreva a descrição."); return; }
+    setAdjSaving(true);
+    setAdjError("");
+    try {
+      await apiPost("adjustment-create", token, { client_id: adjClient, tipo: adjTipo, descricao: adjDescricao.trim() });
+      setAdjDescricao("");
+      await reload();
+    } catch (caught) {
+      setAdjError(caught instanceof Error ? caught.message : "Falha ao registrar ajuste.");
+    } finally {
+      setAdjSaving(false);
+    }
+  }
+
+  const [taskCategory, setTaskCategory] = useState("Execução");
+  const [taskName, setTaskName] = useState("");
+  const [taskDate, setTaskDate] = useState(new Date().toISOString().slice(0, 10));
+  const [taskSaving, setTaskSaving] = useState(false);
+  const [taskError, setTaskError] = useState("");
+
+  async function submitTask() {
+    if (!taskName.trim()) { setTaskError("Descreva a tarefa."); return; }
+    setTaskSaving(true);
+    setTaskError("");
+    try {
+      await apiPost("tasklog-create", token, { category: taskCategory, task_name: taskName.trim(), task_date: taskDate });
+      setTaskName("");
+      await reload();
+    } catch (caught) {
+      setTaskError(caught instanceof Error ? caught.message : "Falha ao registrar tarefa.");
+    } finally {
+      setTaskSaving(false);
+    }
+  }
+
+  const isFullView = profile?.access_level === "FULL" || profile?.elevated;
+  const recentAdjustments = adjustments.slice(0, 50);
+  const recentTasks = (taskLog.recent || []).slice(0, 50);
+  const row = { display: "flex", gap: 8, flexWrap: "wrap" as const, marginTop: 10 };
+  const wide = { width: "100%", marginTop: 10, minHeight: 80 };
+
+  return (
+    <section className="workspace">
+      <div className="workspace-head">
+        <div><h2>Diário</h2><p>Registre ajustes de clientes e tarefas executadas direto no dashboard — sem depender dos apps desktop.</p></div>
+        <span className="counter">{adjustments.length} ajustes · {taskLog.total || 0} tarefas</span>
+      </div>
+      <div className="filter-tabs">
+        <button type="button" className={tab === "ajustes" ? "active" : ""} onClick={() => setTab("ajustes")}>Diário de Ajustes</button>
+        <button type="button" className={tab === "tasklog" ? "active" : ""} onClick={() => setTab("tasklog")}>Registro de Tarefas</button>
+      </div>
+
+      {tab === "ajustes" && (
+        <>
+          <section className="card section">
+            <div className="section-title">Novo ajuste</div>
+            <div style={row}>
+              <select className="control" value={adjClient} onChange={(event) => setAdjClient(event.target.value)}>
+                <option value="">Selecione o cliente…</option>
+                {activeClientsSorted.map((client) => <option key={client.client_id} value={client.client_id}>{client.display_name}</option>)}
+              </select>
+              <select className="control" value={adjTipo} onChange={(event) => setAdjTipo(event.target.value)}>
+                <option value="Ajuste">Ajuste realizado</option>
+                <option value="Observação">Observação</option>
+                <option value="Pendência">Pendência</option>
+                <option value="Risco">Risco identificado</option>
+              </select>
+            </div>
+            <textarea className="control" style={wide} placeholder="O que foi feito ou observado…" value={adjDescricao} onChange={(event) => setAdjDescricao(event.target.value)} />
+            {adjError && <div className="error-box" style={{ marginTop: 8 }}>{adjError}</div>}
+            <button type="button" className="primary" style={{ marginTop: 10 }} disabled={adjSaving} onClick={submitAdjustment}>{adjSaving ? "Salvando…" : "Registrar ajuste"}</button>
+          </section>
+          <section className="card section" style={{ marginTop: 16 }}>
+            <div className="section-title">Últimos ajustes</div>
+            {recentAdjustments.map((entry: Row) => (
+              <div className="productivity-row" key={entry.id}>
+                <div><b>{text(entry.client_display_name || "Cliente")}</b><small>{text(entry.tipo)} · {text(entry.descricao)}</small></div>
+                <strong>{formatDate(entry.occurred_at)}</strong>
+              </div>
+            ))}
+            {!recentAdjustments.length && <div className="empty">Nenhum ajuste registrado ainda.</div>}
+          </section>
+        </>
+      )}
+
+      {tab === "tasklog" && (
+        <>
+          <section className="card section">
+            <div className="section-title">Nova tarefa</div>
+            <div style={row}>
+              <select className="control" value={taskCategory} onChange={(event) => setTaskCategory(event.target.value)}>
+                <option value="Execução">Execução</option>
+                <option value="Reunião">Reunião</option>
+                <option value="Criativo">Criativo</option>
+                <option value="Atendimento">Atendimento</option>
+                <option value="Outro">Outro</option>
+              </select>
+              <input type="date" className="control" value={taskDate} onChange={(event) => setTaskDate(event.target.value)} />
+            </div>
+            <input className="control" style={{ width: "100%", marginTop: 10 }} placeholder="O que foi feito…" value={taskName} onChange={(event) => setTaskName(event.target.value)} />
+            {taskError && <div className="error-box" style={{ marginTop: 8 }}>{taskError}</div>}
+            <button type="button" className="primary" style={{ marginTop: 10 }} disabled={taskSaving} onClick={submitTask}>{taskSaving ? "Salvando…" : "Registrar tarefa"}</button>
+          </section>
+          <section className="card section" style={{ marginTop: 16 }}>
+            <div className="section-title">{isFullView ? "Últimas tarefas da equipe" : "Minhas últimas tarefas"}</div>
+            {recentTasks.map((entry: Row, index: number) => (
+              <div className="productivity-row" key={entry.id || index}>
+                <div><b>{text(entry.task_name)}</b><small>{text(entry.category)} · {text(entry.collaborator_name)}</small></div>
+                <strong>{formatDate(entry.task_date)}</strong>
+              </div>
+            ))}
+            {!recentTasks.length && <div className="empty">Nenhuma tarefa registrada ainda.</div>}
+          </section>
+        </>
+      )}
+    </section>
+  );
+}
+
 
 
 function ClickUpCenter({ clickup, reload, token }: { clickup: Row; reload: () => Promise<void>; token: string }) {
