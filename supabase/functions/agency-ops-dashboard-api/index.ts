@@ -259,6 +259,7 @@ Deno.serve(async (req) => {
     ops.from("onboarding_stage_definitions").select("code,label").order("ordem"),
     isFull ? ops.from("access_requests").select("*,team_roster(role)").eq("status", "PENDING").order("requested_at", { ascending: false }) : Promise.resolve({ data: [], error: null }),
     ops.from("access_requests").select("*").eq("user_key", currentUserKey).order("requested_at", { ascending: false }).limit(1),
+    ops.from("whatsapp_chat_registry").select("chat_id,chat_name,message_count,last_seen_at").limit(500),
   ]);
 
   const results = [...core, ...sources, ...operationsData, ...clickupData];
@@ -372,6 +373,14 @@ Deno.serve(async (req) => {
       return { ...row, client_display_name: meta?.display_name ?? null, gestor: meta?.gt_owner ?? null, cs_owner: meta?.cs_owner ?? null, carteira: meta?.gt_owner ? `Carteira ${meta.gt_owner}` : null };
     });
 
+  // 70 das 191 conversas nao tem client_id e apareciam com o chat_id cru na tela.
+  // O nome do grupo existe em whatsapp_chat_registry para todas elas.
+  const chatMeta = new Map(value<any[]>(teamData[6], []).map((row: any) => [row.chat_id, row]));
+  const conversationsEnriched = conversations.map((row: any) => {
+    const meta = chatMeta.get(row.chat_id);
+    return { ...row, chat_name: meta?.chat_name ?? null, message_count: meta?.message_count ?? null, last_seen_at: meta?.last_seen_at ?? null };
+  });
+
   const wonEvents = value<any[]>(platformData[2], []).filter((row) => inScope(row.client_id));
   const preferencesRow = value(platformData[5], {});
   const myAccessRequest = value<any[]>(teamData[5], [])[0] ?? null;
@@ -380,7 +389,7 @@ Deno.serve(async (req) => {
     kpis: { active_clients: activeClients.length, churned_clients: clients.filter((row) => row.lifecycle === "CHURNED").length, onboarding_clients: clients.filter((row) => row.lifecycle === "ONBOARDING").length, operation_clients: clients.filter((row) => row.lifecycle === "ACTIVE").length, attention_now: count((row) => row.priority === "ATTENTION"), follow_up: count((row) => row.priority === "FOLLOW_UP"), ok: count((row) => row.priority === "OK"), undetermined: count((row) => row.priority === "UNDETERMINED"), data_incomplete: count((row) => row.priority === "DATA_INCOMPLETE"), client_waiting_agency: count((row) => row.waiting_direction === "CLIENT_WAITING_AGENCY"), agency_waiting_client: count((row) => row.waiting_direction === "AGENCY_WAITING_CLIENT"), overdue_commitments: overdue.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, open_alerts: alerts.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, critical_alerts: alerts.filter((row) => (!row.client_id || activeIds.has(row.client_id)) && ["CRITICAL", "HIGH"].includes(row.severity)).length, semantic_review: conversations.filter((row) => row.needs_semantic_review && (!row.client_id || activeIds.has(row.client_id))).length, briefing_pages: briefings.length, briefing_pending: briefings.filter((row) => row.sync_status === "DISCOVERED").length, briefing_unlinked: briefings.filter((row) => !row.client_id).length, queue_pending: isFull ? queue.filter((row) => row.status === "PENDING").length : 0, queue_errors: isFull ? queue.filter((row) => row.status === "ERROR").length : 0, team_members: team.filter((row) => row.in_roster).length, clients_unassigned: unassignedClients.length, team_unassigned: team.filter((row) => !row.in_roster && !row.is_former).length },
     clients: enrichedClients, campaigns,
     alerts: alerts.sort((a, b) => (severity[a.severity] ?? 9) - (severity[b.severity] ?? 9)).slice(0, 100),
-    commitments, conversations, media: aggregateMedia(activeMediaRows),
+    commitments, conversations: conversationsEnriched, media: aggregateMedia(activeMediaRows),
     operations: isFull ? { sla: { waiting_agency: waitingAgency, waiting_client: waitingClient, overdue_commitments: overdue }, bottlenecks, evidence_review: evidenceReview.slice(0, 100), employee_capacity: value(results[10], []), task_log: aggregateTaskLog(value(platformData[7], [])) } : { sla: { waiting_agency: waitingAgency, waiting_client: waitingClient, overdue_commitments: overdue }, bottlenecks, evidence_review: [], employee_capacity: [], task_log: { total: 0, by_category: {}, by_collaborator: {}, recent: [] } },
     clickup: isFull ? { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: totalClickup, last_sync: lastClickupSync, configured: Boolean(clickupConfig?.token && clickupConfig?.team_id), webhook_configured: Boolean(clickupConfig?.webhook_secret), indexing: { matched: matchedClickup, match_rate: totalClickup ? Number((100 * matchedClickup / totalClickup).toFixed(1)) : 0, unmatched_label: results[18].count ?? 0, without_label: results[19].count ?? 0, unmatched_labels: value(results[20], []) } } : { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: recentCompleted.length, last_sync: null, configured: null, webhook_configured: null, indexing: null },
     coverage: { complete: count((row) => row.data_coverage === "COMPLETE"), partial: count((row) => row.data_coverage === "PARTIAL"), incomplete: count((row) => row.data_coverage === "INCOMPLETE") },

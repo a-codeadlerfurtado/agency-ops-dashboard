@@ -582,8 +582,93 @@ function CampaignDiagnosis({ row }: { row: Row }) {
 
 function ConversationCenter({ conversations, clients, openClient }: { conversations: Row[]; clients: Row[]; openClient: (id: string) => void }) {
   const clientById = new Map(clients.map((client) => [client.client_id, client]));
-  const ordered = [...conversations].sort((a, b) => Number(Boolean(b.waiting_for_agency)) - Number(Boolean(a.waiting_for_agency)) || new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime());
-  return <section className="workspace"><div className="workspace-head"><div><h2>Inteligência de conversas</h2><p>Perguntas, promessas, espera e sinais que exigem acompanhamento.</p></div><span className="counter">{ordered.length} grupos</span></div><section className="card conversation-list">{ordered.map((row) => <button key={row.chat_id} onClick={() => row.client_id && openClient(row.client_id)}><span className={`conversation-signal ${row.waiting_for_agency ? "danger" : row.waiting_for_client ? "warn" : ""}`} /><div><strong>{text(clientById.get(row.client_id)?.display_name || row.chat_id)}</strong><p>{text(row.last_summary || row.open_question || row.last_intent)}</p><small>{row.waiting_for_agency ? "Cliente esperando a agência" : row.waiting_for_client ? "Agência esperando o cliente" : text(row.conversation_status)} · {formatDate(row.updated_at)}</small></div><Chip value={row.sla_level || row.conversation_status} /></button>)}{!ordered.length && <div className="empty">Nenhuma conversa consolidada.</div>}</section></section>;
+  // 70 das 191 conversas nao tem cliente vinculado; o nome do grupo vem do registro do WhatsApp.
+  const label = (row: Row) => text(clientById.get(row.client_id)?.display_name || row.chat_name || row.chat_id);
+  // updated_at e' identico em todas as linhas (o job reescreve o lote inteiro), entao
+  // nao serve para ordenar. Usamos o tempo de espera real.
+  const since = (row: Row) => new Date(row.waiting_since || row.last_client_message_at || row.last_team_message_at || 0).getTime();
+  const elapsed = (iso?: string | null) => {
+    if (!iso) return null;
+    const ms = Date.now() - new Date(iso).getTime();
+    if (!Number.isFinite(ms) || ms < 0) return null;
+    const h = Math.floor(ms / 3600000);
+    if (h < 1) return `há ${Math.max(1, Math.floor(ms / 60000))}min`;
+    if (h < 48) return `há ${h}h`;
+    return `há ${Math.floor(h / 24)}d`;
+  };
+  const byOldest = (a: Row, b: Row) => since(a) - since(b);
+
+  const waitingAgency = conversations.filter((row) => row.waiting_for_agency).sort(byOldest);
+  const waitingClient = conversations.filter((row) => row.waiting_for_client && !row.waiting_for_agency).sort(byOldest);
+  const questions = conversations.filter((row) => row.open_question && !row.waiting_for_agency).sort(byOldest);
+  const unlinked = conversations.filter((row) => !row.client_id);
+  const idle = conversations.filter((row) => !row.waiting_for_agency && !row.waiting_for_client && !row.open_question);
+
+  const Row_ = ({ row, tone, note }: { row: Row; tone: string; note?: string | null }) =>
+    <button key={row.chat_id} onClick={() => row.client_id && openClient(row.client_id)} disabled={!row.client_id}>
+      <span className={`conversation-signal ${tone}`} />
+      <div>
+        <strong>{label(row)}</strong>
+        <p>{text(row.open_question || row.last_summary || row.last_intent || "Sem pergunta em aberto")}</p>
+        <small>{note || text(row.conversation_status)}{row.message_count ? ` · ${row.message_count} mensagens` : ""}</small>
+      </div>
+      <Chip value={row.sla_level || row.conversation_status} />
+    </button>;
+
+  return <section className="workspace conversation-center">
+    <div className="workspace-head">
+      <div><h2>Fila de conversas</h2><p>O que precisa de resposta agora, e quem está esperando quem.</p></div>
+      <span className="counter">{conversations.length} conversas</span>
+    </div>
+
+    <div className="grid conversation-kpis">
+      <article className="card metric"><div className="label">Esperando você</div><div className={`value ${waitingAgency.length ? "red" : "green"}`}>{waitingAgency.length}</div><div className="hint">cliente aguarda resposta</div></article>
+      <article className="card metric"><div className="label">Aguardando cliente</div><div className="value yellow">{waitingClient.length}</div><div className="hint">bola com o cliente</div></article>
+      <article className="card metric"><div className="label">Perguntas em aberto</div><div className="value blue">{questions.length}</div><div className="hint">sem resposta registrada</div></article>
+      <article className="card metric"><div className="label">Não vinculadas</div><div className="value">{unlinked.length}</div><div className="hint">sem cliente no cadastro</div></article>
+    </div>
+
+    <section className="card conversation-block urgent">
+      <div className="conversation-block-head"><b>Responder agora</b><span>{waitingAgency.length}</span></div>
+      <div className="conversation-list">
+        {waitingAgency.map((row) => <Row_ key={row.chat_id} row={row} tone="danger" note={elapsed(row.waiting_since) ? `Esperando ${elapsed(row.waiting_since)}` : "Cliente esperando a agência"} />)}
+        {!waitingAgency.length && <div className="empty">Nada pendente com a agência.</div>}
+      </div>
+    </section>
+
+    <details className="card conversation-block" open>
+      <summary><b>Aguardando o cliente</b><span>{waitingClient.length}</span></summary>
+      <div className="conversation-list">
+        {waitingClient.map((row) => <Row_ key={row.chat_id} row={row} tone="warn" note={elapsed(row.last_team_message_at) ? `Cobrado ${elapsed(row.last_team_message_at)}` : "Agência esperando o cliente"} />)}
+        {!waitingClient.length && <div className="empty">Ninguém pendente do lado do cliente.</div>}
+      </div>
+    </details>
+
+    <details className="card conversation-block">
+      <summary><b>Perguntas em aberto</b><span>{questions.length}</span></summary>
+      <div className="conversation-list">
+        {questions.map((row) => <Row_ key={row.chat_id} row={row} tone="" note={elapsed(row.last_client_message_at)} />)}
+        {!questions.length && <div className="empty">Nenhuma pergunta em aberto.</div>}
+      </div>
+    </details>
+
+    <details className="card conversation-block">
+      <summary><b>Não vinculadas a cliente</b><span>{unlinked.length}</span></summary>
+      <p className="conversation-note">Grupos do WhatsApp sem cliente correspondente no cadastro. O nome vem do registro de chats; vincular é feito na aba Clientes.</p>
+      <div className="conversation-list">
+        {unlinked.map((row) => <Row_ key={row.chat_id} row={row} tone="" note="Sem cliente vinculado" />)}
+        {!unlinked.length && <div className="empty">Todas as conversas estão vinculadas.</div>}
+      </div>
+    </details>
+
+    <details className="card conversation-block">
+      <summary><b>Sem pendência</b><span>{idle.length}</span></summary>
+      <div className="conversation-list">
+        {idle.map((row) => <Row_ key={row.chat_id} row={row} tone="" note={text(row.conversation_status)} />)}
+        {!idle.length && <div className="empty">Nenhuma conversa parada.</div>}
+      </div>
+    </details>
+  </section>;
 }
 
 function TeamCenter({ team, teamMembers, unassigned, openClient }: { team: TeamMember[]; teamMembers: number; unassigned: Row[]; openClient: (id: string) => void }) {
