@@ -29,3 +29,8 @@ a cada push na branch principal.
 As pastas `supabase/functions` e `supabase/migrations` são cópias de referência do que
 já está em produção no projeto Supabase — não é necessário reaplicar as migrações
 (confirmado já aplicadas em produção via `list_migrations`).
+
+<!-- deploy trigger -->
+
+
+<!-- deploy trigger: initial Cloudflare Workers build -->
