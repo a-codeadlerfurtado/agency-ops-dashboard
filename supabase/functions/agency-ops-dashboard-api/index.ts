@@ -342,6 +342,15 @@ Deno.serve(async (req) => {
   }));
   const team = isFull ? fullTeam : fullTeam.filter((row) => row.person === profilePerson);
 
+  // Clientes ativos/onboarding sem gestor de trafego. Sao carteira de ninguem: nao
+  // aparecem em nenhum card da aba Equipe e por isso passavam despercebidos.
+  const unassignedClients = isFull
+    ? allClients
+        .filter((row) => ["ACTIVE", "ONBOARDING"].includes(row.lifecycle) && !String(row.gt_owner ?? "").trim())
+        .map((row) => ({ client_id: row.client_id, display_name: row.display_name, lifecycle: row.lifecycle, priority: row.priority, entrada: row.entrada, client_days: row.client_days }))
+        .sort((a, b) => String(a.display_name ?? "").localeCompare(String(b.display_name ?? ""), "pt-BR"))
+    : [];
+
   const rawProductivity30 = value<any[]>(results[12], []);
   const rawProductivityDaily = value<any[]>(results[13], []);
   const rawRecentCompleted = value<any[]>(results[14], []);
@@ -368,7 +377,7 @@ Deno.serve(async (req) => {
   const myAccessRequest = value<any[]>(teamData[5], [])[0] ?? null;
 
   return respond({
-    kpis: { active_clients: activeClients.length, churned_clients: clients.filter((row) => row.lifecycle === "CHURNED").length, onboarding_clients: clients.filter((row) => row.lifecycle === "ONBOARDING").length, operation_clients: clients.filter((row) => row.lifecycle === "ACTIVE").length, attention_now: count((row) => row.priority === "ATTENTION"), follow_up: count((row) => row.priority === "FOLLOW_UP"), ok: count((row) => row.priority === "OK"), undetermined: count((row) => row.priority === "UNDETERMINED"), data_incomplete: count((row) => row.priority === "DATA_INCOMPLETE"), client_waiting_agency: count((row) => row.waiting_direction === "CLIENT_WAITING_AGENCY"), agency_waiting_client: count((row) => row.waiting_direction === "AGENCY_WAITING_CLIENT"), overdue_commitments: overdue.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, open_alerts: alerts.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, critical_alerts: alerts.filter((row) => (!row.client_id || activeIds.has(row.client_id)) && ["CRITICAL", "HIGH"].includes(row.severity)).length, semantic_review: conversations.filter((row) => row.needs_semantic_review && (!row.client_id || activeIds.has(row.client_id))).length, briefing_pages: briefings.length, briefing_pending: briefings.filter((row) => row.sync_status === "DISCOVERED").length, briefing_unlinked: briefings.filter((row) => !row.client_id).length, queue_pending: isFull ? queue.filter((row) => row.status === "PENDING").length : 0, queue_errors: isFull ? queue.filter((row) => row.status === "ERROR").length : 0, team_members: team.filter((row) => row.in_roster).length, team_unassigned: team.filter((row) => !row.in_roster && !row.is_former).length },
+    kpis: { active_clients: activeClients.length, churned_clients: clients.filter((row) => row.lifecycle === "CHURNED").length, onboarding_clients: clients.filter((row) => row.lifecycle === "ONBOARDING").length, operation_clients: clients.filter((row) => row.lifecycle === "ACTIVE").length, attention_now: count((row) => row.priority === "ATTENTION"), follow_up: count((row) => row.priority === "FOLLOW_UP"), ok: count((row) => row.priority === "OK"), undetermined: count((row) => row.priority === "UNDETERMINED"), data_incomplete: count((row) => row.priority === "DATA_INCOMPLETE"), client_waiting_agency: count((row) => row.waiting_direction === "CLIENT_WAITING_AGENCY"), agency_waiting_client: count((row) => row.waiting_direction === "AGENCY_WAITING_CLIENT"), overdue_commitments: overdue.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, open_alerts: alerts.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, critical_alerts: alerts.filter((row) => (!row.client_id || activeIds.has(row.client_id)) && ["CRITICAL", "HIGH"].includes(row.severity)).length, semantic_review: conversations.filter((row) => row.needs_semantic_review && (!row.client_id || activeIds.has(row.client_id))).length, briefing_pages: briefings.length, briefing_pending: briefings.filter((row) => row.sync_status === "DISCOVERED").length, briefing_unlinked: briefings.filter((row) => !row.client_id).length, queue_pending: isFull ? queue.filter((row) => row.status === "PENDING").length : 0, queue_errors: isFull ? queue.filter((row) => row.status === "ERROR").length : 0, team_members: team.filter((row) => row.in_roster).length, clients_unassigned: unassignedClients.length, team_unassigned: team.filter((row) => !row.in_roster && !row.is_former).length },
     clients: enrichedClients, campaigns,
     alerts: alerts.sort((a, b) => (severity[a.severity] ?? 9) - (severity[b.severity] ?? 9)).slice(0, 100),
     commitments, conversations, media: aggregateMedia(activeMediaRows),
@@ -379,7 +388,7 @@ Deno.serve(async (req) => {
     audit_runs: isFull ? value(platformData[3], []) : [], audit_issues: isFull ? value(platformData[4], []) : [],
     preferences: { ...preferencesRow, my_access_request: myAccessRequest },
     integration_health: isFull ? value(platformData[6], []) : [],
-    team, stage_labels: stageLabels,
+    team, unassigned_clients: unassignedClients, stage_labels: stageLabels,
     access_requests_pending: isFull ? value(teamData[4], []) : [],
     profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
