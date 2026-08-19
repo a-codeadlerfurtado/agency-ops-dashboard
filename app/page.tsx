@@ -698,6 +698,117 @@ function TeamCenter({ team, teamMembers, unassigned, openClient }: { team: TeamM
   </section>;
 }
 
+function ClickUpRangeExplorer({ token, people }: { token: string; people: string[] }) {
+  const presets = [
+    { key: "7d", label: "7 dias" },
+    { key: "30d", label: "30 dias" },
+    { key: "month", label: "Mes atual" },
+    { key: "prev_month", label: "Mes anterior" },
+    { key: "custom", label: "Personalizado" },
+  ];
+  const [preset, setPreset] = useState("30d");
+  const [since, setSince] = useState("");
+  const [until, setUntil] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
+  const [rangeData, setRangeData] = useState<any>(null);
+  const [rangeLoading, setRangeLoading] = useState(false);
+
+  const range = useMemo(() => {
+    const today = new Date();
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    if (preset === "custom" && since && until) return { since, until };
+    if (preset === "7d") return { since: iso(new Date(today.getTime() - 6 * 86400000)), until: iso(today) };
+    if (preset === "month") return { since: iso(new Date(today.getFullYear(), today.getMonth(), 1)), until: iso(today) };
+    if (preset === "prev_month") {
+      const first = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const last = new Date(today.getFullYear(), today.getMonth(), 0);
+      return { since: iso(first), until: iso(last) };
+    }
+    return { since: iso(new Date(today.getTime() - 29 * 86400000)), until: iso(today) };
+  }, [preset, since, until]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRangeLoading(true);
+    api("clickup-range", token, { since: range.since, until: range.until, people: selected.join(",") })
+      .then((res: any) => { if (!cancelled) setRangeData(res); })
+      .catch(() => { if (!cancelled) setRangeData(null); })
+      .finally(() => { if (!cancelled) setRangeLoading(false); });
+    return () => { cancelled = true; };
+  }, [token, range.since, range.until, selected]);
+
+  const togglePerson = (p: string) => {
+    setSelected((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
+  };
+
+  const todayKey = new Date().toISOString().slice(0, 10);
+  const yesterdayKey = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+  const dayBeforeKey = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+  const byDate = new Map((rangeData?.daily_totals ?? []).map((row: any) => [row.date, row]));
+  const dayCard = (label: string, dateKey: string) => {
+    const row: any = byDate.get(dateKey);
+    return (
+      <span key={dateKey}>
+        <b>{row ? row.tasks_done : 0}</b>
+        {label}
+      </span>
+    );
+  };
+
+  return (
+    <section className="card section">
+      <div className="section-title">Produtividade por periodo</div>
+      <div className="filter-tabs">
+        {presets.map((p) => (
+          <button key={p.key} type="button" className={preset === p.key ? "active" : ""} onClick={() => setPreset(p.key)}>
+            {p.label}
+          </button>
+        ))}
+      </div>
+      {preset === "custom" && (
+        <div className="campo-linha" style={{ marginTop: 10 }}>
+          <input type="date" value={since} onChange={(e) => setSince(e.target.value)} />
+          <input type="date" value={until} onChange={(e) => setUntil(e.target.value)} />
+        </div>
+      )}
+      <div className="attention-grid" style={{ justifyContent: "flex-start", margin: "12px 0" }}>
+        {dayCard("Hoje", todayKey)}
+        {dayCard("Ontem", yesterdayKey)}
+        {dayCard("Anteontem", dayBeforeKey)}
+      </div>
+      <div className="person-badges">
+        {people.map((p) => (
+          <label key={p} className={"team-badge" + (selected.includes(p) ? " info" : "")}>
+            <input type="checkbox" checked={selected.includes(p)} onChange={() => togglePerson(p)} style={{ marginRight: 4 }} />
+            {p}
+          </label>
+        ))}
+        {selected.length > 0 && (
+          <button type="button" className="link-btn" onClick={() => setSelected([])}>
+            limpar selecao
+          </button>
+        )}
+      </div>
+      {rangeLoading && <div className="empty">Carregando...</div>}
+      {!rangeLoading && rangeData && (
+        <div>
+          {(rangeData.summary ?? []).map((row: any) => (
+            <div className="productivity-row" key={row.user_id}>
+              <div>
+                <b>{row.person}</b>
+                <small>{row.tasks_done} tasks - ciclo medio {row.avg_cycle_hours ?? "-"}h</small>
+              </div>
+              <strong>{row.completed_on_time}/{row.completed_on_time + row.completed_late}</strong>
+            </div>
+          ))}
+          {!(rangeData.summary ?? []).length && <div className="empty">Sem dados no periodo selecionado.</div>}
+        </div>
+      )}
+    </section>
+  );
+}
+
+
 function ClickUpCenter({ clickup, reload, token }: { clickup: Row; reload: () => Promise<void>; token: string }) {
   const productivity = clickup.productivity_30d || [];
   const recent = clickup.recent_completed || [];
@@ -726,6 +837,7 @@ function ClickUpCenter({ clickup, reload, token }: { clickup: Row; reload: () =>
       <Metric label="Última sincronização" value={clickup.last_sync ? text(clickup.last_sync.status) : "—"} tone={clickup.last_sync?.status === "SUCCESS" ? "green" : "yellow"} hint={formatDate(clickup.last_sync?.finished_at || clickup.last_sync?.started_at)}/>
     </div>
     {!connected && <div className="connection-note"><b>A ponte e o banco já estão prontos.</b><p>Falta configurar o token da API e o ID do Workspace ClickUp. O segredo do webhook será criado e guardado automaticamente ao ativar o tempo real.</p></div>}
+    <ClickUpRangeExplorer token={token} people={(clickup.productivity_30d ?? []).map((r: any) => r.person)} />
     <div className="grid clickup-split">
       <section className="card section"><div className="section-title">Produção por pessoa · 30 dias{collabFilter !== "ALL" && ` · ${collabFilter}`}</div>{filteredProductivity.map((row: Row, index: number) => <div className="productivity-row" key={row.user_id}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>{text(row.person)}</b><small>{formatNumber(row.tracked_hours)}h registradas · {row.on_time_pct == null ? "SLA sem base" : `${formatNumber(row.on_time_pct)}% no prazo`}</small></div><strong>{formatNumber(row.tasks_done)}</strong></div>)}{!filteredProductivity.length && <div className="empty">{productivity.length ? "Nenhum resultado para esse colaborador." : "Os indicadores aparecerão após a primeira sincronização."}</div>}</section>
       <section className="card section"><div className="section-title">Últimas tarefas concluídas{collabFilter !== "ALL" && ` · ${collabFilter}`}</div><div className="table-wrap"><table className="completed-table"><thead><tr><th>Tarefa</th><th>Colaborador</th><th>Lista e conclusão</th><th>Status</th></tr></thead><tbody>{filteredRecent.slice(0,20).map((task: Row) => { const assignees = Array.isArray(task.clickup_task_assignees) ? task.clickup_task_assignees : []; const collaboratorsLabel = assignees.map((person: Row) => person.username || person.email).filter(Boolean).join(", ") || "Não atribuído"; return <tr key={task.task_id}><td><a href={task.url || undefined} target="_blank" rel="noreferrer"><b>{text(task.name)}</b></a></td><td>{collaboratorsLabel}</td><td>{text(task.list_name)}<div className="small">{formatDate(task.date_closed)}</div></td><td><Chip value={task.status}/></td></tr>; })}{!filteredRecent.length && <tr><td colSpan={4} className="empty">{recent.length ? "Nenhuma tarefa desse colaborador." : "Nenhuma tarefa importada ainda."}</td></tr>}</tbody></table></div></section>
