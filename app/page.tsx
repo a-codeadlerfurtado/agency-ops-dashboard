@@ -12,7 +12,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 type Row = Record<string, any>;
 type TeamMember = {
   person: string;
-  role: "GT" | "CS" | "DESIGN" | "MGMT" | "UNASSIGNED" | "FORMER";
+  role: "GT" | "CS" | "DESIGN" | "AI" | "MGMT" | "UNASSIGNED" | "FORMER";
   in_roster: boolean;
   is_former: boolean;
   former_reason: string | null;
@@ -677,9 +677,9 @@ function TeamCenter({ team, teamMembers, unassigned, openClient }: { team: TeamM
   const unregistered = team.filter((member) => !member.in_roster && !member.is_former);
   const former = team.filter((member) => member.is_former);
   const sections: Array<{ role: TeamMember["role"]; title: string }> = [
-    { role: "GT", title: "Gestores de Tráfego" }, { role: "CS", title: "Customer Success" }, { role: "DESIGN", title: "Design" }, { role: "MGMT", title: "Gestão" },
+    { role: "GT", title: "Gestores de Tráfego" }, { role: "CS", title: "Customer Success" }, { role: "DESIGN", title: "Design" }, { role: "AI", title: "Inteligência Artificial" }, { role: "MGMT", title: "Gestão" },
   ];
-  const roleLabel: Record<TeamMember["role"], string> = { GT:"Gestor de Tráfego", CS:"Customer Success", DESIGN:"Design", MGMT:"Gestão", UNASSIGNED:"Sem cadastro", FORMER:"Desligado" };
+  const roleLabel: Record<TeamMember["role"], string> = { GT:"Gestor de Tráfego", CS:"Customer Success", DESIGN:"Design", AI:"Head de IA", MGMT:"Gestão", UNASSIGNED:"Sem cadastro", FORMER:"Desligado" };
   const portfolioRank: Record<string, number> = { ATTENTION:0, FOLLOW_UP:1, DATA_INCOMPLETE:2, OK:3, UNDETERMINED:4 };
   function toggle(member: TeamMember) {
     if (member.role !== "GT" || member.portfolio.length === 0) return;
