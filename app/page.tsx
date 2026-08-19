@@ -46,6 +46,9 @@ type HomeData = {
   preferences?: Row;
   integration_health?: Row[];
   team?: TeamMember[];
+  stage_labels?: Record<string, string>;
+  profile?: Row;
+  access_requests_pending?: Row[];
   generated_at: string;
 };
 
@@ -172,14 +175,28 @@ function AuthScreen() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [collaborator, setCollaborator] = useState("");
+  const [roster, setRoster] = useState<Row[]>([]);
+  const [rosterLoading, setRosterLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    if (mode !== "signup") return;
+    setRosterLoading(true);
+    fetch(`${API_URL}?view=roster`, { cache: "no-store" })
+      .then((response) => response.json())
+      .then((json) => setRoster(json.roster || []))
+      .catch(() => setRoster([]))
+      .finally(() => setRosterLoading(false));
+  }, [mode]);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setMessage("");
     try {
       if (mode === "signup") {
-        const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { name: name.trim(), full_name: name.trim() } } });
+        if (!collaborator) throw new Error("Selecione qual colaborador da empresa você é.");
+        const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { name: name.trim(), full_name: name.trim(), collaborator_person: collaborator } } });
         if (error) throw error;
         if (!data.session) setMessage("Cadastro criado. Confirme seu e-mail para entrar.");
       } else {
@@ -190,7 +207,7 @@ function AuthScreen() {
     finally { setBusy(false); }
   }
 
-  return <main className="auth-shell"><section className="auth-card"><div className="auth-brand"><div className="logo">A</div><div><span className="eyebrow">AGENCY OPS</span><h1>Central de Operações</h1><p>Acesse seu perfil para continuar.</p></div></div><div className="auth-tabs"><button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setMessage(""); }}>Entrar</button><button type="button" className={mode === "signup" ? "active" : ""} onClick={() => { setMode("signup"); setMessage(""); }}>Criar conta</button></div><form onSubmit={submit}>{mode === "signup" && <label>Nome completo<input autoComplete="name" required value={name} onChange={(event) => setName(event.target.value)} placeholder="Seu nome" /></label>}<label>E-mail<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com" /></label><label>Senha<input type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={6} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 6 caracteres" /></label>{message && <p className="auth-message" role="status">{message}</p>}<button className="auth-submit" disabled={busy}>{busy ? "Processando…" : mode === "login" ? "Entrar no dashboard" : "Criar minha conta"}</button></form></section></main>;
+  return <main className="auth-shell"><section className="auth-card"><div className="auth-brand"><div className="logo">A</div><div><span className="eyebrow">AGENCY OPS</span><h1>Central de Operações</h1><p>Acesse seu perfil para continuar.</p></div></div><div className="auth-tabs"><button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setMessage(""); }}>Entrar</button><button type="button" className={mode === "signup" ? "active" : ""} onClick={() => { setMode("signup"); setMessage(""); }}>Criar conta</button></div><form onSubmit={submit}>{mode === "signup" && <label>Nome completo<input autoComplete="name" required value={name} onChange={(event) => setName(event.target.value)} placeholder="Seu nome" /></label>}{mode === "signup" && <label>Qual colaborador da empresa você é?<select required value={collaborator} onChange={(event) => setCollaborator(event.target.value)}><option value="">{rosterLoading ? "Carregando…" : "Selecione…"}</option>{roster.map((person) => <option key={person.person} value={person.person}>{person.person}</option>)}</select>{!rosterLoading && !roster.length && <small className="auth-hint">Todos os colaboradores já têm conta. Fale com o Adler se precisar de acesso.</small>}</label>}<label>E-mail<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com" /></label><label>Senha<input type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={6} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 6 caracteres" /></label>{message && <p className="auth-message" role="status">{message}</p>}<button className="auth-submit" disabled={busy}>{busy ? "Processando…" : mode === "login" ? "Entrar no dashboard" : "Criar minha conta"}</button></form></section></main>;
 }
 
 export default function Dashboard() {
@@ -213,6 +230,7 @@ export default function Dashboard() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<Row | null>(null);
+  const [toastLeaving, setToastLeaving] = useState(false);
   const [win, setWin] = useState<Row | null>(null);
   const loadedRef = useRef(false);
   const lastNotificationRef = useRef<string | null>(null);
@@ -272,6 +290,14 @@ export default function Dashboard() {
   }, [load, session?.access_token]);
 
   useEffect(() => {
+    if (!toast) { setToastLeaving(false); return; }
+    setToastLeaving(false);
+    const fadeTimer = window.setTimeout(() => setToastLeaving(true), 4500);
+    const removeTimer = window.setTimeout(() => setToast(null), 5000);
+    return () => { window.clearTimeout(fadeTimer); window.clearTimeout(removeTimer); };
+  }, [toast]);
+
+  useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") { setSelected(null); setCommandOpen(false); setProfileOpen(false); setNotificationsOpen(false); setSettingsOpen(false); }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setCommandOpen(true); }
@@ -302,6 +328,17 @@ export default function Dashboard() {
       })
       .sort((a, b) => (priorityRank[a.priority] ?? 9) - (priorityRank[b.priority] ?? 9) || text(a.display_name).localeCompare(text(b.display_name)));
   }, [data, query, filter, lifecycleFilter]);
+
+  async function requestAccess() {
+    if (!session?.access_token) return;
+    try { await apiPost("access-request", session.access_token, {}); await load(); } catch { /* ignore */ }
+  }
+
+  async function decideAccessRequest(id: string, decision: "APPROVED" | "DENIED") {
+    if (!session?.access_token) return;
+    await apiPost("access-request-decide", session.access_token, { id, decision });
+    await load();
+  }
 
   async function openClient(clientId: string) {
     if (!session?.access_token) return;
@@ -382,7 +419,7 @@ export default function Dashboard() {
 
       {view === "focus" && <FocusCenter clients={actionClients} operations={data?.operations || {}} alerts={data?.alerts || []} openClient={openClient} />}
       {view === "clients" && <ClientPortfolio clients={clients} total={allClients.length} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} lifecycleFilter={lifecycleFilter} setLifecycleFilter={setLifecycleFilter} openClient={openClient} />}
-      {view === "onboarding" && <OnboardingBoard groups={onboardingGroups} openClient={openClient} />}
+      {view === "onboarding" && <OnboardingBoard groups={onboardingGroups} stageLabels={data?.stage_labels || {}} openClient={openClient} />}
       {view === "campaigns" && <CampaignCenter media={media} campaigns={filteredCampaigns} clients={allClients} campaignFilter={campaignFilter} setCampaignFilter={setCampaignFilter} openClient={openClient} />}
       {view === "preclients" && <PreClientCenter rows={data?.preclients || []} won={data?.won_events || []} />}
       {view === "conversations" && <ConversationCenter conversations={data?.conversations || []} clients={allClients} openClient={openClient} />}
@@ -394,7 +431,7 @@ export default function Dashboard() {
 
       {view === "overview" && <><SmartSearch question={opsQuestion} setQuestion={setOpsQuestion} clients={allClients} conversations={data?.conversations || []} commitments={data?.commitments || []} openClient={openClient} />
       <AttentionCenter clients={activeClients} operations={data?.operations || {}} preclients={data?.preclients || []} />
-      <ExecutiveBrief clients={activeClients} onboardingGroups={onboardingGroups} openClient={openClient} />
+      <ExecutiveBrief clients={activeClients} onboardingGroups={onboardingGroups} stageLabels={data?.stage_labels || {}} openClient={openClient} />
       <section className="card section media-section">
         <div className="section-head">
           <div>
@@ -465,16 +502,16 @@ export default function Dashboard() {
 
       {selected && <ClientDrawer detail={selected} loading={detailLoading} close={() => setSelected(null)} />}
       {commandOpen && <GlobalCommand clients={allClients} tasks={data?.clickup?.recent_completed || []} preclients={data?.preclients || []} close={() => setCommandOpen(false)} openClient={openClient} />}
-      {profileOpen && <ProfileMenu preferences={data?.preferences || {}} email={session.user.email || ""} settings={() => { setProfileOpen(false); setSettingsOpen(true); }} close={() => setProfileOpen(false)} signOut={() => supabase.auth.signOut()} />}
+      {profileOpen && <ProfileMenu preferences={data?.preferences || {}} profile={data?.profile || {}} email={session.user.email || ""} settings={() => { setProfileOpen(false); setSettingsOpen(true); }} close={() => setProfileOpen(false)} signOut={() => supabase.auth.signOut()} requestAccess={requestAccess} />}
       {notificationsOpen && <NotificationCenter items={data?.notifications || []} close={() => setNotificationsOpen(false)} refresh={load} openClient={openClient} token={session.access_token} />}
-      {settingsOpen && <SettingsModal preferences={data?.preferences || {}} close={() => setSettingsOpen(false)} refresh={load} token={session.access_token} />}
-      {toast && <button className="toast" onClick={() => { if (toast.client_id) openClient(toast.client_id); setToast(null); }}><Chip value={toast.level}/><span><b>{text(toast.title)}</b><small>{text(toast.actor ? `${toast.actor}: ${toast.description}` : toast.description)}</small></span><i onClick={(event) => { event.stopPropagation(); setToast(null); }}>×</i></button>}
+      {settingsOpen && <SettingsModal preferences={data?.preferences || {}} close={() => setSettingsOpen(false)} refresh={load} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
+      {toast && <button className={`toast${toastLeaving ? " leaving" : ""}`} onClick={() => { if (toast.client_id) openClient(toast.client_id); setToast(null); }}><Chip value={toast.level}/><span><b>{text(toast.title)}</b><small>{text(toast.actor ? `${toast.actor}: ${toast.description}` : toast.description)}</small>{(toast.gestor || toast.carteira) && <small className="toast-meta">{text(toast.carteira || (toast.gestor ? `Gestor: ${toast.gestor}` : ""))}</small>}</span><i onClick={(event) => { event.stopPropagation(); setToast(null); }}>×</i></button>}
       {win && data?.preferences?.win_celebration_enabled !== false && <button className="win-pulse" onClick={() => { if (win.client_id) openClient(win.client_id); setWin(null); }}><small>NOVO CLIENTE</small><strong>{text(win.description)}</strong><span>Acabou de entrar para a operação</span></button>}
     </main>
   );
 }
 
-function ExecutiveBrief({ clients, onboardingGroups, openClient }: { clients: Row[]; onboardingGroups: [string, Row[]][]; openClient: (id: string) => void }) {
+function ExecutiveBrief({ clients, onboardingGroups, stageLabels, openClient }: { clients: Row[]; onboardingGroups: [string, Row[]][]; stageLabels: Record<string, string>; openClient: (id: string) => void }) {
   const counts = {
     attention: clients.filter((c) => c.priority === "ATTENTION").length,
     follow: clients.filter((c) => c.priority === "FOLLOW_UP").length,
@@ -492,7 +529,7 @@ function ExecutiveBrief({ clients, onboardingGroups, openClient }: { clients: Ro
     <article className="card executive-story"><div className="eyebrow">Leitura executiva · agora</div><h2>{headline}</h2><p>{counts.incomplete ? `${counts.incomplete} registros ainda têm cobertura incompleta e podem limitar o diagnóstico.` : "A cobertura atual permite uma leitura consistente da operação."}</p><div className="method"><span>i</span><div><b>Como é calculado</b><small>Prioridade, cobertura, compromissos e alertas consolidados pelo motor operacional.</small></div></div></article>
     <article className="card portfolio-health"><div className="panel-heading"><div><span className="eyebrow">Saúde da carteira</span><h3>Distribuição operacional</h3></div><b>{Math.round((counts.ok / total) * 100)}% OK</b></div><div className="health-rail" aria-label="Distribuição de saúde"><i className="r-attention" style={{width:`${counts.attention / total * 100}%`}}/><i className="r-follow" style={{width:`${counts.follow / total * 100}%`}}/><i className="r-incomplete" style={{width:`${counts.incomplete / total * 100}%`}}/><i className="r-ok" style={{width:`${counts.ok / total * 100}%`}}/></div><div className="rail-legend"><span><i className="r-attention"/>Atenção <b>{counts.attention}</b></span><span><i className="r-follow"/>Follow-up <b>{counts.follow}</b></span><span><i className="r-incomplete"/>Dados <b>{counts.incomplete}</b></span><span><i className="r-ok"/>OK <b>{counts.ok}</b></span></div></article>
     <article className="card risk-watch"><div className="panel-heading"><div><span className="eyebrow">Prioridades</span><h3>Quem olhar primeiro</h3></div><span className="counter">{risk.length}</span></div>{risk.map((client, index) => <button key={client.client_id} onClick={() => openClient(client.client_id)}><span className="rank">{String(index + 1).padStart(2,"0")}</span><span><b>{text(client.display_name)}</b><small>{text(client.next_step || client.current_subject)}</small></span><Chip value={client.priority}/></button>)}</article>
-    <article className="card compact-funnel"><div className="panel-heading"><div><span className="eyebrow">Onboarding</span><h3>Distribuição por etapa</h3></div><b>{onboardingTotal}</b></div>{onboardingGroups.slice(0, 6).map(([stage, rows]) => <div className="funnel-row" key={stage}><span>{stage.replaceAll("_"," ")}</span><div><i style={{width:`${Math.max(4, rows.length / Math.max(onboardingTotal,1) * 100)}%`}}/></div><b>{rows.length}</b></div>)}</article>
+    <article className="card compact-funnel"><div className="panel-heading"><div><span className="eyebrow">Onboarding</span><h3>Distribuição por etapa</h3></div><b>{onboardingTotal}</b></div>{onboardingGroups.slice(0, 6).map(([stage, rows]) => <div className="funnel-row" key={stage}><span>{stageLabels[stage] || stage.replaceAll("_"," ")}</span><div><i style={{width:`${Math.max(4, rows.length / Math.max(onboardingTotal,1) * 100)}%`}}/></div><b>{rows.length}</b></div>)}</article>
   </section>;
 }
 
@@ -581,22 +618,31 @@ function ClickUpCenter({ clickup, reload, token }: { clickup: Row; reload: () =>
   const connected = Boolean(clickup.configured || clickup.last_sync || clickup.total_completed || productivity.length);
   const [busy, setBusy] = useState("");
   const [message, setMessage] = useState("");
+  const [collabFilter, setCollabFilter] = useState("ALL");
+  const collaborators = useMemo(() => {
+    const names = new Set<string>();
+    productivity.forEach((row: Row) => row.person && names.add(row.person));
+    recent.forEach((task: Row) => (Array.isArray(task.clickup_task_assignees) ? task.clickup_task_assignees : []).forEach((person: Row) => { const label = person.username || person.email; if (label) names.add(label); }));
+    return [...names].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [productivity, recent]);
+  const filteredProductivity = collabFilter === "ALL" ? productivity : productivity.filter((row: Row) => row.person === collabFilter);
+  const filteredRecent = collabFilter === "ALL" ? recent : recent.filter((task: Row) => (Array.isArray(task.clickup_task_assignees) ? task.clickup_task_assignees : []).some((person: Row) => (person.username || person.email) === collabFilter));
   async function run(action: "register" | "sync") { setBusy(action); setMessage(""); try { const result = await clickupAction(action, token); setMessage(action === "register" ? "Webhook ativado com sucesso." : `${result.tasks_upserted || 0} tarefas importadas.`); await reload(); } catch (error) { setMessage(error instanceof Error ? error.message : "Falha na integração"); } finally { setBusy(""); } }
   return <section className="workspace">
-    <div className="workspace-head"><div><h2>Produtividade no ClickUp</h2><p>Tarefas finalizadas são espelhadas no Supabase; a execução continua no ClickUp.</p></div><div className="clickup-actions"><Chip value={connected ? "CONECTADO" : "AGUARDANDO TOKEN"}/>{clickup.configured && !clickup.webhook_configured && <button disabled={Boolean(busy)} onClick={() => run("register")}>{busy === "register" ? "Ativando…" : "Ativar tempo real"}</button>}{clickup.configured && <button disabled={Boolean(busy)} onClick={() => run("sync")}>{busy === "sync" ? "Importando…" : "Atualizar dados"}</button>}</div></div>
+    <div className="workspace-head"><div><h2>Produtividade no ClickUp</h2><p>Tarefas finalizadas são espelhadas no Supabase; a execução continua no ClickUp.</p></div><div className="clickup-actions"><Chip value={connected ? "CONECTADO" : "AGUARDANDO TOKEN"}/>{collaborators.length > 0 && <select className="control" value={collabFilter} onChange={(event) => setCollabFilter(event.target.value)}><option value="ALL">Todos os colaboradores</option>{collaborators.map((name) => <option key={name} value={name}>{name}</option>)}</select>}{clickup.configured && !clickup.webhook_configured && <button disabled={Boolean(busy)} onClick={() => run("register")}>{busy === "register" ? "Ativando…" : "Ativar tempo real"}</button>}{clickup.configured && <button disabled={Boolean(busy)} onClick={() => run("sync")}>{busy === "sync" ? "Importando…" : "Atualizar dados"}</button>}</div></div>
     {message && <div className="action-message">{message}</div>}
     <div className="grid clickup-kpis">
       <Metric label="Concluídas registradas" value={formatNumber(clickup.total_completed)} tone="green" hint="desde janeiro de 2026"/>
-      <Metric label="Indexadas por cliente" value={`${formatNumber(indexing.matched)} · ${formatNumber(indexing.match_rate)}%`} tone="blue" hint={`${formatNumber(indexing.unmatched_label)} rótulos pendentes`}/>
+      <Metric label="Indexadas por cliente" value={indexing.matched == null ? "—" : `${formatNumber(indexing.matched)} · ${formatNumber(indexing.match_rate)}%`} tone="blue" hint={indexing.unmatched_label == null ? "acesso restrito" : `${formatNumber(indexing.unmatched_label)} rótulos pendentes`}/>
       <Metric label="Pessoas com entregas" value={formatNumber(productivity.length)} tone="blue" hint="últimos 30 dias"/>
       <Metric label="Última sincronização" value={clickup.last_sync ? text(clickup.last_sync.status) : "—"} tone={clickup.last_sync?.status === "SUCCESS" ? "green" : "yellow"} hint={formatDate(clickup.last_sync?.finished_at || clickup.last_sync?.started_at)}/>
     </div>
     {!connected && <div className="connection-note"><b>A ponte e o banco já estão prontos.</b><p>Falta configurar o token da API e o ID do Workspace ClickUp. O segredo do webhook será criado e guardado automaticamente ao ativar o tempo real.</p></div>}
     <div className="grid clickup-split">
-      <section className="card section"><div className="section-title">Produção por pessoa · 30 dias</div>{productivity.map((row: Row, index: number) => <div className="productivity-row" key={row.user_id}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>{text(row.person)}</b><small>{formatNumber(row.tracked_hours)}h registradas · {row.on_time_pct == null ? "SLA sem base" : `${formatNumber(row.on_time_pct)}% no prazo`}</small></div><strong>{formatNumber(row.tasks_done)}</strong></div>)}{!productivity.length && <div className="empty">Os indicadores aparecerão após a primeira sincronização.</div>}</section>
-      <section className="card section"><div className="section-title">Últimas tarefas concluídas</div><div className="table-wrap"><table className="completed-table"><thead><tr><th>Tarefa</th><th>Colaborador</th><th>Lista e conclusão</th><th>Status</th></tr></thead><tbody>{recent.slice(0,20).map((task: Row) => { const assignees = Array.isArray(task.clickup_task_assignees) ? task.clickup_task_assignees : []; const collaborators = assignees.map((person: Row) => person.username || person.email).filter(Boolean).join(", ") || "Não atribuído"; return <tr key={task.task_id}><td><a href={task.url || undefined} target="_blank" rel="noreferrer"><b>{text(task.name)}</b></a></td><td>{collaborators}</td><td>{text(task.list_name)}<div className="small">{formatDate(task.date_closed)}</div></td><td><Chip value={task.status}/></td></tr>; })}{!recent.length && <tr><td colSpan={4} className="empty">Nenhuma tarefa importada ainda.</td></tr>}</tbody></table></div></section>
+      <section className="card section"><div className="section-title">Produção por pessoa · 30 dias{collabFilter !== "ALL" && ` · ${collabFilter}`}</div>{filteredProductivity.map((row: Row, index: number) => <div className="productivity-row" key={row.user_id}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>{text(row.person)}</b><small>{formatNumber(row.tracked_hours)}h registradas · {row.on_time_pct == null ? "SLA sem base" : `${formatNumber(row.on_time_pct)}% no prazo`}</small></div><strong>{formatNumber(row.tasks_done)}</strong></div>)}{!filteredProductivity.length && <div className="empty">{productivity.length ? "Nenhum resultado para esse colaborador." : "Os indicadores aparecerão após a primeira sincronização."}</div>}</section>
+      <section className="card section"><div className="section-title">Últimas tarefas concluídas{collabFilter !== "ALL" && ` · ${collabFilter}`}</div><div className="table-wrap"><table className="completed-table"><thead><tr><th>Tarefa</th><th>Colaborador</th><th>Lista e conclusão</th><th>Status</th></tr></thead><tbody>{filteredRecent.slice(0,20).map((task: Row) => { const assignees = Array.isArray(task.clickup_task_assignees) ? task.clickup_task_assignees : []; const collaboratorsLabel = assignees.map((person: Row) => person.username || person.email).filter(Boolean).join(", ") || "Não atribuído"; return <tr key={task.task_id}><td><a href={task.url || undefined} target="_blank" rel="noreferrer"><b>{text(task.name)}</b></a></td><td>{collaboratorsLabel}</td><td>{text(task.list_name)}<div className="small">{formatDate(task.date_closed)}</div></td><td><Chip value={task.status}/></td></tr>; })}{!filteredRecent.length && <tr><td colSpan={4} className="empty">{recent.length ? "Nenhuma tarefa desse colaborador." : "Nenhuma tarefa importada ainda."}</td></tr>}</tbody></table></div></section>
     </div>
-    <section className="card section"><div className="section-title">Rótulos sem correspondência na base de clientes</div>{unmatchedLabels.slice(0,20).map((row: Row, index: number) => <div className="productivity-row" key={`${row.client_label}-${index}`}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>[{text(row.client_label)}]</b><small>Requer cliente cadastrado ou confirmação de equivalência</small></div><strong>{formatNumber(row.task_count)}</strong></div>)}{!unmatchedLabels.length && <div className="empty">Todos os rótulos estão identificados.</div>}</section>
+    {unmatchedLabels.length > 0 && <section className="card section"><div className="section-title">Rótulos sem correspondência na base de clientes</div>{unmatchedLabels.slice(0,20).map((row: Row, index: number) => <div className="productivity-row" key={`${row.client_label}-${index}`}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>[{text(row.client_label)}]</b><small>Requer cliente cadastrado ou confirmação de equivalência</small></div><strong>{formatNumber(row.task_count)}</strong></div>)}</section>}
   </section>;
 }
 
@@ -615,15 +661,15 @@ function ActionInbox({ clients, openClient }: { clients: Row[]; openClient: (id:
   return <section className="workspace"><div className="workspace-head"><div><h2>Caixa de ação</h2><p>Prioridades consolidadas. A execução e a baixa continuam no ClickUp.</p></div><span className="counter">{clients.length} itens</span></div><div className="action-columns">{buckets.map(([title, rows]) => <section className="card lane" key={title}><div className="lane-head"><b>{title}</b><span>{rows.length}</span></div>{rows.slice(0, 30).map((client) => <button className="action-card" key={client.client_id} onClick={() => openClient(client.client_id)}><div><strong>{text(client.display_name)}</strong><Chip value={client.priority} /></div><p>{text(client.next_step)}</p><small>{text(client.action_owner)} · {relativeDate(client.next_step_due)}</small></button>)}{!rows.length && <div className="empty compact">Tudo limpo por aqui.</div>}</section>)}</div></section>;
 }
 
-function OnboardingBoard({ groups, openClient }: { groups: [string, Row[]][]; openClient: (id: string) => void }) {
+function OnboardingBoard({ groups, stageLabels, openClient }: { groups: [string, Row[]][]; stageLabels: Record<string, string>; openClient: (id: string) => void }) {
   const total = groups.reduce((sum, [, rows]) => sum + rows.length, 0);
-  return <section className="workspace"><div className="workspace-head"><div><h2>Funil de onboarding</h2><p>Leitura automática do progresso; tarefas e responsáveis permanecem no ClickUp.</p></div><span className="counter">{total} clientes</span></div><div className="funnel">{groups.map(([stage, rows]) => <section className="card stage" key={stage}><div className="stage-title"><span>{stage.replaceAll("_", " ")}</span><b>{rows.length}</b></div><div className="stage-bar"><i style={{ width: `${Math.max(8, (rows.length / Math.max(total, 1)) * 100)}%` }} /></div>{rows.slice(0, 20).map((client) => { const age = daysSince(client.entrada); const estimate = age == null ? null : Math.max(0, 21-age); return <button key={client.client_id} onClick={() => openClient(client.client_id)}><strong>{text(client.display_name)}</strong><span><Chip value={client.onboarding_risk || client.priority} /></span><small>{text(client.onboarding_next_action || client.next_step)}</small><small className="onboarding-age">Entrada: {client.entrada ? new Intl.DateTimeFormat("pt-BR").format(new Date(`${client.entrada}T12:00:00`)) : "sem data"}{client.onboarding_status === "OPEN" && estimate != null ? ` · janela estimada: ${estimate}d` : ""}</small></button>; })}</section>)}</div></section>;
+  return <section className="workspace"><div className="workspace-head"><div><h2>Funil de onboarding</h2><p>Leitura automática do progresso; tarefas e responsáveis permanecem no ClickUp.</p></div><span className="counter">{total} clientes</span></div><div className="funnel">{groups.map(([stage, rows]) => <section className="card stage" key={stage}><div className="stage-title"><span>{stageLabels[stage] || stage.replaceAll("_", " ")}</span><b>{rows.length}</b></div><div className="stage-bar"><i style={{ width: `${Math.max(8, (rows.length / Math.max(total, 1)) * 100)}%` }} /></div>{rows.slice(0, 20).map((client) => { const age = daysSince(client.entrada); const estimate = age == null ? null : Math.max(0, 21-age); return <button key={client.client_id} onClick={() => openClient(client.client_id)}><strong>{text(client.display_name)}</strong><span><Chip value={client.onboarding_risk || client.priority} /></span><small>{text(client.onboarding_next_action || client.next_step)}</small><small className="onboarding-age">Entrada: {client.entrada ? new Intl.DateTimeFormat("pt-BR").format(new Date(`${client.entrada}T12:00:00`)) : "sem data"}{client.onboarding_status === "OPEN" && estimate != null ? ` · janela estimada: ${estimate}d` : ""}</small></button>; })}</section>)}</div></section>;
 }
 
 function MediaCenter({ media, clients, openClient }: { media: Row; clients: Row[]; openClient: (id: string) => void }) {
   const diagnosis = media.is_stale ? "A carga está desatualizada. Evite decisões de otimização até a próxima sincronização." : media.leads > 0 ? `Cada lead custou ${formatMoney(media.cpl)} na última referência.` : "Não há leads registrados na última referência.";
   const mediaClients = clients.filter((c) => c.media_account_key || c.media_account_id || String(c.current_subject || "").toLowerCase().includes("mídia"));
-  return <section className="workspace"><div className="workspace-head"><div><h2>Central de mídia</h2><p>Diagnóstico operacional sem substituir o gerenciador de anúncios.</p></div><Chip value={media.is_stale ? "DESATUALIZADO" : "ATUALIZADO"} /></div><div className="grid media-grid standalone"><Metric label="Investimento" value={formatMoney(media.spend)} tone="blue" hint={`${formatNumber(media.accounts)} contas`} /><Metric label="Leads" value={formatNumber(media.leads)} tone="green" hint="última referência" /><Metric label="CPL" value={media.cpl == null ? "—" : formatMoney(media.cpl)} tone="yellow" hint="investimento ÷ leads" /><Metric label="CTR" value={media.ctr == null ? "—" : `${formatNumber(media.ctr)}%`} hint="cliques ÷ impressões" /></div><div className={`diagnosis ${media.is_stale ? "warn" : ""}`}><b>Diagnóstico automático</b><p>{diagnosis}</p><small>Referência: {text(media.latest_date)} · atualiza quando uma nova carga entrar</small></div>{mediaClients.length > 0 && <section className="card section"><div className="section-title">Clientes com contexto de mídia</div><div className="client-pills">{mediaClients.map((client) => <button key={client.client_id} onClick={() => openClient(client.client_id)}>{text(client.display_name)} <Chip value={client.priority} /></button>)}</div></section>}</section>;
+  return <section className="workspace"><div className="workspace-head"><div><h2>Central de Anúncios</h2><p>Diagnóstico operacional sem substituir o gerenciador de anúncios.</p></div><Chip value={media.is_stale ? "DESATUALIZADO" : "ATUALIZADO"} /></div><div className="grid media-grid standalone"><Metric label="Investimento" value={formatMoney(media.spend)} tone="blue" hint={`${formatNumber(media.accounts)} contas`} /><Metric label="Leads" value={formatNumber(media.leads)} tone="green" hint="última referência" /><Metric label="CPL" value={media.cpl == null ? "—" : formatMoney(media.cpl)} tone="yellow" hint="investimento ÷ leads" /><Metric label="CTR" value={media.ctr == null ? "—" : `${formatNumber(media.ctr)}%`} hint="cliques ÷ impressões" /></div><div className={`diagnosis ${media.is_stale ? "warn" : ""}`}><b>Diagnóstico automático</b><p>{diagnosis}</p><small>Referência: {text(media.latest_date)} · atualiza quando uma nova carga entrar</small></div>{mediaClients.length > 0 && <section className="card section"><div className="section-title">Clientes com contexto de mídia</div><div className="client-pills">{mediaClients.map((client) => <button key={client.client_id} onClick={() => openClient(client.client_id)}>{text(client.display_name)} <Chip value={client.priority} /></button>)}</div></section>}</section>;
 }
 
 function AlertCenter({ alerts, clients, openClient }: { alerts: Row[]; clients: Row[]; openClient: (id: string) => void }) {
@@ -661,17 +707,28 @@ function GlobalCommand({clients,tasks,preclients,close,openClient}:{clients:Row[
   return <><div className="overlay open" onClick={close}/><section className="command-modal"><div className="command-input"><span>⌕</span><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Pesquisar cliente, tarefa, responsável, campanha ou pré-cliente"/><kbd>Esc</kbd></div><div className="command-results"><small>CLIENTES</small>{clientRows.map(c=><button key={c.client_id} onClick={()=>{openClient(c.client_id);close();}}><span><b>{c.display_name}</b><small>{pt[c.lifecycle]||c.lifecycle} · CS {text(c.cs_owner)} · GT {text(c.gt_owner)} · {text(c.next_step)}</small></span><Chip value={c.priority}/></button>)}{taskRows.length>0&&<small>TAREFAS</small>}{taskRows.map(t=><a key={t.task_id} href={t.url} target="_blank" rel="noreferrer"><span><b>{t.name}</b><small>{t.list_name} · {formatDate(t.date_closed)}</small></span><Chip value={t.status}/></a>)}{leadRows.length>0&&<small>PRÉ-CLIENTES</small>}{leadRows.map(p=><button key={p.id}><span><b>{p.company||p.name}</b><small>{p.stage} · {formatMoney(p.estimated_value)}</small></span></button>)}</div></section></>;
 }
 
-function ProfileMenu({preferences,email,settings,close,signOut}:{preferences:Row;email:string;settings:()=>void;close:()=>void;signOut:()=>Promise<unknown>}) { const name=preferences.name||email; return <div className="profile-menu"><div className="profile-card"><span className="avatar">{initials(name)}</span><div><b>{text(name)}</b><small>{text(preferences.role||"Colaborador")}</small></div></div><button onClick={settings}>Meu perfil</button><button onClick={settings}>Configurações</button><button onClick={settings}>Preferências</button><button onClick={close}>Notificações</button><button className="muted" onClick={() => signOut()}>Sair</button></div>; }
+function ProfileMenu({preferences,profile,email,settings,close,signOut,requestAccess}:{preferences:Row;profile:Row;email:string;settings:()=>void;close:()=>void;signOut:()=>Promise<unknown>;requestAccess:()=>Promise<void>}) {
+  const name=preferences.name||email;
+  const showRequest = profile?.access_level === "RESTRICTED" && !profile?.elevated;
+  const pending = preferences?.my_access_request?.status === "PENDING";
+  const [asking, setAsking] = useState(false);
+  async function ask() { setAsking(true); try { await requestAccess(); } finally { setAsking(false); } }
+  return <div className="profile-menu"><div className="profile-card"><span className="avatar">{initials(name)}</span><div><b>{text(name)}</b><small>{text(preferences.role||"Colaborador")}</small></div></div>
+    {showRequest && <button className="request-access" disabled={pending || asking} onClick={ask}>{pending ? "Solicitação enviada — aguardando Adler" : asking ? "Enviando…" : "Solicitar acesso completo"}</button>}
+    <button onClick={settings}>Meu perfil</button><button onClick={settings}>Configurações</button><button onClick={settings}>Preferências</button><button onClick={close}>Notificações</button><button className="muted" onClick={() => signOut()}>Sair</button></div>;
+}
 
 function NotificationCenter({items,close,refresh,openClient,token}:{items:Row[];close:()=>void;refresh:()=>Promise<void>;openClient:(id:string)=>void;token:string}) {
   async function read(id?:string){await apiPost("notifications-read",token,id?{id}:{});await refresh();}
-  return <div className="notification-panel"><div className="panel-heading"><div><span className="eyebrow">Central de Notificações</span><h3>Atualizações da operação</h3></div><button onClick={close}>×</button></div><button className="mark-read" onClick={()=>read()}>Marcar todas como lidas</button><div className="notification-list">{items.map(item=><button className={item.read_at?"":"unread"} key={item.id} onClick={()=>{read(item.id);if(item.client_id)openClient(item.client_id);}}><Chip value={item.level}/><span><b>{item.title}</b><small>{text(item.actor ? `${item.actor}: ${item.description}` : item.description)} · {formatDate(item.occurred_at)}</small></span></button>)}{!items.length&&<div className="empty">Nenhuma notificação.</div>}</div></div>;
+  return <div className="notification-panel"><div className="panel-heading"><div><span className="eyebrow">Central de Notificações</span><h3>Atualizações da operação</h3></div><button onClick={close}>×</button></div><button className="mark-read" onClick={()=>read()}>Marcar todas como lidas</button><div className="notification-list">{items.map(item=><button className={item.read_at?"":"unread"} key={item.id} onClick={()=>{read(item.id);if(item.client_id)openClient(item.client_id);}}><Chip value={item.level}/><span><b>{item.title}</b><small>{text(item.actor ? `${item.actor}: ${item.description}` : item.description)} · {formatDate(item.occurred_at)}</small>{(item.gestor || item.carteira) && <small className="notification-owner">{text(item.carteira || (item.gestor ? `Gestor: ${item.gestor}` : ""))}</small>}</span></button>)}{!items.length&&<div className="empty">Nenhuma notificação.</div>}</div></div>;
 }
 
-function SettingsModal({preferences,close,refresh,token}:{preferences:Row;close:()=>void;refresh:()=>Promise<void>;token:string}) {
+function SettingsModal({preferences,close,refresh,token,pendingRequests,canDecide,decide}:{preferences:Row;close:()=>void;refresh:()=>Promise<void>;token:string;pendingRequests:Row[];canDecide:boolean;decide:(id:string,decision:"APPROVED"|"DENIED")=>Promise<void>}) {
   const [prefs,setPrefs]=useState<Row>(preferences); const toggle=(key:string)=>setPrefs((p:Row)=>({...p,[key]:p[key]===false}));
+  const [deciding,setDeciding]=useState<string>("");
   async function save(){await apiPost("preferences",token,prefs);await refresh();close();}
-  return <><div className="overlay open" onClick={close}/><section className="settings-modal"><div className="panel-heading"><div><span className="eyebrow">Configurações</span><h2>Conta e preferências</h2></div><button onClick={close}>×</button></div><div className="settings-grid"><div><h3>Conta</h3><label>Nome<input value={preferences.name||"Colaborador"} disabled/></label><label>Cargo<input value={preferences.role||"Colaborador"} disabled/></label></div><div><h3>Notificações</h3>{[["sounds_enabled","Som das notificações"],["win_sound_enabled","Som de novo cliente"],["win_celebration_enabled","Celebração de novo cliente"],["notifications_enabled","Notificações"],["animations_enabled","Animações"]].map(([key,label])=><button className="setting-toggle" key={key} onClick={()=>toggle(key)}><span>{label}</span><i className={prefs[key]===false?"":"on"}/></button>)}</div><div><h3>Integrações</h3>{["ClickUp","CRM Comercial","Supabase","WhatsApp","Meta Ads","Google Ads","Make","n8n","Notion"].map(name=><p className="integration-line" key={name}><span>{name}</span><small>{["ClickUp","CRM Comercial","Supabase","WhatsApp","Meta Ads","Notion"].includes(name)?"Configurado":"Preparado"}</small></p>)}</div><div><h3>Usuários e permissões</h3><p className="small">Administrador · Operações · CS · GT · Designer · Comercial · Visualizador</p></div></div><div className="modal-actions"><button onClick={close}>Cancelar</button><button className="primary" onClick={save}>Salvar alterações</button></div></section></>;
+  async function act(id:string,decision:"APPROVED"|"DENIED"){setDeciding(id);try{await decide(id,decision);}finally{setDeciding("");}}
+  return <><div className="overlay open" onClick={close}/><section className="settings-modal"><div className="panel-heading"><div><span className="eyebrow">Configurações</span><h2>Conta e preferências</h2></div><button onClick={close}>×</button></div><div className="settings-grid"><div><h3>Conta</h3><label>Nome<input value={preferences.name||"Colaborador"} disabled/></label><label>Cargo<input value={preferences.role||"Colaborador"} disabled/></label></div><div><h3>Notificações</h3>{[["sounds_enabled","Som das notificações"],["win_sound_enabled","Som de novo cliente"],["win_celebration_enabled","Celebração de novo cliente"],["notifications_enabled","Notificações"],["animations_enabled","Animações"]].map(([key,label])=><button className="setting-toggle" key={key} onClick={()=>toggle(key)}><span>{label}</span><i className={prefs[key]===false?"":"on"}/></button>)}</div><div><h3>Integrações</h3>{["ClickUp","CRM Comercial","Supabase","WhatsApp","Meta Ads","Google Ads","Make","n8n","Notion"].map(name=><p className="integration-line" key={name}><span>{name}</span><small>{["ClickUp","CRM Comercial","Supabase","WhatsApp","Meta Ads","Notion"].includes(name)?"Configurado":"Preparado"}</small></p>)}</div><div><h3>Usuários e permissões</h3>{canDecide ? <div className="access-requests">{pendingRequests.length ? pendingRequests.map((request)=><div className="access-request-row" key={request.id}><span><b>{text(request.person)}</b><small>Solicitado em {formatDate(request.requested_at)}{request.note ? ` · ${request.note}` : ""}</small></span><span className="access-request-actions"><button disabled={deciding===request.id} onClick={()=>act(request.id,"APPROVED")}>Aprovar</button><button className="muted" disabled={deciding===request.id} onClick={()=>act(request.id,"DENIED")}>Recusar</button></span></div>) : <p className="small">Nenhuma solicitação de acesso pendente.</p>}</div> : <p className="small">Administrador · Operações · CS · GT · Designer · Comercial · Visualizador</p>}</div></div><div className="modal-actions"><button onClick={close}>Cancelar</button><button className="primary" onClick={save}>Salvar alterações</button></div></section></>;
 }
 
 function ClientDrawer({ detail, loading, close }: { detail: Row; loading: boolean; close: () => void }) {
