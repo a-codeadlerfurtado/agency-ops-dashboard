@@ -132,6 +132,11 @@ Deno.serve(async (req) => {
   const isFull = accessLevel === "FULL" || elevated;
   const isWalletOnly = accessLevel === "WALLET_ONLY" && !elevated;
   const isRestrictedBase = accessLevel === "RESTRICTED" && !elevated;
+  // Login sem colaborador vinculado: conta existe mas nao representa ninguem do quadro.
+  // Com cadastro aberto + mailer_autoconfirm, qualquer um cria conta; sem esta trava
+  // essa pessoa cairia em RESTRICTED, que nao filtra carteira, e enxergaria os 155
+  // clientes com nome, prioridade e proxima acao. Fica sem dado ate ser liberada.
+  const isUnlinked = viaLogin && !profilePerson && !elevated;
   const canDecideAccessRequests = isFull && (!viaLogin || profileRole === "MGMT");
 
   if (req.method === "POST") {
@@ -256,7 +261,9 @@ Deno.serve(async (req) => {
   const allClients: any[] = value(results[0], []);
   // ---- Escopo por carteira: GT (WALLET_ONLY) so enxerga clientes cujo gt_owner e o proprio.
   // CS restrito e perfis FULL nao tem restricao de carteira (mas team/produtividade e' filtrado a parte).
-  const walletSet = isWalletOnly ? new Set(allClients.filter((row) => row.gt_owner === profilePerson).map((row) => row.client_id)) : null;
+  const walletSet = isUnlinked
+    ? new Set<string>()
+    : isWalletOnly ? new Set(allClients.filter((row) => row.gt_owner === profilePerson).map((row) => row.client_id)) : null;
   const inScope = (clientId: string | null) => !walletSet || (clientId && walletSet.has(clientId));
 
   const clients = walletSet ? allClients.filter((row) => walletSet.has(row.client_id)) : allClients;
@@ -368,7 +375,7 @@ Deno.serve(async (req) => {
     integration_health: isFull ? value(platformData[6], []) : [],
     team, stage_labels: stageLabels,
     access_requests_pending: isFull ? value(teamData[4], []) : [],
-    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests },
+    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isUnlinked },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
     auth_mode: currentUserKey === "adler-furtado" && suppliedKey.length >= 40 ? "dashboard_key" : "login",
     generated_at: new Date().toISOString(),
