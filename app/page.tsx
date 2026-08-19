@@ -810,6 +810,24 @@ function ClickUpRangeExplorer({ token, people }: { token: string; people: string
 }
 
 
+const TASK_CATEGORIES_BY_ROLE: Record<string, string[]> = {
+  GT: ["Campanha nova subida", "Otimização de campanha", "Ajuste de orçamento", "Análise de métricas", "Reunião com cliente", "Outro"],
+  CS: ["Atendimento ao cliente", "Onboarding", "Reunião com cliente", "Resolução de pendência", "Relatório de resultados", "Outro"],
+  DESIGN: ["Criativo novo", "Revisão de arte", "Edição de vídeo", "Banco de imagens", "Reunião de briefing", "Outro"],
+  AI: ["Automação criada", "Otimização de prompt/IA", "Integração de sistema", "Análise de dados", "Reunião", "Outro"],
+  MGMT: ["Reunião de gestão", "Planejamento estratégico", "Revisão de equipe", "Financeiro", "Reunião com cliente", "Outro"],
+};
+const DEFAULT_TASK_CATEGORIES = ["Execução", "Reunião", "Criativo", "Atendimento", "Outro"];
+
+const ADJ_TIPOS_BY_ROLE: Record<string, string[]> = {
+  GT: ["Ajuste de campanha", "Otimização de budget", "Ajuste de segmentação", "Observação", "Pendência", "Risco identificado"],
+  CS: ["Ajuste de atendimento", "Alinhamento com cliente", "Observação", "Pendência", "Risco identificado"],
+  DESIGN: ["Ajuste de criativo", "Revisão de arte", "Observação", "Pendência", "Risco identificado"],
+  AI: ["Ajuste de automação", "Ajuste de fluxo", "Observação", "Pendência", "Risco identificado"],
+  MGMT: ["Ajuste estratégico", "Observação", "Pendência", "Risco identificado"],
+};
+const DEFAULT_ADJ_TIPOS = ["Ajuste realizado", "Observação", "Pendência", "Risco identificado"];
+
 function DiaryCenter({ clients, adjustments, taskLog, profile, token, reload }: { clients: Row[]; adjustments: Row[]; taskLog: Row; profile: Row; token: string; reload: () => Promise<void> }) {
   const [tab, setTab] = useState<"ajustes" | "tasklog">("ajustes");
 
@@ -818,8 +836,12 @@ function DiaryCenter({ clients, adjustments, taskLog, profile, token, reload }: 
     [clients]
   );
 
-  const [adjClient, setAdjClient] = useState("");
-  const [adjTipo, setAdjTipo] = useState("Ajuste");
+  const role = String(profile?.role || "").toUpperCase();
+    const taskCategoryOptions = TASK_CATEGORIES_BY_ROLE[role] || DEFAULT_TASK_CATEGORIES;
+    const adjTipoOptions = ADJ_TIPOS_BY_ROLE[role] || DEFAULT_ADJ_TIPOS;
+
+    const [adjClient, setAdjClient] = useState("");
+  const [adjTipo, setAdjTipo] = useState(adjTipoOptions[0]);
   const [adjDescricao, setAdjDescricao] = useState("");
   const [adjSaving, setAdjSaving] = useState(false);
   const [adjError, setAdjError] = useState("");
@@ -839,7 +861,7 @@ function DiaryCenter({ clients, adjustments, taskLog, profile, token, reload }: 
     }
   }
 
-  const [taskCategory, setTaskCategory] = useState("Execução");
+  const [taskCategory, setTaskCategory] = useState(taskCategoryOptions[0]);
   const [taskName, setTaskName] = useState("");
   const [taskDate, setTaskDate] = useState(new Date().toISOString().slice(0, 10));
   const [taskSaving, setTaskSaving] = useState(false);
@@ -887,10 +909,7 @@ function DiaryCenter({ clients, adjustments, taskLog, profile, token, reload }: 
                 {activeClientsSorted.map((client) => <option key={client.client_id} value={client.client_id}>{client.display_name}</option>)}
               </select>
               <select className="control" value={adjTipo} onChange={(event) => setAdjTipo(event.target.value)}>
-                <option value="Ajuste">Ajuste realizado</option>
-                <option value="Observação">Observação</option>
-                <option value="Pendência">Pendência</option>
-                <option value="Risco">Risco identificado</option>
+                {adjTipoOptions.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
             </div>
             <textarea className="control" style={wide} placeholder="O que foi feito ou observado…" value={adjDescricao} onChange={(event) => setAdjDescricao(event.target.value)} />
@@ -916,11 +935,7 @@ function DiaryCenter({ clients, adjustments, taskLog, profile, token, reload }: 
             <div className="section-title">Nova tarefa</div>
             <div style={row}>
               <select className="control" value={taskCategory} onChange={(event) => setTaskCategory(event.target.value)}>
-                <option value="Execução">Execução</option>
-                <option value="Reunião">Reunião</option>
-                <option value="Criativo">Criativo</option>
-                <option value="Atendimento">Atendimento</option>
-                <option value="Outro">Outro</option>
+                {taskCategoryOptions.map((option) => <option key={option} value={option}>{option}</option>)}
               </select>
               <input type="date" className="control" value={taskDate} onChange={(event) => setTaskDate(event.target.value)} />
             </div>
