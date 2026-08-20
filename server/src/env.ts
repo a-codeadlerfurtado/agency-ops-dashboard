@@ -22,9 +22,11 @@ export const env = {
   // Nunca sai da VPS e nunca recebe o Authorization do usuario.
   supabaseSecretKey: required("SUPABASE_SECRET_KEY"),
 
-  anthropicApiKey: required("ANTHROPIC_API_KEY"),
-  anthropicModel: optional("ANTHROPIC_MODEL", "claude-sonnet-5"),
-  anthropicMaxTokens: Number(optional("ANTHROPIC_MAX_TOKENS", "8000")),
+  openaiApiKey: required("OPENAI_API_KEY"),
+  // Mesmo modelo que o OpsQuestion ja' roda nesta VPS. Manter os dois iguais
+  // evita a IA e o OpsQuestion divergirem respondendo sobre o mesmo dado.
+  openaiModel: optional("OPENAI_MODEL", "gpt-5-mini"),
+  openaiMaxTokens: Number(optional("OPENAI_MAX_TOKENS", "8000")),
 
   // Em producao o frontend e' same-origin (Traefik roteia /api/ai para ca'),
   // entao a lista fica vazia e nenhum cross-origin e' aceito.

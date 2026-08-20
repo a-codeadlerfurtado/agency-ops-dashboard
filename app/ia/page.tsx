@@ -272,7 +272,7 @@ export default function AIWorkspace() {
 
       <section className="ai-main">
         <header className="ai-topbar">
-          <div className="ai-topbar-left"><button className="ai-icon-button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Alternar histórico">☰</button><div><b>{selected?.title || "Nova conversa"}</b><small>{selected?.model || "Claude"}</small></div></div>
+          <div className="ai-topbar-left"><button className="ai-icon-button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Alternar histórico">☰</button><div><b>{selected?.title || "Nova conversa"}</b><small>{selected?.model || "IA da agência"}</small></div></div>
           <div className="ai-context-select"><label>Contexto</label><select value={(selected ? selected.client_id : draftClientId) || ""} onChange={(event) => changeClient(event.target.value)} disabled={sending}><option value="">Geral / sem cliente</option>{clients.map((client) => <option value={client.client_id} key={client.client_id}>{client.display_name} · {client.lifecycle}</option>)}</select></div>
           <a className="ai-back" href="/">Central de Operações ↗</a>
         </header>
@@ -292,9 +292,9 @@ export default function AIWorkspace() {
             <div className="ai-thread">
               {messages.map((message) => <article key={message.id} className={`ai-message ai-message-${message.role}`}>
                 <div className="ai-message-avatar">{message.role === "user" ? initials(profile?.person) : "✦"}</div>
-                <div className="ai-message-body"><div className="ai-message-meta"><b>{message.role === "user" ? "Você" : "Claude"}</b>{message.model && <span>{message.model}</span>}</div><div className="ai-message-content">{message.content}</div>{message.role === "assistant" && (message.source || message.latency_ms) && <small className="ai-message-source">{message.source ? `Fonte: ${message.source}` : ""}{message.latency_ms ? ` · ${(message.latency_ms / 1000).toFixed(1)}s` : ""}</small>}</div>
+                <div className="ai-message-body"><div className="ai-message-meta"><b>{message.role === "user" ? "Você" : "IA"}</b>{message.model && <span>{message.model}</span>}</div><div className="ai-message-content">{message.content}</div>{message.role === "assistant" && (message.source || message.latency_ms) && <small className="ai-message-source">{message.source ? `Fonte: ${message.source}` : ""}{message.latency_ms ? ` · ${(message.latency_ms / 1000).toFixed(1)}s` : ""}</small>}</div>
               </article>)}
-              {sending && <article className="ai-message ai-message-assistant"><div className="ai-message-avatar">✦</div><div className="ai-message-body"><div className="ai-message-meta"><b>Claude</b></div><div className="ai-thinking"><i /><i /><i /></div></div></article>}
+              {sending && <article className="ai-message ai-message-assistant"><div className="ai-message-avatar">✦</div><div className="ai-message-body"><div className="ai-message-meta"><b>IA</b></div><div className="ai-thinking"><i /><i /><i /></div></div></article>}
               <div ref={endRef} />
             </div>
           )}

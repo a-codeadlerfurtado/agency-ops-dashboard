@@ -35,7 +35,7 @@ app.get("/api/ai/health", (_req: Request, res: Response) => {
     ok: true,
     service: "agency-ops-ai-server",
     commit: env.gitCommit,
-    model: env.anthropicModel,
+    model: env.openaiModel,
     uptime_s: Math.round(process.uptime()),
   });
 });
@@ -48,11 +48,11 @@ app.use((_req: Request, res: Response) => {
 });
 
 const server = app.listen(env.port, () => {
-  console.log(`[ai] escutando em :${env.port} | modelo ${env.anthropicModel} | commit ${env.gitCommit}`);
+  console.log(`[ai] escutando em :${env.port} | modelo ${env.openaiModel} | commit ${env.gitCommit}`);
 });
 
 // O Swarm manda SIGTERM ao trocar de versao. Encerrar as conexoes em aberto
-// evita cortar uma resposta do Claude no meio durante um deploy.
+// evita cortar uma resposta do modelo no meio durante um deploy.
 for (const signal of ["SIGTERM", "SIGINT"] as const) {
   process.on(signal, () => {
     console.log(`[ai] ${signal} recebido, encerrando...`);
