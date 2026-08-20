@@ -19,16 +19,56 @@ function json(body: unknown, status = 200) {
 // dado externo, nao contradicao entre as fontes.
 const DIVERGENT = ["CONFLICT", "PARTIAL"];
 
+// Espelha agency-ops-dashboard-api: saude das integracoes e' payload de perfil
+// FULL (la', `integration_health: isFull ? ... : []`). verify_jwt sozinho so'
+// prova que o token e' valido, nao que a pessoa e' colaboradora aprovada - sem
+// esta checagem, qualquer conta recem-cadastrada leria o cruzamento de todos os
+// clientes, incluindo nomes e resumos do Notion.
+async function resolveIsFull(ops: any, authClient: any): Promise<boolean> {
+  const { data, error } = await authClient.auth.getUser();
+  if (error || !data?.user) return false;
+  const userKey = data.user.id;
+
+  const { data: pref } = await ops.from("user_preferences").select("collaborator_person").eq("user_key", userKey).maybeSingle();
+  const person = pref?.collaborator_person ?? null;
+
+  let accessLevel = "RESTRICTED";
+  if (person) {
+    const { data: roster } = await ops.from("team_roster").select("access_level").eq("person", person).eq("is_former", false).maybeSingle();
+    accessLevel = roster?.access_level ?? "RESTRICTED";
+  }
+
+  const { data: decisions } = await ops.from("access_requests").select("kind,status").eq("user_key", userKey).eq("status", "APPROVED");
+  const approvals = decisions ?? [];
+  const accountApproved = approvals.some((row: any) => row.kind === "SIGNUP");
+  const elevated = accessLevel === "RESTRICTED" && approvals.some((row: any) => row.kind === "ELEVATION");
+
+  if (!accountApproved || (!person && !elevated)) return false;
+  return accessLevel === "FULL" || elevated;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (req.method !== "GET") return json({ error: "method_not_allowed" }, 405);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-  if (!supabaseUrl || !serviceRole) return json({ error: "server_configuration" }, 500);
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  if (!supabaseUrl || !serviceRole || !anonKey) return json({ error: "server_configuration" }, 500);
+
+  const authHeader = req.headers.get("Authorization") ?? "";
+  if (!authHeader.startsWith("Bearer ")) return json({ error: "unauthorized" }, 401);
 
   const db = createClient(supabaseUrl, serviceRole, { auth: { persistSession: false, autoRefreshToken: false } });
   const ops = db.schema("agency_ops");
+
+  // Cliente separado, com a chave publica, so' para validar a sessao. O cliente
+  // privilegiado nunca recebe o Authorization do usuario.
+  const authClient = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: authHeader } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  if (!(await resolveIsFull(ops, authClient))) return json({ error: "forbidden" }, 403);
   const url = new URL(req.url);
   const clientId = url.searchParams.get("client_id");
 

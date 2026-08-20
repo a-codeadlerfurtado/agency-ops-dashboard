@@ -46,6 +46,12 @@ const meta = {
   FAIL: { icon: "🔴", label: "Falha", color: "#ef4444", bg: "rgba(239,68,68,.08)", border: "rgba(239,68,68,.22)" },
 } as const;
 
+// O React nao sanitiza href. Como external_source_url chega do Notion, um
+// javascript: gravado la' viraria execucao no clique - so' http(s) passa.
+function safeUrl(value: string | null): string | null {
+  return value && /^https?:\/\//i.test(value) ? value : null;
+}
+
 function clock(value: string | null) {
   if (!value) return "sem registro";
   try { return new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
@@ -57,6 +63,7 @@ export default function IntegrationHealthBar() {
   const [data, setData] = useState<HealthPayload | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [showDivergences, setShowDivergences] = useState(false);
+  const [forbidden, setForbidden] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -75,7 +82,10 @@ export default function IntegrationHealthBar() {
           headers: { Authorization: `Bearer ${session!.access_token}`, apikey: SUPABASE_ANON_KEY },
           cache: "no-store",
         });
+        // 403 = perfil sem acesso a esta visao. Nao e' falha: a barra some.
+        if (response.status === 403) { if (active) { setForbidden(true); setData(null); } return; }
         if (!response.ok) throw new Error(String(response.status));
+        if (active) setForbidden(false);
         const payload = await response.json();
         if (active) setData(payload);
       } catch {
@@ -98,7 +108,7 @@ export default function IntegrationHealthBar() {
     return "OK";
   }, [integrations]);
 
-  if (!session) return null;
+  if (!session || forbidden) return null;
 
   const summary = data?.client_health_crosscheck_summary || {};
   const details = data?.client_health_crosscheck_details || [];
@@ -185,8 +195,8 @@ export default function IntegrationHealthBar() {
                       {row.external_recommended_action || row.external_summary}
                     </p>
                   )}
-                  {row.external_source_url && (
-                    <a href={row.external_source_url} target="_blank" rel="noreferrer" style={{ color:"#60a5fa", fontSize:10.5, textDecoration:"none" }}>
+                  {safeUrl(row.external_source_url) && (
+                    <a href={safeUrl(row.external_source_url)!} target="_blank" rel="noreferrer" style={{ color:"#60a5fa", fontSize:10.5, textDecoration:"none" }}>
                       Abrir no Notion ↗
                     </a>
                   )}
