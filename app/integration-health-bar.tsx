@@ -18,9 +18,25 @@ type Integration = {
   metadata?: Record<string, unknown>;
 };
 
+type CrosscheckDetail = {
+  client_id: string;
+  display_name: string | null;
+  crosscheck_status: "CONFLICT" | "PARTIAL";
+  internal_band: string | null;
+  internal_score: number | null;
+  external_health_status: string | null;
+  external_health_score: number | null;
+  external_risk_level: string | null;
+  external_summary: string | null;
+  external_recommended_action: string | null;
+  external_source_url: string | null;
+  external_source_updated_at: string | null;
+};
+
 type HealthPayload = {
   integrations?: Integration[];
   client_health_crosscheck_summary?: Record<string, number>;
+  client_health_crosscheck_details?: CrosscheckDetail[];
   generated_at?: string;
 };
 
@@ -40,6 +56,7 @@ export default function IntegrationHealthBar() {
   const [session, setSession] = useState<Session | null>(null);
   const [data, setData] = useState<HealthPayload | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const [showDivergences, setShowDivergences] = useState(false);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -84,7 +101,8 @@ export default function IntegrationHealthBar() {
   if (!session) return null;
 
   const summary = data?.client_health_crosscheck_summary || {};
-  const conflicts = Number(summary.CONFLICT || 0);
+  const details = data?.client_health_crosscheck_details || [];
+  const conflicts = details.length || Number(summary.CONFLICT || 0);
   const stale = Number(summary.STALE_EXTERNAL || 0);
   const noExternal = Number(summary.NO_EXTERNAL || 0);
   const state = meta[worst];
@@ -129,10 +147,54 @@ export default function IntegrationHealthBar() {
               <b style={{ color:"#f8fafc", fontSize:12.5 }}>Cruzamento de saúde dos clientes</b>
               <div style={{ color:"#94a3b8", fontSize:11, marginTop:3 }}>Notion entra como sinal adicional junto de WhatsApp, ClickUp, CRM, campanhas e alertas.</div>
             </div>
-            <span style={{ color: conflicts ? "#ef4444" : stale || noExternal ? "#f59e0b" : "#22c55e", fontSize:11, fontWeight:700, textAlign:"right" }}>
-              {conflicts ? `⚠ ${conflicts} divergência(s)` : stale ? `🟠 ${stale} atrasado(s)` : noExternal ? `🟠 ${noExternal} sem dado externo` : "🟢 Cruzamento disponível"}
-            </span>
+            {conflicts ? (
+              <button
+                onClick={() => setShowDivergences((v) => !v)}
+                aria-expanded={showDivergences}
+                title="Ver quais clientes divergem"
+                style={{ color:"#ef4444", fontSize:11, fontWeight:700, textAlign:"right", background:"transparent", border:"1px solid rgba(239,68,68,.35)", borderRadius:9, padding:"5px 9px", cursor:"pointer" }}
+              >
+                ⚠ {conflicts} divergência(s) {showDivergences ? "▲" : "▼"}
+              </button>
+            ) : (
+              <span style={{ color: stale || noExternal ? "#f59e0b" : "#22c55e", fontSize:11, fontWeight:700, textAlign:"right" }}>
+                {stale ? `🟠 ${stale} atrasado(s)` : noExternal ? `🟠 ${noExternal} sem dado externo` : "🟢 Cruzamento disponível"}
+              </span>
+            )}
           </div>
+
+          {showDivergences && (
+            <div style={{ marginTop:8, maxHeight:260, overflowY:"auto", display:"flex", flexDirection:"column", gap:6 }}>
+              {details.map((row) => (
+                <div key={row.client_id} style={{ border:"1px solid rgba(239,68,68,.2)", background:"rgba(239,68,68,.06)", borderRadius:10, padding:"8px 10px" }}>
+                  <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+                    <b style={{ color:"#f8fafc", fontSize:12, flex:1, minWidth:0, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
+                      {row.display_name || "Cliente sem nome"}
+                    </b>
+                    <em style={{ fontStyle:"normal", fontSize:10, fontWeight:700, color: row.crosscheck_status === "CONFLICT" ? "#ef4444" : "#f59e0b" }}>
+                      {row.crosscheck_status === "CONFLICT" ? "Contradição" : "Parcial"}
+                    </em>
+                  </div>
+                  <div style={{ display:"flex", gap:10, marginTop:5, fontSize:11, color:"#cbd5e1", flexWrap:"wrap" }}>
+                    <span>Interno: <b style={{ color:"#f8fafc" }}>{row.internal_band || "—"}</b>{row.internal_score != null ? ` (${row.internal_score})` : ""}</span>
+                    <span style={{ color:"#475569" }}>×</span>
+                    <span>Notion: <b style={{ color:"#f8fafc" }}>{row.external_health_status || "—"}</b>{row.external_health_score != null ? ` (${row.external_health_score})` : ""}{row.external_risk_level ? ` · risco ${row.external_risk_level}` : ""}</span>
+                  </div>
+                  {(row.external_summary || row.external_recommended_action) && (
+                    <p style={{ color:"#94a3b8", fontSize:10.5, lineHeight:1.35, margin:"5px 0 0" }}>
+                      {row.external_recommended_action || row.external_summary}
+                    </p>
+                  )}
+                  {row.external_source_url && (
+                    <a href={row.external_source_url} target="_blank" rel="noreferrer" style={{ color:"#60a5fa", fontSize:10.5, textDecoration:"none" }}>
+                      Abrir no Notion ↗
+                    </a>
+                  )}
+                </div>
+              ))}
+              {!details.length && <div style={{ color:"#94a3b8", fontSize:11, padding:6 }}>Nenhuma divergência detalhada disponível.</div>}
+            </div>
+          )}
         </div>
       )}
     </aside>
