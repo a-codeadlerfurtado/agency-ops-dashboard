@@ -18,10 +18,19 @@ function situacao(row: Row): { rotulo: string; tom: string; nota?: string } {
   const operando = Number(row.tasks_last_30d || 0) > 0;
 
   if (row.renewal_pending) return { rotulo: "RENOVAÇÃO EM ANDAMENTO", tom: "#fbbf24", nota: "documento novo em processo" };
+  // Vencido no papel, mas com task depois do vencimento E grupo de WhatsApp
+  // vivo: a clausula de renovacao foi acionada na pratica. Cobrar aqui seria
+  // ruido — o que falta e' regularizar o documento, nao resgatar o cliente.
+  if (row.operational_signal === "RENEWED_PRESUMED") {
+    return { rotulo: "RENOVAÇÃO PRESUMIDA", tom: "#22c55e",
+             nota: `cláusula acionada · ${formatNumber(row.tasks_after_expiry)} tasks após vencer, grupo ativo` };
+  }
   if (estado === "EXPIRED") {
-    return operando
-      ? { rotulo: "RENOVAÇÃO NECESSÁRIA", tom: "#ef4444", nota: "cliente continua na operação" }
-      : { rotulo: "CONTRATO VENCIDO", tom: "#ef4444" };
+    return row.operational_signal === "RENEWAL_NEEDED"
+      ? { rotulo: "RENOVAÇÃO NECESSÁRIA", tom: "#ef4444", nota: "teve entrega, mas o grupo esfriou" }
+      : operando
+        ? { rotulo: "RENOVAÇÃO NECESSÁRIA", tom: "#ef4444", nota: "cliente continua na operação" }
+        : { rotulo: "CONTRATO VENCIDO", tom: "#ef4444" };
   }
   if (dias === 0) return { rotulo: "VENCE HOJE", tom: "#ef4444" };
   if (estado === "EXPIRING_7") return { rotulo: "VENCE EM 7 DIAS", tom: "#ef4444" };
