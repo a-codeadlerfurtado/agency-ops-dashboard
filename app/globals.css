@@ -102,9 +102,12 @@
    parecer desenhado, e a Inter normal continua carregando o texto corrido e os
    dados, onde legibilidade vale mais que personalidade. */
 h1,h2,h3,.section-title,.pf-hero-main b,.metric .value{font-family:"Inter Tight",Inter,ui-sans-serif,system-ui,sans-serif}
-h1{letter-spacing:-.028em;font-weight:750}
-h2{letter-spacing:-.05em;font-weight:780}
-h3{letter-spacing:-.02em}
+/* A Inter Tight ja' e' estreita de desenho. Somar tracking negativo forte por cima
+   cola as palavras - o titulo ganha densidade e perde leitura. Aqui o aperto e'
+   leve, e o espaco entre palavras e' devolvido. */
+h1{letter-spacing:-.015em;font-weight:750;word-spacing:.04em}
+h2{letter-spacing:-.02em;font-weight:780;word-spacing:.06em;line-height:1.14}
+h3{letter-spacing:-.008em;word-spacing:.03em}
 .eyebrow{letter-spacing:.12em}
 
 /* Numero que alinha em coluna precisa de largura fixa por digito, senao a coluna
