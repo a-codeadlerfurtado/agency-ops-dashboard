@@ -1,8 +1,8 @@
 -- Central de Operacoes - AI Workspace
 -- Persistencia privada de conversas, mensagens, anexos e uso.
--- O schema agency_ops nao e exposto diretamente ao frontend; a Edge Function
--- autenticada e a unica porta de entrada. RLS permanece habilitado como defesa
--- adicional caso a exposicao do schema mude no futuro.
+-- Arquitetura final: frontend/backend na VPS Hostinger; Supabase como Auth/DB/Storage.
+-- O frontend nunca acessa estas tabelas diretamente. O backend da Hostinger valida
+-- o JWT do usuario no Supabase e somente entao usa credencial privada do servidor.
 
 create table if not exists agency_ops.ai_conversations (
   id uuid primary key default gen_random_uuid(),
@@ -96,14 +96,19 @@ alter table agency_ops.ai_messages enable row level security;
 alter table agency_ops.ai_attachments enable row level security;
 alter table agency_ops.ai_usage_events enable row level security;
 
--- Nenhum GRANT para anon/authenticated: o acesso de aplicacao acontece somente
--- pela Edge Function usando service_role apos validar o JWT do usuario.
+-- Acesso direto pelo navegador permanece negado. O backend confiavel na Hostinger
+-- usa a credencial privada do Supabase somente apos validar o JWT do colaborador.
 revoke all on table agency_ops.ai_conversations from anon, authenticated;
 revoke all on table agency_ops.ai_messages from anon, authenticated;
 revoke all on table agency_ops.ai_attachments from anon, authenticated;
 revoke all on table agency_ops.ai_usage_events from anon, authenticated;
 
+grant select, insert, update, delete on table agency_ops.ai_conversations to service_role;
+grant select, insert, update, delete on table agency_ops.ai_messages to service_role;
+grant select, insert, update, delete on table agency_ops.ai_attachments to service_role;
+grant select, insert, update, delete on table agency_ops.ai_usage_events to service_role;
+
 comment on table agency_ops.ai_conversations is 'Conversas privadas da IA da Central de Operacoes por usuario autenticado.';
 comment on table agency_ops.ai_messages is 'Mensagens persistidas das conversas da IA, incluindo metadados de modelo e uso.';
-comment on table agency_ops.ai_attachments is 'Metadados de anexos da IA; bytes ficam em storage privado quando o upload for habilitado.';
+comment on table agency_ops.ai_attachments is 'Metadados de anexos da IA; bytes ficam em Storage privado.';
 comment on table agency_ops.ai_usage_events is 'Auditoria e medicao de consumo da IA por usuario/conversa.';
