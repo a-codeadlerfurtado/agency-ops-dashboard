@@ -600,8 +600,10 @@ function FocusCenter({ clients, allClients, operations, alerts, openClient }: { 
       cliente: nome(alert.client_id, "Alerta geral"),
       titulo: text(alert.title || alert.description || "Alerta operacional"),
       detalhe: text(alert.description || "Alerta aberto"),
-      dono: dono(alert.client_id),
-      horas: horasDesde(alert.last_detected_at || alert.created_at),
+      dono: text(alert.owner || dono(alert.client_id)),
+      // first_detected_at, nao last_detected_at: o detector reescreve last a cada
+      // rodada, entao alerta aberto ha dois dias aparecia como "ha menos de 1h".
+      horas: horasDesde(alert.first_detected_at || alert.last_detected_at),
       chip: alert.severity,
     }));
 
@@ -1166,7 +1168,7 @@ function MediaCenter({ media, clients, openClient }: { media: Row; clients: Row[
 
 function AlertCenter({ alerts, clients, openClient }: { alerts: Row[]; clients: Row[]; openClient: (id: string) => void }) {
   const clientById = new Map(clients.map((client) => [client.client_id, client]));
-  return <section className="workspace"><div className="workspace-head"><div><h2>Central de alertas</h2><p>Sinais agrupados para investigação; ações corretivas seguem no ClickUp.</p></div><span className="counter">{alerts.length} abertos</span></div><section className="card alert-list">{alerts.map((alert) => { const client = clientById.get(alert.client_id); return <button key={alert.id} onClick={() => client && openClient(client.client_id)} disabled={!client}><Chip value={alert.severity} /><div><strong>{text(alert.title)}</strong><p>{text(alert.description)}</p><small>{client ? text(client.display_name) : "Alerta geral"} · {formatDate(alert.created_at)}</small></div><span className="arrow">→</span></button>; })}{!alerts.length && <div className="empty">Nenhum alerta aberto.</div>}</section></section>;
+  return <section className="workspace"><div className="workspace-head"><div><h2>Central de alertas</h2><p>Sinais agrupados para investigação; ações corretivas seguem no ClickUp.</p></div><span className="counter">{alerts.length} abertos</span></div><section className="card alert-list">{alerts.map((alert) => { const client = clientById.get(alert.client_id); return <button key={alert.id} onClick={() => client && openClient(client.client_id)} disabled={!client}><Chip value={alert.severity} /><div><strong>{text(alert.title)}</strong><p>{text(alert.description)}</p><small>{client ? text(client.display_name) : "Alerta geral"} · aberto em {formatDate(alert.first_detected_at)}</small></div><span className="arrow">→</span></button>; })}{!alerts.length && <div className="empty">Nenhum alerta aberto.</div>}</section></section>;
 }
 
 function Health({ name, status, tone }: { name: string; status: string; tone: string }) {
