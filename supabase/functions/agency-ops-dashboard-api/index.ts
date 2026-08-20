@@ -194,43 +194,52 @@ Deno.serve(async (req) => {
     const clientRow: any = core[0].data;
     if (!clientRow) return respond({ error: "not_found" }, 404);
     if (isWalletOnly && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
-    const context = await Promise.all([
+    // core fica antes de proposito: e' ele que carrega a checagem de permissao
+    // (cliente inexistente ou de carteira alheia para'm aqui). Ja' context e history
+    // nao dependem um do outro e passam a rodar juntos.
+    const [context, history] = await Promise.all([
+      Promise.all([
       ops.from("notion_briefing_pages").select("notion_page_id,title,page_url,sync_status,match_status,extracted_profile,last_fetched_at").eq("client_id", clientId).order("updated_at", { ascending: false }),
       ops.from("client_daily_summary").select("*").eq("client_id", clientId).order("summary_date", { ascending: false }).limit(30),
       ops.from("media_metrics_daily").select("*").eq("client_id", clientId).order("date", { ascending: false }).limit(180),
       ops.from("client_timeline").select("*").eq("client_id", clientId).order("at", { ascending: false }).limit(100),
-    ]);
-    const history = await Promise.all([
+      ]),
+      Promise.all([
       ops.from("client_health_scores").select("*").eq("client_id", clientId).order("date", { ascending: false }).limit(90),
       ops.from("client_integrations").select("*").eq("client_id", clientId),
       ops.from("clickup_tasks").select("task_id,name,status,is_closed,date_created,date_closed,due_date,list_name,url,last_synced_at").eq("client_id", clientId).order("date_updated", { ascending: false }).limit(100),
       ops.from("onboarding_cases").select("*,onboarding_stages(*)").eq("client_id", clientId).order("created_at", { ascending: false }).limit(3),
       ops.from("client_lifecycle_events").select("*").eq("client_id", clientId).order("occurred_at", { ascending: false }).limit(100),
       ops.from("client_won_events").select("*").eq("client_id", clientId).order("occurred_at", { ascending: false }).limit(20),
+      ]),
     ]);
     const results = [...core, ...context, ...history];
     return respond({ client: results[0].data, conversations: value(results[1], []), alerts: value(results[2], []), commitments: value(results[3], []), briefings: value(results[4], []), daily_summaries: value(results[5], []), media: value(results[6], []), timeline: value(results[7], []), health_history: value(results[8], []), integrations: value(results[9], []), clickup_tasks: value(results[10], []), onboarding_cases: value(results[11], []), lifecycle_events: value(results[12], []), won_events: value(results[13], []), generated_at: new Date().toISOString() });
   }
 
-  const core = await Promise.all([
+  // Os seis grupos nao dependem uns dos outros, mas rodavam em serie: cada await
+  // esperava o grupo anterior terminar. O tempo da resposta era a soma dos seis.
+  // Agora disparam juntos e a espera passa a ser a do grupo mais lento.
+  const [core, sources, operationsData, clickupData, platformData, teamData] = await Promise.all([
+    Promise.all([
     ops.from("dashboard_client_overview").select("*").limit(300),
     ops.from("operational_alerts").select("*").eq("status", "OPEN").limit(500),
     ops.from("commitments").select("*").in("status", ["OPEN", "IN_PROGRESS"]).limit(500),
     ops.from("conversation_state").select("*").limit(500),
-  ]);
-  const sources = await Promise.all([
+    ]),
+    Promise.all([
     ops.from("notion_briefing_pages").select("notion_page_id,client_id,match_status,sync_status,updated_at").limit(500),
     ops.from("notion_briefing_sync_runs").select("*").order("started_at", { ascending: false }).limit(1),
     ops.from("job_runs").select("job_name,status,started_at,finished_at,error").order("started_at", { ascending: false }).limit(40),
     ops.from("conversation_processing_queue").select("chat_id,status,dirty_since,last_error").limit(500),
-  ]);
-  const operationsData = await Promise.all([
+    ]),
+    Promise.all([
     ops.from("whatsapp_messages").select("id,event_at,received_at,chat_id").order("id", { ascending: false }).limit(1),
     ops.from("media_metrics_daily").select("*").order("date", { ascending: false }).limit(3000),
     ops.from("employee_capacity").select("*").order("date", { ascending: false }).limit(300),
     ops.from("client_health_scores").select("*").order("date", { ascending: false }).limit(1000),
-  ]);
-  const clickupData = await Promise.all([
+    ]),
+    Promise.all([
     ops.from("clickup_productivity_30d").select("*").order("tasks_done", { ascending: false }),
     ops.from("clickup_productivity_daily").select("*").gte("date", new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)).order("date", { ascending: true }),
     ops.from("clickup_tasks").select("task_id,name,status,date_closed,due_date,list_name,client_id,url,clickup_task_assignees(user_id,username,email)", { count: "exact" }).eq("is_closed", true).order("date_closed", { ascending: false }).limit(100),
@@ -240,8 +249,8 @@ Deno.serve(async (req) => {
     ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).eq("client_match_status", "UNMATCHED"),
     ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).eq("client_match_status", "NO_LABEL"),
     ops.from("clickup_client_label_audit").select("client_label,task_count,status").eq("status", "UNMATCHED").order("task_count", { ascending: false }).limit(30),
-  ]);
-  const platformData = await Promise.all([
+    ]),
+    Promise.all([
     ops.from("platform_notifications").select("*").order("occurred_at", { ascending: false }).limit(100),
     ops.from("crm_preclients").select("*").order("updated_at", { ascending: false }).limit(200),
     ops.from("client_won_events").select("*").order("occurred_at", { ascending: false }).limit(100),
@@ -250,8 +259,8 @@ Deno.serve(async (req) => {
     ops.from("user_preferences").select("*").eq("user_key", currentUserKey).maybeSingle(),
     ops.from("automation_health").select("*").order("updated_at", { ascending: false }),
     ops.from("task_log_entries").select("category,collaborator_name,task_name,task_date,synced_at").is("deleted_at", null).order("task_date", { ascending: false }).limit(3000),
-  ]);
-  const teamData = await Promise.all([
+    ]),
+    Promise.all([
     ops.from("team_roster").select("*").eq("is_former", false).order("person"),
     ops.from("team_former_members").select("*").order("left_at", { ascending: false }),
     // Quadro de pessoal + produtividade ClickUp, agregado em SQL (agency_ops.team_overview).
@@ -273,6 +282,7 @@ Deno.serve(async (req) => {
     ops.from("portfolio_monthly_computed").select("*").gte("month", "2026-01-01").order("month"),
     // Sinal operacional: cliente que parou de gerar task parou de ser atendido.
     ops.from("portfolio_operational_signal").select("*"),
+    ]),
   ]);
 
   const results = [...core, ...sources, ...operationsData, ...clickupData];
