@@ -12,6 +12,10 @@ export const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
 export const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
 export const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api`;
 export const CLICKUP_API_URL = `${SUPABASE_URL}/functions/v1/clickup-sync-api`;
+// Backend da IA roda na VPS Hostinger, atras do mesmo dominio do Dashboard.
+// Same-origin de proposito: nenhum preflight de CORS e nenhuma credencial
+// privilegiada precisa transitar pelo navegador.
+export const AI_API_BASE = "/api/ai";
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 export type Row = Record<string, any>;
@@ -177,4 +181,61 @@ export function text(value: unknown) {
 
 export function initials(value: unknown) {
   return String(value || "CO").trim().split(/\s+/).map((part) => part[0]).slice(0,2).join("").toUpperCase();
+}
+
+export async function api(view: string, token: string, params: Record<string, string> = {}) {
+  const url = new URL(API_URL);
+  url.searchParams.set("view", view);
+  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
+  return response.json();
+}
+
+export async function apiPost(view: string, token: string, body: Row = {}) {
+  const response = await fetch(`${API_URL}?view=${encodeURIComponent(view)}`, { method:"POST", headers:{Authorization:`Bearer ${token}`,"content-type":"application/json"}, body:JSON.stringify(body) });
+  if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
+  return response.json();
+}
+
+export async function clickupAction(action: "register" | "sync", token: string) {
+  if (action === "register") {
+    const response = await fetch(`${CLICKUP_API_URL}?action=register`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || body.error || `ClickUp ${response.status}`);
+    return body;
+  }
+  let pageStart = 0;
+  const totals = { tasks_seen: 0, tasks_upserted: 0, tasks_closed: 0 };
+  for (let batch = 0; batch < 100; batch++) {
+    const response = await fetch(`${CLICKUP_API_URL}?action=sync&since_days=180&page_start=${pageStart}&max_pages=5`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.detail || body.error || `ClickUp ${response.status}`);
+    totals.tasks_seen += Number(body.tasks_seen || 0);
+    totals.tasks_upserted += Number(body.tasks_upserted || 0);
+    totals.tasks_closed += Number(body.tasks_closed || 0);
+    if (body.next_page == null) return { ...body, ...totals };
+    pageStart = Number(body.next_page);
+  }
+  throw new Error("A importação atingiu o limite de páginas; tente novamente para continuar.");
+}
+
+export function Chip({ value }: { value: unknown }) {
+  const raw = text(value);
+  return <span className={`chip ${raw}`}>{pt[raw] || raw.replaceAll("_", " ")}</span>;
+}
+
+export function Metric({ label, value, tone = "", hint = "", loading = false }: { label: string; value: string; tone?: string; hint?: string; loading?: boolean }) {
+  return (
+    <article className="card metric" aria-busy={loading || undefined}>
+      <div className="label">{label}</div>
+      {loading
+        ? <div className="value"><span className="skeleton skeleton-value" /></div>
+        : <div className={`value ${tone}`}>{value}</div>}
+      <div className="hint">{loading ? <span className="skeleton skeleton-line" /> : hint}</div>
+    </article>
+  );
 }
