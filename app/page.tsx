@@ -246,6 +246,9 @@ export default function Dashboard() {
           {([
             ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"],
           ] as [View, string][]).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} title={label}>{label}</button>)}
+          {/* A IA e' uma rota propria, nao uma aba de estado: link de verdade,
+              para abrir direto em /ia e continuar funcionando no back do navegador. */}
+          <a href="/ia" title="IA da agência">IA</a>
         </div>
       </aside>
 
