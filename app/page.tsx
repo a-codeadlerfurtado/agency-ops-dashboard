@@ -1261,6 +1261,41 @@ function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | null; ope
     </article>;
   }
 
+  // Leitura operacional: interpreta o movimento das metricas em vez de so exibi-las.
+  // TPC e LTV apontam para lados diferentes por construcao - TPC mede quanto duram os
+  // que saem, LTV quanto ja duram os que ficam -, entao a combinacao dos dois diz mais
+  // do que cada um isolado.
+  const varia = (campo: string) => {
+    if (!anterior) return null;
+    const atual = Number(linha[campo] ?? 0), prev = Number(anterior[campo] ?? 0);
+    if (!prev) return null;
+    return ((atual - prev) / prev) * 100;
+  };
+  const leituras: Array<{ titulo: string; texto: string; tom: string }> = [];
+  if (anterior) {
+    const dTpc = varia("tpc_months"), dLtv = varia("ltv_months"), dChurn = varia("churn_rate"), dEnt = varia("entries");
+    const saldo = Number(linha.balance ?? 0);
+    if (dTpc !== null && dLtv !== null) {
+      if (dTpc < -5 && dLtv > 5) leituras.push({ titulo: "Perdendo cliente novo, segurando o antigo. ", tom: "alerta", texto: `O TPC caiu ${Math.abs(dTpc).toFixed(0)}% enquanto o LTV subiu ${dLtv.toFixed(0)}%: quem está saindo dura cada vez menos, mas a base que ficou está envelhecendo bem. O problema está na largada, não na retenção.` });
+      else if (dTpc > 5 && dLtv > 5) leituras.push({ titulo: "Retenção melhorando na base inteira. ", tom: "bom", texto: `TPC e LTV subiram juntos (${dTpc.toFixed(0)}% e ${dLtv.toFixed(0)}%): quem sai está durando mais e quem fica também. É o cenário saudável.` });
+      else if (dTpc < -5 && dLtv < -5) leituras.push({ titulo: "Carteira rejuvenescendo por perda. ", tom: "alerta", texto: `TPC e LTV caíram juntos: a base está sendo reposta por clientes novos mais rápido do que amadurece. Volume compensando retenção.` });
+      else leituras.push({ titulo: "Sem movimento relevante. ", tom: "neutro", texto: `TPC e LTV estáveis em relação ao mês anterior.` });
+    }
+    if (dChurn !== null && Math.abs(dChurn) > 5) leituras.push({
+      titulo: dChurn > 0 ? "Churn acelerando. " : "Churn desacelerando. ", tom: dChurn > 0 ? "alerta" : "bom",
+      texto: `Taxa de ${formatNumber(linha.churn_rate, 1)}% contra ${formatNumber(anterior.churn_rate, 1)}% no mês anterior, sobre base potencial de ${formatNumber(linha.churn_base, 0)}.` });
+    if (dEnt !== null && Math.abs(dEnt) > 10) leituras.push({
+      titulo: dEnt > 0 ? "Entrada em alta. " : "Entrada em queda. ", tom: dEnt > 0 ? "bom" : "alerta",
+      texto: `${formatNumber(linha.entries, 0)} entradas contra ${formatNumber(anterior.entries, 0)} no mês anterior.` });
+    if (saldo < 0) leituras.push({ titulo: "Carteira encolhendo. ", tom: "alerta", texto: `Saldo de ${saldo}: saíram mais clientes do que entraram.` });
+  }
+  if (Number(linha.vendas_caidas) > 0) leituras.push({
+    titulo: "Venda caída no mês. ", tom: "neutro",
+    texto: `${formatNumber(linha.vendas_caidas, 0)} cliente(s) saíram em até 10 dias. Não entram em churn, taxa nem TPC — nunca chegaram à operação. Se o número crescer, o problema é de qualificação na venda, não de entrega.` });
+  if (Number(status.churn_previsto) > 0) leituras.push({
+    titulo: "Churn previsto em aberto. ", tom: "alerta",
+    texto: `${formatNumber(status.churn_previsto, 0)} cliente(s) com saída sinalizada. Ainda contam como ativos, então a taxa do mês tende a subir quando confirmarem.` });
+
   if (auditOpen) return <section className="workspace">
     <div className="workspace-head">
       <div><span className="eyebrow">Carteira de Clientes</span><h2>Auditorias e commits</h2><p>Registro numerado, mais recente primeiro.</p></div>
@@ -1330,9 +1365,18 @@ function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | null; ope
         <Kpi label="LTV médio" valor={formatNumber(linha.ltv_months, 2)} unidade="m" hint="tempo médio da carteira ativa" campo="ltv_months" />
         <Kpi label="Entradas no mês" valor={formatNumber(linha.entries, 0)} hint={`novos clientes de ${SECTOR_LABEL[sector]}`} campo="entries" />
         <Kpi label="Churns no mês" valor={formatNumber(linha.churns, 0)} hint={Number(linha.churns) ? "cancelamentos registrados" : "nenhum cancelamento registrado"} campo="churns" inverso />
+        <Kpi label="Vendas caídas" valor={formatNumber(linha.vendas_caidas, 0)} hint="saíram em até 10 dias; não contam como churn" />
         <Kpi label="Taxa de churn" valor={formatNumber(linha.churn_rate, 1)} unidade="%" hint={`${formatNumber(linha.churns, 0)} churns sobre base potencial de ${formatNumber(linha.churn_base, 0)}`} campo="churn_rate" inverso />
         <Kpi label="TPC" valor={linha.tpc_months == null ? "—" : formatNumber(linha.tpc_months, 2)} unidade={linha.tpc_months == null ? undefined : "m"} hint={linha.tpc_months == null ? "sem churns para calcular permanência" : "permanência média dos churns"} />
         <Kpi label="Saldo líquido" valor={`${Number(linha.balance) > 0 ? "+" : ""}${formatNumber(linha.balance, 0)}`} hint="entradas menos churns no mês" campo="balance" />
+      </div>
+    </section>
+
+    <section className="card pf-block pf-reading">
+      <div className="pf-block-head"><div><b>Leitura operacional</b><small>O que o movimento das métricas diz sobre a carteira.</small></div></div>
+      <div className="pf-reading-list">{leituras.map((l, i) =>
+        <p key={i} className={`pf-read ${l.tom}`}><b>{l.titulo}</b>{l.texto}</p>)}
+        {!leituras.length && <p className="pf-read neutro"><b>Sem base de comparação.</b>Não há mês anterior para comparar as métricas.</p>}
       </div>
     </section>
 
