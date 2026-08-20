@@ -355,7 +355,8 @@ Deno.serve(async (req) => {
     Promise.all([
     ops.from("whatsapp_messages").select("id,event_at,received_at,chat_id").order("id", { ascending: false }).limit(1),
     ops.from("media_metrics_daily").select("*").order("date", { ascending: false }).limit(3000),
-    ops.from("employee_capacity").select("*").order("date", { ascending: false }).limit(300),
+    // employee_capacity saiu: nenhuma tela consumia, e a consulta pesava na carga.
+    Promise.resolve({ data: [], error: null }),
     ops.from("client_health_scores").select("*").order("date", { ascending: false }).limit(1000),
     ]),
     Promise.all([
@@ -435,13 +436,18 @@ Deno.serve(async (req) => {
   const wallets = value<any[]>(teamData[17], []);
   const walletByOwner = new Map(wallets.map((row: any) => [row.gt_owner, row.carteira]));
   const walletName = (owner: unknown) => walletByOwner.get(String(owner ?? "")) ?? null;
-  const enrichedClients = clients.map((client) => ({ ...client, carteira: walletName(client.gt_owner), health: latestHealthByClient.get(client.client_id) ?? null }));
+  // briefing_profile vem do select("*") da view e nenhuma tela le': ~800 bytes por
+  // cliente, ~127 kB por carga. O drawer busca o cliente a parte quando precisa.
+  const enrichedClients = clients.map(({ briefing_profile: _ignorado, ...client }) => ({ ...client, carteira: walletName(client.gt_owner), health: latestHealthByClient.get(client.client_id) ?? null }));
   const count = (fn: (row: any) => boolean) => activeClients.filter(fn).length;
   const severity: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
   const now = new Date();
   const overdue = commitments.filter((row) => row.due_at && new Date(row.due_at) < now);
-  const bottlenecks = activeClients.reduce((acc: Record<string, number>, row: any) => { const key = row.waiting_direction || row.onboarding_blocked_by || "NO_BLOCKER"; acc[key] = (acc[key] ?? 0) + 1; return acc; }, {});
-  const evidenceReview = activeClients.filter((row) => row.needs_semantic_review || ["PARTIAL", "INCOMPLETE"].includes(row.data_coverage));
+  // So' os campos que o card de evidencia desenha. Antes ia a linha inteira do cliente,
+  // 128 kB duplicando o que o proprio payload ja' manda em `clients`.
+  const evidenceReview = activeClients
+    .filter((row) => row.needs_semantic_review || ["PARTIAL", "INCOMPLETE"].includes(row.data_coverage))
+    .map((row) => ({ client_id: row.client_id, display_name: row.display_name, data_coverage: row.data_coverage, summary_today: row.summary_today, current_subject: row.current_subject, confidence: row.confidence, needs_semantic_review: row.needs_semantic_review }));
   const clientNames = new Map(clients.map((row) => [row.client_id, row.display_name]));
   const clientLifecycles = new Map(clients.map((row) => [row.client_id, row.lifecycle]));
   const clientMeta = new Map(allClients.map((row) => [row.client_id, row]));
@@ -591,10 +597,8 @@ Deno.serve(async (req) => {
       // Enriquecidas: 70 das 191 conversas nao tem client_id e a fila do Foco do dia
       // mostrava o chat_id cru no lugar do nome do grupo.
       sla: { waiting_agency: conversationsEnriched.filter((row: any) => row.waiting_for_agency), waiting_client: conversationsEnriched.filter((row: any) => row.waiting_for_client), overdue_commitments: overdue },
-      bottlenecks,
       // Evidencias e' tela de gestao: quem nao tem a aba tambem nao recebe o dado.
       evidence_review: canView("evidence") ? evidenceReview.slice(0, 100) : [],
-      employee_capacity: isFull ? value(results[10], []) : [],
       task_log: taskLog,
     },
     adjustments,
