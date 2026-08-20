@@ -402,8 +402,8 @@ Deno.serve(async (req) => {
     ops.from("portfolio_monthly_computed").select("*").gte("month", "2026-01-01").order("month"),
     // Sinal operacional: cliente que parou de gerar task parou de ser atendido.
     ops.from("portfolio_operational_signal").select("*"),
-    // Codinome das carteiras (Alfa, Bravo, Charlie...). O nome do gestor deixa de ser
-    // o nome da carteira: troca de GT nao renomeia a carteira.
+    // Codinome das carteiras (Alfa, Bravo, Charlie...) no lugar do nome do gestor.
+    // O codinome acompanha o GESTOR: cliente que troca de GT troca de carteira junto.
     ops.from("wallet_overview").select("*").order("ordem"),
     ]),
   ]);

@@ -1,14 +1,20 @@
 -- Carteiras com nome proprio (alfabeto militar), em vez do nome do gestor.
 --
 -- Ate' aqui "carteira" era so' o nome da pessoa colado num rotulo ("Carteira Felipe
--- Oliveira"). Isso amarra a identidade da carteira a quem a opera hoje: troca de GT
--- e a carteira "muda de nome", mesmo sendo a mesma lista de clientes.
+-- Oliveira"): comprido, e muda de escrita conforme quem digita.
 --
--- Agora cada carteira tem um codinome estavel - Alfa, Bravo, Charlie... - atribuido
--- por ORDEM DE CRIACAO e nunca reciclado. Carteira nova nasce ja' com a proxima
--- palavra do alfabeto, sem ninguem precisar batizar: os gatilhos abaixo cuidam disso
--- em qualquer caminho que crie uma carteira (cliente novo com gestor, remanejamento
--- em gt_assignments, ou GT novo entrando no quadro).
+-- Agora cada carteira tem um codinome curto - Alfa, Bravo, Charlie... - atribuido por
+-- ORDEM DE CRIACAO e nunca reciclado. Carteira nova nasce ja' com a proxima palavra do
+-- alfabeto, sem ninguem precisar batizar: os gatilhos abaixo cuidam disso em qualquer
+-- caminho que crie uma carteira (cliente novo com gestor, remanejamento em
+-- gt_assignments, ou GT novo entrando no quadro).
+--
+-- DECISAO DELIBERADA (confirmada pelo gestor): o codinome acompanha o GESTOR, nao o
+-- conjunto de clientes. wallet_registry e' chaveado por gt_owner, entao carteira e' o
+-- livro de um GT: cliente que muda de gestor muda de carteira junto, e GT que sai leva
+-- a carteira dele para o vazio em vez de passa-la adiante. Se um dia a carteira precisar
+-- sobreviver a troca de dono, o caminho e' dar wallet_id ao cliente em vez de derivar
+-- do gt_owner - nao e' um ajuste de rotulo.
 
 create table if not exists agency_ops.wallet_registry (
   gt_owner  text        primary key,
