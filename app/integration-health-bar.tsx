@@ -106,6 +106,7 @@ export default function IntegrationHealthBar() {
         </span>
         <span style={{ fontSize:16, color:"#94a3b8" }}>{expanded ? "−" : "+"}</span>
           </>
+          )}
       </button>
 
       {expanded && (
