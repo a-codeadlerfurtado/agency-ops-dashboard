@@ -23,6 +23,7 @@ export type TeamMember = {
   is_former: boolean;
   former_reason: string | null;
   clickup_user: string | null;
+  carteira: string | null;
   missing_clickup_link: boolean;
   clients_active: number;
   clients_onboarding: number;
@@ -56,6 +57,7 @@ export type HomeData = {
   team?: TeamMember[];
   unassigned_clients?: Row[];
   portfolio?: Row | null;
+  wallets?: Row[];
   adjustments?: Row[];
   stage_labels?: Record<string, string>;
   profile?: Row;

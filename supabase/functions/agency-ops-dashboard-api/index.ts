@@ -331,7 +331,9 @@ Deno.serve(async (req) => {
       ]),
     ]);
     const results = [...core, ...context, ...history];
-    return respond({ client: results[0].data, conversations: value(results[1], []), alerts: value(results[2], []), commitments: value(results[3], []), briefings: value(results[4], []), daily_summaries: value(results[5], []), media: value(results[6], []), timeline: value(results[7], []), health_history: value(results[8], []), integrations: value(results[9], []), clickup_tasks: value(results[10], []), onboarding_cases: value(results[11], []), lifecycle_events: value(results[12], []), won_events: value(results[13], []), ops_notes: value(results[14], []), generated_at: new Date().toISOString() });
+    // Codinome da carteira: o drawer mostra "Carteira Bravo", nao o nome do gestor.
+    const { data: walletRow } = await ops.from("wallet_registry").select("carteira").eq("gt_owner", clientRow.gt_owner ?? "").maybeSingle();
+    return respond({ client: { ...(results[0].data as any), carteira: walletRow?.carteira ?? null }, conversations: value(results[1], []), alerts: value(results[2], []), commitments: value(results[3], []), briefings: value(results[4], []), daily_summaries: value(results[5], []), media: value(results[6], []), timeline: value(results[7], []), health_history: value(results[8], []), integrations: value(results[9], []), clickup_tasks: value(results[10], []), onboarding_cases: value(results[11], []), lifecycle_events: value(results[12], []), won_events: value(results[13], []), ops_notes: value(results[14], []), generated_at: new Date().toISOString() });
   }
 
   // Os seis grupos nao dependem uns dos outros, mas rodavam em serie: cada await
@@ -400,6 +402,9 @@ Deno.serve(async (req) => {
     ops.from("portfolio_monthly_computed").select("*").gte("month", "2026-01-01").order("month"),
     // Sinal operacional: cliente que parou de gerar task parou de ser atendido.
     ops.from("portfolio_operational_signal").select("*"),
+    // Codinome das carteiras (Alfa, Bravo, Charlie...). O nome do gestor deixa de ser
+    // o nome da carteira: troca de GT nao renomeia a carteira.
+    ops.from("wallet_overview").select("*").order("ordem"),
     ]),
   ]);
 
@@ -427,7 +432,10 @@ Deno.serve(async (req) => {
   const activeMediaRows = mediaRows.filter((row) => row.client_id && activeIds.has(row.client_id));
   const latestHealthByClient = new Map<string, any>();
   for (const row of value<any[]>(results[11], [])) if (!latestHealthByClient.has(row.client_id)) latestHealthByClient.set(row.client_id, row);
-  const enrichedClients = clients.map((client) => ({ ...client, health: latestHealthByClient.get(client.client_id) ?? null }));
+  const wallets = value<any[]>(teamData[17], []);
+  const walletByOwner = new Map(wallets.map((row: any) => [row.gt_owner, row.carteira]));
+  const walletName = (owner: unknown) => walletByOwner.get(String(owner ?? "")) ?? null;
+  const enrichedClients = clients.map((client) => ({ ...client, carteira: walletName(client.gt_owner), health: latestHealthByClient.get(client.client_id) ?? null }));
   const count = (fn: (row: any) => boolean) => activeClients.filter(fn).length;
   const severity: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
   const now = new Date();
@@ -474,6 +482,7 @@ Deno.serve(async (req) => {
   const fullTeam = value<any[]>(teamData[2], []).map((member: any) => ({
     ...member,
     access_level: accessByPerson.get(norm(member.person)) ?? null,
+    carteira: member.role === "GT" ? walletName(member.person) : null,
     portfolio: member.role === "GT"
       ? allClients
           .filter((row) => row.gt_owner === member.person && ["ACTIVE", "ONBOARDING"].includes(row.lifecycle))
@@ -511,7 +520,7 @@ Deno.serve(async (req) => {
     .filter((row) => inScope(row.client_id))
     .map((row) => {
       const meta = row.client_id ? clientMeta.get(row.client_id) : null;
-      return { ...row, client_display_name: meta?.display_name ?? null, gestor: meta?.gt_owner ?? null, cs_owner: meta?.cs_owner ?? null, carteira: meta?.gt_owner ? `Carteira ${meta.gt_owner}` : null };
+      return { ...row, client_display_name: meta?.display_name ?? null, gestor: meta?.gt_owner ?? null, cs_owner: meta?.cs_owner ?? null, carteira: walletName(meta?.gt_owner) };
     });
 
   // 70 das 191 conversas nao tem client_id e apareciam com o chat_id cru na tela.
@@ -596,9 +605,11 @@ Deno.serve(async (req) => {
     preferences: { ...preferencesRow, my_access_request: myAccessRequest },
     integration_health: isFull ? value(platformData[6], []) : [],
     team, unassigned_clients: canView("team") ? unassignedClients : [],
+    // Quem opera uma carteira ve o codinome dela; quem ve o quadro inteiro ve todas.
+    wallets: canView("team") ? wallets : [],
     portfolio: canView("clients") ? portfolio : null, stage_labels: stageLabels,
     access_requests_pending: isFull ? value(teamData[4], []) : [],
-    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved, views: allowedViews },
+    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved, views: allowedViews, carteira: walletName(profilePerson) },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
     auth_mode: currentUserKey === "adler-furtado" && suppliedKey.length >= 40 ? "dashboard_key" : "login",
     generated_at: new Date().toISOString(),
