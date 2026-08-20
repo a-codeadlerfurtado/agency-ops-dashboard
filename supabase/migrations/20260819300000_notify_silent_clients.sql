@@ -16,17 +16,17 @@ begin
          case when s.sinal in ('nunca_atendido','silencio_critico') then 'CRITICAL' else 'ATTENTION' end,
          case s.sinal
            when 'nunca_atendido'   then 'Nunca atendido: ' || s.display_name
-           when 'silencio_critico' then 'Silencio critico: ' || s.display_name
-           else 'Cliente em silencio: ' || s.display_name end,
+           when 'silencio_critico' then 'Silêncio crítico: ' || s.display_name
+           else 'Cliente em silêncio: ' || s.display_name end,
          case s.sinal
            when 'nunca_atendido' then
-             s.display_name || ' esta ha ' || s.dias_casa || ' dias na carteira e nunca teve uma task criada no ClickUp.'
-             || coalesce(' Gestor: ' || s.gt_owner || '.', ' Sem gestor de trafego atribuido.')
+             s.display_name || ' está há ' || s.dias_casa || ' dias na carteira e nunca teve uma task criada no ClickUp.'
+             || coalesce(' Gestor: ' || s.gt_owner || '.', ' Sem gestor de tráfego atribuído.')
            else
-             s.display_name || ' esta ha ' || s.dias_sem_pedido || ' dias sem nenhum pedido novo no ClickUp'
-             || ' (ultima task em ' || to_char(s.ultima_task_criada,'DD/MM/YYYY') || ').'
+             s.display_name || ' está há ' || s.dias_sem_pedido || ' dias sem nenhum pedido novo no ClickUp'
+             || ' (última task em ' || to_char(s.ultima_task_criada,'DD/MM/YYYY') || ').'
              || ' ' || s.dias_casa || ' dias de casa, ' || s.tasks || ' tasks no total.'
-             || coalesce(' Gestor: ' || s.gt_owner || '.', ' Sem gestor de trafego atribuido.')
+             || coalesce(' Gestor: ' || s.gt_owner || '.', ' Sem gestor de tráfego atribuído.')
          end,
          s.client_id, 'dashboard', now(),
          jsonb_build_object('client_id', s.client_id, 'sinal', s.sinal,
