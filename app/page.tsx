@@ -1241,6 +1241,19 @@ function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | null; ope
   const churns: Row[] = portfolio.churns || [];
   const audit: Row[] = portfolio.audit || [];
   const maxTenure = Math.max(1, ...tenure.map((t) => Number(t.clientes || 0)));
+  const survival: Row[] = portfolio.survival || [];
+  const evolucao: Row[] = (portfolio.long_series || []).filter((r: Row) => r.sector === sector);
+  const gtRet: Row[] = portfolio.gt_retention || [];
+  // Projecao: cada faixa contribui com seus ativos vezes o risco historico da faixa.
+  const previstos = survival.length
+    ? survival.reduce((total, f: Row) => total + (Number(f.expostos) > 0
+        ? Number(f.ativos_na_faixa) * (Number(f.churns) / Number(f.expostos)) : 0), 0)
+    : null;
+  const piorFaixa = survival.length
+    ? (survival.map((f: Row) => ({ ...f, risco: Number(f.expostos) > 0 ? (Number(f.churns) / Number(f.expostos)) * 100 : 0 })) as Row[])
+        .filter((f: Row) => Number(f.ativos_na_faixa) > 0)
+        .sort((a, b) => Number(b.risco) - Number(a.risco))[0]
+    : null;
   const pct = (parte: any) => Number(linha.active_clients) ? ((Number(parte) / Number(linha.active_clients)) * 100).toFixed(1) : "0";
 
   function Delta({ campo, inverso }: { campo: string; inverso?: boolean }) {
@@ -1408,6 +1421,89 @@ function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | null; ope
           <td><span className={`pf-quality-tag q-${r.quality}`}>{text(r.quality_label)}</span></td>
           <td><span className={`pf-origin ${r.origem}`}>{r.origem === "ao_vivo" ? "ao vivo" : "congelado"}</span></td>
         </tr>)}
+      </tbody></table></div>
+    </section>
+
+    <section className="card pf-block pf-since">
+      <div className="pf-block-head"><div><b>Evolução desde janeiro de 2026</b>
+        <small>Série reconstruída do dado bruto — alcança janeiro e fevereiro, que o relatório não cobre. É tendência, não fechamento oficial.</small></div></div>
+      {evolucao.length > 1 && <>
+        <div className="pf-since-cards">{[
+          { k: "active_clients", l: "Base ativa", suf: "", casas: 0, melhorSubindo: true },
+          { k: "churn_rate", l: "Taxa de churn", suf: "%", casas: 1, melhorSubindo: false },
+          { k: "ltv_months", l: "LTV", suf: "m", casas: 2, melhorSubindo: true },
+          { k: "tpc_months", l: "TPC", suf: "m", casas: 2, melhorSubindo: true },
+        ].map((m) => {
+          const ini = Number(evolucao[0][m.k] ?? 0), fim = Number(evolucao[evolucao.length - 1][m.k] ?? 0);
+          const var_ = ini ? ((fim - ini) / ini) * 100 : null;
+          const melhorou = var_ === null ? null : (m.melhorSubindo ? var_ > 0 : var_ < 0);
+          return <article key={m.k} className={`pf-since-card ${melhorou === null ? "" : melhorou ? "bom" : "ruim"}`}>
+            <div className="label">{m.l}</div>
+            <div className="pf-since-nums"><span>{formatNumber(ini, m.casas)}{m.suf}</span><i>→</i><b>{formatNumber(fim, m.casas)}{m.suf}</b></div>
+            {var_ !== null && <div className="pf-since-var">{var_ >= 0 ? "▲" : "▼"} {Math.abs(var_).toFixed(0)}% desde janeiro</div>}
+          </article>;
+        })}</div>
+        <div className="pf-charts">
+          <div><h4>Base ativa por mês</h4><PortfolioChart kind="line" unit="clientes" series={[{ label: "Ativos", values: evolucao.map((r: Row) => Number(r.active_clients || 0)) }]} /></div>
+          <div><h4>Taxa de churn por mês</h4><PortfolioChart kind="line" unit="%" series={[{ label: "Churn rate", values: evolucao.map((r: Row) => Number(r.churn_base) > 0 ? Number(((Number(r.churns) / Number(r.churn_base)) * 100).toFixed(1)) : 0) }]} /></div>
+        </div>
+        <div className="pf-months">{evolucao.map((r: Row) => <span key={r.month_key}>{String(r.month_key).slice(5)}</span>)}</div>
+        <div className="table-wrap"><table><thead><tr>
+          <th>Mês</th><th>Ativos</th><th>Entradas</th><th>Churns</th><th>Vendas caídas</th><th>Taxa</th><th>LTV</th><th>TPC</th><th>Saldo</th>
+        </tr></thead><tbody>
+          {evolucao.map((r: Row) => { const taxa = Number(r.churn_base) > 0 ? (Number(r.churns) / Number(r.churn_base)) * 100 : 0;
+            return <tr key={r.month_key}>
+              <td><b>{String(r.month_key)}</b></td>
+              <td>{formatNumber(r.active_clients, 0)}</td>
+              <td>{formatNumber(r.entries, 0)}</td>
+              <td>{formatNumber(r.churns, 0)}</td>
+              <td>{formatNumber(r.vendas_caidas, 0)}</td>
+              <td className={taxa >= 20 ? "red" : taxa >= 10 ? "yellow" : "green"}>{taxa.toFixed(1)}%</td>
+              <td>{r.ltv_months == null ? "—" : formatNumber(r.ltv_months, 2)}</td>
+              <td>{r.tpc_months == null ? "—" : formatNumber(r.tpc_months, 2)}</td>
+              <td>{(() => { const sd = Number(r.entries) - Number(r.churns) - Number(r.vendas_caidas); return `${sd > 0 ? "+" : ""}${sd}`; })()}</td>
+            </tr>; })}
+        </tbody></table></div>
+        <p className="pf-since-note">O mês corrente está em andamento — entradas e churns ainda podem subir até o fechamento.</p>
+      </>}
+      {evolucao.length <= 1 && <div className="empty">Série insuficiente para comparar.</div>}
+    </section>
+
+    <section className="card pf-block pf-survival">
+      <div className="pf-block-head"><div><b>Curva de sobrevivência</b>
+        <small>Risco por faixa de idade: de quem chegou aos X dias, quantos saíram antes da faixa seguinte. Não é a distribuição dos churns — as faixas têm populações diferentes.</small></div></div>
+      {previstos !== null && <p className="pf-forecast">
+        <b>{previstos.toFixed(1)} churns projetados</b> se a base atual envelhecer no risco histórico de cada faixa.
+        {piorFaixa && <> A faixa mais perigosa é <b>{piorFaixa.rotulo}</b>, com {formatNumber(piorFaixa.risco, 1)}% de risco e {piorFaixa.ativos_na_faixa} cliente(s) ali agora.</>}
+      </p>}
+      <div className="pf-survival-list">{survival.map((f: Row) => {
+        const risco = Number(f.expostos) > 0 ? (Number(f.churns) / Number(f.expostos)) * 100 : 0;
+        const nivel = risco >= 40 ? "alto" : risco >= 15 ? "medio" : "baixo";
+        return <div key={f.ordem} className={`pf-surv-row ${nivel}`}>
+          <span className="pf-surv-label">{text(f.rotulo)}</span>
+          <div className="pf-surv-bar"><i style={{ width: `${Math.min(100, risco)}%` }} /></div>
+          <span className="pf-surv-risk">{risco.toFixed(1)}%</span>
+          <small className="pf-surv-detail">{f.churns} de {f.expostos} que chegaram · {f.ativos_na_faixa} ativos hoje</small>
+        </div>;
+      })}</div>
+    </section>
+
+    <section className="card pf-block">
+      <div className="pf-block-head"><div><b>Retenção por gestor</b>
+        <small>A carteira foi dividida em agosto/2026 — churns anteriores não têm gestor e aparecem agrupados.</small></div></div>
+      <div className="table-wrap"><table><thead><tr>
+        <th>Gestor</th><th>Ativos</th><th>Churns</th><th>Vendas caídas</th><th>Permanência média</th><th>Idade média dos ativos</th><th>% churn</th>
+      </tr></thead><tbody>
+        {gtRet.map((g: Row) => <tr key={g.gestor} className={String(g.gestor).startsWith("(") ? "inactive-member" : ""}>
+          <td><b>{text(g.gestor)}</b></td>
+          <td>{formatNumber(g.ativos, 0)}</td>
+          <td>{formatNumber(g.churns, 0)}</td>
+          <td>{formatNumber(g.vendas_caidas, 0)}</td>
+          <td>{g.permanencia_media_dias == null ? "—" : `${formatNumber(g.permanencia_media_dias, 0)} dias`}</td>
+          <td>{g.idade_media_ativos == null ? "—" : `${formatNumber(g.idade_media_ativos, 0)} dias`}</td>
+          <td>{g.churn_pct == null ? "—" : `${formatNumber(g.churn_pct, 1)}%`}</td>
+        </tr>)}
+        {!gtRet.length && <tr><td colSpan={7}><div className="empty">Sem dados de retenção por gestor.</div></td></tr>}
       </tbody></table></div>
     </section>
 

@@ -267,6 +267,10 @@ Deno.serve(async (req) => {
     ops.from("portfolio_tenure_distribution").select("*"),
     ops.from("portfolio_audit_log").select("*").order("occurred_at", { ascending: false }).limit(100),
     ops.from("client_churn_log").select("*").order("saida", { ascending: false }).limit(200),
+    ops.from("portfolio_survival").select("*").order("ordem"),
+    ops.from("portfolio_gt_retention").select("*"),
+    // Serie longa reconstruida do dado bruto: alcanca janeiro/2026, que o relatorio nao cobre.
+    ops.from("portfolio_monthly_computed").select("*").gte("month", "2026-01-01").order("month"),
   ]);
 
   const results = [...core, ...sources, ...operationsData, ...clickupData];
@@ -415,6 +419,10 @@ Deno.serve(async (req) => {
     timeline: pfTimeline,
     churns: pfChurn,
     audit: pfAudit,
+    // Curva de sobrevivencia: risco por faixa de idade, nao distribuicao dos churns.
+    survival: value<any[]>(teamData[13], []),
+    gt_retention: value<any[]>(teamData[14], []),
+    long_series: value<any[]>(teamData[15], []),
   } : null;
 
   const wonEvents = value<any[]>(platformData[2], []).filter((row) => inScope(row.client_id));
