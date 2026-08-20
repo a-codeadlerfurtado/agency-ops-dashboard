@@ -19,6 +19,7 @@ const SOURCE_GUIDE = `FONTES PREFERENCIAIS NO SCHEMA agency_ops:
 - Serviços e IA dos clientes: client_service_overview, client_services, client_ai_evidence, client_ai_overrides, ai_source_registry, ai_source_discovery.
 - Formulários e materiais: form_responses, client_raw_material_uploads, client_raw_material_uploads_summary.
 - CRM e pré-clientes: crm_preclients.
+- Anotações escritas pelo time no perfil do cliente: ops_notes (o que o GT sabe e nenhum coletor automático vê — reclamação por telefone, combinado informal, contexto de bastidor). ops_notes_pendentes são as que ainda não têm cliente definido. Ao responder sobre um cliente, verifique ops_notes: quando houver anotação, ela costuma explicar o que os números só mostram.
 - Saúde das integrações: integration_health_overview.
 - Carteira/retention: portfolio_live, portfolio_client_status, portfolio_gt_retention.
 Se uma fonte não trouxer o dado, consulte as fontes adjacentes acima. Não conclua pela ausência numa única tabela.`;
