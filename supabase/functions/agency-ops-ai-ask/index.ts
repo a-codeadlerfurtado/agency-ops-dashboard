@@ -292,14 +292,24 @@ Deno.serve(async (req) => {
     return reply({ ok: true, name: "OpsQuestion", answer: fast.answer, source: `${fast.source} · ${fast.tables.join(", ")}`, read_only: true, mode: "DIRECT_DB", request_id: requestId, latency_ms: latency, generated_at: new Date().toISOString() });
   }
 
-  await ops.from("opsquestion_interactions").insert({ user_key: user.id, person, role, access_level: accessLevel, question, status: "PENDING", source: "MAKE_AI", request_id: requestId });
-  const [{ data: webhookCfg }, { data: secretCfg }, clientContext] = await Promise.all([
+  // Para onde a pergunta vai e' configuracao, nao codigo. AI_ASK_ENDPOINT_URL manda;
+  // MAKE_AI_ASK_WEBHOOK_URL fica como a rota atual enquanto ninguem definir a nova.
+  // Trocar Make por VPS vira um insert em automation_settings, sem deploy.
+  const [{ data: endpointCfg }, { data: webhookCfg }, { data: secretCfg }, clientContext] = await Promise.all([
+    ops.from("automation_settings").select("value").eq("key", "AI_ASK_ENDPOINT_URL").maybeSingle(),
     ops.from("automation_settings").select("value").eq("key", "MAKE_AI_ASK_WEBHOOK_URL").maybeSingle(),
     ops.from("automation_settings").select("value").eq("key", "AI_ASK_READ_SECRET").maybeSingle(),
     buildClientContext(client, ops),
   ]);
-  const webhookUrl = typeof webhookCfg?.value === "string" ? webhookCfg.value : null;
+  const directUrl = typeof endpointCfg?.value === "string" ? endpointCfg.value : null;
+  const webhookUrl = directUrl ?? (typeof webhookCfg?.value === "string" ? webhookCfg.value : null);
   const readSecret = typeof secretCfg?.value === "string" ? secretCfg.value : null;
+  // O log tem que dizer por onde a resposta passou de verdade - senao, depois da
+  // troca, o historico continua alegando Make para respostas que vieram da VPS.
+  const routeMode = directUrl ? "DIRECT_AI" : "MAKE_AI";
+  const routeLabel = directUrl ? "agency_ops via IA direta" : "agency_ops via Make/IA";
+
+  await ops.from("opsquestion_interactions").insert({ user_key: user.id, person, role, access_level: accessLevel, question, status: "PENDING", source: routeMode, request_id: requestId });
   if (!webhookUrl || !readSecret) {
     const latency = Date.now() - started;
     await ops.from("opsquestion_interactions").update({ status: "ERROR", error: "missing_ai_configuration", latency_ms: latency }).eq("request_id", requestId);
@@ -329,12 +339,12 @@ Deno.serve(async (req) => {
     const raw = await response.text(); let parsed: any = null; try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
     const answer = safeAnswer(parsed, raw); const latency = Date.now() - started;
     if (!response.ok || !answer) {
-      const error = !response.ok ? `make_http_${response.status}` : "empty_ai_answer";
+      const error = !response.ok ? `${routeMode === "DIRECT_AI" ? "vps" : "make"}_http_${response.status}` : "empty_ai_answer";
       await ops.from("opsquestion_interactions").update({ status: "ERROR", error, latency_ms: latency, answered_at: new Date().toISOString() }).eq("request_id", requestId);
       return reply({ ok: false, error: "Falha temporária no OpsQuestion.", detail: error, request_id: requestId }, 502);
     }
     await ops.from("opsquestion_interactions").update({ status: "SUCCESS", answer: answer.slice(0, 20000), latency_ms: latency, answered_at: new Date().toISOString() }).eq("request_id", requestId);
-    return reply({ ok: true, name: "OpsQuestion", answer, source: "agency_ops via Make/IA", read_only: true, mode: "MAKE_AI", request_id: requestId, latency_ms: latency, generated_at: new Date().toISOString() });
+    return reply({ ok: true, name: "OpsQuestion", answer, source: routeLabel, read_only: true, mode: routeMode, request_id: requestId, latency_ms: latency, generated_at: new Date().toISOString() });
   } catch (error) {
     clearTimeout(timeout); const latency = Date.now() - started;
     const message = error instanceof DOMException && error.name === "AbortError" ? "ai_timeout" : String(error instanceof Error ? error.message : error).slice(0, 500);

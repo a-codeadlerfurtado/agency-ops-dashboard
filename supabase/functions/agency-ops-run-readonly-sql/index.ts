@@ -21,9 +21,21 @@ async function getAskSecret(): Promise<string | null> {
   return cachedAskSecret;
 }
 
+// A senha do papel de leitura vive no Vault, nao em automation_settings - de la'
+// qualquer select na tabela a devolvia em texto aberto. O fallback existe apenas
+// durante a transicao e sai quando a linha antiga for removida.
+async function getReaderPassword(): Promise<string | null> {
+  try {
+    const rows = await svcSql`select agency_ops.get_ai_reader_password() as s`;
+    const fromVault = rows.length ? (rows[0].s as string | null) : null;
+    if (fromVault) return fromVault;
+  } catch { /* cai no fallback abaixo */ }
+  return await getSetting("AI_READER_DB_PASSWORD");
+}
+
 async function getReaderUrl(): Promise<string> {
   if (cachedReaderUrl) return cachedReaderUrl;
-  const pw = await getSetting("AI_READER_DB_PASSWORD");
+  const pw = await getReaderPassword();
   if (!pw) throw new Error("missing AI_READER_DB_PASSWORD");
   const orig = new URL(Deno.env.get("SUPABASE_DB_URL")!);
   const suffix = orig.username.includes(".") ? orig.username.slice(orig.username.indexOf(".")) : "";
