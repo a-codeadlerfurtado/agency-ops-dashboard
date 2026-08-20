@@ -30,8 +30,14 @@ function situacao(row: Row): { rotulo: string; tom: string; nota?: string } {
              nota: "renovação confirmada; instrumento novo ainda não assinado" };
   }
   if (row.operational_signal === "OPERATING_UNCOVERED") {
-    return { rotulo: "SEM CONTRATO VIGENTE", tom: "#ef4444",
-             nota: `${formatNumber(row.tasks_after_expiry)} tasks entregues após o fim da vigência · exige novo instrumento` };
+    // Nem toda entrega vira task de campanha: cliente de produto de IA aparece
+    // por evidencia de IA ou resumo diario. Citar a fonte evita a leitura de que
+    // "0 tasks" significa cliente parado.
+    const fonte: Record<string, string> = { clickup: "tasks no ClickUp", ia: "entregas de IA", resumo_diario: "resumo diário" };
+    const prova = Number(row.tasks_after_expiry) > 0
+      ? `${formatNumber(row.tasks_after_expiry)} tasks entregues após o fim da vigência`
+      : `operação ativa via ${fonte[String(row.fonte_atividade)] || "outra fonte"}`;
+    return { rotulo: "SEM CONTRATO VIGENTE", tom: "#ef4444", nota: `${prova} · exige novo instrumento` };
   }
   if (estado === "EXPIRED") {
     return row.operational_signal === "RENEWAL_NEEDED"
@@ -203,7 +209,9 @@ export function ContractsCenter({ token }: { token: string }) {
               <td><b style={{ color: s.tom }}>{prazo(row.days_remaining, String(row.contract_state || ""))}</b></td>
               <td><div style={{ color: s.tom, fontWeight: 700, fontSize: 12 }}>{s.rotulo}</div>{s.nota && <div className="small" style={{ color: "#fca5a5" }}>{s.nota}</div>}</td>
               <td className="small">{formatNumber(row.tasks_last_30d)}</td>
-              <td className="small">{row.last_task_at ? formatDate(row.last_task_at) : "sem atividade"}</td>
+              <td className="small">{row.last_task_at ? formatDate(row.last_task_at)
+                : row.ultima_atividade ? `${formatDate(row.ultima_atividade)} (${text(row.fonte_atividade)})`
+                : "sem atividade"}</td>
               <td className="small">{row.renewal_pending ? "em andamento" : (String(row.contract_state) === "EXPIRED" ? "necessária" : "—")}</td>
               <td>{pdf ? <a className="btn" href={String(pdf)} target="_blank" rel="noreferrer">Abrir</a> : <span className="small">—</span>}</td>
             </tr>;
