@@ -304,3 +304,13 @@ tbody tr{transition:background .14s ease}
 .foco-carteira>summary{cursor:pointer;font-size:13px;display:flex;align-items:center;gap:8px}
 .foco-carteira>summary span{border:1px solid var(--line);border-radius:99px;padding:1px 8px;font-size:11px;color:var(--muted)}
 .foco-carteira .workspace{margin-top:12px}
+
+/* Linha de tabela clicavel: o clique no <tr> serve o mouse, mas <tr> nao recebe foco
+   nem responde a Enter. Quem navega por teclado nao conseguia abrir cliente nenhum.
+   O botao abaixo e' o alvo real - parece texto, funciona como botao. */
+.cell-open{background:none;border:0;padding:0;margin:0;font:inherit;color:inherit;
+  text-align:left;cursor:pointer;display:block;width:100%}
+.cell-open:hover{text-decoration:underline;text-underline-offset:2px}
+.cell-open:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
+tr:focus-within{background:color-mix(in srgb, var(--accent) 8%, transparent)}
+.skeleton-title{width:200px;height:24px;margin:2px 0}

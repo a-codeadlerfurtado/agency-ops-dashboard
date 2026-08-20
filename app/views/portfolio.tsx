@@ -262,7 +262,7 @@ export function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | nu
     <section className="card pf-block">
       <div className="pf-block-head"><div><b>Resumo histórico</b><small>Clique em um mês para abrir seus indicadores.</small></div></div>
       <div className="table-wrap"><table className="pf-history"><thead><tr>
-        <th>Mês</th><th>Ativos</th><th>Entradas</th><th>Churns</th><th>Churn rate</th><th>LTV</th><th>TPC</th><th>Saldo</th><th>Qualidade</th><th>Origem</th>
+        <th scope="col">Mês</th><th scope="col">Ativos</th><th scope="col">Entradas</th><th scope="col">Churns</th><th scope="col">Churn rate</th><th scope="col">LTV</th><th scope="col">TPC</th><th scope="col">Saldo</th><th scope="col">Qualidade</th><th scope="col">Origem</th>
       </tr></thead><tbody>
         {timeline.filter((r) => r.sector === sector).map((r) => <tr key={r.month_key} className={r.month_key === mesAtivo ? "active" : ""} onClick={() => setMonthKey(r.month_key)}>
           <td><b>{text(r.label)}</b></td>
@@ -304,7 +304,7 @@ export function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | nu
         </div>
         <div className="pf-months">{evolucao.map((r: Row) => <span key={r.month_key}>{String(r.month_key).slice(5)}</span>)}</div>
         <div className="table-wrap"><table><thead><tr>
-          <th>Mês</th><th>Ativos</th><th>Entradas</th><th>Churns</th><th>Vendas caídas</th><th>Taxa</th><th>LTV</th><th>TPC</th><th>Saldo</th>
+          <th scope="col">Mês</th><th scope="col">Ativos</th><th scope="col">Entradas</th><th scope="col">Churns</th><th scope="col">Vendas caídas</th><th scope="col">Taxa</th><th scope="col">LTV</th><th scope="col">TPC</th><th scope="col">Saldo</th>
         </tr></thead><tbody>
           {evolucao.map((r: Row) => { const taxa = Number(r.churn_base) > 0 ? (Number(r.churns) / Number(r.churn_base)) * 100 : 0;
             return <tr key={r.month_key}>
@@ -367,7 +367,7 @@ export function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | nu
       <div className="pf-block-head"><div><b>Retenção por gestor</b>
         <small>A carteira foi dividida em agosto/2026 — churns anteriores não têm gestor e aparecem agrupados.</small></div></div>
       <div className="table-wrap"><table><thead><tr>
-        <th>Gestor</th><th>Ativos</th><th>Churns</th><th>Vendas caídas</th><th>Permanência média</th><th>Idade média dos ativos</th><th>% churn</th>
+        <th scope="col">Gestor</th><th scope="col">Ativos</th><th scope="col">Churns</th><th scope="col">Vendas caídas</th><th scope="col">Permanência média</th><th scope="col">Idade média dos ativos</th><th scope="col">% churn</th>
       </tr></thead><tbody>
         {gtRet.map((g: Row) => <tr key={g.gestor} className={String(g.gestor).startsWith("(") ? "inactive-member" : ""}>
           <td><b>{text(g.gestor)}</b></td>
@@ -414,7 +414,7 @@ export function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | nu
 
     <details className="card pf-block">
       <summary><b>Churns registrados</b><span>{churns.length}</span></summary>
-      <div className="table-wrap"><table><thead><tr><th>Cliente</th><th>Entrada</th><th>Saída</th><th>Permanência</th><th>Qualidade</th></tr></thead>
+      <div className="table-wrap"><table><thead><tr><th scope="col">Cliente</th><th scope="col">Entrada</th><th scope="col">Saída</th><th scope="col">Permanência</th><th scope="col">Qualidade</th></tr></thead>
       <tbody>
         {churns.map((c) => <tr key={c.id}>
           <td><b>{text(c.client_name)}</b></td><td>{formatDay(c.entrada)}</td><td>{formatDay(c.saida)}</td>

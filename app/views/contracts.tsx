@@ -177,9 +177,9 @@ export function ContractsCenter({ token }: { token: string }) {
       <div className="table-wrap">
         <table>
           <thead><tr>
-            <th>Cliente</th><th>Status do cliente</th><th>CS</th><th>GT</th><th>Documento</th><th>Status Autentique</th>
-            <th>Data início</th><th>Data fim</th><th>Dias restantes</th><th>Status contratual</th>
-            <th>Tasks 30d</th><th>Última task</th><th>Renovação</th><th>Documento/PDF</th>
+            <th scope="col">Cliente</th><th scope="col">Status do cliente</th><th scope="col">CS</th><th scope="col">GT</th><th scope="col">Documento</th><th scope="col">Status Autentique</th>
+            <th scope="col">Data início</th><th scope="col">Data fim</th><th scope="col">Dias restantes</th><th scope="col">Status contratual</th>
+            <th scope="col">Tasks 30d</th><th scope="col">Última task</th><th scope="col">Renovação</th><th scope="col">Documento/PDF</th>
           </tr></thead>
           <tbody>{filtrados.map((row) => {
             const s = situacao(row);
