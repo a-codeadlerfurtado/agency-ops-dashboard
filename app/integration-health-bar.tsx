@@ -90,18 +90,18 @@ export default function IntegrationHealthBar() {
   const state = meta[worst];
 
   return (
-    <aside style={{ position:"fixed", left:6, bottom:18, zIndex:9999, width: expanded ? "min(640px,calc(100vw - 36px))" : 255, fontFamily:"inherit" }}>
+    <aside style={{ position:"fixed", left:6, bottom:18, zIndex:9999, width: expanded ? "min(640px,calc(100vw - 36px))" : 190, fontFamily:"inherit" }}>
       <button
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
-        style={{ width:"100%", display:"flex", alignItems:"center", gap:10, border:`1px solid ${state.border}`, background:"rgba(9,12,20,.94)", color:"#f8fafc", borderRadius:16, padding:"11px 13px", boxShadow:"0 16px 50px rgba(0,0,0,.28)", cursor:"pointer", backdropFilter:"blur(16px)" }}
+        style={{ width:"100%", display:"flex", alignItems:"center", gap:8, border:`1px solid ${state.border}`, background:"rgba(9,12,20,.94)", color:"#f8fafc", borderRadius:13, padding:"8px 10px", boxShadow:"0 16px 50px rgba(0,0,0,.28)", cursor:"pointer", backdropFilter:"blur(16px)" }}
       >
-        <span style={{ width:10, height:10, borderRadius:999, background:state.color, boxShadow:`0 0 0 5px ${state.bg}` }} />
+        <span style={{ width:8, height:8, borderRadius:999, background:state.color, boxShadow:`0 0 0 5px ${state.bg}` }} />
         <span style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", flex:1, minWidth:0 }}>
-          <b style={{ fontSize:13, whiteSpace:"nowrap" }}>Saúde das integrações</b>
+          <b style={{ fontSize:11.5, whiteSpace:"nowrap" }}>Saúde das integrações</b>
           <small style={{ color:"#94a3b8", marginTop:2 }}>{loading ? "Atualizando…" : `${state.icon} ${state.label}`}</small>
         </span>
-        <span style={{ fontSize:20, color:"#94a3b8" }}>{expanded ? "−" : "+"}</span>
+        <span style={{ fontSize:16, color:"#94a3b8" }}>{expanded ? "−" : "+"}</span>
       </button>
 
       {expanded && (
