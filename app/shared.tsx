@@ -13,6 +13,10 @@ export const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7
 export const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api`;
 export const CONTRACTS_API = `${SUPABASE_URL}/functions/v1/agency-ops-contracts-api`;
 export const CLICKUP_API_URL = `${SUPABASE_URL}/functions/v1/clickup-sync-api`;
+// Backend da IA roda na VPS Hostinger, atras do mesmo dominio do Dashboard.
+// Same-origin de proposito: nenhum preflight de CORS e nenhuma credencial
+// privilegiada precisa transitar pelo navegador.
+export const AI_API_BASE = "/api/ai";
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 export type Row = Record<string, any>;
