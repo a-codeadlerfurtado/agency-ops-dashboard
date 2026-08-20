@@ -1,5 +1,6 @@
 import "./globals.css";
 import IntegrationHealthBar from "./integration-health-bar";
+import CampaignsNavBridge from "./campaigns-nav-bridge";
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
@@ -17,6 +18,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       </head>
       <body>
         {children}
+        <CampaignsNavBridge />
         <IntegrationHealthBar />
       </body>
     </html>
