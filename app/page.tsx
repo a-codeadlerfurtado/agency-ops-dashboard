@@ -66,6 +66,7 @@ export default function Dashboard() {
   // responde 404. Nada aqui revela que a area existe — nem o botao no menu, nem
   // um campo no payload compartilhado do dashboard.
   const [contractsAllowed, setContractsAllowed] = useState(false);
+  const [contractsUnread, setContractsUnread] = useState(0);
   useEffect(() => { document.documentElement.style.setProperty("--sidenav-width", sidebarOpen ? "224px" : "58px"); }, [sidebarOpen]);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [opsQuestion, setOpsQuestion] = useState("");
@@ -95,8 +96,13 @@ export default function Dashboard() {
     if (!token) { setContractsAllowed(false); return; }
     let active = true;
     fetch(`${CONTRACTS_API}?probe=1`, { headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY }, cache: "no-store" })
-      .then((response) => { if (active) setContractsAllowed(response.ok); })
-      .catch(() => { if (active) setContractsAllowed(false); });
+      .then(async (response) => {
+        if (!active) return;
+        setContractsAllowed(response.ok);
+        // O probe devolve so' o contador; nenhum dado contratual trafega aqui.
+        if (response.ok) { const corpo = await response.json().catch(() => null); setContractsUnread(Number(corpo?.unread || 0)); }
+      })
+      .catch(() => { if (active) { setContractsAllowed(false); setContractsUnread(0); } });
     return () => { active = false; };
   }, [session?.access_token]);
 
@@ -289,7 +295,7 @@ export default function Dashboard() {
           {([
             ...navItems,
             ...(contractsAllowed ? [["contracts", "Contratos"]] : []),
-          ] as [View, string][]).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} title={label}>{label}</button>)}
+          ] as [View, string][]).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} title={label}>{label}{key === "contracts" && contractsUnread > 0 && <span className="chip" style={{ marginLeft: 6 }}>{contractsUnread}</span>}</button>)}
         </div>
       </aside>
 
