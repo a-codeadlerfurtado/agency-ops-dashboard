@@ -1163,6 +1163,14 @@ function Detail({ title, full = false, children }: { title: string; full?: boole
 // recalculado a cada consulta. O campo `origem` distingue os dois, para a tela
 // nunca apresentar reconstrucao como medicao.
 // ---------------------------------------------------------------------------
+const SINAL_META: Record<string, { rotulo: string; tom: string; nota: string }> = {
+  nunca_atendido: { rotulo: "Nunca atendido", tom: "critico", nota: "mais de 30 dias de casa sem nenhuma task criada" },
+  silencio_critico: { rotulo: "Silêncio crítico", tom: "critico", nota: "45 dias ou mais sem nenhum pedido novo" },
+  silencio_atencao: { rotulo: "Silêncio", tom: "alerta", nota: "entre 21 e 44 dias sem pedido novo" },
+  aguardando_primeira_task: { rotulo: "Aguardando 1ª task", tom: "neutro", nota: "entrou há pouco e ainda não gerou pedido" },
+  ia_sem_sinal: { rotulo: "Apenas IA", tom: "neutro", nota: "não passa pelo ClickUp; ausência de task não diz nada" },
+};
+
 const SECTOR_LABEL: Record<string, string> = { marketing: "Marketing", ia: "Apenas IA" };
 const URGENCY_LABEL: Record<string, string> = { urgente: "Até 10 dias", atencao: "11–30 dias", ok: "31–60 dias", confort: "61+ dias", veteran: "Veterano" };
 const BAND_LABEL: Record<string, string> = { LESS_3M: "Menos de 3 meses", M3_6: "3 a 6 meses", OVER_6M: "Mais de 6 meses" };
@@ -1242,6 +1250,8 @@ function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | null; ope
   const audit: Row[] = portfolio.audit || [];
   const maxTenure = Math.max(1, ...tenure.map((t) => Number(t.clientes || 0)));
   const survival: Row[] = portfolio.survival || [];
+  const sinais: Row[] = portfolio.operational_signal || [];
+  const sinaisAtivos = sinais.filter((r) => ["ACTIVE","ONBOARDING"].includes(String(r.lifecycle)));
   const evolucao: Row[] = (portfolio.long_series || []).filter((r: Row) => r.sector === sector);
   const gtRet: Row[] = portfolio.gt_retention || [];
   // Projecao: cada faixa contribui com seus ativos vezes o risco historico da faixa.
@@ -1467,6 +1477,26 @@ function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | null; ope
         <p className="pf-since-note">O mês corrente está em andamento — entradas e churns ainda podem subir até o fechamento.</p>
       </>}
       {evolucao.length <= 1 && <div className="empty">Série insuficiente para comparar.</div>}
+    </section>
+
+    <section className="card pf-block pf-signal">
+      <div className="pf-block-head"><div><b>Sinal operacional do ClickUp</b>
+        <small>Cliente que parou de gerar task parou de ser atendido. Usa a data de criação do pedido, não de fechamento — em 11–13/07 houve faxina com 232 tasks fechadas contra 21 criadas, e o fechamento marcaria trabalho que não existiu.</small></div></div>
+      <div className="pf-signal-list">{["nunca_atendido","silencio_critico","silencio_atencao","aguardando_primeira_task","ia_sem_sinal"].map((k) => {
+        const lista = sinaisAtivos.filter((r) => r.sinal === k);
+        if (!lista.length) return null;
+        const meta = SINAL_META[k];
+        return <div key={k} className={`pf-signal-group ${meta.tom}`}>
+          <header><b>{meta.rotulo}</b><span>{lista.length}</span><small>{meta.nota}</small></header>
+          <div className="pf-signal-items">{lista
+            .sort((a, b) => Number(b.dias_sem_pedido ?? 9999) - Number(a.dias_sem_pedido ?? 9999))
+            .map((r) => <button key={r.client_id} onClick={() => openClient(r.client_id)}>
+              <span><b>{text(r.display_name)}</b><small>{text(r.gt_owner) === "sem registro" ? "sem gestor" : text(r.gt_owner)} · {formatNumber(r.dias_casa, 0)} dias de casa · {formatNumber(r.tasks, 0)} tasks</small></span>
+              <span className="pf-signal-days">{r.dias_sem_pedido == null ? "—" : `${r.dias_sem_pedido}d`}</span>
+            </button>)}</div>
+        </div>;
+      })}
+      {!sinaisAtivos.length && <div className="empty">Nenhum sinal de silêncio na carteira.</div>}</div>
     </section>
 
     <section className="card pf-block pf-survival">

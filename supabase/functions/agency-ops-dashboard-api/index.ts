@@ -271,6 +271,8 @@ Deno.serve(async (req) => {
     ops.from("portfolio_gt_retention").select("*"),
     // Serie longa reconstruida do dado bruto: alcanca janeiro/2026, que o relatorio nao cobre.
     ops.from("portfolio_monthly_computed").select("*").gte("month", "2026-01-01").order("month"),
+    // Sinal operacional: cliente que parou de gerar task parou de ser atendido.
+    ops.from("portfolio_operational_signal").select("*"),
   ]);
 
   const results = [...core, ...sources, ...operationsData, ...clickupData];
@@ -423,6 +425,10 @@ Deno.serve(async (req) => {
     survival: value<any[]>(teamData[13], []),
     gt_retention: value<any[]>(teamData[14], []),
     long_series: value<any[]>(teamData[15], []),
+    operational_signal: value<any[]>(teamData[16], []).filter((row: any) => row.sinal !== "ativo" && row.sinal !== "churned"),
+    signal_summary: value<any[]>(teamData[16], [])
+      .filter((row: any) => ["ACTIVE","ONBOARDING"].includes(row.lifecycle))
+      .reduce((acc: any, row: any) => { acc[row.sinal] = (acc[row.sinal] ?? 0) + 1; return acc; }, {}),
   } : null;
 
   const wonEvents = value<any[]>(platformData[2], []).filter((row) => inScope(row.client_id));
