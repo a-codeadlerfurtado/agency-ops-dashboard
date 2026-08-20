@@ -80,8 +80,11 @@ function useArrastavel(expandido: boolean) {
   const refCaixa = useRef<HTMLElement | null>(null);
   const [posicao, setPosicao] = useState<Posicao | null>(null);
   const [arrastando, setArrastando] = useState(false);
+  // Refs, nao estado: o pointermove chega antes de o React re-renderizar, entao
+  // ler `arrastando` do estado dentro do handler perdia o inicio do arraste.
+  const arrastandoRef = useRef(false);
   const moveu = useRef(false);
-  const origem = useRef({ pxInicial: 0, pyInicial: 0, xInicial: 0, yInicial: 0 });
+  const origem = useRef({ px: 0, py: 0, x: 0, y: 0 });
 
   useEffect(() => {
     try {
@@ -102,41 +105,47 @@ function useArrastavel(expandido: boolean) {
     return () => window.removeEventListener("resize", reencaixar);
   }, [expandido]);
 
-  // Grava depois que o arraste termina, lendo a posicao corrente em vez do valor
-  // capturado no closure do pointerup - que pode estar um render atrasado.
   useEffect(() => {
     if (arrastando || !posicao) return;
     try { window.localStorage.setItem(CHAVE_POSICAO, JSON.stringify(posicao)); } catch { /* sem storage, so' nao lembra */ }
   }, [arrastando, posicao]);
 
+  // Listeners no window, nao no elemento: o ponteiro anda mais rapido que o
+  // cursor sobre a barra, e se os eventos dependessem de continuar em cima dela
+  // o arraste morreria no primeiro movimento rapido.
+  useEffect(() => {
+    function mover(evento: PointerEvent) {
+      if (!arrastandoRef.current) return;
+      const dx = evento.clientX - origem.current.px;
+      const dy = evento.clientY - origem.current.py;
+      if (!moveu.current && Math.abs(dx) + Math.abs(dy) < LIMIAR_ARRASTE) return;
+      moveu.current = true;
+      evento.preventDefault();
+      setPosicao(limitar({ x: origem.current.x + dx, y: origem.current.y + dy }, refCaixa.current));
+    }
+    function soltar() {
+      if (!arrastandoRef.current) return;
+      arrastandoRef.current = false;
+      setArrastando(false);
+    }
+    window.addEventListener("pointermove", mover, { passive: false });
+    window.addEventListener("pointerup", soltar);
+    window.addEventListener("pointercancel", soltar);
+    return () => {
+      window.removeEventListener("pointermove", mover);
+      window.removeEventListener("pointerup", soltar);
+      window.removeEventListener("pointercancel", soltar);
+    };
+  }, []);
+
   function aoPressionar(evento: React.PointerEvent<HTMLElement>) {
     const caixa = refCaixa.current;
     if (!caixa) return;
-    const retangulo = caixa.getBoundingClientRect();
-    origem.current = {
-      pxInicial: evento.clientX,
-      pyInicial: evento.clientY,
-      xInicial: posicao?.x ?? retangulo.left,
-      yInicial: posicao?.y ?? retangulo.top,
-    };
+    const r = caixa.getBoundingClientRect();
+    origem.current = { px: evento.clientX, py: evento.clientY, x: posicao?.x ?? r.left, y: posicao?.y ?? r.top };
     moveu.current = false;
+    arrastandoRef.current = true;
     setArrastando(true);
-    evento.currentTarget.setPointerCapture(evento.pointerId);
-  }
-
-  function aoMover(evento: React.PointerEvent<HTMLElement>) {
-    if (!arrastando) return;
-    const dx = evento.clientX - origem.current.pxInicial;
-    const dy = evento.clientY - origem.current.pyInicial;
-    if (!moveu.current && Math.abs(dx) + Math.abs(dy) < LIMIAR_ARRASTE) return;
-    moveu.current = true;
-    setPosicao(limitar({ x: origem.current.xInicial + dx, y: origem.current.yInicial + dy }, refCaixa.current));
-  }
-
-  function aoSoltar(evento: React.PointerEvent<HTMLElement>) {
-    if (!arrastando) return;
-    setArrastando(false);
-    try { evento.currentTarget.releasePointerCapture(evento.pointerId); } catch { /* ponteiro ja' liberado */ }
   }
 
   // O clique dispara depois do pointerup. Sem isso, terminar um arraste em cima
@@ -152,7 +161,7 @@ function useArrastavel(expandido: boolean) {
     try { window.localStorage.removeItem(CHAVE_POSICAO); } catch { /* nada a limpar */ }
   }
 
-  return { refCaixa, posicao, arrastando, aoPressionar, aoMover, aoSoltar, arrasteEngoliuOClique, reposicionar };
+  return { refCaixa, posicao, arrastando, aoPressionar, arrasteEngoliuOClique, reposicionar };
 }
 
 function clock(value: string | null) {
@@ -237,15 +246,15 @@ export default function IntegrationHealthBar() {
       }}>
       <button
         onPointerDown={arraste.aoPressionar}
-        onPointerMove={arraste.aoMover}
-        onPointerUp={arraste.aoSoltar}
-        onPointerCancel={arraste.aoSoltar}
         onDoubleClick={arraste.reposicionar}
         onClick={() => { if (arraste.arrasteEngoliuOClique()) return; setExpanded((v) => !v); }}
         aria-expanded={expanded}
         title={arraste.posicao ? "Arraste para mover · duplo clique volta ao canto" : "Arraste para mover"}
-        style={{ width:"100%", display:"flex", alignItems:"center", gap:8, border:`1px solid ${state.border}`, background:"rgba(9,12,20,.94)", color:"#f8fafc", borderRadius:13, padding:"8px 10px", boxShadow:"0 16px 50px rgba(0,0,0,.28)", cursor: arraste.arrastando ? "grabbing" : "grab", backdropFilter:"blur(16px)", touchAction:"none" }}
+        style={{ width:"100%", display:"flex", alignItems:"center", gap:7, border:`1px solid ${state.border}`, background:"rgba(9,12,20,.94)", color:"#f8fafc", borderRadius:13, padding:"8px 10px", boxShadow:"0 16px 50px rgba(0,0,0,.28)", cursor: arraste.arrastando ? "grabbing" : "grab", backdropFilter:"blur(16px)", touchAction:"none" }}
       >
+        {/* Alca visivel. Sem ela, "da' para arrastar" e' informacao que so'
+            existe na cabeca de quem programou. */}
+        <span aria-hidden style={{ color:"#64748b", fontSize:13, lineHeight:1, letterSpacing:-1, marginRight:-2 }}>⠿</span>
         <span style={{ width:8, height:8, borderRadius:999, background:state.color, boxShadow:`0 0 0 5px ${state.bg}` }} />
         <span style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", flex:1, minWidth:0 }}>
           <b style={{ fontSize:11.5, whiteSpace:"nowrap" }}>Saúde das integrações</b>
