@@ -332,24 +332,60 @@ Deno.serve(async (req) => {
   ].filter(Boolean);
   const prompt = promptParts.join("\n\n");
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60_000);
-  try {
-    const response = await fetch(webhookUrl, { method: "POST", headers: { "content-type": "application/json", "x-ai-read-secret": readSecret }, body: JSON.stringify({ question: prompt, original_question: question, source: "OpsQuestion", request_id: requestId, user: { person, role, access_level: accessLevel, scope: "FULL" }, constraints: { read_only: true, schema: "agency_ops", timezone: "America/Sao_Paulo", no_invention: true } }), signal: controller.signal });
-    clearTimeout(timeout);
-    const raw = await response.text(); let parsed: any = null; try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
-    const answer = safeAnswer(parsed, raw); const latency = Date.now() - started;
-    if (!response.ok || !answer) {
-      const error = !response.ok ? `${routeMode === "DIRECT_AI" ? "vps" : "make"}_http_${response.status}` : "empty_ai_answer";
-      await ops.from("opsquestion_interactions").update({ status: "ERROR", error, latency_ms: latency, answered_at: new Date().toISOString() }).eq("request_id", requestId);
-      return reply({ ok: false, error: "Falha temporária no OpsQuestion.", detail: error, request_id: requestId }, 502);
+  // Uma tentativa por rota, com o relogio do chamador em mente: o dashboard corta em
+  // 60s, entao a rota principal ganha 50s e sobra folga para o plano B.
+  const enviar = (url: string, tempoMs: number) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), tempoMs);
+    return fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-ai-read-secret": readSecret }, body: JSON.stringify({ question: prompt, original_question: question, source: "OpsQuestion", request_id: requestId, user: { person, role, access_level: accessLevel, scope: "FULL" }, constraints: { read_only: true, schema: "agency_ops", timezone: "America/Sao_Paulo", no_invention: true } }), signal: controller.signal })
+      .then(async (response) => {
+        const raw = await response.text();
+        let parsed: unknown = null; try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
+        const answer = safeAnswer(parsed, raw);
+        if (!response.ok) return { answer: null as string | null, error: `http_${response.status}` };
+        if (!answer) return { answer: null as string | null, error: "empty_ai_answer" };
+        return { answer: answer as string | null, error: null as string | null };
+      })
+      .catch((error) => {
+        const abortou = error instanceof DOMException && error.name === "AbortError";
+        return { answer: null as string | null, error: abortou ? "ai_timeout" : String(error instanceof Error ? error.message : error).slice(0, 300) };
+      })
+      .finally(() => clearTimeout(timeout));
+  };
+
+  const makeUrl = typeof webhookCfg?.value === "string" ? webhookCfg.value : null;
+  let modo = routeMode;
+  let rotulo = routeLabel;
+  let tentativa = await enviar(webhookUrl, directUrl ? 50_000 : 60_000);
+
+  // Virar a chave para a VPS nao pode ser aposta. Se a rota nova falhar rapido - VPS
+  // fora do ar, certificado vencido, servico reiniciando - o Make continua de pe' e
+  // responde, e o time nao fica sem OpsQuestion por causa de uma migracao.
+  // Falha lenta nao tem plano B: o tempo do usuario ja' foi gasto, e insistir so'
+  // entregaria um timeout mais longo.
+  if (!tentativa.answer && directUrl && makeUrl && makeUrl !== directUrl
+      && tentativa.error !== "ai_timeout" && Date.now() - started < 25_000) {
+    const erroVps = tentativa.error;
+    const plano = await enviar(makeUrl, 30_000);
+    if (plano.answer) {
+      modo = "DIRECT_AI_FALLBACK";
+      rotulo = "agency_ops via Make/IA (VPS indisponível)";
+      tentativa = plano;
+      console.error(`[ai-ask] ${requestId} VPS falhou (${erroVps}); respondido pelo Make`);
     }
-    await ops.from("opsquestion_interactions").update({ status: "SUCCESS", answer: answer.slice(0, 20000), latency_ms: latency, answered_at: new Date().toISOString() }).eq("request_id", requestId);
-    return reply({ ok: true, name: "OpsQuestion", answer, source: routeLabel, read_only: true, mode: routeMode, request_id: requestId, latency_ms: latency, generated_at: new Date().toISOString() });
-  } catch (error) {
-    clearTimeout(timeout); const latency = Date.now() - started;
-    const message = error instanceof DOMException && error.name === "AbortError" ? "ai_timeout" : String(error instanceof Error ? error.message : error).slice(0, 500);
-    await ops.from("opsquestion_interactions").update({ status: "ERROR", error: message, latency_ms: latency, answered_at: new Date().toISOString() }).eq("request_id", requestId);
-    return reply({ ok: false, error: message === "ai_timeout" ? "OpsQuestion demorou demais para responder. Tente uma pergunta mais específica." : "Falha temporária no OpsQuestion.", request_id: requestId }, message === "ai_timeout" ? 504 : 502);
   }
+
+  const latency = Date.now() - started;
+  if (!tentativa.answer) {
+    const error = `${routeMode === "DIRECT_AI" ? "vps" : "make"}_${tentativa.error}`;
+    await ops.from("opsquestion_interactions").update({ status: "ERROR", error, latency_ms: latency, answered_at: new Date().toISOString() }).eq("request_id", requestId);
+    const amigavel = tentativa.error === "ai_timeout"
+      ? "OpsQuestion demorou demais para responder. Tente uma pergunta mais específica."
+      : "Falha temporária no OpsQuestion.";
+    return reply({ ok: false, error: amigavel, detail: error, request_id: requestId }, 502);
+  }
+
+  // source grava a rota que de fato respondeu, inclusive quando foi o plano B.
+  await ops.from("opsquestion_interactions").update({ status: "SUCCESS", source: modo, answer: tentativa.answer.slice(0, 20000), latency_ms: latency, answered_at: new Date().toISOString() }).eq("request_id", requestId);
+  return reply({ ok: true, name: "OpsQuestion", answer: tentativa.answer, source: rotulo, read_only: true, mode: modo, request_id: requestId, latency_ms: latency, generated_at: new Date().toISOString() });
 });

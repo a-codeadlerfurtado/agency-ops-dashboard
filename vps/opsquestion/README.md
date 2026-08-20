@@ -34,6 +34,17 @@ comprometida, o alcance é o mesmo de quem já podia digitar uma pergunta no das
 
 ## Instalação
 
+### O jeito curto
+
+```bash
+sudo bash instalar.sh
+```
+
+Ele confere o Node, cria o usuário, copia o código, instala o systemd unit e avisa o
+que falta preencher. Rodar de novo é como se atualiza o código depois.
+
+### O jeito longo, se preferir ver cada passo
+
 ```bash
 # 1. usuário sem shell e sem home, só para rodar o serviço
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin opsquestion
@@ -105,6 +116,13 @@ on conflict (key) do update set value = excluded.value, updated_at = now();
 
 A volta é apagar a linha. Não precisa de deploy em nenhuma das duas direções.
 
+E a virada não é aposta: se a VPS falhar **rápido** — fora do ar, certificado vencido,
+serviço reiniciando — a Edge Function repete a pergunta no Make e o time recebe a
+resposta assim mesmo, com `source = DIRECT_AI_FALLBACK` no log. Falha **lenta** não tem
+plano B: o tempo do usuário já foi gasto, e insistir só entregaria um timeout mais longo.
+Então o pior caso de uma VPS mal configurada é uma linha no log, não uma equipe sem
+OpsQuestion.
+
 ```sql
 delete from agency_ops.automation_settings where key = 'AI_ASK_ENDPOINT_URL';
 ```
@@ -120,8 +138,15 @@ where created_at > now() - interval '1 day'
 group by 1 order by 4 desc;
 ```
 
-`MAKE_AI` é o caminho antigo, `DIRECT_AI` é esta VPS, `DIRECT_DB` são as perguntas que a
-própria Edge Function responde sem IA nenhuma.
+| `source` | o que aconteceu |
+|---|---|
+| `DIRECT_DB` | a própria Edge Function respondeu, sem IA nenhuma |
+| `MAKE_AI` | caminho antigo, pelo cenário do Make |
+| `DIRECT_AI` | esta VPS |
+| `DIRECT_AI_FALLBACK` | a VPS falhou e o Make cobriu — **vá ver o journalctl** |
+
+`DIRECT_AI_FALLBACK` aparecendo é o sinal de que algo na VPS está errado mesmo que
+ninguém tenha reclamado: as respostas continuaram saindo.
 
 ## Quando algo quebra
 
