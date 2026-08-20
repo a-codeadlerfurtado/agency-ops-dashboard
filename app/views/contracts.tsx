@@ -219,3 +219,56 @@ export function ContractsCenter({ token }: { token: string }) {
     </section>
   </section>;
 }
+
+// Secao "Contrato" dentro do drawer do cliente.
+//
+// So' e' montada quando o backend autorizou. Para os demais colaboradores ela
+// nao existe — sem rotulo "oculto", sem "sem permissao", sem espaco vazio: o
+// componente nem chega ao navegador, porque vem do mesmo import dinamico da aba.
+export function ClientContractSection({ clientId, token }: { clientId: string; token: string }) {
+  const [dados, setDados] = useState<Row | null>(null);
+  const [carregando, setCarregando] = useState(true);
+
+  useEffect(() => {
+    let ativo = true;
+    setCarregando(true);
+    fetch(`${CONTRACTS_API}?client_id=${encodeURIComponent(clientId)}`, {
+      headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY },
+      cache: "no-store",
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (ativo) { setDados(j?.ok ? j : null); setCarregando(false); } })
+      .catch(() => { if (ativo) { setDados(null); setCarregando(false); } });
+    return () => { ativo = false; };
+  }, [clientId, token]);
+
+  if (carregando) return null;
+
+  const c = dados?.contract as Row | null | undefined;
+  const historico: Row[] = dados?.history || [];
+  if (!c && !historico.length) return null;
+
+  const s = c ? situacao(c) : null;
+  const pdf = c?.signed_file_url || c?.original_file_url;
+
+  return <section className="detail-card">
+    <h3>Contrato</h3>
+    {c ? <>
+      <p><b>Situação:</b> <span style={{ color: s!.tom, fontWeight: 700 }}>{s!.rotulo}</span></p>
+      {s!.nota && <p className="small" style={{ color: "#fca5a5" }}>{s!.nota}</p>}
+      <p><b>Início:</b> {formatDay(c.contract_start_date)} · <b>Fim:</b> {formatDay(c.contract_end_date)}</p>
+      <p><b>Dias restantes:</b> {prazo(c.days_remaining, String(c.contract_state || ""))}</p>
+      <p><b>Renovação:</b> {c.renewal_pending ? "documento novo em processo" : (String(c.contract_state) === "EXPIRED" ? "necessária" : "—")}</p>
+      <p><b>Documento:</b> {text(c.document_name)} {pdf ? <a href={String(pdf)} target="_blank" rel="noreferrer">abrir PDF</a> : null}</p>
+      {c.term_source && <p className="small" style={{ opacity: .75 }}>Vigência apurada por: {text(c.term_source)}{c.term_confidence != null ? ` · confiança ${Math.round(Number(c.term_confidence) * 100)}%` : ""}</p>}
+    </> : <p className="small">Sem contrato localizado para este cliente.</p>}
+
+    {historico.length > 1 && <>
+      <p style={{ marginTop: 10 }}><b>Histórico</b></p>
+      {historico.map((h) => <p key={String(h.id)} className="small">
+        {formatDay(h.contract_start_date)} → {formatDay(h.contract_end_date)} · {text(h.document_name)}
+        {h.renewal_of_contract_id ? " · renovação" : ""}
+      </p>)}
+    </>}
+  </section>;
+}
