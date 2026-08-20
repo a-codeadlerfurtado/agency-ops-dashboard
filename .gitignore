@@ -8,3 +8,6 @@ dist/
 .env.*
 !.env.example
 .DS_Store
+
+# artefatos do servidor de desenvolvimento
+.vinext/
