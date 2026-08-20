@@ -2,10 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { BrandMark, SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from "../shared";
+import { AI_API_BASE, BrandMark, supabase } from "../shared";
 import "./ai.css";
-
-const CHAT_URL = `${SUPABASE_URL}/functions/v1/agency-ops-ai-chat`;
 
 type Conversation = {
   id: string;
@@ -41,12 +39,11 @@ type Client = {
 
 type Profile = { userId: string; person: string | null; role: string | null; accessLevel: string };
 
-async function callChat(session: Session, body: Record<string, unknown>) {
-  const response = await fetch(CHAT_URL, {
+async function callAI(session: Session, path: string, body: Record<string, unknown> = {}) {
+  const response = await fetch(`${AI_API_BASE}${path}`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${session.access_token}`,
-      apikey: SUPABASE_ANON_KEY,
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
@@ -101,8 +98,8 @@ export default function AIWorkspace() {
 
   const loadSidebar = useCallback(async (activeSession: Session) => {
     const [list, clientList] = await Promise.all([
-      callChat(activeSession, { action: "list" }),
-      callChat(activeSession, { action: "clients" }),
+      callAI(activeSession, "/conversations/list"),
+      callAI(activeSession, "/clients"),
     ]);
     setConversations(list.conversations || []);
     setClients(clientList.clients || []);
@@ -117,7 +114,7 @@ export default function AIWorkspace() {
   }, [session, loadSidebar]);
 
   const selected = useMemo(() => conversations.find((item) => item.id === selectedId) || null, [conversations, selectedId]);
-  const selectedClient = useMemo(() => clients.find((item) => item.client_id === (selected?.client_id || draftClientId)) || null, [clients, selected, draftClientId]);
+  const selectedClient = useMemo(() => clients.find((item) => item.client_id === (selected ? selected.client_id : draftClientId)) || null, [clients, selected, draftClientId]);
 
   const filteredConversations = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("pt-BR");
@@ -144,7 +141,7 @@ export default function AIWorkspace() {
     setError("");
     if (window.innerWidth < 820) setSidebarOpen(false);
     try {
-      const result = await callChat(session, { action: "get", conversation_id: id });
+      const result = await callAI(session, "/conversations/get", { conversation_id: id });
       setMessages(result.messages || []);
       const latest = result.conversation as Conversation;
       setConversations((prev) => prev.map((item) => item.id === id ? latest : item));
@@ -154,6 +151,9 @@ export default function AIWorkspace() {
   }
 
   function newConversation() {
+    // Volta para o contexto Geral. Sem isso a proxima conversa nasce
+    // amarrada ao cliente que estava selecionado na conversa anterior.
+    setDraftClientId("");
     setSelectedId(null);
     setMessages([]);
     setComposer("");
@@ -165,7 +165,7 @@ export default function AIWorkspace() {
   async function ensureConversation(): Promise<Conversation | null> {
     if (!session) return null;
     if (selected) return selected;
-    const result = await callChat(session, { action: "create", client_id: draftClientId || null });
+    const result = await callAI(session, "/conversations/create", { client_id: draftClientId || null });
     const conversation = result.conversation as Conversation;
     setConversations((prev) => [conversation, ...prev]);
     setSelectedId(conversation.id);
@@ -188,7 +188,7 @@ export default function AIWorkspace() {
     try {
       const conversation = await ensureConversation();
       if (!conversation) throw new Error("Não foi possível criar a conversa.");
-      const result = await callChat(session, { action: "send", conversation_id: conversation.id, message });
+      const result = await callAI(session, "/chat", { conversation_id: conversation.id, message });
       setMessages((prev) => [...prev.filter((item) => item.id !== optimistic.id), result.user_message, result.assistant_message]);
       const updated = result.conversation as Conversation;
       setConversations((prev) => {
@@ -209,7 +209,7 @@ export default function AIWorkspace() {
     setDraftClientId(clientId);
     if (!session || !selected) return;
     try {
-      const result = await callChat(session, { action: "set_client", conversation_id: selected.id, client_id: clientId || null });
+      const result = await callAI(session, "/conversations/set-client", { conversation_id: selected.id, client_id: clientId || null });
       const updated = result.conversation as Conversation;
       setConversations((prev) => prev.map((item) => item.id === updated.id ? updated : item));
     } catch (caught) {
@@ -221,20 +221,20 @@ export default function AIWorkspace() {
     if (!session) return;
     const title = window.prompt("Nome da conversa", conversation.title)?.trim();
     if (!title || title === conversation.title) return;
-    const result = await callChat(session, { action: "rename", conversation_id: conversation.id, title });
+    const result = await callAI(session, "/conversations/rename", { conversation_id: conversation.id, title });
     setConversations((prev) => prev.map((item) => item.id === conversation.id ? result.conversation : item));
   }
 
   async function archiveConversation(conversation: Conversation) {
     if (!session) return;
-    await callChat(session, { action: "archive", conversation_id: conversation.id, archived: true });
+    await callAI(session, "/conversations/archive", { conversation_id: conversation.id, archived: true });
     setConversations((prev) => prev.filter((item) => item.id !== conversation.id));
     if (selectedId === conversation.id) newConversation();
   }
 
   async function deleteConversation(conversation: Conversation) {
     if (!session || !window.confirm(`Excluir definitivamente “${conversation.title}”?`)) return;
-    await callChat(session, { action: "delete", conversation_id: conversation.id });
+    await callAI(session, "/conversations/delete", { conversation_id: conversation.id });
     setConversations((prev) => prev.filter((item) => item.id !== conversation.id));
     if (selectedId === conversation.id) newConversation();
   }
@@ -273,7 +273,7 @@ export default function AIWorkspace() {
       <section className="ai-main">
         <header className="ai-topbar">
           <div className="ai-topbar-left"><button className="ai-icon-button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Alternar histórico">☰</button><div><b>{selected?.title || "Nova conversa"}</b><small>{selected?.model || "Claude"}</small></div></div>
-          <div className="ai-context-select"><label>Contexto</label><select value={selected?.client_id || draftClientId || ""} onChange={(event) => changeClient(event.target.value)} disabled={sending}><option value="">Geral / sem cliente</option>{clients.map((client) => <option value={client.client_id} key={client.client_id}>{client.display_name} · {client.lifecycle}</option>)}</select></div>
+          <div className="ai-context-select"><label>Contexto</label><select value={(selected ? selected.client_id : draftClientId) || ""} onChange={(event) => changeClient(event.target.value)} disabled={sending}><option value="">Geral / sem cliente</option>{clients.map((client) => <option value={client.client_id} key={client.client_id}>{client.display_name} · {client.lifecycle}</option>)}</select></div>
           <a className="ai-back" href="/">Central de Operações ↗</a>
         </header>
 
