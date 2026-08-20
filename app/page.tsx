@@ -232,6 +232,7 @@ export default function Dashboard() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState("ALL");
   const [view, setView] = useState<View>("overview");
+  const [sidebarOpen, setSidebarOpen] = useState(true);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [opsQuestion, setOpsQuestion] = useState("");
   const [selected, setSelected] = useState<Row | null>(null);
@@ -391,7 +392,7 @@ export default function Dashboard() {
   if (!session) return <AuthScreen />;
 
   return (
-    <main className="shell">
+    <main className={`shell ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
       <header className="top">
         <div className="brand">
           <div className="logo">A</div>
@@ -413,11 +414,14 @@ export default function Dashboard() {
 
       <div className="source-banner"><span>O dashboard prioriza e diagnostica.</span> O ClickUp continua sendo a fonte oficial para executar e concluir tarefas.</div>
 
-      <nav className="view-nav" aria-label="Visões do dashboard">
-        {([
-          ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"],
-        ] as [View, string][]).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)}>{label}</button>)}
-      </nav>
+      <aside className={`side-nav${sidebarOpen ? " open" : ""}`} aria-label="Visões do dashboard">
+        <button className="side-nav-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? "Recolher menu" : "Expandir menu"} title={sidebarOpen ? "Recolher menu" : "Expandir menu"}>{sidebarOpen ? "⟨" : "⟩"}</button>
+        <div className="side-nav-items">
+          {([
+            ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"],
+          ] as [View, string][]).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} title={label}>{label}</button>)}
+        </div>
+      </aside>
 
       {error && <div className="error-box">{error}</div>}
 
