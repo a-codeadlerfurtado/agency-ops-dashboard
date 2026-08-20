@@ -90,22 +90,26 @@ export default function IntegrationHealthBar() {
   const state = meta[worst];
 
   return (
-    <aside style={{ position:"fixed", left:6, bottom:18, zIndex:9999, width: expanded ? "min(640px,calc(100vw - 36px))" : 190, fontFamily:"inherit" }}>
+    <aside style={{ position:"fixed", top:12, right:12, zIndex:9999, width: expanded ? "min(640px,calc(100vw - 36px))" : 40, fontFamily:"inherit" }}>
       <button
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
-        style={{ width:"100%", display:"flex", alignItems:"center", gap:8, border:`1px solid ${state.border}`, background:"rgba(9,12,20,.94)", color:"#f8fafc", borderRadius:13, padding:"8px 10px", boxShadow:"0 16px 50px rgba(0,0,0,.28)", cursor:"pointer", backdropFilter:"blur(16px)" }}
-      >
+        aria-label="Saúde das integrações"
+        title="Saúde das integrações"
+        style={{ width: expanded ? "100%" : 40, height: expanded ? "auto" : 40, display:"flex", alignItems:"center", justifyContent: expanded ? "flex-start" : "center", gap:8, border:`1px solid ${state.border}`, background:"rgba(9,12,20,.94)", color:"#f8fafc", borderRadius: expanded ? 13 : 999, padding: expanded ? "8px 10px" : 0, boxShadow:"0 16px 50px rgba(0,0,0,.28)", cursor:"pointer", backdropFilter:"blur(16px)" }}
+        >
         <span style={{ width:8, height:8, borderRadius:999, background:state.color, boxShadow:`0 0 0 5px ${state.bg}` }} />
-        <span style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", flex:1, minWidth:0 }}>
+        {expanded && (
+          <><span style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", flex:1, minWidth:0 }}>
           <b style={{ fontSize:11.5, whiteSpace:"nowrap" }}>Saúde das integrações</b>
           <small style={{ color:"#94a3b8", marginTop:2 }}>{loading ? "Atualizando…" : `${state.icon} ${state.label}`}</small>
         </span>
         <span style={{ fontSize:16, color:"#94a3b8" }}>{expanded ? "−" : "+"}</span>
+          </>
       </button>
 
       {expanded && (
-        <div style={{ marginTop:8, border:"1px solid rgba(148,163,184,.16)", background:"rgba(9,12,20,.97)", borderRadius:18, padding:12, boxShadow:"0 24px 70px rgba(0,0,0,.38)", backdropFilter:"blur(18px)" }}>
+        <div style={{ marginTop:8, maxHeight:"80vh", overflowY:"auto", border:"1px solid rgba(148,163,184,.16)", background:"rgba(9,12,20,.97)", borderRadius:18, padding:12, boxShadow:"0 24px 70px rgba(0,0,0,.38)", backdropFilter:"blur(18px)" }}>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(2,minmax(0,1fr))", gap:8 }}>
             {integrations.map((item) => {
               const s = meta[item.status] || meta.DELAY;
