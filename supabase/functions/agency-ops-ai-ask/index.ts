@@ -356,7 +356,11 @@ Deno.serve(async (req) => {
   const makeUrl = typeof webhookCfg?.value === "string" ? webhookCfg.value : null;
   let modo = routeMode;
   let rotulo = routeLabel;
-  let tentativa = await enviar(webhookUrl, directUrl ? 50_000 : 60_000);
+  // 55s para a tentativa principal, nao 50s. Os 50s existiam para sobrar janela ao
+  // plano B, mas o plano B so' dispara em falha rapida (<25s) - reservar tempo no fim
+  // nunca ajudou ninguem e custava as perguntas que levam ~50s. Uma real estourou em
+  // 50,6s em 20/08 e o usuario recebeu erro.
+  let tentativa = await enviar(webhookUrl, 55_000);
 
   // Virar a chave para a VPS nao pode ser aposta. Se a rota nova falhar rapido - VPS
   // fora do ar, certificado vencido, servico reiniciando - o Make continua de pe' e
