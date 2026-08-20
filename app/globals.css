@@ -253,3 +253,49 @@ tbody tr{transition:background .14s ease}
 .note-opcoes button{border:1px solid var(--line);background:var(--panel2);color:var(--text);
   border-radius:8px;padding:5px 11px;font-size:12px;cursor:pointer}
 .note-opcoes button:hover{border-color:var(--brand);background:var(--wash)}
+
+/* ---------------------------------------------------------------- Foco do dia
+   Fila de trabalho por verbo (Responder / Resolver / Acompanhar). A idade do item
+   e' a primeira coluna de proposito: e' o criterio de ordenacao, entao precisa ser
+   a primeira coisa que o olho encontra ao descer a lista. */
+.foco-head{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:23px;margin-bottom:14px;
+  background:linear-gradient(120deg,var(--panel),color-mix(in srgb,var(--blue) 12%,var(--panel)))}
+.foco-head h2{margin:7px 0 6px;font-size:24px;line-height:1.25}
+.foco-head p{margin:0;color:var(--muted);line-height:1.5}
+.foco-head>button{border:1px solid rgba(62,146,220,.35);background:rgba(62,146,220,.1);color:var(--blue);
+  border-radius:10px;padding:10px 13px;cursor:pointer;white-space:nowrap}
+.foco-head>button:hover{background:rgba(62,146,220,.18)}
+
+.foco-tabs{margin-bottom:14px}
+.foco-tabs b{margin-left:6px;font-variant-numeric:tabular-nums;opacity:.75}
+
+.foco-lanes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:start}
+.foco-lanes.single{grid-template-columns:minmax(0,1fr)}
+@media (max-width:1180px){.foco-lanes{grid-template-columns:minmax(0,1fr)}}
+
+.foco-lane{padding:16px 17px;border-top:3px solid var(--line)}
+.foco-lane.danger{border-top-color:var(--red)}
+.foco-lane.warn{border-top-color:var(--yellow)}
+.foco-lane-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.foco-lane-head b{display:block;font-size:15px;letter-spacing:.2px}
+.foco-lane-head span{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+.foco-lane-head strong{font-size:22px;font-variant-numeric:tabular-nums}
+.foco-lane-help{margin:9px 0 4px;color:var(--muted);font-size:11.5px;line-height:1.45}
+
+.foco-item{display:flex;align-items:flex-start;gap:11px;width:100%;text-align:left;cursor:pointer;
+  border:0;border-top:1px solid var(--line);background:transparent;color:var(--text);padding:11px 0}
+.foco-item:disabled{cursor:default}
+.foco-item:not(:disabled):hover{background:var(--wash)}
+.foco-age{flex:0 0 82px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;padding-top:2px}
+.foco-age.late{color:var(--red);font-weight:600}
+.foco-body{flex:1;min-width:0}
+.foco-body b{display:block;font-size:13px}
+.foco-body>span{display:block;font-size:12.5px;color:var(--text);margin-top:2px;line-height:1.4;
+  overflow-wrap:anywhere}
+.foco-body small{display:block;color:var(--muted);font-size:11px;margin-top:4px}
+.foco-more{border-top:1px solid var(--line);padding-top:9px;margin-top:2px;color:var(--muted);font-size:11.5px}
+
+.foco-carteira{margin-top:14px;padding:14px 17px}
+.foco-carteira>summary{cursor:pointer;font-size:13px;display:flex;align-items:center;gap:8px}
+.foco-carteira>summary span{border:1px solid var(--line);border-radius:99px;padding:1px 8px;font-size:11px;color:var(--muted)}
+.foco-carteira .workspace{margin-top:12px}

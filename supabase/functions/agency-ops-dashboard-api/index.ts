@@ -18,6 +18,11 @@ const value = <T>(result: any, fallback: T): T => result?.error ? fallback : (re
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
 // Nomes sinteticos gerados por testes automatizados (ex.: "LeadProposta-1785845578658-5d6j96").
 const SYNTHETIC_NAME = /^[A-Za-z]+-\d{9,}-[a-z0-9]{4,8}$/;
+// Abas do dashboard. A chave fixa do gestor (acesso legado, fora do quadro) recebe
+// todas; quem entra por login recebe o que agency_ops.dashboard_view_permissions disser.
+const ALL_VIEWS = ["overview","focus","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts"];
+// Dia de operacao no fuso de Brasilia: task fechada as 22h e' de hoje, nao de amanha.
+const opsDay = (date = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 
 const aggregateMedia = (rows: any[]) => {
   const daily = rows.filter((row) => (row.granularity ?? "day") === "day");
@@ -145,6 +150,22 @@ Deno.serve(async (req) => {
   const isLocked = viaLogin && (!accountApproved || (!profilePerson && !elevated));
   const canDecideAccessRequests = isFull && (!viaLogin || profileRole === "MGMT");
 
+  // ---- Quais ABAS a pessoa abre. Pergunta separada de QUANTO DADO ela alcanca:
+  // access_level continua governando o escopo (carteira x base inteira), enquanto a
+  // lista de abas vem de agency_ops.dashboard_view_permissions. Sem essa separacao,
+  // liberar Alertas para o CS obrigava a liberar Auditoria e Evidencias junto.
+  // Conta travada enxerga so' a casca (overview) para conseguir pedir acesso.
+  let allowedViews: string[] = ALL_VIEWS;
+  if (viaLogin) {
+    if (isLocked) {
+      allowedViews = ["overview"];
+    } else {
+      const { data: viewRows } = await ops.rpc("dashboard_allowed_views", { p_person: profilePerson, p_role: profileRole });
+      allowedViews = Array.isArray(viewRows) ? viewRows : [];
+    }
+  }
+  const canView = (key: string) => allowedViews.includes(key);
+
   if (req.method === "POST") {
     const body = await req.json().catch(() => ({}));
     if (view === "notifications-read") {
@@ -178,6 +199,52 @@ Deno.serve(async (req) => {
       if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
       return respond({ ok: true, request: result.data });
     }
+    // ---- Diario de Ajustes. A tela existia e o botao "Registrar ajuste" respondia 404:
+    // a rota nunca foi implementada aqui. Cliente e' validado contra o escopo da pessoa -
+    // esconder o cliente no <select> nao e' seguranca.
+    if (view === "adjustment-create") {
+      if (isLocked) return respond({ error: "forbidden" }, 403);
+      if (!canView("diary")) return respond({ error: "forbidden" }, 403);
+      const clientId = String(body.client_id ?? "").trim();
+      const descricao = typeof body.descricao === "string" ? body.descricao.trim() : "";
+      if (!clientId || !descricao) return respond({ error: "missing_fields", required: ["client_id", "descricao"] }, 400);
+      const { data: clientRow } = await ops.from("dashboard_client_overview").select("client_id,gt_owner").eq("client_id", clientId).maybeSingle();
+      if (!clientRow) return respond({ error: "not_found" }, 404);
+      if (isWalletOnly && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
+      const result = await ops.from("client_adjustments").insert({
+        client_id: clientId,
+        source: "diario_ajustes",
+        tipo: typeof body.tipo === "string" ? body.tipo.slice(0, 120) : null,
+        descricao: descricao.slice(0, 4000),
+        metadata: { author_user_key: currentUserKey, author_name: profilePerson ?? null, origem: "dashboard" },
+      }).select().single();
+      if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
+      return respond({ ok: true, adjustment: result.data });
+    }
+    // ---- Registro de Tarefas. Mesmo caso: o front postava, a rota nao existia.
+    // O id e' montado aqui porque task_log_entries.id e' text sem default (a chave vem
+    // do app desktop que alimenta a mesma tabela) - o prefixo diz de onde o registro veio.
+    if (view === "tasklog-create") {
+      if (isLocked) return respond({ error: "forbidden" }, 403);
+      if (!canView("diary")) return respond({ error: "forbidden" }, 403);
+      const taskName = typeof body.task_name === "string" ? body.task_name.trim() : "";
+      const category = typeof body.category === "string" ? body.category.trim() : "";
+      if (!taskName || !category) return respond({ error: "missing_fields", required: ["category", "task_name"] }, 400);
+      const taskDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.task_date ?? "")) ? String(body.task_date) : opsDay();
+      const author = profilePerson ?? String(value(await ops.from("user_preferences").select("name").eq("user_key", currentUserKey).maybeSingle(), {} as any)?.name ?? "Colaborador");
+      const result = await ops.from("task_log_entries").insert({
+        id: `dash-${currentUserKey}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
+        user_key: currentUserKey,
+        collaborator_name: author,
+        category: category.slice(0, 120),
+        task_name: taskName.slice(0, 500),
+        task_date: taskDate,
+        created_at_client: new Date().toISOString(),
+        source: "dashboard_diario",
+      }).select().single();
+      if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
+      return respond({ ok: true, entry: result.data });
+    }
     if (view === "note-create") {
       // O texto do colaborador entra cru e inteiro. O vinculo com cliente e' um
       // palpite marcado como tal - nunca altera o que a pessoa escreveu.
@@ -209,6 +276,25 @@ Deno.serve(async (req) => {
       return respond({ ok: true, note: result.data });
     }
     return respond({ error: "unknown_action" }, 404);
+  }
+
+  // ---- Produtividade do ClickUp por periodo (aba ClickUp). Rota que o front ja' chamava
+  // e que nao existia: a chamada caia no payload de "home" e a tela mostrava zero.
+  // Quem nao ve o ClickUp inteiro so' consegue puxar a propria linha.
+  if (view === "clickup-range") {
+    if (isLocked || !canView("clickup")) return respond({ error: "forbidden" }, 403);
+    const isDay = (raw: string | null) => Boolean(raw && /^\d{4}-\d{2}-\d{2}$/.test(raw));
+    const untilParam = url.searchParams.get("until");
+    const sinceParam = url.searchParams.get("since");
+    const until = isDay(untilParam) ? untilParam! : opsDay();
+    const since = isDay(sinceParam) ? sinceParam! : opsDay(new Date(Date.now() - 29 * 86400000));
+    const requested = (url.searchParams.get("people") ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+    // isFull ve todo mundo; os demais ficam presos a propria conta do ClickUp,
+    // independente do que o parametro people pedir.
+    const people = isFull ? requested : [profileClickupUser ?? "__sem_vinculo__"];
+    const { data, error } = await ops.rpc("clickup_range_report", { p_since: since, p_until: until, p_people: people.length ? people : null });
+    if (error) return respond({ error: "query_failed", detail: error.message }, 500);
+    return respond({ ...(data ?? {}), scoped: !isFull, generated_at: new Date().toISOString() });
   }
 
   if (view === "client") {
@@ -289,7 +375,8 @@ Deno.serve(async (req) => {
     ops.from("data_audit_issues").select("id,severity,category,issue_code,entity_type,entity_id,resolution_status,explanation,created_at").order("created_at", { ascending: false }).limit(100),
     ops.from("user_preferences").select("*").eq("user_key", currentUserKey).maybeSingle(),
     ops.from("automation_health").select("*").order("updated_at", { ascending: false }),
-    ops.from("task_log_entries").select("category,collaborator_name,task_name,task_date,synced_at").is("deleted_at", null).order("task_date", { ascending: false }).limit(3000),
+    ops.from("task_log_entries").select("id,user_key,category,collaborator_name,task_name,task_date,synced_at").is("deleted_at", null).order("task_date", { ascending: false }).limit(3000),
+    ops.from("client_adjustments").select("id,client_id,source,tipo,descricao,occurred_at,metadata").order("occurred_at", { ascending: false }).limit(300),
     ]),
     Promise.all([
     ops.from("team_roster").select("*").eq("is_former", false).order("person"),
@@ -345,8 +432,6 @@ Deno.serve(async (req) => {
   const severity: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
   const now = new Date();
   const overdue = commitments.filter((row) => row.due_at && new Date(row.due_at) < now);
-  const waitingAgency = conversations.filter((row) => row.waiting_for_agency);
-  const waitingClient = conversations.filter((row) => row.waiting_for_client);
   const bottlenecks = activeClients.reduce((acc: Record<string, number>, row: any) => { const key = row.waiting_direction || row.onboarding_blocked_by || "NO_BLOCKER"; acc[key] = (acc[key] ?? 0) + 1; return acc; }, {});
   const evidenceReview = activeClients.filter((row) => row.needs_semantic_review || ["PARTIAL", "INCOMPLETE"].includes(row.data_coverage));
   const clientNames = new Map(clients.map((row) => [row.client_id, row.display_name]));
@@ -395,7 +480,9 @@ Deno.serve(async (req) => {
           .map((row) => ({ client_id: row.client_id, display_name: row.display_name, priority: row.priority, lifecycle: row.lifecycle, next_step: row.next_step, data_coverage: row.data_coverage }))
       : [],
   }));
-  const team = isFull ? fullTeam : fullTeam.filter((row) => row.person === profilePerson);
+  // Quadro de pessoal: so' chega a quem tem a aba Equipe. Quem nao tem enxerga a
+  // propria linha (usada pelos contadores), nunca a produtividade dos colegas.
+  const team = canView("team") && isFull ? fullTeam : fullTeam.filter((row) => row.person === profilePerson);
 
   // Clientes ativos/onboarding sem gestor de trafego. Sao carteira de ninguem: nao
   // aparecem em nenhum card da aba Equipe e por isso passavam despercebidos.
@@ -476,21 +563,42 @@ Deno.serve(async (req) => {
   const preferencesRow = value(platformData[5], {});
   const myAccessRequest = value<any[]>(teamData[5], [])[0] ?? null;
 
+  // ---- Diario. Antes o registro de tarefas so' voltava para perfis FULL, entao a aba
+  // Diario de quem nao e' FULL mostrava a propria lista sempre vazia. Agora sempre volta:
+  // FULL ve a equipe, os demais veem o que eles mesmos escreveram - que e' o que a tela
+  // ja' prometia no titulo ("Minhas ultimas tarefas").
+  const taskLogRows = value<any[]>(platformData[7], []);
+  const taskLog = aggregateTaskLog(isFull ? taskLogRows : taskLogRows.filter((row: any) => row.user_key === currentUserKey));
+  const adjustments = value<any[]>(platformData[8], [])
+    .filter((row: any) => inScope(row.client_id))
+    .map((row: any) => ({ ...row, client_display_name: row.client_id ? (clientMeta.get(row.client_id)?.display_name ?? null) : null }));
+
   return respond({
     kpis: { active_clients: activeClients.length, churned_clients: clients.filter((row) => row.lifecycle === "CHURNED").length, onboarding_clients: clients.filter((row) => row.lifecycle === "ONBOARDING").length, operation_clients: clients.filter((row) => row.lifecycle === "ACTIVE").length, attention_now: count((row) => row.priority === "ATTENTION"), follow_up: count((row) => row.priority === "FOLLOW_UP"), ok: count((row) => row.priority === "OK"), undetermined: count((row) => row.priority === "UNDETERMINED"), data_incomplete: count((row) => row.priority === "DATA_INCOMPLETE"), client_waiting_agency: count((row) => row.waiting_direction === "CLIENT_WAITING_AGENCY"), agency_waiting_client: count((row) => row.waiting_direction === "AGENCY_WAITING_CLIENT"), overdue_commitments: overdue.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, open_alerts: alerts.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, critical_alerts: alerts.filter((row) => (!row.client_id || activeIds.has(row.client_id)) && ["CRITICAL", "HIGH"].includes(row.severity)).length, semantic_review: conversations.filter((row) => row.needs_semantic_review && (!row.client_id || activeIds.has(row.client_id))).length, briefing_pages: briefings.length, briefing_pending: briefings.filter((row) => row.sync_status === "DISCOVERED").length, briefing_unlinked: briefings.filter((row) => !row.client_id).length, queue_pending: isFull ? queue.filter((row) => row.status === "PENDING").length : 0, queue_errors: isFull ? queue.filter((row) => row.status === "ERROR").length : 0, team_members: team.filter((row) => row.in_roster).length, clients_unassigned: unassignedClients.length, team_unassigned: team.filter((row) => !row.in_roster && !row.is_former).length },
     clients: enrichedClients, campaigns,
     alerts: alerts.sort((a, b) => (severity[a.severity] ?? 9) - (severity[b.severity] ?? 9)).slice(0, 100),
     commitments, conversations: conversationsEnriched, media: aggregateMedia(activeMediaRows),
-    operations: isFull ? { sla: { waiting_agency: waitingAgency, waiting_client: waitingClient, overdue_commitments: overdue }, bottlenecks, evidence_review: evidenceReview.slice(0, 100), employee_capacity: value(results[10], []), task_log: aggregateTaskLog(value(platformData[7], [])) } : { sla: { waiting_agency: waitingAgency, waiting_client: waitingClient, overdue_commitments: overdue }, bottlenecks, evidence_review: [], employee_capacity: [], task_log: { total: 0, by_category: {}, by_collaborator: {}, recent: [] } },
+    operations: {
+      // Enriquecidas: 70 das 191 conversas nao tem client_id e a fila do Foco do dia
+      // mostrava o chat_id cru no lugar do nome do grupo.
+      sla: { waiting_agency: conversationsEnriched.filter((row: any) => row.waiting_for_agency), waiting_client: conversationsEnriched.filter((row: any) => row.waiting_for_client), overdue_commitments: overdue },
+      bottlenecks,
+      // Evidencias e' tela de gestao: quem nao tem a aba tambem nao recebe o dado.
+      evidence_review: canView("evidence") ? evidenceReview.slice(0, 100) : [],
+      employee_capacity: isFull ? value(results[10], []) : [],
+      task_log: taskLog,
+    },
+    adjustments,
     clickup: isFull ? { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: totalClickup, last_sync: lastClickupSync, configured: Boolean(clickupConfig?.token && clickupConfig?.team_id), webhook_configured: Boolean(clickupConfig?.webhook_secret), indexing: { matched: matchedClickup, match_rate: totalClickup ? Number((100 * matchedClickup / totalClickup).toFixed(1)) : 0, unmatched_label: results[18].count ?? 0, without_label: results[19].count ?? 0, unmatched_labels: value(results[20], []) } } : { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: recentCompleted.length, last_sync: null, configured: null, webhook_configured: null, indexing: null },
     coverage: { complete: count((row) => row.data_coverage === "COMPLETE"), partial: count((row) => row.data_coverage === "PARTIAL"), incomplete: count((row) => row.data_coverage === "INCOMPLETE") },
-    notifications, preclients, won_events: wonEvents,
-    audit_runs: isFull ? value(platformData[3], []) : [], audit_issues: isFull ? value(platformData[4], []) : [],
+    notifications, preclients: canView("preclients") ? preclients : [], won_events: wonEvents,
+    audit_runs: canView("audit") ? value(platformData[3], []) : [], audit_issues: canView("audit") ? value(platformData[4], []) : [],
     preferences: { ...preferencesRow, my_access_request: myAccessRequest },
     integration_health: isFull ? value(platformData[6], []) : [],
-    team, unassigned_clients: unassignedClients, portfolio, stage_labels: stageLabels,
+    team, unassigned_clients: canView("team") ? unassignedClients : [],
+    portfolio: canView("clients") ? portfolio : null, stage_labels: stageLabels,
     access_requests_pending: isFull ? value(teamData[4], []) : [],
-    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved },
+    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved, views: allowedViews },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
     auth_mode: currentUserKey === "adler-furtado" && suppliedKey.length >= 40 ? "dashboard_key" : "login",
     generated_at: new Date().toISOString(),

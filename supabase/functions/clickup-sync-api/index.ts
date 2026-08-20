@@ -1,7 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*", "access-control-allow-headers": "content-type,x-dashboard-key,x-signature", "access-control-allow-methods": "GET,POST,OPTIONS" };
+const JSON_HEADERS = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*", "access-control-allow-headers": "content-type,x-dashboard-key,x-signature,authorization,apikey", "access-control-allow-methods": "GET,POST,OPTIONS" };
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: JSON_HEADERS });
 const asDate = (value: unknown) => value ? new Date(Number(value)).toISOString() : null;
 const normalize = (value: unknown) => String(value ?? "")
@@ -48,12 +48,48 @@ Deno.serve(async (req) => {
   webhookSecret ||= vaultConfig?.webhook_secret ?? "";
   const url = new URL(req.url);
 
-  async function dashboardAuthorized() {
+  async function dashboardKeyAuthorized() {
     const supplied = req.headers.get("x-dashboard-key") ?? "";
     if (supplied.length < 40) return false;
     const keyHash = await sha256(supplied);
     const { data } = await ops.from("dashboard_api_keys").select("active,expires_at").eq("key_hash", keyHash).maybeSingle();
     return Boolean(data?.active && (!data.expires_at || new Date(data.expires_at) > new Date()));
+  }
+
+  // Login de colaborador. Ate' aqui esta funcao so' aceitava a chave fixa do gestor, mas
+  // o dashboard sempre chamou "Atualizar dados" / "Ativar tempo real" com o JWT do usuario:
+  // os dois botoes da aba ClickUp respondiam 401 para todo mundo, inclusive para o Adler
+  // logado. Passa a aceitar quem tem a aba ClickUp liberada e alcance de base inteira -
+  // sincronizar e registrar webhook sao operacoes do workspace, nao de uma carteira.
+  async function loginAuthorized() {
+    const authHeader = req.headers.get("Authorization") ?? "";
+    if (!authHeader.startsWith("Bearer ")) return false;
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+    if (!anonKey) return false;
+    const authClient = createClient(supabaseUrl!, anonKey, { global: { headers: { Authorization: authHeader } } });
+    const { data: userData } = await authClient.auth.getUser();
+    const userId = userData?.user?.id;
+    if (!userId) return false;
+
+    const { data: prefRow } = await ops.from("user_preferences").select("collaborator_person").eq("user_key", userId).maybeSingle();
+    const person = prefRow?.collaborator_person ?? null;
+    if (!person) return false;
+
+    const { data: rosterRow } = await ops.from("team_roster").select("person,role,access_level").eq("person", person).eq("is_former", false).maybeSingle();
+    if (!rosterRow) return false;
+
+    const { data: decisions } = await ops.from("access_requests").select("kind,status").eq("user_key", userId).eq("status", "APPROVED");
+    const approvals = decisions ?? [];
+    if (!approvals.some((row: any) => row.kind === "SIGNUP")) return false;
+    const elevated = approvals.some((row: any) => row.kind === "ELEVATION");
+    if (rosterRow.access_level !== "FULL" && !elevated) return false;
+
+    const { data: views } = await ops.rpc("dashboard_allowed_views", { p_person: rosterRow.person, p_role: rosterRow.role });
+    return Array.isArray(views) && views.includes("clickup");
+  }
+
+  async function dashboardAuthorized() {
+    return (await dashboardKeyAuthorized()) || (await loginAuthorized());
   }
 
   let matchDataPromise: Promise<any> | null = null;

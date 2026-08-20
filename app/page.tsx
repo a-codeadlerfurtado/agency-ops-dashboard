@@ -103,6 +103,25 @@ export default function Dashboard() {
   // continuar aberta na tela.
   useEffect(() => { if (!contractsAllowed) setView((current) => (current === "contracts" ? "overview" : current)); }, [contractsAllowed]);
 
+  // ---- Menu lateral: quem decide quais abas existem e' o backend
+  // (agency_ops.dashboard_view_permissions), nao esta lista. Antes o menu era igual para
+  // todo mundo e a diferenca aparecia so' como tela vazia - o CS via "Auditoria" e
+  // "Evidencias" para descobrir que nao tinha o dado. Enquanto o primeiro carregamento
+  // nao chega, mostra so' o que nao depende de permissao.
+  // A resposta chega a cada 30s com um array novo, mesmo sem mudanca de permissao.
+  // A chave estavel evita recalcular o menu (e disparar o efeito abaixo) a cada carga.
+  const viewsKey = Array.isArray(data?.profile?.views) ? (data!.profile!.views as string[]).join(",") : "";
+  const allowedViews = useMemo(() => new Set<string>(viewsKey ? viewsKey.split(",") : ["overview", "focus"]), [viewsKey]);
+  const navItems = useMemo(() => ([
+    ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"],
+  ] as [View, string][]).filter(([key]) => allowedViews.has(key)), [allowedViews]);
+  // Aba aberta que deixou de ser permitida volta para a primeira disponivel.
+  useEffect(() => {
+    if (!viewsKey) return;
+    setView((current) => (current === "contracts" || allowedViews.has(current) ? current : (navItems[0]?.[0] ?? "overview")));
+  }, [viewsKey, allowedViews, navItems]);
+  const canSee = useCallback((key: View) => allowedViews.has(key), [allowedViews]);
+
   const playTone = useCallback((kind: "pop" | "win") => {
     const prefs = preferencesRef.current;
     if (prefs.sounds_enabled === false || (kind === "win" && prefs.win_sound_enabled === false)) return;
@@ -267,7 +286,7 @@ export default function Dashboard() {
         <button className="side-nav-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? "Recolher menu" : "Expandir menu"} title={sidebarOpen ? "Recolher menu" : "Expandir menu"}>{sidebarOpen ? "⟨" : "⟩"}</button>
         <div className="side-nav-items">
           {([
-            ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"],
+            ...navItems,
             ...(contractsAllowed ? [["contracts", "Contratos"]] : []),
           ] as [View, string][]).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} title={label}>{label}</button>)}
         </div>
@@ -284,21 +303,21 @@ export default function Dashboard() {
         <Metric label="Alertas abertos" value={formatNumber(kpis.open_alerts)} tone={kpis.critical_alerts ? "red" : "yellow"} hint={`${formatNumber(kpis.critical_alerts)} críticos/altos`} loading={!data} />
       </section>
 
-      {view === "focus" && <FocusCenter clients={actionClients} operations={data?.operations || {}} alerts={data?.alerts || []} openClient={openClient} />}
-      {view === "clients" && <><PortfolioCenter portfolio={data?.portfolio || null} openClient={openClient} />
+      {view === "focus" && <FocusCenter clients={actionClients} allClients={allClients} operations={data?.operations || {}} alerts={data?.alerts || []} openClient={openClient} />}
+      {view === "clients" && canSee("clients") && <><PortfolioCenter portfolio={data?.portfolio || null} openClient={openClient} />
       <details className="card portfolio-fulllist"><summary>Lista completa de clientes <span>{allClients.length}</span></summary>
       <ClientPortfolio clients={clients} total={allClients.length} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} lifecycleFilter={lifecycleFilter} setLifecycleFilter={setLifecycleFilter} openClient={openClient} /></details></>}
-      {view === "onboarding" && <OnboardingBoard groups={onboardingGroups} stageLabels={data?.stage_labels || {}} openClient={openClient} />}
-      {view === "campaigns" && <CampaignCenter media={media} campaigns={filteredCampaigns} clients={allClients} campaignFilter={campaignFilter} setCampaignFilter={setCampaignFilter} openClient={openClient} />}
-      {view === "preclients" && <PreClientCenter rows={data?.preclients || []} won={data?.won_events || []} />}
-      {view === "conversations" && <ConversationCenter conversations={data?.conversations || []} clients={allClients} openClient={openClient} />}
-      {view === "team" && <TeamCenter team={data?.team || []} teamMembers={Number(kpis.team_members || 0)} unassigned={data?.unassigned_clients || []} openClient={openClient} />}
-      {view === "diary" && <DiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />}
-      {view === "clickup" && <ClickUpCenter clickup={data?.clickup || {}} reload={load} token={session.access_token} />}
-      {view === "evidence" && <EvidenceCenter clients={allClients} operations={data?.operations || {}} openClient={openClient} />}
-      {view === "audit" && <AuditCenter runs={data?.audit_runs || []} issues={data?.audit_issues || []} />}
+      {view === "onboarding" && canSee("onboarding") && <OnboardingBoard groups={onboardingGroups} stageLabels={data?.stage_labels || {}} openClient={openClient} />}
+      {view === "campaigns" && canSee("campaigns") && <CampaignCenter media={media} campaigns={filteredCampaigns} clients={allClients} campaignFilter={campaignFilter} setCampaignFilter={setCampaignFilter} openClient={openClient} />}
+      {view === "preclients" && canSee("preclients") && <PreClientCenter rows={data?.preclients || []} won={data?.won_events || []} />}
+      {view === "conversations" && canSee("conversations") && <ConversationCenter conversations={data?.conversations || []} clients={allClients} openClient={openClient} />}
+      {view === "team" && canSee("team") && <TeamCenter team={data?.team || []} teamMembers={Number(kpis.team_members || 0)} unassigned={data?.unassigned_clients || []} openClient={openClient} />}
+      {view === "diary" && canSee("diary") && <DiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />}
+      {view === "clickup" && canSee("clickup") && <ClickUpCenter clickup={data?.clickup || {}} reload={load} token={session.access_token} />}
+      {view === "evidence" && canSee("evidence") && <EvidenceCenter clients={allClients} operations={data?.operations || {}} openClient={openClient} />}
+      {view === "audit" && canSee("audit") && <AuditCenter runs={data?.audit_runs || []} issues={data?.audit_issues || []} />}
       {view === "contracts" && contractsAllowed && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando contratos…</div>}><ContractsCenter token={session.access_token} /></Suspense>}
-      {view === "alerts" && <AlertCenter alerts={data?.alerts || []} clients={allClients} openClient={openClient} />}
+      {view === "alerts" && canSee("alerts") && <AlertCenter alerts={data?.alerts || []} clients={allClients} openClient={openClient} />}
 
       {view === "overview" && <><SmartSearch question={opsQuestion} setQuestion={setOpsQuestion} clients={allClients} conversations={data?.conversations || []} commitments={data?.commitments || []} openClient={openClient} />
       <AttentionCenter clients={activeClients} operations={data?.operations || {}} preclients={data?.preclients || []} />
@@ -488,11 +507,199 @@ function SmartSearch({ question, setQuestion, clients, conversations, commitment
   return <section className="smart-search card"><div className="smart-mark">✦</div><div className="smart-main"><span className="eyebrow">Busca operacional inteligente</span><div className="smart-input"><input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Pergunte: quem está atrasado, em onboarding ou esperando resposta?" />{question && <button onClick={() => setQuestion("")}>×</button>}</div>{!question && <div className="prompt-chips">{["Quem está atrasado?", "Onboardings em andamento", "Clientes esperando resposta", "Problemas de campanha"].map((item) => <button key={item} onClick={() => setQuestion(item)}>{item}</button>)}</div>}{question && <div className="smart-results"><small>{matched.length ? `${matched.length} resultado(s) encontrado(s)` : "Nenhum cliente corresponde aos sinais atuais."}</small>{matched.map((client) => <button key={client.client_id} onClick={() => openClient(client.client_id)}><span><b>{text(client.display_name)}</b><small>{text(client.next_step || client.current_subject)}</small></span><Chip value={client.priority} /></button>)}</div>}</div></section>;
 }
 
-function FocusCenter({ clients, operations, alerts, openClient }: { clients: Row[]; operations: Row; alerts: Row[]; openClient: (id: string) => void }) {
-  const overdue = operations.sla?.overdue_commitments || [];
-  const waiting = operations.sla?.waiting_agency || [];
-  const summary = `${clients.filter((c) => c.priority === "ATTENTION").length} prioridades imediatas, ${overdue.length} compromissos vencidos, ${waiting.length} conversas esperando a agência e ${alerts.filter((a) => ["CRITICAL", "HIGH"].includes(a.severity)).length} alertas críticos/altos.`;
-  return <section className="workspace"><div className="daily-brief card"><div><span className="eyebrow">Briefing automático</span><h2>O que merece atenção hoje</h2><p>{summary}</p></div><button onClick={() => navigator.clipboard?.writeText(`Resumo operacional: ${summary}`)}>Copiar resumo</button></div><ActionInbox clients={clients} openClient={openClient} /><div className="triage-grid"><section className="card section"><div className="section-title">SLA · esperando a agência</div>{waiting.slice(0, 15).map((row: Row) => <button className="triage-row" key={row.chat_id} onClick={() => row.client_id && openClient(row.client_id)}><span><b>{text(row.last_summary || row.open_question || row.chat_id)}</b><small>Desde {formatDate(row.waiting_since)}</small></span><Chip value={row.sla_level || row.conversation_status} /></button>)}{!waiting.length && <div className="empty compact">Nenhuma conversa aguardando a equipe.</div>}</section><section className="card section"><div className="section-title">Compromissos vencidos</div>{overdue.slice(0, 15).map((row: Row) => <button className="triage-row" key={row.id} onClick={() => row.client_id && openClient(row.client_id)}><span><b>{text(row.descricao || row.title)}</b><small>{text(row.owner)} · {relativeDate(row.due_at)}</small></span><Chip value="ATRASADO" /></button>)}{!overdue.length && <div className="empty compact">Nenhum compromisso vencido.</div>}</section></div></section>;
+// ---------------------------------------------------------------- Foco do dia
+//
+// A tela antes era um briefing em prosa + quatro colunas de "caixa de acao" + duas
+// listas soltas de SLA e compromissos. Quem abria lia quatro contagens e ainda tinha
+// que decidir sozinho por onde comecar - e as duas coisas com prazo real (cliente
+// esperando resposta e compromisso vencido) ficavam no rodape, abaixo da carteira.
+//
+// Agora e' uma fila de trabalho unica, ordenada por atraso, dividida pelo VERBO da
+// acao: Responder (alguem esta esperando a agencia), Resolver (venceu ou alertou) e
+// Acompanhar (nao venceu, mas nao pode dormir). Cada linha responde na mesma altura:
+// o que e', de quem e', ha quanto tempo e de quem e' a bola.
+
+// Dia no fuso da operacao. O backend agrupa as tasks por data de Sao Paulo; se a tela
+// perguntasse pelo dia em UTC, "Hoje" viraria o dia seguinte depois das 21h.
+const diaSaoPaulo = (date = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+
+const HORA_MS = 3600000;
+
+function horasDesde(value: unknown) {
+  if (!value) return null;
+  const at = new Date(String(value)).getTime();
+  return Number.isNaN(at) ? null : Math.max(0, (Date.now() - at) / HORA_MS);
+}
+
+// "há 3h" / "há 2 dias" / "há 3 semanas". O atraso e' o criterio de ordenacao da fila,
+// entao ele precisa estar escrito na linha, nao escondido numa data absoluta.
+function atrasoLabel(horas: number | null) {
+  if (horas == null) return "sem data";
+  if (horas < 1) return "há menos de 1h";
+  if (horas < 24) return `há ${Math.floor(horas)}h`;
+  const dias = Math.floor(horas / 24);
+  if (dias < 14) return `há ${dias} ${dias === 1 ? "dia" : "dias"}`;
+  return `há ${Math.floor(dias / 7)} semanas`;
+}
+
+type FocoItem = {
+  key: string;
+  lane: "reply" | "solve" | "follow";
+  client_id: string | null;
+  cliente: string;
+  titulo: string;
+  detalhe: string;
+  dono: string;
+  horas: number | null;
+  chip: string;
+};
+
+function FocusCenter({ clients, allClients, operations, alerts, openClient }: { clients: Row[]; allClients: Row[]; operations: Row; alerts: Row[]; openClient: (id: string) => void }) {
+  const [lane, setLane] = useState<"all" | "reply" | "solve" | "follow">("all");
+
+  const clientePorId = useMemo(() => new Map(allClients.map((client) => [String(client.client_id), client])), [allClients]);
+  const nome = (id: unknown, fallback = "Sem cliente vinculado") => text(clientePorId.get(String(id ?? ""))?.display_name || fallback);
+  const dono = (id: unknown) => {
+    const client = clientePorId.get(String(id ?? ""));
+    return text(client?.action_owner || client?.cs_owner || client?.gt_owner || "sem responsável");
+  };
+
+  const waiting: Row[] = operations.sla?.waiting_agency || [];
+  const overdue: Row[] = operations.sla?.overdue_commitments || [];
+  const criticos = useMemo(() => alerts.filter((alert) => ["CRITICAL", "HIGH"].includes(alert.severity)), [alerts]);
+
+  const filas = useMemo(() => {
+    const responder: FocoItem[] = waiting.map((row) => ({
+      key: `reply-${row.chat_id}`,
+      lane: "reply",
+      client_id: row.client_id ?? null,
+      cliente: nome(row.client_id, text(row.chat_name || row.chat_id)),
+      titulo: text(row.open_question || row.last_summary || row.last_intent || "Cliente aguardando retorno"),
+      detalhe: "Cliente esperando a agência",
+      dono: dono(row.client_id),
+      horas: horasDesde(row.waiting_since || row.updated_at),
+      chip: row.sla_level || row.conversation_status || "ESPERANDO",
+    }));
+
+    const resolverCompromissos: FocoItem[] = overdue.map((row) => ({
+      key: `commit-${row.id}`,
+      lane: "solve",
+      client_id: row.client_id ?? null,
+      cliente: nome(row.client_id),
+      titulo: text(row.descricao || row.title || "Compromisso sem descrição"),
+      detalhe: "Compromisso vencido",
+      dono: text(row.owner || dono(row.client_id)),
+      horas: horasDesde(row.due_at),
+      chip: "ATRASADO",
+    }));
+
+    const resolverAlertas: FocoItem[] = criticos.map((alert) => ({
+      key: `alert-${alert.id}`,
+      lane: "solve",
+      client_id: alert.client_id ?? null,
+      cliente: nome(alert.client_id, "Alerta geral"),
+      titulo: text(alert.title || alert.description || "Alerta operacional"),
+      detalhe: text(alert.description || "Alerta aberto"),
+      dono: dono(alert.client_id),
+      horas: horasDesde(alert.last_detected_at || alert.created_at),
+      chip: alert.severity,
+    }));
+
+    const acompanhar: FocoItem[] = clients
+      .filter((client) => ["ATTENTION", "FOLLOW_UP", "DATA_INCOMPLETE"].includes(client.priority) && client.next_step)
+      .map((client) => ({
+        key: `follow-${client.client_id}`,
+        lane: "follow" as const,
+        client_id: client.client_id,
+        cliente: text(client.display_name),
+        titulo: text(client.next_step),
+        detalhe: text(client.current_subject || "Próxima ação da carteira"),
+        dono: text(client.action_owner || client.cs_owner || "sem responsável"),
+        horas: horasDesde(client.next_step_due),
+        chip: client.priority,
+      }));
+
+    // Dentro de cada fila, o mais parado primeiro. Item sem data vai para o fim:
+    // sem prazo nao da' para afirmar que esta' atrasado.
+    const porAtraso = (a: FocoItem, b: FocoItem) => (b.horas ?? -1) - (a.horas ?? -1);
+    return {
+      reply: responder.sort(porAtraso),
+      solve: [...resolverCompromissos, ...resolverAlertas].sort(porAtraso),
+      follow: acompanhar.sort(porAtraso),
+    };
+  }, [waiting, overdue, criticos, clients, clientePorId]);
+
+  const lanes = [
+    { key: "reply" as const, verbo: "Responder", titulo: "Alguém está esperando você", ajuda: "Conversas em que o cliente falou por último e a agência ainda não voltou.", itens: filas.reply, tom: "danger" },
+    { key: "solve" as const, verbo: "Resolver", titulo: "Venceu ou alertou", ajuda: "Compromissos com prazo estourado e alertas críticos/altos em aberto.", itens: filas.solve, tom: "warn" },
+    { key: "follow" as const, verbo: "Acompanhar", titulo: "Não venceu, mas não pode dormir", ajuda: "Próximas ações da carteira em atenção ou follow-up.", itens: filas.follow, tom: "" },
+  ];
+  const visiveis = lane === "all" ? lanes : lanes.filter((item) => item.key === lane);
+  const teto = lane === "all" ? 12 : 60;
+  const totalFila = filas.reply.length + filas.solve.length + filas.follow.length;
+  const parados = filas.reply.filter((item) => (item.horas ?? 0) >= 24).length + filas.solve.filter((item) => (item.horas ?? 0) >= 24).length;
+
+  // O plano do dia sai em texto pronto para colar no grupo da equipe: o topo de cada
+  // fila, com prazo e dono, na mesma ordem que a tela mostra.
+  const planoDoDia = [
+    `Foco do dia · ${new Intl.DateTimeFormat("pt-BR", { dateStyle: "long" }).format(new Date())}`,
+    `${filas.reply.length} para responder · ${filas.solve.length} para resolver · ${filas.follow.length} para acompanhar`,
+    "",
+    ...lanes.flatMap((item) => item.itens.length
+      ? [`${item.verbo.toUpperCase()}:`, ...item.itens.slice(0, 5).map((row, index) => `${index + 1}. ${row.cliente} — ${row.titulo} (${atrasoLabel(row.horas)}, ${row.dono})`), ""]
+      : []),
+  ].join("\n");
+
+  return (
+    <section className="workspace foco">
+      <div className="foco-head card">
+        <div>
+          <span className="eyebrow">Fila do dia</span>
+          <h2>{totalFila ? `${totalFila} ${totalFila === 1 ? "item aberto" : "itens abertos"} · ${parados} parado${parados === 1 ? "" : "s"} há mais de 24h` : "Nada em aberto na fila de hoje"}</h2>
+          <p>Do mais parado para o mais recente. O diagnóstico é aqui; a baixa continua no ClickUp.</p>
+        </div>
+        <button type="button" onClick={() => navigator.clipboard?.writeText(planoDoDia)}>Copiar plano do dia</button>
+      </div>
+
+      <div className="filter-tabs foco-tabs">
+        <button type="button" className={lane === "all" ? "active" : ""} onClick={() => setLane("all")}>Tudo <b>{totalFila}</b></button>
+        {lanes.map((item) => <button key={item.key} type="button" className={lane === item.key ? "active" : ""} onClick={() => setLane(item.key)}>{item.verbo} <b>{item.itens.length}</b></button>)}
+      </div>
+
+      <div className={`foco-lanes${lane === "all" ? "" : " single"}`}>
+        {visiveis.map((item) => (
+          <section className={`card foco-lane ${item.tom}`} key={item.key}>
+            <div className="foco-lane-head">
+              <div>
+                <b>{item.verbo}</b>
+                <span>{item.titulo}</span>
+              </div>
+              <strong>{item.itens.length}</strong>
+            </div>
+            <p className="foco-lane-help">{item.ajuda}</p>
+            {item.itens.slice(0, teto).map((row) => (
+              <button type="button" className="foco-item" key={row.key} onClick={() => row.client_id && openClient(row.client_id)} disabled={!row.client_id}>
+                <span className={`foco-age${(row.horas ?? 0) >= 24 ? " late" : ""}`}>{atrasoLabel(row.horas)}</span>
+                <span className="foco-body">
+                  <b>{row.cliente}</b>
+                  <span>{row.titulo}</span>
+                  <small>{row.detalhe} · {row.dono}</small>
+                </span>
+                <Chip value={row.chip} />
+              </button>
+            ))}
+            {item.itens.length > teto && <div className="foco-more">+{item.itens.length - teto} itens — abra a fila “{item.verbo}” para ver todos.</div>}
+            {!item.itens.length && <div className="empty compact">Nada aqui hoje.</div>}
+          </section>
+        ))}
+      </div>
+
+      <details className="card foco-carteira">
+        <summary>Carteira por prioridade <span>{clients.length}</span></summary>
+        <ActionInbox clients={clients} openClient={openClient} />
+      </details>
+    </section>
+  );
 }
 
 function ClientPortfolio({ clients, total, query, setQuery, filter, setFilter, lifecycleFilter, setLifecycleFilter, openClient }: { clients: Row[]; total: number; query: string; setQuery: (value: string) => void; filter: string; setFilter: (value: string) => void; lifecycleFilter:string; setLifecycleFilter:(value:string)=>void; openClient: (id: string) => void }) {
@@ -647,7 +854,9 @@ function ClickUpRangeExplorer({ token, people }: { token: string; people: string
 
   const range = useMemo(() => {
     const today = new Date();
-    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    // Dia no fuso da operacao, nao em UTC: depois das 21h de Brasilia o toISOString()
+    // ja' virou o dia seguinte e "Hoje" mostrava zero enquanto o time ainda trabalhava.
+    const iso = (d: Date) => diaSaoPaulo(d);
     if (preset === "custom" && since && until) return { since, until };
     if (preset === "7d") return { since: iso(new Date(today.getTime() - 6 * 86400000)), until: iso(today) };
     if (preset === "month") return { since: iso(new Date(today.getFullYear(), today.getMonth(), 1)), until: iso(today) };
@@ -673,9 +882,9 @@ function ClickUpRangeExplorer({ token, people }: { token: string; people: string
     setSelected((prev) => (prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]));
   };
 
-  const todayKey = new Date().toISOString().slice(0, 10);
-  const yesterdayKey = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-  const dayBeforeKey = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+  const todayKey = diaSaoPaulo();
+  const yesterdayKey = diaSaoPaulo(new Date(Date.now() - 86400000));
+  const dayBeforeKey = diaSaoPaulo(new Date(Date.now() - 2 * 86400000));
   const byDate = new Map((rangeData?.daily_totals ?? []).map((row: any) => [row.date, row]));
   const dayCard = (label: string, dateKey: string) => {
     const row: any = byDate.get(dateKey);
