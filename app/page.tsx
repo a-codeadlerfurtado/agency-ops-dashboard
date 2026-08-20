@@ -81,6 +81,17 @@ function formatMoney(value: unknown) {
   }).format(Number(value || 0));
 }
 
+// Simbolo da Leonardo Imobi: o retangulo com a haste esquerda estendida formando o
+// "L", e as duas cunhas inclinadas. Inline em SVG para escalar sem arquivo externo.
+function BrandMark() {
+  return <svg viewBox="0 0 276 390" role="img" aria-label="Leonardo Imobi" fill="none">
+    <rect x="6.5" y="6.5" width="263" height="252" stroke="currentColor" strokeWidth="13" />
+    <rect x="0" y="252" width="13" height="138" fill="currentColor" />
+    <polygon points="68,223 276,247 276,253 68,253" fill="currentColor" />
+    <polygon points="0,377 208,343 208,390 0,390" fill="currentColor" />
+  </svg>;
+}
+
 function formatDay(value: unknown) {
   if (!value) return "—";
   const raw = String(value).slice(0, 10);
@@ -220,7 +231,7 @@ function AuthScreen() {
     finally { setBusy(false); }
   }
 
-  return <main className="auth-shell"><section className="auth-card"><div className="auth-brand"><div className="logo">A</div><div><span className="eyebrow">AGENCY OPS</span><h1>Central de Operações</h1><p>Acesse seu perfil para continuar.</p></div></div><div className="auth-tabs"><button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setMessage(""); }}>Entrar</button><button type="button" className={mode === "signup" ? "active" : ""} onClick={() => { setMode("signup"); setMessage(""); }}>Criar conta</button></div><form onSubmit={submit}>{mode === "signup" && <label>Nome completo<input autoComplete="name" required value={name} onChange={(event) => setName(event.target.value)} placeholder="Seu nome" /></label>}{mode === "signup" && <label>Qual colaborador da empresa você é?<select required value={collaborator} onChange={(event) => setCollaborator(event.target.value)}><option value="">{rosterLoading ? "Carregando…" : "Selecione…"}</option>{roster.map((person) => <option key={person.person} value={person.person}>{person.person}</option>)}</select>{!rosterLoading && !roster.length && <small className="auth-hint">Todos os colaboradores já têm conta. Fale com o Adler se precisar de acesso.</small>}</label>}<label>E-mail<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com" /></label><label>Senha<input type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={6} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 6 caracteres" /></label>{message && <p className="auth-message" role="status">{message}</p>}<button className="auth-submit" disabled={busy}>{busy ? "Processando…" : mode === "login" ? "Entrar no dashboard" : "Criar minha conta"}</button></form></section></main>;
+  return <main className="auth-shell"><section className="auth-card"><div className="auth-brand"><div className="logo"><BrandMark /></div><div><span className="eyebrow">LEONARDO IMOBI</span><h1>Central de Operações</h1><p>Acesse seu perfil para continuar.</p></div></div><div className="auth-tabs"><button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setMessage(""); }}>Entrar</button><button type="button" className={mode === "signup" ? "active" : ""} onClick={() => { setMode("signup"); setMessage(""); }}>Criar conta</button></div><form onSubmit={submit}>{mode === "signup" && <label>Nome completo<input autoComplete="name" required value={name} onChange={(event) => setName(event.target.value)} placeholder="Seu nome" /></label>}{mode === "signup" && <label>Qual colaborador da empresa você é?<select required value={collaborator} onChange={(event) => setCollaborator(event.target.value)}><option value="">{rosterLoading ? "Carregando…" : "Selecione…"}</option>{roster.map((person) => <option key={person.person} value={person.person}>{person.person}</option>)}</select>{!rosterLoading && !roster.length && <small className="auth-hint">Todos os colaboradores já têm conta. Fale com o Adler se precisar de acesso.</small>}</label>}<label>E-mail<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com" /></label><label>Senha<input type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={6} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 6 caracteres" /></label>{message && <p className="auth-message" role="status">{message}</p>}<button className="auth-submit" disabled={busy}>{busy ? "Processando…" : mode === "login" ? "Entrar no dashboard" : "Criar minha conta"}</button></form></section></main>;
 }
 
 export default function Dashboard() {
@@ -396,8 +407,9 @@ export default function Dashboard() {
     <main className={`shell ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
       <header className="top">
         <div className="brand">
-          <div className="logo">A</div>
+          <div className="logo"><BrandMark /></div>
           <div>
+            <span className="brand-name">Leonardo Imobi</span>
             <h1>Central de Operações</h1>
             <div className="subtitle">Clientes, onboarding, WhatsApp e mídia em um só lugar</div>
           </div>
