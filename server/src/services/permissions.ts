@@ -50,7 +50,7 @@ export class ClientForbidden extends Error {
 
 /**
  * Porteiro de client_id. O frontend esconder um cliente nao e' seguranca:
- * toda entrada de client_id passa por aqui antes de virar contexto do Claude.
+ * toda entrada de client_id passa por aqui antes de virar contexto do modelo.
  */
 export async function assertClientAllowed(
   identity: Identity,
