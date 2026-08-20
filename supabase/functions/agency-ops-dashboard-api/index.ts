@@ -386,7 +386,7 @@ Deno.serve(async (req) => {
     // Quadro de pessoal + produtividade ClickUp, agregado em SQL (agency_ops.team_overview).
     ops.from("team_overview").select("*").order("role_order", { ascending: true }).order("tasks_done", { ascending: false }),
     ops.from("onboarding_stage_definitions").select("code,label").order("ordem"),
-    isFull ? ops.from("access_requests").select("*,team_roster(role)").eq("status", "PENDING").order("requested_at", { ascending: false }) : Promise.resolve({ data: [], error: null }),
+    canDecideAccessRequests ? ops.from("access_requests").select("*,team_roster(role)").eq("status", "PENDING").order("requested_at", { ascending: false }) : Promise.resolve({ data: [], error: null }),
     ops.from("access_requests").select("*").eq("user_key", currentUserKey).order("requested_at", { ascending: false }).limit(1),
     ops.from("whatsapp_chat_registry").select("chat_id,chat_name,message_count,last_seen_at").limit(500),
     // Carteira de Clientes: metricas vivas, serie mensal, transicoes e auditoria.
@@ -608,7 +608,9 @@ Deno.serve(async (req) => {
     // Quem opera uma carteira ve o codinome dela; quem ve o quadro inteiro ve todas.
     wallets: canView("team") ? wallets : [],
     portfolio: canView("clients") ? portfolio : null, stage_labels: stageLabels,
-    access_requests_pending: isFull ? value(teamData[4], []) : [],
+    // Quem nao decide nao precisa da fila: o gate era isFull, entao todo perfil de
+    // acesso total recebia os nomes de quem esta esperando aprovacao sem poder aprovar.
+    access_requests_pending: canDecideAccessRequests ? value(teamData[4], []) : [],
     profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved, views: allowedViews, carteira: walletName(profilePerson) },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
     auth_mode: currentUserKey === "adler-furtado" && suppliedKey.length >= 40 ? "dashboard_key" : "login",
