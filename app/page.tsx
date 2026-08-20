@@ -130,9 +130,44 @@ function healthScore(client: Row) {
   return Math.max(0, score);
 }
 
+// Painel sobreposto precisa prender o foco. Sem isso o Tab continua passeando pelo
+// conteudo atras do painel: quem usa teclado perde a referencia de onde esta, e o
+// leitor de tela le' a pagina inteira em vez do dialogo. Ao fechar, o foco volta
+// para o elemento que abriu.
+function useDialogFocus(close: () => void) {
+  const ref = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const anterior = document.activeElement as HTMLElement | null;
+    const focaveis = () => Array.from(
+      ref.current?.querySelectorAll<HTMLElement>(
+        'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+      ) ?? []
+    ).filter((el) => el.offsetParent !== null);
+    focaveis()[0]?.focus();
+    function aoTeclar(evento: KeyboardEvent) {
+      if (evento.key === "Escape") { evento.stopPropagation(); close(); return; }
+      if (evento.key !== "Tab") return;
+      const itens = focaveis();
+      if (!itens.length) return;
+      const primeiro = itens[0], ultimo = itens[itens.length - 1];
+      if (evento.shiftKey && document.activeElement === primeiro) { evento.preventDefault(); ultimo.focus(); }
+      else if (!evento.shiftKey && document.activeElement === ultimo) { evento.preventDefault(); primeiro.focus(); }
+    }
+    document.addEventListener("keydown", aoTeclar);
+    return () => { document.removeEventListener("keydown", aoTeclar); anterior?.focus?.(); };
+  }, [close]);
+  return ref;
+}
+
+// Alguns campos chegam com marcador interno do coletor, tipo
+// "[SEM TEXTO RECONHECIDO - VER RAW_JSON]". Isso e' recado de sistema, nao assunto
+// do cliente: quem le' a lista precisa de contexto, nao de um ponteiro para o log.
+const MARCADOR_INTERNO = /^\s*\[?\s*(sem texto reconhecido|ver raw_json|raw_json|sem conte[uú]do|sem texto|null|undefined)/i;
 function text(value: unknown) {
   if (value === null || value === undefined || value === "") return "—";
-  return String(value);
+  const raw = String(value).trim();
+  if (MARCADOR_INTERNO.test(raw)) return "Sem assunto identificado";
+  return raw;
 }
 
 function initials(value: unknown) {
@@ -184,12 +219,14 @@ function Chip({ value }: { value: unknown }) {
   return <span className={`chip ${raw}`}>{pt[raw] || raw.replaceAll("_", " ")}</span>;
 }
 
-function Metric({ label, value, tone = "", hint = "" }: { label: string; value: string; tone?: string; hint?: string }) {
+function Metric({ label, value, tone = "", hint = "", loading = false }: { label: string; value: string; tone?: string; hint?: string; loading?: boolean }) {
   return (
-    <article className="card metric">
+    <article className="card metric" aria-busy={loading || undefined}>
       <div className="label">{label}</div>
-      <div className={`value ${tone}`}>{value}</div>
-      <div className="hint">{hint}</div>
+      {loading
+        ? <div className="value"><span className="skeleton skeleton-value" /></div>
+        : <div className={`value ${tone}`}>{value}</div>}
+      <div className="hint">{loading ? <span className="skeleton skeleton-line" /> : hint}</div>
     </article>
   );
 }
@@ -416,7 +453,7 @@ export default function Dashboard() {
         </div>
         <div className="live">
           <span className={`dot ${loading ? "loading" : error ? "error" : ""}`} />
-          <span>{loading ? "Atualizando…" : error ? "Problema de sincronização" : "Sistemas sincronizados"}</span>
+          <span role="status" aria-live="polite">{loading ? "Atualizando…" : error ? "Problema de sincronização" : "Sistemas sincronizados"}</span>
           <button className="command-trigger" onClick={() => setCommandOpen(true)}>⌕ Pesquisar <kbd>Ctrl K</kbd></button>
           <button className="icon-btn" onClick={() => setNotificationsOpen(!notificationsOpen)} aria-label="Notificações">♢{unread > 0 && <b>{unread}</b>}</button>
           <button className="btn" onClick={load}>Atualizar</button>
@@ -439,12 +476,12 @@ export default function Dashboard() {
       {error && <div className="error-box">{error}</div>}
 
       <section className="grid kpis">
-        <Metric label="Clientes ativos" value={formatNumber(kpis.active_clients)} tone="blue" hint="Ativos + onboarding" />
-        <Metric label="Atenção agora" value={formatNumber(kpis.attention_now)} tone="red" hint="prioridade operacional" />
-        <Metric label="Follow-up" value={formatNumber(kpis.follow_up)} tone="yellow" hint="ação em acompanhamento" />
-        <Metric label="Operação OK" value={formatNumber(kpis.ok)} tone="green" hint="sem pendência crítica" />
-        <Metric label="Compromissos vencidos" value={formatNumber(kpis.overdue_commitments)} tone={kpis.overdue_commitments ? "red" : "green"} hint="em aberto" />
-        <Metric label="Alertas abertos" value={formatNumber(kpis.open_alerts)} tone={kpis.critical_alerts ? "red" : "yellow"} hint={`${formatNumber(kpis.critical_alerts)} críticos/altos`} />
+        <Metric label="Clientes ativos" value={formatNumber(kpis.active_clients)} tone="blue" hint="Ativos + onboarding" loading={!data} />
+        <Metric label="Atenção agora" value={formatNumber(kpis.attention_now)} tone="red" hint="prioridade operacional" loading={!data} />
+        <Metric label="Follow-up" value={formatNumber(kpis.follow_up)} tone="yellow" hint="ação em acompanhamento" loading={!data} />
+        <Metric label="Operação OK" value={formatNumber(kpis.ok)} tone="green" hint="sem pendência crítica" loading={!data} />
+        <Metric label="Compromissos vencidos" value={formatNumber(kpis.overdue_commitments)} tone={kpis.overdue_commitments ? "red" : "green"} hint="em aberto" loading={!data} />
+        <Metric label="Alertas abertos" value={formatNumber(kpis.open_alerts)} tone={kpis.critical_alerts ? "red" : "yellow"} hint={`${formatNumber(kpis.critical_alerts)} críticos/altos`} loading={!data} />
       </section>
 
       {view === "focus" && <FocusCenter clients={actionClients} operations={data?.operations || {}} alerts={data?.alerts || []} openClient={openClient} />}
@@ -464,7 +501,7 @@ export default function Dashboard() {
 
       {view === "overview" && <><SmartSearch question={opsQuestion} setQuestion={setOpsQuestion} clients={allClients} conversations={data?.conversations || []} commitments={data?.commitments || []} openClient={openClient} />
       <AttentionCenter clients={activeClients} operations={data?.operations || {}} preclients={data?.preclients || []} />
-      <ExecutiveBrief clients={activeClients} onboardingGroups={onboardingGroups} stageLabels={data?.stage_labels || {}} openClient={openClient} />
+      <ExecutiveBrief ready={!!data} clients={activeClients} onboardingGroups={onboardingGroups} stageLabels={data?.stage_labels || {}} openClient={openClient} />
       <section className="card section media-section">
         <div className="section-head">
           <div>
@@ -544,7 +581,7 @@ export default function Dashboard() {
   );
 }
 
-function ExecutiveBrief({ clients, onboardingGroups, stageLabels, openClient }: { clients: Row[]; onboardingGroups: [string, Row[]][]; stageLabels: Record<string, string>; openClient: (id: string) => void }) {
+function ExecutiveBrief({ ready, clients, onboardingGroups, stageLabels, openClient }: { ready: boolean; clients: Row[]; onboardingGroups: [string, Row[]][]; stageLabels: Record<string, string>; openClient: (id: string) => void }) {
   const counts = {
     attention: clients.filter((c) => c.priority === "ATTENTION").length,
     follow: clients.filter((c) => c.priority === "FOLLOW_UP").length,
@@ -554,12 +591,14 @@ function ExecutiveBrief({ clients, onboardingGroups, stageLabels, openClient }: 
   const total = Math.max(clients.length, 1);
   const risk = [...clients].sort((a, b) => (priorityRank[a.priority] ?? 9) - (priorityRank[b.priority] ?? 9)).slice(0, 6);
   const onboardingTotal = onboardingGroups.reduce((sum, [, rows]) => sum + rows.length, 0);
-  const headline = counts.attention
+  const headline = !ready
+    ? "Consolidando a leitura da operação…"
+    : counts.attention
     ? `${counts.attention} cliente${counts.attention > 1 ? "s" : ""} exige${counts.attention > 1 ? "m" : ""} ação imediata.`
     : counts.follow ? `A carteira está estável, com ${counts.follow} follow-up${counts.follow > 1 ? "s" : ""} em acompanhamento.`
     : "A carteira está estável e sem prioridade crítica registrada.";
   return <section className="executive-grid">
-    <article className="card executive-story"><div className="eyebrow">Leitura executiva · agora</div><h2>{headline}</h2><p>{counts.incomplete ? `${counts.incomplete} registros ainda têm cobertura incompleta e podem limitar o diagnóstico.` : "A cobertura atual permite uma leitura consistente da operação."}</p><div className="method"><span>i</span><div><b>Como é calculado</b><small>Prioridade, cobertura, compromissos e alertas consolidados pelo motor operacional.</small></div></div></article>
+    <article className="card executive-story"><div className="eyebrow">Leitura executiva · agora</div><h2>{headline}</h2><p>{!ready ? "Aguardando a carga para avaliar a cobertura." : counts.incomplete ? `${counts.incomplete} registros ainda têm cobertura incompleta e podem limitar o diagnóstico.` : "A cobertura atual permite uma leitura consistente da operação."}</p><div className="method"><span>i</span><div><b>Como é calculado</b><small>Prioridade, cobertura, compromissos e alertas consolidados pelo motor operacional.</small></div></div></article>
     <article className="card portfolio-health"><div className="panel-heading"><div><span className="eyebrow">Saúde da carteira</span><h3>Distribuição operacional</h3></div><b>{Math.round((counts.ok / total) * 100)}% OK</b></div><div className="health-rail" aria-label="Distribuição de saúde"><i className="r-attention" style={{width:`${counts.attention / total * 100}%`}}/><i className="r-follow" style={{width:`${counts.follow / total * 100}%`}}/><i className="r-incomplete" style={{width:`${counts.incomplete / total * 100}%`}}/><i className="r-ok" style={{width:`${counts.ok / total * 100}%`}}/></div><div className="rail-legend"><span><i className="r-attention"/>Atenção <b>{counts.attention}</b></span><span><i className="r-follow"/>Follow-up <b>{counts.follow}</b></span><span><i className="r-incomplete"/>Dados <b>{counts.incomplete}</b></span><span><i className="r-ok"/>OK <b>{counts.ok}</b></span></div></article>
     <article className="card risk-watch"><div className="panel-heading"><div><span className="eyebrow">Prioridades</span><h3>Quem olhar primeiro</h3></div><span className="counter">{risk.length}</span></div>{risk.map((client, index) => <button key={client.client_id} onClick={() => openClient(client.client_id)}><span className="rank">{String(index + 1).padStart(2,"0")}</span><span><b>{text(client.display_name)}</b><small>{text(client.next_step || client.current_subject)}</small></span><Chip value={client.priority}/></button>)}</article>
     <article className="card compact-funnel"><div className="panel-heading"><div><span className="eyebrow">Onboarding</span><h3>Distribuição por etapa</h3></div><b>{onboardingTotal}</b></div>{onboardingGroups.slice(0, 6).map(([stage, rows]) => <div className="funnel-row" key={stage}><span>{stageLabels[stage] || stage.replaceAll("_"," ")}</span><div><i style={{width:`${Math.max(4, rows.length / Math.max(onboardingTotal,1) * 100)}%`}}/></div><b>{rows.length}</b></div>)}</article>
@@ -1081,25 +1120,28 @@ function AuditCenter({runs,issues}:{runs:Row[];issues:Row[]}) {
 }
 
 function GlobalCommand({clients,tasks,preclients,close,openClient}:{clients:Row[];tasks:Row[];preclients:Row[];close:()=>void;openClient:(id:string)=>void}) {
+  const dialogRef = useDialogFocus(close);
   const [search,setSearch]=useState(""); const needle=search.toLowerCase().trim();
   const clientRows=needle?clients.filter(c=>[c.display_name,c.cs_owner,c.gt_owner,c.current_subject,c.next_step].join(" ").toLowerCase().includes(needle)).slice(0,8):clients.slice(0,5);
   const taskRows=needle?tasks.filter(t=>[t.name,t.list_name,t.status].join(" ").toLowerCase().includes(needle)).slice(0,5):[];
   const leadRows=needle?preclients.filter(p=>[p.name,p.company,p.stage].join(" ").toLowerCase().includes(needle)).slice(0,5):[];
-  return <><div className="overlay open" onClick={close}/><section className="command-modal"><div className="command-input"><span>⌕</span><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Pesquisar cliente, tarefa, responsável, campanha ou pré-cliente"/><kbd>Esc</kbd></div><div className="command-results"><small>CLIENTES</small>{clientRows.map(c=><button key={c.client_id} onClick={()=>{openClient(c.client_id);close();}}><span><b>{c.display_name}</b><small>{pt[c.lifecycle]||c.lifecycle} · CS {text(c.cs_owner)} · GT {text(c.gt_owner)} · {text(c.next_step)}</small></span><Chip value={c.priority}/></button>)}{taskRows.length>0&&<small>TAREFAS</small>}{taskRows.map(t=><a key={t.task_id} href={t.url} target="_blank" rel="noreferrer"><span><b>{t.name}</b><small>{t.list_name} · {formatDate(t.date_closed)}</small></span><Chip value={t.status}/></a>)}{leadRows.length>0&&<small>PRÉ-CLIENTES</small>}{leadRows.map(p=><button key={p.id}><span><b>{p.company||p.name}</b><small>{p.stage} · {formatMoney(p.estimated_value)}</small></span></button>)}</div></section></>;
+  return <><div className="overlay open" onClick={close}/><section ref={dialogRef as React.RefObject<HTMLElement>} role="dialog" aria-modal="true" aria-label="Busca operacional" className="command-modal"><div className="command-input"><span>⌕</span><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Pesquisar cliente, tarefa, responsável, campanha ou pré-cliente"/><kbd>Esc</kbd></div><div className="command-results"><small>CLIENTES</small>{clientRows.map(c=><button key={c.client_id} onClick={()=>{openClient(c.client_id);close();}}><span><b>{c.display_name}</b><small>{pt[c.lifecycle]||c.lifecycle} · CS {text(c.cs_owner)} · GT {text(c.gt_owner)} · {text(c.next_step)}</small></span><Chip value={c.priority}/></button>)}{taskRows.length>0&&<small>TAREFAS</small>}{taskRows.map(t=><a key={t.task_id} href={t.url} target="_blank" rel="noreferrer"><span><b>{t.name}</b><small>{t.list_name} · {formatDate(t.date_closed)}</small></span><Chip value={t.status}/></a>)}{leadRows.length>0&&<small>PRÉ-CLIENTES</small>}{leadRows.map(p=><button key={p.id}><span><b>{p.company||p.name}</b><small>{p.stage} · {formatMoney(p.estimated_value)}</small></span></button>)}</div></section></>;
 }
 
 function ProfileMenu({preferences,profile,email,settings,close,signOut,requestAccess}:{preferences:Row;profile:Row;email:string;settings:()=>void;close:()=>void;signOut:()=>Promise<unknown>;requestAccess:()=>Promise<void>}) {
+  const dialogRef = useDialogFocus(close);
   const name=preferences.name||email;
   const showRequest = profile?.access_level === "RESTRICTED" && !profile?.elevated;
   const pending = preferences?.my_access_request?.status === "PENDING";
   const [asking, setAsking] = useState(false);
   async function ask() { setAsking(true); try { await requestAccess(); } finally { setAsking(false); } }
-  return <div className="profile-menu"><div className="profile-card"><span className="avatar">{initials(name)}</span><div><b>{text(name)}</b><small>{text(preferences.role||"Colaborador")}</small></div></div>
+  return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Menu do perfil" className="profile-menu"><div className="profile-card"><span className="avatar">{initials(name)}</span><div><b>{text(name)}</b><small>{text(preferences.role||"Colaborador")}</small></div></div>
     {showRequest && <button className="request-access" disabled={pending || asking} onClick={ask}>{pending ? "Solicitação enviada — aguardando Adler" : asking ? "Enviando…" : "Solicitar acesso completo"}</button>}
     <button onClick={settings}>Meu perfil</button><button onClick={settings}>Configurações</button><button onClick={settings}>Preferências</button><button onClick={close}>Notificações</button><button className="muted" onClick={() => signOut()}>Sair</button></div>;
 }
 
 function NotificationCenter({items,close,refresh,openClient,token,pendingRequests,canDecide,decide}:{items:Row[];close:()=>void;refresh:()=>Promise<void>;openClient:(id:string)=>void;token:string;pendingRequests:Row[];canDecide:boolean;decide:(id:string,decision:"APPROVED"|"DENIED")=>Promise<void>}) {
+  const dialogRef = useDialogFocus(close);
   const [deciding,setDeciding]=useState<string|null>(null);
   async function read(id?:string){await apiPost("notifications-read",token,id?{id}:{});await refresh();}
   // Solicitacoes de acesso ainda pendentes viram acao inline: aprovar aqui ja libera o colaborador.
@@ -1108,7 +1150,7 @@ function NotificationCenter({items,close,refresh,openClient,token,pendingRequest
     setDeciding(requestId);
     try{await decide(requestId,decision);}finally{setDeciding(null);}
   }
-  return <div className="notification-panel"><div className="panel-heading"><div><span className="eyebrow">Central de Notificações</span><h3>Atualizações da operação</h3></div><button onClick={close}>×</button></div><button className="mark-read" onClick={()=>read()}>Marcar todas como lidas</button><div className="notification-list">{items.map(item=>{
+  return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Central de notificações" className="notification-panel"><div className="panel-heading"><div><span className="eyebrow">Central de Notificações</span><h3>Atualizações da operação</h3></div><button onClick={close}>×</button></div><button className="mark-read" onClick={()=>read()}>Marcar todas como lidas</button><div className="notification-list">{items.map(item=>{
     const requestId=item.metadata?.access_request_id?String(item.metadata.access_request_id):null;
     if(canDecide&&requestId&&pendingIds.has(requestId)) return <div className={`notification-action${item.read_at?"":" unread"}`} key={item.id}><Chip value={item.level}/><span><b>{text(item.title)}</b><small>{text(item.description)} · {formatDate(item.occurred_at)}</small></span><span className="access-request-actions"><button disabled={deciding===requestId} onClick={()=>act(requestId,"APPROVED")}>Aprovar</button><button className="muted" disabled={deciding===requestId} onClick={()=>act(requestId,"DENIED")}>Recusar</button></span></div>;
     return <button className={item.read_at?"":"unread"} key={item.id} onClick={()=>{read(item.id);if(item.client_id)openClient(item.client_id);}}><Chip value={item.level}/><span><b>{item.title}</b><small>{text(item.actor ? `${item.actor}: ${item.description}` : item.description)} · {formatDate(item.occurred_at)}</small>{(item.gestor || item.carteira) && <small className="notification-owner">{text(item.carteira || (item.gestor ? `Gestor: ${item.gestor}` : ""))}</small>}</span></button>;
@@ -1116,14 +1158,16 @@ function NotificationCenter({items,close,refresh,openClient,token,pendingRequest
 }
 
 function SettingsModal({preferences,close,refresh,token,pendingRequests,canDecide,decide}:{preferences:Row;close:()=>void;refresh:()=>Promise<void>;token:string;pendingRequests:Row[];canDecide:boolean;decide:(id:string,decision:"APPROVED"|"DENIED")=>Promise<void>}) {
+  const dialogRef = useDialogFocus(close);
   const [prefs,setPrefs]=useState<Row>(preferences); const toggle=(key:string)=>setPrefs((p:Row)=>({...p,[key]:p[key]===false}));
   const [deciding,setDeciding]=useState<string>("");
   async function save(){await apiPost("preferences",token,prefs);await refresh();close();}
   async function act(id:string,decision:"APPROVED"|"DENIED"){setDeciding(id);try{await decide(id,decision);}finally{setDeciding("");}}
-  return <><div className="overlay open" onClick={close}/><section className="settings-modal"><div className="panel-heading"><div><span className="eyebrow">Configurações</span><h2>Conta e preferências</h2></div><button onClick={close}>×</button></div><div className="settings-grid"><div><h3>Conta</h3><label>Nome<input value={preferences.name||"Colaborador"} disabled/></label><label>Cargo<input value={preferences.role||"Colaborador"} disabled/></label></div><div><h3>Notificações</h3>{[["sounds_enabled","Som das notificações"],["win_sound_enabled","Som de novo cliente"],["win_celebration_enabled","Celebração de novo cliente"],["notifications_enabled","Notificações"],["animations_enabled","Animações"]].map(([key,label])=><button className="setting-toggle" key={key} onClick={()=>toggle(key)}><span>{label}</span><i className={prefs[key]===false?"":"on"}/></button>)}</div><div><h3>Integrações</h3>{["ClickUp","CRM Comercial","Supabase","WhatsApp","Meta Ads","Google Ads","Make","n8n","Notion"].map(name=><p className="integration-line" key={name}><span>{name}</span><small>{["ClickUp","CRM Comercial","Supabase","WhatsApp","Meta Ads","Notion"].includes(name)?"Configurado":"Preparado"}</small></p>)}</div><div><h3>Usuários e permissões</h3>{canDecide ? <div className="access-requests">{pendingRequests.length ? pendingRequests.map((request)=><div className="access-request-row" key={request.id}><span><b>{text(request.person)}</b><small>Solicitado em {formatDate(request.requested_at)}{request.note ? ` · ${request.note}` : ""}</small></span><span className="access-request-actions"><button disabled={deciding===request.id} onClick={()=>act(request.id,"APPROVED")}>Aprovar</button><button className="muted" disabled={deciding===request.id} onClick={()=>act(request.id,"DENIED")}>Recusar</button></span></div>) : <p className="small">Nenhuma solicitação de acesso pendente.</p>}</div> : <p className="small">Administrador · Operações · CS · GT · Designer · Comercial · Visualizador</p>}</div></div><div className="modal-actions"><button onClick={close}>Cancelar</button><button className="primary" onClick={save}>Salvar alterações</button></div></section></>;
+  return <><div className="overlay open" onClick={close}/><section ref={dialogRef as React.RefObject<HTMLElement>} role="dialog" aria-modal="true" aria-label="Configurações" className="settings-modal"><div className="panel-heading"><div><span className="eyebrow">Configurações</span><h2>Conta e preferências</h2></div><button onClick={close}>×</button></div><div className="settings-grid"><div><h3>Conta</h3><label>Nome<input value={preferences.name||"Colaborador"} disabled/></label><label>Cargo<input value={preferences.role||"Colaborador"} disabled/></label></div><div><h3>Notificações</h3>{[["sounds_enabled","Som das notificações"],["win_sound_enabled","Som de novo cliente"],["win_celebration_enabled","Celebração de novo cliente"],["notifications_enabled","Notificações"],["animations_enabled","Animações"]].map(([key,label])=><button className="setting-toggle" key={key} onClick={()=>toggle(key)}><span>{label}</span><i className={prefs[key]===false?"":"on"}/></button>)}</div><div><h3>Integrações</h3>{["ClickUp","CRM Comercial","Supabase","WhatsApp","Meta Ads","Google Ads","Make","n8n","Notion"].map(name=><p className="integration-line" key={name}><span>{name}</span><small>{["ClickUp","CRM Comercial","Supabase","WhatsApp","Meta Ads","Notion"].includes(name)?"Configurado":"Preparado"}</small></p>)}</div><div><h3>Usuários e permissões</h3>{canDecide ? <div className="access-requests">{pendingRequests.length ? pendingRequests.map((request)=><div className="access-request-row" key={request.id}><span><b>{text(request.person)}</b><small>Solicitado em {formatDate(request.requested_at)}{request.note ? ` · ${request.note}` : ""}</small></span><span className="access-request-actions"><button disabled={deciding===request.id} onClick={()=>act(request.id,"APPROVED")}>Aprovar</button><button className="muted" disabled={deciding===request.id} onClick={()=>act(request.id,"DENIED")}>Recusar</button></span></div>) : <p className="small">Nenhuma solicitação de acesso pendente.</p>}</div> : <p className="small">Administrador · Operações · CS · GT · Designer · Comercial · Visualizador</p>}</div></div><div className="modal-actions"><button onClick={close}>Cancelar</button><button className="primary" onClick={save}>Salvar alterações</button></div></section></>;
 }
 
 function ClientDrawer({ detail, loading, close }: { detail: Row; loading: boolean; close: () => void }) {
+  const dialogRef = useDialogFocus(close);
   const client = detail.client || detail;
   const media = detail.media || [];
   const conversations = (detail.conversations || []).slice(0, 8);
@@ -1144,7 +1188,7 @@ function ClientDrawer({ detail, loading, close }: { detail: Row; loading: boolea
   return (
     <>
       <div className="overlay open" onClick={close} />
-      <aside className="drawer open">
+      <aside ref={dialogRef as React.RefObject<HTMLElement>} role="dialog" aria-modal="true" aria-label="Visão do cliente" className="drawer open">
         <div className="drawer-head"><div><div className="label">Visão do cliente</div><h2>{text(client.display_name)}</h2></div><button className="close" onClick={close}>×</button></div>
         <div className="drawer-body">
           {detail.error ? <div className="error-box">{text(detail.error)}</div> : loading ? <div className="empty">Buscando visão completa…</div> : (
