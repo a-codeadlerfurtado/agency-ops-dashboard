@@ -72,6 +72,43 @@ curl -s localhost:8787/health
 # {"ok":true,"service":"opsquestion","model":"claude-sonnet-5"}
 ```
 
+## Nesta VPS o caminho e' outro (leia antes do resto)
+
+A `srv1837879.hstgr.cloud` nao e' uma maquina vazia. Ela roda **EasyPanel sobre Docker
+Swarm**, com Traefik 3.6.7 ja' ocupando as portas 80 e 443, e mais cinco servicos em
+producao (`centralops-web`, `crm_crm`, `agente_ia_evolution-api`, Postgres, Redis).
+Node nao esta' instalado.
+
+Isso invalida duas coisas escritas abaixo, para **este** servidor:
+
+- **O `Caddyfile` nao serve aqui.** Sem a porta 80 livre, o Caddy nao sobe e o
+  Let's Encrypt nao emite certificado. Ele fica no repositorio para um servidor limpo.
+- **O `instalar.sh` (systemd) tambem nao.** Nao ha' Node no host, e instalar um so'
+  para isso vai contra o jeito que a maquina ja' funciona.
+
+O caminho certo e' entrar no mesmo esquema do `centralops-web`: container na rede
+overlay `easypanel` com labels de Traefik. O certificado vem do curinga
+`*.yb4hto.easypanel.host` que o EasyPanel ja' mantem — nada a provisionar.
+
+```bash
+# 1. levar o codigo para a maquina (repo privado, entao clone com a sua credencial)
+git clone https://github.com/a-codeadlerfurtado/agency-ops-dashboard /tmp/aod
+sudo mkdir -p /opt/opsquestion
+sudo cp /tmp/aod/vps/opsquestion/server.mjs /opt/opsquestion/
+
+# 2. as chaves
+sudo install -m 600 -o root -g root /tmp/aod/vps/opsquestion/opsquestion.env.example /etc/opsquestion.env
+sudo nano /etc/opsquestion.env      # OPENAI_API_KEY e AI_ASK_READ_SECRET
+
+# 3. subir
+sudo bash /tmp/aod/vps/opsquestion/deploy-easypanel.sh
+```
+
+Fica em `https://opsquestion.yb4hto.easypanel.host`. Nenhuma porta e' publicada no
+host: quem alcanca o container e' o Traefik, pela rede interna.
+
+---
+
 ## TLS
 
 O `server.mjs` escuta só em `127.0.0.1`. Quem fala com a internet é o Caddy:
