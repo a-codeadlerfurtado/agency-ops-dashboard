@@ -3,27 +3,26 @@
 import { useEffect } from "react";
 
 /**
- * Mantém a identidade do copiloto consistente sem acoplar o layout ao componente
- * legado AIAskWidget que ainda vive em app/page.tsx.
+ * Remove visualmente o widget legado AIAskWidget da Home. O OpsQuestion global,
+ * montado no RootLayout, substitui esse componente em todas as rotas.
  */
 export default function OpsQuestionBrand() {
   useEffect(() => {
-    const applyBrand = () => {
+    const hideLegacyWidget = () => {
       document.querySelectorAll("b").forEach((node) => {
         const text = node.textContent?.trim();
-        if (text === "Perguntar à IA") node.textContent = "OpsQuestion";
-        if (text === "Perguntar à IA · agency_ops") node.textContent = "OpsQuestion · agency_ops";
-      });
-
-      document.querySelectorAll<HTMLInputElement>("input").forEach((input) => {
-        if (input.placeholder === "Ex: quantos clientes estão em RED?") {
-          input.placeholder = "Pergunte ao OpsQuestion…";
+        if (text === "Perguntar à IA" || text === "Perguntar à IA · agency_ops") {
+          const aside = node.closest("aside") as HTMLElement | null;
+          if (aside) {
+            aside.style.display = "none";
+            aside.dataset.opsquestionLegacy = "hidden";
+          }
         }
       });
     };
 
-    applyBrand();
-    const observer = new MutationObserver(applyBrand);
+    hideLegacyWidget();
+    const observer = new MutationObserver(hideLegacyWidget);
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, []);
