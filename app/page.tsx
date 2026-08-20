@@ -353,6 +353,67 @@ export default function Dashboard() {
       {toast && <button className={`toast${toastLeaving ? " leaving" : ""}`} onClick={() => { if (toast.client_id) openClient(toast.client_id); setToast(null); }}><Chip value={toast.level}/><span><b>{text(toast.title)}</b><small>{text(toast.actor ? `${toast.actor}: ${toast.description}` : toast.description)}</small>{(toast.gestor || toast.carteira) && <small className="toast-meta">{text(toast.carteira || (toast.gestor ? `Gestor: ${toast.gestor}` : ""))}</small>}</span><i onClick={(event) => { event.stopPropagation(); setToast(null); }}>×</i></button>}
       {win && data?.preferences?.win_celebration_enabled !== false && <button className="win-pulse" onClick={() => { if (win.client_id) openClient(win.client_id); setWin(null); }}><small>NOVO CLIENTE</small><strong>{text(win.description)}</strong><span>Acabou de entrar para a operação</span></button>}
     </main>
+      {session?.access_token && <AIAskWidget token={session.access_token} />}
+  );
+}
+
+function AIAskWidget({ token }: { token: string }) {
+  const [open, setOpen] = useState(false);
+  const [question, setQuestionText] = useState("");
+  const [messages, setMessages] = useState<{ role: "user" | "ai"; text: string }[]>([]);
+  const [asking, setAsking] = useState(false);
+  const AI_ASK_URL = API_URL.replace(/agency-ops-dashboard-api$/, "agency-ops-ai-ask");
+
+  async function send() {
+    const q = question.trim();
+    if (!q || asking) return;
+    setMessages((prev) => [...prev, { role: "user", text: q }]);
+    setQuestionText("");
+    setAsking(true);
+    try {
+      const response = await fetch(AI_ASK_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({ question: q }),
+      });
+      const json = await response.json().catch(() => null);
+      const answer = json && json.ok ? json.answer : (json && json.error ? `Não consegui responder: ${json.error}` : "Não consegui responder agora.");
+      setMessages((prev) => [...prev, { role: "ai", text: answer }]);
+    } catch {
+      setMessages((prev) => [...prev, { role: "ai", text: "Não consegui responder agora. Tente novamente em instantes." }]);
+    } finally {
+      setAsking(false);
+    }
+  }
+
+  return (
+    <aside style={{ position: "fixed", right: 18, bottom: 18, zIndex: 9999, width: open ? "min(380px,calc(100vw - 36px))" : "auto", fontFamily: "inherit" }}>
+      {!open && (
+        <button onClick={() => setOpen(true)} style={{ background: "rgba(9,12,20,.94)", color: "#f8fafc", border: "1px solid #2a3040", borderRadius: 999, padding: "10px 16px", display: "flex", alignItems: "center", gap: 8, cursor: "pointer", boxShadow: "0 16px 50px rgba(0,0,0,.28)" }}>
+          <span style={{ fontSize: 16 }}>💬</span>
+          <b style={{ fontSize: 12.5 }}>Perguntar à IA</b>
+        </button>
+      )}
+      {open && (
+        <div style={{ background: "rgba(9,12,20,.96)", color: "#f8fafc", borderRadius: 14, border: "1px solid #2a3040", boxShadow: "0 16px 50px rgba(0,0,0,.28)", display: "flex", flexDirection: "column", height: 460, overflow: "hidden" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", borderBottom: "1px solid #2a3040" }}>
+            <b style={{ fontSize: 12.5 }}>Perguntar à IA · agency_ops</b>
+            <span style={{ cursor: "pointer", fontSize: 16, color: "#94a3b8" }} onClick={() => setOpen(false)}>−</span>
+          </div>
+          <div style={{ flex: 1, overflowY: "auto", padding: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+            {!messages.length && <div style={{ fontSize: 12, color: "#94a3b8" }}>Pergunte qualquer coisa sobre clientes, formulários, materiais, alertas ou produtividade — a resposta vem direto do banco de dados.</div>}
+            {messages.map((m, i) => (
+              <div key={i} style={{ alignSelf: m.role === "user" ? "flex-end" : "flex-start", background: m.role === "user" ? "#2563eb" : "#1c2333", color: "#f8fafc", borderRadius: 10, padding: "7px 10px", fontSize: 12.5, maxWidth: "88%", whiteSpace: "pre-wrap" }}>{m.text}</div>
+            ))}
+            {asking && <div style={{ alignSelf: "flex-start", fontSize: 12, color: "#94a3b8" }}>Consultando o banco…</div>}
+          </div>
+          <div style={{ display: "flex", gap: 6, padding: 10, borderTop: "1px solid #2a3040" }}>
+            <input value={question} onChange={(e) => setQuestionText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") send(); }} placeholder="Ex: quantos clientes estão em RED?" style={{ flex: 1, background: "#12151f", border: "1px solid #2a3040", borderRadius: 8, color: "#f8fafc", padding: "7px 9px", fontSize: 12.5 }} />
+            <button onClick={send} disabled={asking || !question.trim()} style={{ background: "#2563eb", border: "none", borderRadius: 8, color: "#fff", padding: "7px 12px", fontSize: 12.5, cursor: "pointer", opacity: asking || !question.trim() ? 0.6 : 1 }}>Enviar</button>
+          </div>
+        </div>
+      )}
+    </aside>
   );
 }
 
