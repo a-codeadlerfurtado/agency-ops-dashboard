@@ -312,6 +312,9 @@ export default function Dashboard() {
             ...navItems,
             ...(contractsAllowed ? [["contracts", "Contratos"]] : []),
           ] as [View, string][]).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} title={label}>{label}{key === "contracts" && contractsUnread > 0 && <span className="chip" style={{ marginLeft: 6 }}>{contractsUnread}</span>}</button>)}
+          {/* A IA e' rota propria, nao aba de estado: link de verdade, para abrir
+              direto em /ia e continuar funcionando no voltar do navegador. */}
+          <a href="/ia" title="IA da agência">IA</a>
         </div>
       </aside>
 
