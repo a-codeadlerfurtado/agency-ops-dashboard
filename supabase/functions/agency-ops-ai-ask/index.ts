@@ -7,6 +7,22 @@ const CORS = {
   "access-control-allow-methods": "POST,OPTIONS",
 };
 
+const SOURCE_GUIDE = `FONTES PREFERENCIAIS NO SCHEMA agency_ops:
+- Carteira atual, lifecycle, GT/CS, próxima ação e visão geral: dashboard_client_overview, clients, client_operational_snapshot, client_operational_status.
+- Onboarding: dashboard_client_overview, onboarding_cases, onboarding_stages.
+- Campanhas/Meta Ads: campaign_client_latest, campaign_latest_details, meta_campaign_insights, meta_campaign_inventory, client_integrations.
+- Saúde, risco e churn: client_health_scores, client_health_attention_queue, client_health_crosscheck, client_health_timeline, client_health_trends, complaint_events, client_churn_log, client_lifecycle_events.
+- WhatsApp e atendimento: conversation_state, whatsapp_messages, whatsapp_daily_group_status, whatsapp_group_registry.
+- Compromissos e pendências: commitments, operational_alerts.
+- Reuniões Donnah/Google Meet: meeting_transcripts, meeting_transcript_actions, donnah_ingestion_overview, donnah_transcript_health.
+- ClickUp e produtividade: clickup_tasks, clickup_productivity_daily, clickup_productivity_30d, task_log_entries.
+- Serviços e IA dos clientes: client_service_overview, client_services, client_ai_evidence, client_ai_overrides, ai_source_registry, ai_source_discovery.
+- Formulários e materiais: form_responses, client_raw_material_uploads, client_raw_material_uploads_summary.
+- CRM e pré-clientes: crm_preclients.
+- Saúde das integrações: integration_health_overview.
+- Carteira/retention: portfolio_live, portfolio_client_status, portfolio_gt_retention.
+Se uma fonte não trouxer o dado, consulte as fontes adjacentes acima. Não conclua pela ausência numa única tabela.`;
+
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
@@ -108,7 +124,7 @@ Deno.serve(async (req) => {
   if (!webhookUrl || !readSecret) {
     const latency = Date.now() - started;
     await ops.from("opsquestion_interactions").update({ status: "ERROR", error: "missing_ai_configuration", latency_ms: latency }).eq("request_id", requestId);
-    return reply({ ok: false, error: "ai_not_configured" }, 503);
+    return reply({ ok: false, error: "OpsQuestion não está configurado no backend." }, 503);
   }
 
   const prompt = [
@@ -118,10 +134,11 @@ Deno.serve(async (req) => {
     "Se os dados não forem suficientes, diga claramente que não encontrou evidência suficiente.",
     "A conexão de banco usada por você é SOMENTE LEITURA; não proponha nem execute INSERT, UPDATE, DELETE, DDL ou alterações.",
     "Quando a pergunta disser 'clientes atuais', considere ACTIVE + ONBOARDING. Quando disser apenas 'ativos', respeite literalmente ACTIVE, salvo se o contexto pedir carteira atual.",
-    "Sempre prefira a fonte operacional mais recente disponível. Para campanhas, use a camada canônica Meta quando pertinente.",
+    "Sempre prefira a fonte operacional mais recente disponível e confira mais de uma fonte quando houver risco de ambiguidade.",
+    SOURCE_GUIDE,
     `Usuário: ${person}${role ? ` (${role})` : ""}.`,
-    `Pergunta: ${question}`,
-  ].join("\n");
+    `Pergunta do usuário: ${question}`,
+  ].join("\n\n");
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60_000);
@@ -149,7 +166,7 @@ Deno.serve(async (req) => {
     if (!response.ok || !answer) {
       const error = !response.ok ? `make_http_${response.status}` : "empty_ai_answer";
       await ops.from("opsquestion_interactions").update({ status: "ERROR", error, latency_ms: latency, answered_at: new Date().toISOString() }).eq("request_id", requestId);
-      return reply({ ok: false, error: "ai_upstream_error", detail: error, request_id: requestId }, 502);
+      return reply({ ok: false, error: "Falha temporária no OpsQuestion.", detail: error, request_id: requestId }, 502);
     }
 
     await ops.from("opsquestion_interactions").update({
