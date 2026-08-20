@@ -18,12 +18,13 @@ function situacao(row: Row): { rotulo: string; tom: string; nota?: string } {
   const operando = Number(row.tasks_last_30d || 0) > 0;
 
   if (row.renewal_pending) return { rotulo: "RENOVAÇÃO EM ANDAMENTO", tom: "#fbbf24", nota: "documento novo em processo" };
-  // Vencido no papel, mas com task depois do vencimento E grupo de WhatsApp
-  // vivo: a clausula de renovacao foi acionada na pratica. Cobrar aqui seria
-  // ruido — o que falta e' regularizar o documento, nao resgatar o cliente.
-  if (row.operational_signal === "RENEWED_PRESUMED") {
-    return { rotulo: "RENOVAÇÃO PRESUMIDA", tom: "#22c55e",
-             nota: `cláusula acionada · ${formatNumber(row.tasks_after_expiry)} tasks após vencer, grupo ativo` };
+  // Verificado no texto dos contratos: a clausula 7.1 exige "expressa vontade
+  // das partes" e a 9.4 diz que o contrato NAO se renova automaticamente. Entao
+  // vencido + entrega em curso nao e' renovacao tacita: e' entrega sem cobertura
+  // contratual, que e' o caso mais grave da lista, nao o mais tranquilo.
+  if (row.operational_signal === "OPERATING_UNCOVERED") {
+    return { rotulo: "SEM CONTRATO VIGENTE", tom: "#ef4444",
+             nota: `${formatNumber(row.tasks_after_expiry)} tasks entregues após o fim da vigência · exige novo instrumento` };
   }
   if (estado === "EXPIRED") {
     return row.operational_signal === "RENEWAL_NEEDED"
