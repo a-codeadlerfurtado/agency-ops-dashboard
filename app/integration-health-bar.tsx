@@ -90,7 +90,7 @@ export default function IntegrationHealthBar() {
   const state = meta[worst];
 
   return (
-    <aside style={{ position:"fixed", left:"calc(var(--sidenav-width, 224px) + 14px)", bottom:18, zIndex:9999, width: expanded ? "min(640px,calc(100vw - 36px))" : 255, fontFamily:"inherit" }}>
+    <aside style={{ position:"fixed", left:18, bottom:18, zIndex:9999, width: expanded ? "min(640px,calc(100vw - 36px))" : 255, fontFamily:"inherit" }}>
       <button
         onClick={() => setExpanded((v) => !v)}
         aria-expanded={expanded}
