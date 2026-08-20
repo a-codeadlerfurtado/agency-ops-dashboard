@@ -22,6 +22,13 @@ function situacao(row: Row): { rotulo: string; tom: string; nota?: string } {
   // das partes" e a 9.4 diz que o contrato NAO se renova automaticamente. Entao
   // vencido + entrega em curso nao e' renovacao tacita: e' entrega sem cobertura
   // contratual, que e' o caso mais grave da lista, nao o mais tranquilo.
+  // Renovacao confirmada pelo Adler, sem instrumento novo assinado. O cliente
+  // nao esta' irregular nem em risco: a pendencia e' documental, e cobrar como
+  // se fosse risco comercial afoga o caso que realmente precisa de acao.
+  if (row.operational_signal === "RENEWED_UNDOCUMENTED") {
+    return { rotulo: "RENOVADO · FALTA DOCUMENTO", tom: "#f59e0b",
+             nota: "renovação confirmada; instrumento novo ainda não assinado" };
+  }
   if (row.operational_signal === "OPERATING_UNCOVERED") {
     return { rotulo: "SEM CONTRATO VIGENTE", tom: "#ef4444",
              nota: `${formatNumber(row.tasks_after_expiry)} tasks entregues após o fim da vigência · exige novo instrumento` };
