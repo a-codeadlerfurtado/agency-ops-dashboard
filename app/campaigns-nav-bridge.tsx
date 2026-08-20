@@ -10,7 +10,7 @@ export default function CampaignsNavBridge() {
       if (!target) return;
       const label = (target.textContent || "").replace(/\s+/g, " ").trim().toLowerCase();
       if (label !== "campanhas") return;
-      const nav = target.closest("nav, .view-nav, .sidenav, .sidebar");
+      const nav = target.closest("nav, .view-nav, .side-nav, .sidenav, .sidebar");
       if (!nav) return;
       event.preventDefault();
       event.stopPropagation();
