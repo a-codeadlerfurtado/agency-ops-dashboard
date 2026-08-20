@@ -111,7 +111,7 @@ function sqlDeArgumentos(bruto) {
 
 const PROVEDORES = {
   openai: {
-    modeloPadrao: process.env.OPENAI_MODEL || "gpt-4o",
+    modeloPadrao: process.env.OPENAI_MODEL || "gpt-5-mini",
     chave: () => OPENAI_API_KEY,
     nomeChave: "OPENAI_API_KEY",
     inicio: (pergunta) => [{ role: "system", content: SYSTEM }, { role: "user", content: pergunta }],
