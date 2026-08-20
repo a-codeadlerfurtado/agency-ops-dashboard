@@ -34,3 +34,4 @@ já está em produção no projeto Supabase — não é necessário reaplicar as
 
 
 <!-- deploy trigger: initial Cloudflare Workers build -->
+<!-- deploy trigger: production worker aligned 2026-08-20T12:16-03:00 -->
