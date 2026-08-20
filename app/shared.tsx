@@ -62,7 +62,7 @@ export type HomeData = {
   generated_at: string;
 };
 
-export type View = "overview" | "focus" | "clients" | "onboarding" | "campaigns" | "preclients" | "conversations" | "team" | "diary" | "clickup" | "evidence" | "audit" | "alerts";
+export type View = "overview" | "focus" | "clients" | "onboarding" | "campaigns" | "contracts" | "preclients" | "conversations" | "team" | "diary" | "clickup" | "evidence" | "audit" | "alerts";
 
 export const pt: Record<string,string> = { ATTENTION:"Atenção",FOLLOW_UP:"Acompanhamento",UNDETERMINED:"Indeterminado",DATA_INCOMPLETE:"Dados incompletos",OK:"OK",ACTIVE:"Ativo",ONBOARDING:"Onboarding",CHURNED:"Churned",COMPLETE:"Completa",PARTIAL:"Parcial",INCOMPLETE:"Incompleta",SUCCESS:"Sucesso",ERROR:"Erro",RUNNING:"Em execução",OPEN:"Aberto",COMPLETED:"Concluído",ABORTED:"Encerrado",CRITICAL:"Crítico",HIGH:"Alto",MEDIUM:"Médio",LOW:"Baixo",CONNECTED:"Conectado",CONECTADO:"Conectado" };
 
@@ -167,7 +167,7 @@ export function useDialogFocus(close: () => void) {
 // Alguns campos chegam com marcador interno do coletor, tipo
 // "[SEM TEXTO RECONHECIDO - VER RAW_JSON]". Isso e' recado de sistema, nao assunto
 // do cliente: quem le' a lista precisa de contexto, nao de um ponteiro para o log.
-export const MARCADOR_INTERNO = /^\s*\[?\s*(sem texto reconhecido|ver raw_json|raw_json|sem conte[uú]do|sem texto|null|undefined)/i;
+export const MARCADOR_INTERNO = /^\s*\[?\s*(sem texto reconhecido|ver raw_json|raw_json|sem conte[uú]do|sem texto|null|undefined)\b/i;
 export function text(value: unknown) {
   if (value === null || value === undefined || value === "") return "—";
   const raw = String(value).trim();
@@ -177,61 +177,4 @@ export function text(value: unknown) {
 
 export function initials(value: unknown) {
   return String(value || "CO").trim().split(/\s+/).map((part) => part[0]).slice(0,2).join("").toUpperCase();
-}
-
-export async function api(view: string, token: string, params: Record<string, string> = {}) {
-  const url = new URL(API_URL);
-  url.searchParams.set("view", view);
-  Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  });
-  if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
-  return response.json();
-}
-
-export async function apiPost(view: string, token: string, body: Row = {}) {
-  const response = await fetch(`${API_URL}?view=${encodeURIComponent(view)}`, { method:"POST", headers:{Authorization:`Bearer ${token}`,"content-type":"application/json"}, body:JSON.stringify(body) });
-  if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
-  return response.json();
-}
-
-export async function clickupAction(action: "register" | "sync", token: string) {
-  if (action === "register") {
-    const response = await fetch(`${CLICKUP_API_URL}?action=register`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.detail || body.error || `ClickUp ${response.status}`);
-    return body;
-  }
-  let pageStart = 0;
-  const totals = { tasks_seen: 0, tasks_upserted: 0, tasks_closed: 0 };
-  for (let batch = 0; batch < 100; batch++) {
-    const response = await fetch(`${CLICKUP_API_URL}?action=sync&since_days=180&page_start=${pageStart}&max_pages=5`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.detail || body.error || `ClickUp ${response.status}`);
-    totals.tasks_seen += Number(body.tasks_seen || 0);
-    totals.tasks_upserted += Number(body.tasks_upserted || 0);
-    totals.tasks_closed += Number(body.tasks_closed || 0);
-    if (body.next_page == null) return { ...body, ...totals };
-    pageStart = Number(body.next_page);
-  }
-  throw new Error("A importação atingiu o limite de páginas; tente novamente para continuar.");
-}
-
-export function Chip({ value }: { value: unknown }) {
-  const raw = text(value);
-  return <span className={`chip ${raw}`}>{pt[raw] || raw.replaceAll("_", " ")}</span>;
-}
-
-export function Metric({ label, value, tone = "", hint = "", loading = false }: { label: string; value: string; tone?: string; hint?: string; loading?: boolean }) {
-  return (
-    <article className="card metric" aria-busy={loading || undefined}>
-      <div className="label">{label}</div>
-      {loading
-        ? <div className="value"><span className="skeleton skeleton-value" /></div>
-        : <div className={`value ${tone}`}>{value}</div>}
-      <div className="hint">{loading ? <span className="skeleton skeleton-line" /> : hint}</div>
-    </article>
-  );
 }
