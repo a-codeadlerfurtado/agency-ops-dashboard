@@ -216,6 +216,7 @@ export default function Dashboard() {
   if (!session) return <AuthScreen />;
 
   return (
+<>
     <main className={`shell ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
       <header className="top">
         <div className="brand">
@@ -354,6 +355,7 @@ export default function Dashboard() {
       {win && data?.preferences?.win_celebration_enabled !== false && <button className="win-pulse" onClick={() => { if (win.client_id) openClient(win.client_id); setWin(null); }}><small>NOVO CLIENTE</small><strong>{text(win.description)}</strong><span>Acabou de entrar para a operação</span></button>}
     </main>
       {session?.access_token && <AIAskWidget token={session.access_token} />}
+</>
   );
 }
 
