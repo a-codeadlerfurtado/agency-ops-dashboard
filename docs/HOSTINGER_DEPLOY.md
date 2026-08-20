@@ -26,6 +26,16 @@ Projetos EasyPanel já existentes — **não derrubar**:
 - `agente_ia` → `evolution-api`, `evolution-api-db` (Postgres 17),
   `evolution-api-redis`, `redis`
 
+## Provedor de IA
+
+A Central usa **OpenAI (`gpt-5-mini`)**, o mesmo modelo e a mesma chave que o
+serviço `opsquestion` já roda nesta VPS. Os dois respondem sobre o mesmo dado
+operacional — modelos diferentes divergiriam entre a resposta da IA e a
+evidência que o próprio OpsQuestion devolve como fonte.
+
+A documentação anterior especificava Anthropic/Claude; a troca foi decisão do
+Adler em 2026-08-20.
+
 ## Por que EasyPanel e não systemd/nginx
 
 A VPS já padroniza Docker Swarm + Traefik. Isso entrega, sem código novo:
@@ -58,8 +68,8 @@ no frontend, em log ou em screenshot.
 | `SUPABASE_URL` | `https://bfzdetibfcwihfkltbkp.supabase.co` |
 | `SUPABASE_PUBLISHABLE_KEY` | chave pública `sb_publishable_...` (a mesma do frontend) |
 | `SUPABASE_SECRET_KEY` | **privada** — `sb_secret_...` (ou `service_role` legado) |
-| `ANTHROPIC_API_KEY` | **privada** |
-| `ANTHROPIC_MODEL` | `claude-sonnet-5` |
+| `OPENAI_API_KEY` | **privada** |
+| `OPENAI_MODEL` | `gpt-5-mini` |
 | `PORT` | `8787` |
 | `ALLOWED_ORIGINS` | vazio em produção (same-origin) |
 | `GIT_COMMIT` | commit publicado, aparece no healthcheck |
@@ -85,7 +95,7 @@ O serviço **falha ao subir** se qualquer variável obrigatória faltar — prop
 
 ```bash
 curl -s https://<dominio>/api/ai/health
-# {"ok":true,"service":"agency-ops-ai-server","commit":"<sha>","model":"claude-sonnet-5",...}
+# {"ok":true,"service":"agency-ops-ai-server","commit":"<sha>","model":"gpt-5-mini",...}
 
 # Sem token precisa recusar:
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<dominio>/api/ai/conversations/list

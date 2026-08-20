@@ -1,5 +1,10 @@
 # AI Workspace — Handoff de implementação
 
+> **Atualização — 2026-08-20.** O provedor mudou para **OpenAI (`gpt-5-mini`)**,
+> por decisão do Adler, alinhando com o serviço `opsquestion` que já roda na VPS.
+> As menções a Anthropic/Claude abaixo descrevem o que foi especificado na época
+> e ficam como registro. O estado atual está em `docs/HOSTINGER_DEPLOY.md`.
+
 Branch de trabalho: `feature/ai-workspace`
 
 ## Objetivo
