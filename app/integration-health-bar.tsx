@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
 
 const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
@@ -52,6 +52,109 @@ function safeUrl(value: string | null): string | null {
   return value && /^https?:\/\//i.test(value) ? value : null;
 }
 
+type Posicao = { x: number; y: number };
+const CHAVE_POSICAO = "agency-ops:saude-integracoes:posicao";
+const MARGEM = 4;
+// Abaixo disso e' tremida de dedo, nao arraste. Sem essa folga, qualquer clique
+// com 1px de deslize deixaria de abrir o painel.
+const LIMIAR_ARRASTE = 4;
+
+function limitar(p: Posicao, el: HTMLElement | null): Posicao {
+  if (!el) return p;
+  const largura = el.offsetWidth;
+  const altura = el.offsetHeight;
+  return {
+    x: Math.min(Math.max(p.x, MARGEM), Math.max(MARGEM, window.innerWidth - largura - MARGEM)),
+    y: Math.min(Math.max(p.y, MARGEM), Math.max(MARGEM, window.innerHeight - altura - MARGEM)),
+  };
+}
+
+/**
+ * Deixa a caixa ser arrastada pela barra de titulo e lembra onde foi largada.
+ *
+ * A posicao fica em localStorage, nao no servidor: e' preferencia de tela de
+ * quem esta' ali, e por maquina - a mesma pessoa no notebook e no monitor
+ * grande quer a caixa em lugares diferentes.
+ */
+function useArrastavel(expandido: boolean) {
+  const refCaixa = useRef<HTMLElement | null>(null);
+  const [posicao, setPosicao] = useState<Posicao | null>(null);
+  const [arrastando, setArrastando] = useState(false);
+  const moveu = useRef(false);
+  const origem = useRef({ pxInicial: 0, pyInicial: 0, xInicial: 0, yInicial: 0 });
+
+  useEffect(() => {
+    try {
+      const bruto = window.localStorage.getItem(CHAVE_POSICAO);
+      if (bruto) {
+        const p = JSON.parse(bruto) as Posicao;
+        if (typeof p?.x === "number" && typeof p?.y === "number") setPosicao(p);
+      }
+    } catch { /* preferencia corrompida nao pode derrubar a barra */ }
+  }, []);
+
+  // Janela menor, ou painel que abriu e ficou mais largo, nao pode empurrar a
+  // caixa para fora da tela - de la' nao tem como trazer de volta.
+  useEffect(() => {
+    function reencaixar() { setPosicao((p) => (p ? limitar(p, refCaixa.current) : p)); }
+    reencaixar();
+    window.addEventListener("resize", reencaixar);
+    return () => window.removeEventListener("resize", reencaixar);
+  }, [expandido]);
+
+  // Grava depois que o arraste termina, lendo a posicao corrente em vez do valor
+  // capturado no closure do pointerup - que pode estar um render atrasado.
+  useEffect(() => {
+    if (arrastando || !posicao) return;
+    try { window.localStorage.setItem(CHAVE_POSICAO, JSON.stringify(posicao)); } catch { /* sem storage, so' nao lembra */ }
+  }, [arrastando, posicao]);
+
+  function aoPressionar(evento: React.PointerEvent<HTMLElement>) {
+    const caixa = refCaixa.current;
+    if (!caixa) return;
+    const retangulo = caixa.getBoundingClientRect();
+    origem.current = {
+      pxInicial: evento.clientX,
+      pyInicial: evento.clientY,
+      xInicial: posicao?.x ?? retangulo.left,
+      yInicial: posicao?.y ?? retangulo.top,
+    };
+    moveu.current = false;
+    setArrastando(true);
+    evento.currentTarget.setPointerCapture(evento.pointerId);
+  }
+
+  function aoMover(evento: React.PointerEvent<HTMLElement>) {
+    if (!arrastando) return;
+    const dx = evento.clientX - origem.current.pxInicial;
+    const dy = evento.clientY - origem.current.pyInicial;
+    if (!moveu.current && Math.abs(dx) + Math.abs(dy) < LIMIAR_ARRASTE) return;
+    moveu.current = true;
+    setPosicao(limitar({ x: origem.current.xInicial + dx, y: origem.current.yInicial + dy }, refCaixa.current));
+  }
+
+  function aoSoltar(evento: React.PointerEvent<HTMLElement>) {
+    if (!arrastando) return;
+    setArrastando(false);
+    try { evento.currentTarget.releasePointerCapture(evento.pointerId); } catch { /* ponteiro ja' liberado */ }
+  }
+
+  // O clique dispara depois do pointerup. Sem isso, terminar um arraste em cima
+  // da barra abriria ou fecharia o painel sem querer.
+  function arrasteEngoliuOClique() {
+    if (!moveu.current) return false;
+    moveu.current = false;
+    return true;
+  }
+
+  function reposicionar() {
+    setPosicao(null);
+    try { window.localStorage.removeItem(CHAVE_POSICAO); } catch { /* nada a limpar */ }
+  }
+
+  return { refCaixa, posicao, arrastando, aoPressionar, aoMover, aoSoltar, arrasteEngoliuOClique, reposicionar };
+}
+
 function clock(value: string | null) {
   if (!value) return "sem registro";
   try { return new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(value)); }
@@ -64,6 +167,7 @@ export default function IntegrationHealthBar() {
   const [expanded, setExpanded] = useState(false);
   const [showDivergences, setShowDivergences] = useState(false);
   const [forbidden, setForbidden] = useState(false);
+  const arraste = useArrastavel(expanded);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -118,11 +222,29 @@ export default function IntegrationHealthBar() {
   const state = meta[worst];
 
   return (
-    <aside style={{ position:"fixed", left:6, bottom:18, zIndex:9999, width: expanded ? "min(640px,calc(100vw - 36px))" : 190, fontFamily:"inherit" }}>
+    <aside
+      ref={arraste.refCaixa as React.RefObject<HTMLElement>}
+      style={{
+        position:"fixed", zIndex:9999,
+        // Sem posicao salva, fica no canto de sempre. Com posicao, vira top/left
+        // porque o arraste raciocina em coordenada da viewport.
+        ...(arraste.posicao
+          ? { left: arraste.posicao.x, top: arraste.posicao.y, bottom: "auto" as const }
+          : { left: 6, bottom: 18 }),
+        width: expanded ? "min(640px,calc(100vw - 36px))" : 190,
+        fontFamily:"inherit",
+        userSelect: arraste.arrastando ? "none" : undefined,
+      }}>
       <button
-        onClick={() => setExpanded((v) => !v)}
+        onPointerDown={arraste.aoPressionar}
+        onPointerMove={arraste.aoMover}
+        onPointerUp={arraste.aoSoltar}
+        onPointerCancel={arraste.aoSoltar}
+        onDoubleClick={arraste.reposicionar}
+        onClick={() => { if (arraste.arrasteEngoliuOClique()) return; setExpanded((v) => !v); }}
         aria-expanded={expanded}
-        style={{ width:"100%", display:"flex", alignItems:"center", gap:8, border:`1px solid ${state.border}`, background:"rgba(9,12,20,.94)", color:"#f8fafc", borderRadius:13, padding:"8px 10px", boxShadow:"0 16px 50px rgba(0,0,0,.28)", cursor:"pointer", backdropFilter:"blur(16px)" }}
+        title={arraste.posicao ? "Arraste para mover · duplo clique volta ao canto" : "Arraste para mover"}
+        style={{ width:"100%", display:"flex", alignItems:"center", gap:8, border:`1px solid ${state.border}`, background:"rgba(9,12,20,.94)", color:"#f8fafc", borderRadius:13, padding:"8px 10px", boxShadow:"0 16px 50px rgba(0,0,0,.28)", cursor: arraste.arrastando ? "grabbing" : "grab", backdropFilter:"blur(16px)", touchAction:"none" }}
       >
         <span style={{ width:8, height:8, borderRadius:999, background:state.color, boxShadow:`0 0 0 5px ${state.bg}` }} />
         <span style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", flex:1, minWidth:0 }}>
