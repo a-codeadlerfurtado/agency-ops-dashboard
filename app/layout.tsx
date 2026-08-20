@@ -3,7 +3,6 @@ import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
-import ContractsPrivateBridge from "./contracts-private-bridge";
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
@@ -22,7 +21,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         {children}
         <CampaignsNavBridge />
-        <ContractsPrivateBridge />
         <IntegrationHealthBar />
         <OpsQuestionWidget />
         <OpsQuestionBrand />

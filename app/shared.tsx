@@ -11,6 +11,7 @@ import { createClient, type Session } from "@supabase/supabase-js";
 export const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
 export const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
 export const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api`;
+export const CONTRACTS_API = `${SUPABASE_URL}/functions/v1/agency-ops-contracts-api`;
 export const CLICKUP_API_URL = `${SUPABASE_URL}/functions/v1/clickup-sync-api`;
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -235,4 +236,21 @@ export function Metric({ label, value, tone = "", hint = "", loading = false }: 
       <div className="hint">{loading ? <span className="skeleton skeleton-line" /> : hint}</div>
     </article>
   );
+}
+
+// A notificacao de tarefa concluida carrega DUAS pessoas diferentes, e elas ja'
+// foram confundidas na tela: quem fechou a task (actor, do evento real de
+// mudanca de status no ClickUp) nao e' necessariamente o responsavel (assignee
+// da task). Aqui a leitura separa as duas, para o painel nunca mais dizer que o
+// responsavel concluiu.
+const MARCA_RESPONSAVEL = " · Responsável pela task: ";
+export function taskCompletion(item: Row) {
+  const description = String(item?.description ?? "");
+  const corte = description.indexOf(MARCA_RESPONSAVEL);
+  if (corte < 0) return null;
+  return {
+    tarefa: description.slice(0, corte).trim(),
+    responsavel: description.slice(corte + MARCA_RESPONSAVEL.length).trim() || null,
+    concluidaPor: item?.actor ? String(item.actor) : null,
+  };
 }

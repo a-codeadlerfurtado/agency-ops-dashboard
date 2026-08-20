@@ -1,0 +1,9 @@
+-- Aplicada em producao via MCP. Registrada aqui porque toda a DDL de contratos
+-- foi criada direto no Supabase e nunca versionada no repo.
+--
+-- 1. is_contract_viewer: unica fonte de verdade sobre quem ve contrato.
+-- 2. REVOKE explicito para agency_ops_ai_reader (OpsQuestion). Atencao: esse
+--    role tem rolbypassrls = true, entao RLS nao o detem — so' o GRANT.
+-- 3. block_contract_payload: trava estrutural que impede conteudo contratual de
+--    entrar em platform_notifications / operational_alerts.
+-- O corpo completo esta em 20260820141000_consolidate_contract_leak_guard.sql.

@@ -1,10 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { API_URL, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
+import { API_URL, CONTRACTS_API, SUPABASE_ANON_KEY, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
 import type { HomeData, Row, TeamMember, View } from "./shared";
 import { PortfolioCenter } from "./views/portfolio";
+// A aba de contratos entra por import dinamico de proposito: assim o codigo da
+// area privada so' e' baixado por quem o backend autorizou. Para os demais
+// colaboradores ele nem chega ao navegador.
+const ContractsCenter = lazy(() => import("./views/contracts").then((m) => ({ default: m.ContractsCenter })));
 
 function AuthScreen() {
   const [mode, setMode] = useState<"login" | "signup">("login");
@@ -56,6 +60,11 @@ export default function Dashboard() {
   const [filter, setFilter] = useState("ALL");
   const [view, setView] = useState<View>("overview");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Contratos sao ADLER ONLY. Quem autoriza e' o backend: o probe abaixo so'
+  // recebe 200 se a API privada liberar; para qualquer outro usuario a rota
+  // responde 404. Nada aqui revela que a area existe — nem o botao no menu, nem
+  // um campo no payload compartilhado do dashboard.
+  const [contractsAllowed, setContractsAllowed] = useState(false);
   useEffect(() => { document.documentElement.style.setProperty("--sidenav-width", sidebarOpen ? "224px" : "58px"); }, [sidebarOpen]);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [opsQuestion, setOpsQuestion] = useState("");
@@ -79,6 +88,20 @@ export default function Dashboard() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, current) => { setSession(current); setAuthReady(true); if (!current) { setData(null); loadedRef.current = false; } });
     return () => subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    const token = session?.access_token;
+    if (!token) { setContractsAllowed(false); return; }
+    let active = true;
+    fetch(`${CONTRACTS_API}?probe=1`, { headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY }, cache: "no-store" })
+      .then((response) => { if (active) setContractsAllowed(response.ok); })
+      .catch(() => { if (active) setContractsAllowed(false); });
+    return () => { active = false; };
+  }, [session?.access_token]);
+
+  // Se a autorizacao cair (troca de usuario, sessao expirada) a aba nao pode
+  // continuar aberta na tela.
+  useEffect(() => { if (!contractsAllowed) setView((current) => (current === "contracts" ? "overview" : current)); }, [contractsAllowed]);
 
   const playTone = useCallback((kind: "pop" | "win") => {
     const prefs = preferencesRef.current;
@@ -245,6 +268,7 @@ export default function Dashboard() {
         <div className="side-nav-items">
           {([
             ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"],
+            ...(contractsAllowed ? [["contracts", "Contratos"]] : []),
           ] as [View, string][]).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} title={label}>{label}</button>)}
         </div>
       </aside>
@@ -273,6 +297,7 @@ export default function Dashboard() {
       {view === "clickup" && <ClickUpCenter clickup={data?.clickup || {}} reload={load} token={session.access_token} />}
       {view === "evidence" && <EvidenceCenter clients={allClients} operations={data?.operations || {}} openClient={openClient} />}
       {view === "audit" && <AuditCenter runs={data?.audit_runs || []} issues={data?.audit_issues || []} />}
+      {view === "contracts" && contractsAllowed && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando contratos…</div>}><ContractsCenter token={session.access_token} /></Suspense>}
       {view === "alerts" && <AlertCenter alerts={data?.alerts || []} clients={allClients} openClient={openClient} />}
 
       {view === "overview" && <><SmartSearch question={opsQuestion} setQuestion={setOpsQuestion} clients={allClients} conversations={data?.conversations || []} commitments={data?.commitments || []} openClient={openClient} />
@@ -1041,7 +1066,10 @@ function NotificationCenter({items,close,refresh,openClient,token,pendingRequest
   return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Central de notificações" className="notification-panel"><div className="panel-heading"><div><span className="eyebrow">Central de Notificações</span><h3>Atualizações da operação</h3></div><button onClick={close}>×</button></div><button className="mark-read" onClick={()=>read()}>Marcar todas como lidas</button><div className="notification-list">{items.map(item=>{
     const requestId=item.metadata?.access_request_id?String(item.metadata.access_request_id):null;
     if(canDecide&&requestId&&pendingIds.has(requestId)) return <div className={`notification-action${item.read_at?"":" unread"}`} key={item.id}><Chip value={item.level}/><span><b>{text(item.title)}</b><small>{text(item.description)} · {formatDate(item.occurred_at)}</small></span><span className="access-request-actions"><button disabled={deciding===requestId} onClick={()=>act(requestId,"APPROVED")}>Aprovar</button><button className="muted" disabled={deciding===requestId} onClick={()=>act(requestId,"DENIED")}>Recusar</button></span></div>;
-    return <button className={item.read_at?"":"unread"} key={item.id} onClick={()=>{read(item.id);if(item.client_id)openClient(item.client_id);}}><Chip value={item.level}/><span><b>{item.title}</b><small>{text(item.actor ? `${item.actor}: ${item.description}` : item.description)} · {formatDate(item.occurred_at)}</small>{(item.gestor || item.carteira) && <small className="notification-owner">{text(item.carteira || (item.gestor ? `Gestor: ${item.gestor}` : ""))}</small>}</span></button>;
+    const conclusao=taskCompletion(item);
+    return <button className={item.read_at?"":"unread"} key={item.id} onClick={()=>{read(item.id);if(item.client_id)openClient(item.client_id);}}><Chip value={item.level}/><span><b>{item.title}</b>{conclusao
+      ? <><small>{text(conclusao.tarefa)}</small><small className="notification-owner">Concluída por: {conclusao.concluidaPor || "não identificado"}</small><small className="notification-owner">Responsável: {text(conclusao.responsavel)}</small><small>{formatDate(item.occurred_at)}</small></>
+      : <small>{text(item.actor ? `${item.actor}: ${item.description}` : item.description)} · {formatDate(item.occurred_at)}</small>}{(item.gestor || item.carteira) && <small className="notification-owner">{text(item.carteira || (item.gestor ? `Gestor: ${item.gestor}` : ""))}</small>}</span></button>;
   })}{!items.length&&<div className="empty">Nenhuma notificação.</div>}</div></div>;
 }
 
