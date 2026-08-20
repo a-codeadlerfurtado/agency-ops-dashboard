@@ -156,12 +156,23 @@ Deno.serve(async (req) => {
   // liberar Alertas para o CS obrigava a liberar Auditoria e Evidencias junto.
   // Conta travada enxerga so' a casca (overview) para conseguir pedir acesso.
   let allowedViews: string[] = ALL_VIEWS;
+  let viewsStale = false;
   if (viaLogin) {
     if (isLocked) {
       allowedViews = ["overview"];
     } else {
-      const { data: viewRows } = await ops.rpc("dashboard_allowed_views", { p_person: profilePerson, p_role: profileRole });
-      allowedViews = Array.isArray(viewRows) ? viewRows : [];
+      const { data: viewRows, error: viewError } = await ops.rpc("dashboard_allowed_views", { p_person: profilePerson, p_role: profileRole });
+      if (viewError || !Array.isArray(viewRows)) {
+        // A resposta da RPC virava [] no catch silencioso: uma falha transitoria - o
+        // cache de schema do PostgREST ficar velho depois de uma migration, por
+        // exemplo - apagava o menu de TODO MUNDO ao mesmo tempo, sem erro na tela.
+        // Cai para o minimo que nao depende de permissao e avisa o front, que entao
+        // mantem o ultimo menu conhecido em vez de encolher.
+        viewsStale = true;
+        allowedViews = ["overview", "focus"];
+      } else {
+        allowedViews = viewRows;
+      }
     }
   }
   const canView = (key: string) => allowedViews.includes(key);
@@ -615,7 +626,7 @@ Deno.serve(async (req) => {
     // Quem nao decide nao precisa da fila: o gate era isFull, entao todo perfil de
     // acesso total recebia os nomes de quem esta esperando aprovacao sem poder aprovar.
     access_requests_pending: canDecideAccessRequests ? value(teamData[4], []) : [],
-    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved, views: allowedViews, carteira: walletName(profilePerson) },
+    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson) },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
     auth_mode: currentUserKey === "adler-furtado" && suppliedKey.length >= 40 ? "dashboard_key" : "login",
     generated_at: new Date().toISOString(),

@@ -117,7 +117,23 @@ export default function Dashboard() {
   // nao chega, mostra so' o que nao depende de permissao.
   // A resposta chega a cada 30s com um array novo, mesmo sem mudanca de permissao.
   // A chave estavel evita recalcular o menu (e disparar o efeito abaixo) a cada carga.
-  const viewsKey = Array.isArray(data?.profile?.views) ? (data!.profile!.views as string[]).join(",") : "";
+  //
+  // O ultimo menu conhecido fica no localStorage por dois motivos: (1) entre abrir a
+  // pagina e a primeira resposta chegar sao alguns segundos em que o menu aparecia com
+  // duas abas e depois pulava para treze; (2) se o backend sinalizar views_stale - ele
+  // nao conseguiu resolver a permissao - o menu antigo vale mais que o minimo. O dado
+  // continua barrado no servidor nos dois casos: isto aqui e' so' a casca.
+  const cacheKey = `ops-views:${session?.user?.id ?? "anon"}`;
+  const viewsFrescas = Array.isArray(data?.profile?.views) ? (data!.profile!.views as string[]) : null;
+  const viewsStale = Boolean(data?.profile?.views_stale);
+  useEffect(() => {
+    if (!viewsFrescas || viewsStale) return;
+    try { window.localStorage.setItem(cacheKey, viewsFrescas.join(",")); } catch { /* modo privado */ }
+  }, [cacheKey, viewsFrescas?.join(","), viewsStale]);
+  const viewsCache = useMemo(() => {
+    try { return window.localStorage.getItem(cacheKey) || ""; } catch { return ""; }
+  }, [cacheKey]);
+  const viewsKey = viewsFrescas && !viewsStale ? viewsFrescas.join(",") : viewsCache;
   const allowedViews = useMemo(() => new Set<string>(viewsKey ? viewsKey.split(",") : ["overview", "focus"]), [viewsKey]);
   const navItems = useMemo(() => ([
     ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"],
