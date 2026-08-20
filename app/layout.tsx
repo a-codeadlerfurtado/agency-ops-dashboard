@@ -2,6 +2,7 @@ import "./globals.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import OpsQuestionBrand from "./opsquestion-brand";
+import OpsQuestionWidget from "./opsquestion-widget";
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
@@ -21,6 +22,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         {children}
         <CampaignsNavBridge />
         <IntegrationHealthBar />
+        <OpsQuestionWidget />
         <OpsQuestionBrand />
       </body>
     </html>
