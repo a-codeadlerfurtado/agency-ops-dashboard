@@ -348,7 +348,7 @@ export default function Dashboard() {
 
       {selected && <ClientDrawer detail={selected} loading={detailLoading} close={() => setSelected(null)} />}
       {commandOpen && <GlobalCommand clients={allClients} tasks={data?.clickup?.recent_completed || []} preclients={data?.preclients || []} close={() => setCommandOpen(false)} openClient={openClient} />}
-      {profileOpen && <ProfileMenu preferences={data?.preferences || {}} profile={data?.profile || {}} email={session.user.email || ""} settings={() => { setProfileOpen(false); setSettingsOpen(true); }} close={() => setProfileOpen(false)} signOut={() => supabase.auth.signOut()} requestAccess={requestAccess} />}
+      {profileOpen && <ProfileMenu preferences={data?.preferences || {}} profile={data?.profile || {}} email={session.user.email || ""} settings={() => { setProfileOpen(false); setSettingsOpen(true); }} close={() => setProfileOpen(false)} signOut={() => supabase.auth.signOut()} requestAccess={requestAccess} token={session.access_token} clients={allClients} />}
       {notificationsOpen && <NotificationCenter items={data?.notifications || []} close={() => setNotificationsOpen(false)} refresh={load} openClient={openClient} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
       {settingsOpen && <SettingsModal preferences={data?.preferences || {}} close={() => setSettingsOpen(false)} refresh={load} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
       {toast && <button className={`toast${toastLeaving ? " leaving" : ""}`} onClick={() => { if (toast.client_id) openClient(toast.client_id); setToast(null); }}><Chip value={toast.level}/><span><b>{text(toast.title)}</b><small>{text(toast.actor ? `${toast.actor}: ${toast.description}` : toast.description)}</small>{(toast.gestor || toast.carteira) && <small className="toast-meta">{text(toast.carteira || (toast.gestor ? `Gestor: ${toast.gestor}` : ""))}</small>}</span><i onClick={(event) => { event.stopPropagation(); setToast(null); }}>×</i></button>}
@@ -966,7 +966,57 @@ function GlobalCommand({clients,tasks,preclients,close,openClient}:{clients:Row[
   return <><div className="overlay open" onClick={close}/><section ref={dialogRef as React.RefObject<HTMLElement>} role="dialog" aria-modal="true" aria-label="Busca operacional" className="command-modal"><div className="command-input"><span>⌕</span><input autoFocus value={search} onChange={e=>setSearch(e.target.value)} placeholder="Pesquisar cliente, tarefa, responsável, campanha ou pré-cliente"/><kbd>Esc</kbd></div><div className="command-results"><small>CLIENTES</small>{clientRows.map(c=><button key={c.client_id} onClick={()=>{openClient(c.client_id);close();}}><span><b>{c.display_name}</b><small>{pt[c.lifecycle]||c.lifecycle} · CS {text(c.cs_owner)} · GT {text(c.gt_owner)} · {text(c.next_step)}</small></span><Chip value={c.priority}/></button>)}{taskRows.length>0&&<small>TAREFAS</small>}{taskRows.map(t=><a key={t.task_id} href={t.url} target="_blank" rel="noreferrer"><span><b>{t.name}</b><small>{t.list_name} · {formatDate(t.date_closed)}</small></span><Chip value={t.status}/></a>)}{leadRows.length>0&&<small>PRÉ-CLIENTES</small>}{leadRows.map(p=><button key={p.id}><span><b>{p.company||p.name}</b><small>{p.stage} · {formatMoney(p.estimated_value)}</small></span></button>)}</div></section></>;
 }
 
-function ProfileMenu({preferences,profile,email,settings,close,signOut,requestAccess}:{preferences:Row;profile:Row;email:string;settings:()=>void;close:()=>void;signOut:()=>Promise<unknown>;requestAccess:()=>Promise<void>}) {
+// Caixa de anotação do colaborador. O texto vai inteiro e cru para o banco; o
+// vínculo com cliente é palpite do sistema, mostrado de volta para quem escreveu
+// poder corrigir na hora. Duas leituras diferentes do mesmo texto — a da pessoa e
+// a da máquina — nunca ficam em conflito silencioso.
+function NoteBox({ token, clients }: { token: string; clients: Row[] }) {
+  const [texto, setTexto] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const [ultima, setUltima] = useState<Row | null>(null);
+
+  async function salvar(clientId?: string) {
+    const corpo = texto.trim();
+    if (corpo.length < 3) return;
+    setSalvando(true);
+    try {
+      const r = await apiPost("note-create", token, clientId ? { body: corpo, client_id: clientId } : { body: corpo });
+      setUltima(r); setTexto("");
+    } finally { setSalvando(false); }
+  }
+
+  async function confirmar(id: string, clientId: string) {
+    const r = await apiPost("note-confirm", token, { id, client_id: clientId });
+    setUltima({ ...(ultima || {}), match_status: "MANUAL", client_id: clientId, candidatos: [], confirmado: true, note: r?.note });
+  }
+
+  const nomeDe = (id: string) => clients.find((c) => c.client_id === id || c.id === id)?.display_name || "cliente";
+
+  return <div className="note-box">
+    <label htmlFor="nota-ops">Anotar algo</label>
+    <textarea id="nota-ops" value={texto} rows={3} disabled={salvando}
+      placeholder="O que aconteceu? Cite o cliente pelo nome — ex.: “Beto disse que vai cancelar se não melhorar o volume”."
+      onChange={(e) => setTexto(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) salvar(); }} />
+    <div className="note-actions">
+      <small>Ctrl+Enter para salvar</small>
+      <button disabled={salvando || texto.trim().length < 3} onClick={() => salvar()}>{salvando ? "Salvando…" : "Salvar"}</button>
+    </div>
+
+    {ultima?.ok && <div className={`note-echo ${ultima.match_status === "AMBIGUOUS" ? "duvida" : ""}`}>
+      {ultima.match_status === "MATCHED" || ultima.match_status === "MANUAL"
+        ? <p>Guardado em <b>{nomeDe(String(ultima.client_id))}</b>.</p>
+        : ultima.match_status === "AMBIGUOUS"
+        ? <><p>Guardado. Citou mais de um cliente — <b>qual é?</b></p>
+            <div className="note-opcoes">{(ultima.candidatos || []).map((c: Row) =>
+              <button key={String(c.client_id)} onClick={() => confirmar(String(ultima.id), String(c.client_id))}>{text(c.nome)}</button>)}</div></>
+        : <p>Guardado <b>sem cliente</b>. Cite o nome dele no texto para vincular.</p>}
+      {!!(ultima.sinais || []).length && <p className="note-sinais">Sinais lidos: {(ultima.sinais || []).map((x: Row) => text(x.sinal)).join(", ")}</p>}
+    </div>}
+  </div>;
+}
+
+function ProfileMenu({preferences,profile,email,settings,close,signOut,requestAccess,token,clients}:{preferences:Row;profile:Row;email:string;settings:()=>void;close:()=>void;signOut:()=>Promise<unknown>;requestAccess:()=>Promise<void>;token:string;clients:Row[]}) {
   const dialogRef = useDialogFocus(close);
   const name=preferences.name||email;
   const showRequest = profile?.access_level === "RESTRICTED" && !profile?.elevated;
@@ -975,7 +1025,7 @@ function ProfileMenu({preferences,profile,email,settings,close,signOut,requestAc
   async function ask() { setAsking(true); try { await requestAccess(); } finally { setAsking(false); } }
   return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Menu do perfil" className="profile-menu"><div className="profile-card"><span className="avatar">{initials(name)}</span><div><b>{text(name)}</b><small>{text(preferences.role||"Colaborador")}</small></div></div>
     {showRequest && <button className="request-access" disabled={pending || asking} onClick={ask}>{pending ? "Solicitação enviada — aguardando Adler" : asking ? "Enviando…" : "Solicitar acesso completo"}</button>}
-    <button onClick={settings}>Meu perfil</button><button onClick={settings}>Configurações</button><button onClick={settings}>Preferências</button><button onClick={close}>Notificações</button><button className="muted" onClick={() => signOut()}>Sair</button></div>;
+    <NoteBox token={token} clients={clients} /><button onClick={settings}>Meu perfil</button><button onClick={settings}>Configurações</button><button onClick={settings}>Preferências</button><button onClick={close}>Notificações</button><button className="muted" onClick={() => signOut()}>Sair</button></div>;
 }
 
 function NotificationCenter({items,close,refresh,openClient,token,pendingRequests,canDecide,decide}:{items:Row[];close:()=>void;refresh:()=>Promise<void>;openClient:(id:string)=>void;token:string;pendingRequests:Row[];canDecide:boolean;decide:(id:string,decision:"APPROVED"|"DENIED")=>Promise<void>}) {

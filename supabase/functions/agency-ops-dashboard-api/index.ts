@@ -178,6 +178,36 @@ Deno.serve(async (req) => {
       if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
       return respond({ ok: true, request: result.data });
     }
+    if (view === "note-create") {
+      // O texto do colaborador entra cru e inteiro. O vinculo com cliente e' um
+      // palpite marcado como tal - nunca altera o que a pessoa escreveu.
+      const texto = typeof body.body === "string" ? body.body.trim() : "";
+      if (!texto) return respond({ error: "missing_fields", required: ["body"] }, 400);
+      const { data, error } = await ops.rpc("ingest_ops_note", { p: {
+        body: texto,
+        author_user_key: currentUserKey,
+        author_name: profilePerson ?? null,
+        client_id: body.client_id ?? null,
+        occurred_at: body.occurred_at ?? null,
+      } });
+      if (error) return respond({ error: "query_failed", detail: error.message }, 500);
+      return respond(data);
+    }
+    if (view === "note-confirm") {
+      // Confirmacao humana do cliente quando o palpite ficou ambiguo ou errado.
+      const id = String(body.id ?? "");
+      if (!id) return respond({ error: "missing_fields", required: ["id"] }, 400);
+      const clientId = body.client_id ? String(body.client_id) : null;
+      const result = await ops.from("ops_notes").update({
+        client_id: clientId,
+        match_status: clientId ? "MANUAL" : "UNMATCHED",
+        match_confidence: clientId ? 1 : null,
+        confirmado_em: new Date().toISOString(),
+        confirmado_por: profilePerson ?? currentUserKey,
+      }).eq("id", id).select().single();
+      if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
+      return respond({ ok: true, note: result.data });
+    }
     return respond({ error: "unknown_action" }, 404);
   }
 
@@ -211,10 +241,11 @@ Deno.serve(async (req) => {
       ops.from("onboarding_cases").select("*,onboarding_stages(*)").eq("client_id", clientId).order("created_at", { ascending: false }).limit(3),
       ops.from("client_lifecycle_events").select("*").eq("client_id", clientId).order("occurred_at", { ascending: false }).limit(100),
       ops.from("client_won_events").select("*").eq("client_id", clientId).order("occurred_at", { ascending: false }).limit(20),
+      ops.from("ops_notes").select("*").eq("client_id", clientId).order("occurred_at", { ascending: false }).limit(50),
       ]),
     ]);
     const results = [...core, ...context, ...history];
-    return respond({ client: results[0].data, conversations: value(results[1], []), alerts: value(results[2], []), commitments: value(results[3], []), briefings: value(results[4], []), daily_summaries: value(results[5], []), media: value(results[6], []), timeline: value(results[7], []), health_history: value(results[8], []), integrations: value(results[9], []), clickup_tasks: value(results[10], []), onboarding_cases: value(results[11], []), lifecycle_events: value(results[12], []), won_events: value(results[13], []), generated_at: new Date().toISOString() });
+    return respond({ client: results[0].data, conversations: value(results[1], []), alerts: value(results[2], []), commitments: value(results[3], []), briefings: value(results[4], []), daily_summaries: value(results[5], []), media: value(results[6], []), timeline: value(results[7], []), health_history: value(results[8], []), integrations: value(results[9], []), clickup_tasks: value(results[10], []), onboarding_cases: value(results[11], []), lifecycle_events: value(results[12], []), won_events: value(results[13], []), ops_notes: value(results[14], []), generated_at: new Date().toISOString() });
   }
 
   // Os seis grupos nao dependem uns dos outros, mas rodavam em serie: cada await
