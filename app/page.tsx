@@ -875,7 +875,7 @@ function DiaryCenter({ clients, adjustments, taskLog, profile, token, reload }: 
 
   const [taskCategory, setTaskCategory] = useState(taskCategoryOptions[0]);
   const [taskName, setTaskName] = useState("");
-  const [taskDate, setTaskDate] = useState(new Date().toISOString().slice(0, 10));
+  const [taskDate, setTaskDate] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()));
   const [taskSaving, setTaskSaving] = useState(false);
   const [taskError, setTaskError] = useState("");
 
