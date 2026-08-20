@@ -260,6 +260,13 @@ Deno.serve(async (req) => {
     isFull ? ops.from("access_requests").select("*,team_roster(role)").eq("status", "PENDING").order("requested_at", { ascending: false }) : Promise.resolve({ data: [], error: null }),
     ops.from("access_requests").select("*").eq("user_key", currentUserKey).order("requested_at", { ascending: false }).limit(1),
     ops.from("whatsapp_chat_registry").select("chat_id,chat_name,message_count,last_seen_at").limit(500),
+    // Carteira de Clientes: metricas vivas, serie mensal, transicoes e auditoria.
+    ops.from("portfolio_live").select("*"),
+    ops.from("portfolio_timeline").select("*").order("month", { ascending: false }),
+    ops.from("portfolio_client_status").select("*"),
+    ops.from("portfolio_tenure_distribution").select("*"),
+    ops.from("portfolio_audit_log").select("*").order("occurred_at", { ascending: false }).limit(100),
+    ops.from("client_churn_log").select("*").order("saida", { ascending: false }).limit(200),
   ]);
 
   const results = [...core, ...sources, ...operationsData, ...clickupData];
@@ -381,6 +388,35 @@ Deno.serve(async (req) => {
     return { ...row, chat_name: meta?.chat_name ?? null, message_count: meta?.message_count ?? null, last_seen_at: meta?.last_seen_at ?? null };
   });
 
+  // ---- Carteira de Clientes. Replica o relatorio de 14/08/2026 sobre dado vivo.
+  // Restrito a perfis FULL: expoe inadimplencia, juridico e churn previsto da base inteira.
+  const pfLive = value<any[]>(teamData[7], []);
+  const pfTimeline = value<any[]>(teamData[8], []);
+  const pfClients = value<any[]>(teamData[9], []);
+  const pfTenure = value<any[]>(teamData[10], []);
+  const pfAudit = value<any[]>(teamData[11], []);
+  const pfChurn = value<any[]>(teamData[12], []);
+  const somaSetores = (campo: string) => pfLive.reduce((total, row: any) => total + number(row[campo]), 0);
+  const portfolio = isFull ? {
+    reference: new Date().toISOString().slice(0, 10),
+    total_active: somaSetores("active_clients"),
+    sectors: pfLive,
+    status_summary: {
+      inadimplentes: somaSetores("inadimplentes"),
+      juridico: somaSetores("juridico"),
+      churn_previsto: somaSetores("churn_previsto"),
+    },
+    // "Proximas transicoes": clientes a <=10 dias de mudar de faixa, o limiar do relatorio.
+    transitions: pfClients
+      .filter((row: any) => row.urgencia === "urgente")
+      .sort((a: any, b: any) => number(a.dias_para_proxima) - number(b.dias_para_proxima)),
+    clients: pfClients,
+    tenure_distribution: pfTenure,
+    timeline: pfTimeline,
+    churns: pfChurn,
+    audit: pfAudit,
+  } : null;
+
   const wonEvents = value<any[]>(platformData[2], []).filter((row) => inScope(row.client_id));
   const preferencesRow = value(platformData[5], {});
   const myAccessRequest = value<any[]>(teamData[5], [])[0] ?? null;
@@ -397,7 +433,7 @@ Deno.serve(async (req) => {
     audit_runs: isFull ? value(platformData[3], []) : [], audit_issues: isFull ? value(platformData[4], []) : [],
     preferences: { ...preferencesRow, my_access_request: myAccessRequest },
     integration_health: isFull ? value(platformData[6], []) : [],
-    team, unassigned_clients: unassignedClients, stage_labels: stageLabels,
+    team, unassigned_clients: unassignedClients, portfolio, stage_labels: stageLabels,
     access_requests_pending: isFull ? value(teamData[4], []) : [],
     profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
