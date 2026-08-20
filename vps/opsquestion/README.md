@@ -76,31 +76,25 @@ curl -s localhost:8787/health
 
 O `server.mjs` escuta só em `127.0.0.1`. Quem fala com a internet é o Caddy:
 
-```bash
-sudo apt install -y caddy
-```
-
-`/etc/caddy/Caddyfile`:
-
-```
-opsquestion.SEUDOMINIO.com.br {
-	reverse_proxy 127.0.0.1:8787 {
-		# uma pergunta pode levar até ~50s investigando o banco
-		transport http {
-			response_header_timeout 90s
-		}
-	}
-}
-```
+A VPS é a `srv1837879.hstgr.cloud` (179.197.228.160, KVM 2, Hostinger). Esse hostname
+já resolve, então serve de domínio — não precisa comprar nem apontar nada.
 
 ```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update && sudo apt install -y caddy
+sudo cp Caddyfile /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
-O Caddy tira certificado sozinho no primeiro acesso. Teste de fora:
+As portas 80 e 443 precisam estar abertas no firewall da Hostinger. Sem a 80, o
+certificado nunca sai e o erro fica só no log do Caddy.
+
+O `Caddyfile` deste diretório já vem com o hostname certo. Teste de fora:
 
 ```bash
-curl -s https://opsquestion.SEUDOMINIO.com.br/health
+curl -s https://srv1837879.hstgr.cloud/health
 ```
 
 ## Virar a chave
@@ -110,7 +104,7 @@ continua indo no Make — nada muda. A troca é um insert:
 
 ```sql
 insert into agency_ops.automation_settings (key, value)
-values ('AI_ASK_ENDPOINT_URL', '"https://opsquestion.SEUDOMINIO.com.br/opsquestion"'::jsonb)
+values ('AI_ASK_ENDPOINT_URL', '"https://srv1837879.hstgr.cloud/opsquestion"'::jsonb)
 on conflict (key) do update set value = excluded.value, updated_at = now();
 ```
 
