@@ -50,6 +50,7 @@ type HomeData = {
   team?: TeamMember[];
   unassigned_clients?: Row[];
   portfolio?: Row | null;
+  adjustments?: Row[];
   stage_labels?: Record<string, string>;
   profile?: Row;
   access_requests_pending?: Row[];
@@ -78,6 +79,14 @@ function formatMoney(value: unknown) {
     currency: "BRL",
     maximumFractionDigits: 0,
   }).format(Number(value || 0));
+}
+
+function formatDay(value: unknown) {
+  if (!value) return "—";
+  const raw = String(value).slice(0, 10);
+  const [y, m, d] = raw.split("-").map(Number);
+  if (!y || !m || !d) return raw;
+  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" }).format(new Date(y, m - 1, d));
 }
 
 function formatDate(value: unknown) {
@@ -1259,7 +1268,7 @@ function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | null; ope
     </div>
     <section className="card"><div className="pf-audit">
       {audit.length ? audit.map((a, i) => <article key={a.id || i}>
-        <header><b>{text(a.title || a.commit_code || `Registro ${audit.length - i}`)}</b><small>{formatDate(a.occurred_at)}</small></header>
+        <header><b>{text(a.title || a.commit_code || `Registro ${audit.length - i}`)}</b><small>{formatDay(a.occurred_at)}</small></header>
         <p>{text(a.description || a.body)}</p>
         {a.source && <small className="pf-audit-src">{text(a.source)}</small>}
       </article>) : <div className="empty">Nenhum registro de auditoria ainda. Cada recálculo da carteira passa a ser gravado aqui.</div>}
@@ -1269,7 +1278,7 @@ function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | null; ope
   return <section className="workspace portfolio-center">
     <div className="workspace-head">
       <div><span className="eyebrow">Relatório mensal · CSM</span><h2>Carteira de Clientes</h2>
-        <p>Referência: {text(linha.label || mesAtivo)} · {formatDate(portfolio.reference)}</p></div>
+        <p>Referência: {text(linha.label || mesAtivo)} · {formatDay(portfolio.reference)}</p></div>
       <button className="btn" onClick={() => setAuditOpen(true)}>Ver auditorias / commits</button>
     </div>
 
@@ -1293,7 +1302,7 @@ function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | null; ope
         {transicoes.map((t) => <button key={t.client_id} onClick={() => openClient(t.client_id)}>
           <span className="pf-days"><b>{t.dias_para_proxima}</b><small>dias</small></span>
           <span className="pf-transition-info"><b>{text(t.display_name)}</b>
-            <small>{SECTOR_LABEL[t.sector] || t.sector} · passa para {text(t.proxima_faixa)} em {formatDate(t.data_transicao)}</small></span>
+            <small>{SECTOR_LABEL[t.sector] || t.sector} · passa para {text(t.proxima_faixa)} em {formatDay(t.data_transicao)}</small></span>
           <Chip value="ATTENTION" />
         </button>)}
         {!transicoes.length && <div className="empty">Nenhuma transição nos próximos 10 dias.</div>}
@@ -1378,7 +1387,7 @@ function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | null; ope
           <header><b>{BAND_LABEL[banda]}</b><span>{lista.length}</span></header>
           <div className="pf-segment-list">
             {lista.slice(0, 40).map((c) => <button key={c.client_id} onClick={() => openClient(c.client_id)}>
-              <span><b>{text(c.display_name)}</b><small>Entrada {formatDate(c.entrada)}</small></span>
+              <span><b>{text(c.display_name)}</b><small>Entrada {formatDay(c.entrada)}</small></span>
               <span className={`pf-badge ${c.urgencia}`}>{c.dias_para_proxima == null ? "veterano" : `${c.dias_para_proxima}d`}</span>
             </button>)}
             {!lista.length && <div className="empty">Nenhum cliente nesta faixa.</div>}
@@ -1393,7 +1402,7 @@ function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | null; ope
       <div className="table-wrap"><table><thead><tr><th>Cliente</th><th>Entrada</th><th>Saída</th><th>Permanência</th><th>Qualidade</th></tr></thead>
       <tbody>
         {churns.map((c) => <tr key={c.id}>
-          <td><b>{text(c.client_name)}</b></td><td>{formatDate(c.entrada)}</td><td>{formatDate(c.saida)}</td>
+          <td><b>{text(c.client_name)}</b></td><td>{formatDay(c.entrada)}</td><td>{formatDay(c.saida)}</td>
           <td>{c.permanencia_dias ? `${c.permanencia_dias} dias · ${(Number(c.permanencia_dias) / 30).toFixed(1)} m` : "—"}</td>
           <td>{text(c.qualidade || (c.confirmed ? "Confirmada" : "Estimada"))}</td>
         </tr>)}
