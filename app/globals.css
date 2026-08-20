@@ -95,3 +95,58 @@
 .pf-signal-group.alerta .pf-signal-days{color:var(--yellow)}
 
 :where(button,a,input,select,textarea,summary):focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:8px}
+
+/* ---------- Polimento tipografico e de acabamento ---------- */
+
+/* Inter Tight so' nos titulos: o tracking apertado da versao Tight faz o titulo
+   parecer desenhado, e a Inter normal continua carregando o texto corrido e os
+   dados, onde legibilidade vale mais que personalidade. */
+h1,h2,h3,.section-title,.pf-hero-main b,.metric .value{font-family:"Inter Tight",Inter,ui-sans-serif,system-ui,sans-serif}
+h1{letter-spacing:-.028em;font-weight:750}
+h2{letter-spacing:-.05em;font-weight:780}
+h3{letter-spacing:-.02em}
+.eyebrow{letter-spacing:.12em}
+
+/* Numero que alinha em coluna precisa de largura fixa por digito, senao a coluna
+   dança a cada atualizacao. */
+.metric .value,.rank,.counter,td,th,.pf-days b,.funnel-row b,.signal-strip b,
+.health-legend b,.pf-surv-risk,.pf-since-nums b{font-variant-numeric:tabular-nums}
+
+/* Metrica: numero maior e mais apertado, rotulo mais discreto, e uma fina barra
+   superior na cor do proprio indicador - assim da' para varrer a linha de KPIs
+   pela cor sem ler os rotulos. */
+.metric{padding:18px 18px 16px}
+.metric .label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700}
+.metric .value{font-size:34px;font-weight:800;letter-spacing:-.04em;line-height:1.05;margin:9px 0 5px}
+.metric .hint{font-size:11.5px;color:var(--muted)}
+.metric:after{right:-30px;bottom:-42px;width:88px;height:88px;opacity:.75}
+.metric:before{content:"";position:absolute;left:0;right:0;top:0;height:2px;background:var(--line);opacity:.9}
+.metric:has(.value.red):before{background:linear-gradient(90deg,var(--red),transparent 72%)}
+.metric:has(.value.yellow):before{background:linear-gradient(90deg,var(--yellow),transparent 72%)}
+.metric:has(.value.green):before{background:linear-gradient(90deg,var(--green),transparent 72%)}
+.metric:has(.value.blue):before{background:linear-gradient(90deg,var(--blue),transparent 72%)}
+.metric:hover{border-color:color-mix(in srgb,var(--blue) 34%,var(--line));box-shadow:0 22px 44px rgba(0,0,0,.3)}
+
+/* O card de leitura executiva ocupa duas linhas da grade, entao sobrava um vazio
+   grande embaixo. Em vez de encolher o card, o rodape e' ancorado no fim: o espaco
+   vira respiro deliberado em lugar de buraco. */
+.executive-story{display:flex;flex-direction:column}
+.executive-story .method{margin-top:auto}
+
+/* Linhas clicaveis precisam parecer clicaveis. */
+.risk-watch button,.conversation-list button,.pf-segment-list>button,.pf-transitions>button{transition:background .16s ease,box-shadow .16s ease}
+.risk-watch button:hover{background:var(--wash);box-shadow:inset 3px 0 var(--accent)}
+tbody tr{transition:background .14s ease}
+
+/* Barra de rolagem discreta, na familia da paleta. */
+*{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line);border-radius:99px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--blue) 45%,var(--line));background-clip:content-box}
+
+::selection{background:color-mix(in srgb,var(--brand) 55%,transparent);color:#fff}
+
+@media (prefers-reduced-motion:reduce){
+  *,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
+}
