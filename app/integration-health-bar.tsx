@@ -61,27 +61,27 @@ const LIMIAR_ARRASTE = 4;
 
 function limitar(p: Posicao, el: HTMLElement | null): Posicao {
   if (!el) return p;
-  const largura = el.offsetWidth;
-  const altura = el.offsetHeight;
+  const w = el.offsetWidth, h = el.offsetHeight;
   return {
-    x: Math.min(Math.max(p.x, MARGEM), Math.max(MARGEM, window.innerWidth - largura - MARGEM)),
-    y: Math.min(Math.max(p.y, MARGEM), Math.max(MARGEM, window.innerHeight - altura - MARGEM)),
+    x: Math.min(Math.max(p.x, MARGEM), Math.max(MARGEM, window.innerWidth - w - MARGEM)),
+    y: Math.min(Math.max(p.y, MARGEM), Math.max(MARGEM, window.innerHeight - h - MARGEM)),
   };
 }
 
 /**
- * Deixa a caixa ser arrastada pela barra de titulo e lembra onde foi largada.
+ * Deixa a caixa ser arrastada e lembra onde foi largada.
  *
- * A posicao fica em localStorage, nao no servidor: e' preferencia de tela de
- * quem esta' ali, e por maquina - a mesma pessoa no notebook e no monitor
- * grande quer a caixa em lugares diferentes.
+ * A alca e' o proprio botao, que fechado e' a bolinha e aberto e' a barra de
+ * titulo - entao os dois estados arrastam pelo mesmo lugar.
+ *
+ * O estado do arraste vive em ref, e move/up ficam no window: o pointermove
+ * chega antes de o React re-renderizar, e o ponteiro anda mais rapido que o
+ * cursor sobre a bolinha de 40px.
  */
 function useArrastavel(expandido: boolean) {
   const refCaixa = useRef<HTMLElement | null>(null);
   const [posicao, setPosicao] = useState<Posicao | null>(null);
   const [arrastando, setArrastando] = useState(false);
-  // Refs, nao estado: o pointermove chega antes de o React re-renderizar, entao
-  // ler `arrastando` do estado dentro do handler perdia o inicio do arraste.
   const arrastandoRef = useRef(false);
   const moveu = useRef(false);
   const origem = useRef({ px: 0, py: 0, x: 0, y: 0 });
@@ -110,9 +110,6 @@ function useArrastavel(expandido: boolean) {
     try { window.localStorage.setItem(CHAVE_POSICAO, JSON.stringify(posicao)); } catch { /* sem storage, so' nao lembra */ }
   }, [arrastando, posicao]);
 
-  // Listeners no window, nao no elemento: o ponteiro anda mais rapido que o
-  // cursor sobre a barra, e se os eventos dependessem de continuar em cima dela
-  // o arraste morreria no primeiro movimento rapido.
   useEffect(() => {
     function mover(evento: PointerEvent) {
       if (!arrastandoRef.current) return;
@@ -149,7 +146,7 @@ function useArrastavel(expandido: boolean) {
   }
 
   // O clique dispara depois do pointerup. Sem isso, terminar um arraste em cima
-  // da barra abriria ou fecharia o painel sem querer.
+  // da alca abriria ou fecharia o painel sem querer.
   function arrasteEngoliuOClique() {
     if (!moveu.current) return false;
     moveu.current = false;
@@ -176,8 +173,8 @@ export default function IntegrationHealthBar() {
   const [expanded, setExpanded] = useState(false);
   const [showDivergences, setShowDivergences] = useState(false);
   const [forbidden, setForbidden] = useState(false);
-  const arraste = useArrastavel(expanded);
   const [loading, setLoading] = useState(false);
+  const arraste = useArrastavel(expanded);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: auth }) => setSession(auth.session));
@@ -238,9 +235,9 @@ export default function IntegrationHealthBar() {
         // Sem posicao salva, fica no canto de sempre. Com posicao, vira top/left
         // porque o arraste raciocina em coordenada da viewport.
         ...(arraste.posicao
-          ? { left: arraste.posicao.x, top: arraste.posicao.y, bottom: "auto" as const }
-          : { left: 6, bottom: 18 }),
-        width: expanded ? "min(640px,calc(100vw - 36px))" : 190,
+          ? { left: arraste.posicao.x, top: arraste.posicao.y, right: "auto" as const }
+          : { top: 12, right: 12 }),
+        width: expanded ? "min(640px,calc(100vw - 36px))" : 40,
         fontFamily:"inherit",
         userSelect: arraste.arrastando ? "none" : undefined,
       }}>
@@ -249,22 +246,23 @@ export default function IntegrationHealthBar() {
         onDoubleClick={arraste.reposicionar}
         onClick={() => { if (arraste.arrasteEngoliuOClique()) return; setExpanded((v) => !v); }}
         aria-expanded={expanded}
-        title={arraste.posicao ? "Arraste para mover · duplo clique volta ao canto" : "Arraste para mover"}
-        style={{ width:"100%", display:"flex", alignItems:"center", gap:7, border:`1px solid ${state.border}`, background:"rgba(9,12,20,.94)", color:"#f8fafc", borderRadius:13, padding:"8px 10px", boxShadow:"0 16px 50px rgba(0,0,0,.28)", cursor: arraste.arrastando ? "grabbing" : "grab", backdropFilter:"blur(16px)", touchAction:"none" }}
-      >
-        {/* Alca visivel. Sem ela, "da' para arrastar" e' informacao que so'
-            existe na cabeca de quem programou. */}
-        <span aria-hidden style={{ color:"#64748b", fontSize:13, lineHeight:1, letterSpacing:-1, marginRight:-2 }}>⠿</span>
+        aria-label="Saúde das integrações"
+        title="Saúde das integrações · arraste para mover · duplo clique volta ao canto"
+        style={{ width: expanded ? "100%" : 40, height: expanded ? "auto" : 40, display:"flex", alignItems:"center", justifyContent: expanded ? "flex-start" : "center", gap:8, border:`1px solid ${state.border}`, background:"rgba(9,12,20,.94)", color:"#f8fafc", borderRadius: expanded ? 13 : 999, padding: expanded ? "8px 10px" : 0, boxShadow:"0 16px 50px rgba(0,0,0,.28)", cursor: arraste.arrastando ? "grabbing" : "grab", backdropFilter:"blur(16px)", touchAction:"none" }}
+        >
         <span style={{ width:8, height:8, borderRadius:999, background:state.color, boxShadow:`0 0 0 5px ${state.bg}` }} />
-        <span style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", flex:1, minWidth:0 }}>
+        {expanded && (
+          <><span style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", flex:1, minWidth:0 }}>
           <b style={{ fontSize:11.5, whiteSpace:"nowrap" }}>Saúde das integrações</b>
           <small style={{ color:"#94a3b8", marginTop:2 }}>{loading ? "Atualizando…" : `${state.icon} ${state.label}`}</small>
         </span>
         <span style={{ fontSize:16, color:"#94a3b8" }}>{expanded ? "−" : "+"}</span>
+          </>
+          )}
       </button>
 
       {expanded && (
-        <div style={{ marginTop:8, border:"1px solid rgba(148,163,184,.16)", background:"rgba(9,12,20,.97)", borderRadius:18, padding:12, boxShadow:"0 24px 70px rgba(0,0,0,.38)", backdropFilter:"blur(18px)" }}>
+        <div style={{ marginTop:8, maxHeight:"80vh", overflowY:"auto", border:"1px solid rgba(148,163,184,.16)", background:"rgba(9,12,20,.97)", borderRadius:18, padding:12, boxShadow:"0 24px 70px rgba(0,0,0,.38)", backdropFilter:"blur(18px)" }}>
           <div style={{ display:"grid", gridTemplateColumns:"repeat(2,minmax(0,1fr))", gap:8 }}>
             {integrations.map((item) => {
               const s = meta[item.status] || meta.DELAY;
