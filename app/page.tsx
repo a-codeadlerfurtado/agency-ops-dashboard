@@ -233,6 +233,7 @@ export default function Dashboard() {
   const [filter, setFilter] = useState("ALL");
   const [view, setView] = useState<View>("overview");
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  useEffect(() => { document.documentElement.style.setProperty("--sidenav-width", sidebarOpen ? "224px" : "58px"); }, [sidebarOpen]);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [opsQuestion, setOpsQuestion] = useState("");
   const [selected, setSelected] = useState<Row | null>(null);
