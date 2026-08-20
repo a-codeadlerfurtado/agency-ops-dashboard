@@ -11,9 +11,9 @@
     "dev": "tsc -p tsconfig.json --watch"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.0",
     "@supabase/supabase-js": "^2.112.3",
-    "express": "^5.1.0"
+    "express": "^5.1.0",
+    "openai": "^4.104.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",

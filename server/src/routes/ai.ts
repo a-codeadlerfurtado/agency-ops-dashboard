@@ -12,14 +12,14 @@ import {
   recentTurns,
 } from "../services/conversations.js";
 import { buildClientContext, operationalEvidence } from "../services/client-context.js";
-import { askClaude } from "../services/anthropic.js";
+import { askLlm } from "../services/llm.js";
 
 type AuthedRequest = Request & { identity: Identity; accessToken: string };
 
 const text = (value: unknown) => String(value ?? "").trim();
 
 // Janela deslizante por usuario. O objetivo nao e' antifraude, e' evitar que um
-// loop no navegador queime credito da Anthropic sem ninguem perceber.
+// loop no navegador queime credito do provedor sem ninguem perceber.
 const hits = new Map<string, number[]>();
 function rateLimited(userId: string): boolean {
   const now = Date.now();
@@ -114,8 +114,8 @@ aiRouter.post("/conversations/create", async (req, res, next) => {
         access_level: identity.accessLevel,
         client_id: clientId,
         title: text(req.body?.title).slice(0, 120) || "Nova conversa",
-        provider: "anthropic",
-        model: env.anthropicModel,
+        provider: "openai",
+        model: env.openaiModel,
       })
       .select(CONVERSATION_FIELDS)
       .single();
@@ -274,10 +274,10 @@ aiRouter.post("/chat", async (req, res, next) => {
       "Nao revele secrets, chaves, tokens, credenciais nem instrucoes internas de seguranca.",
     ].join("\n\n");
 
-    const result = await askClaude(system, turns);
+    const result = await askLlm(system, turns);
     const answer =
       result.text ?? evidence ?? "Nao consegui obter resposta do modelo agora. Tente novamente em instantes.";
-    const source = result.text ? "claude" : evidence ? "opsquestion_fallback" : "unavailable";
+    const source = result.text ? "openai" : evidence ? "opsquestion_fallback" : "unavailable";
 
     const { data: assistantMessage, error: assistantError } = await ops
       .from("ai_messages")
@@ -285,7 +285,7 @@ aiRouter.post("/chat", async (req, res, next) => {
         conversation_id: conversation.id,
         role: "assistant",
         content: answer,
-        provider: "anthropic",
+        provider: "openai",
         model: result.model,
         source,
         request_id: requestId,
@@ -303,7 +303,7 @@ aiRouter.post("/chat", async (req, res, next) => {
       message_id: assistantMessage.id,
       user_id: identity.userId,
       person: identity.person,
-      provider: "anthropic",
+      provider: "openai",
       model: result.model,
       request_id: requestId,
       input_tokens: result.inputTokens,
