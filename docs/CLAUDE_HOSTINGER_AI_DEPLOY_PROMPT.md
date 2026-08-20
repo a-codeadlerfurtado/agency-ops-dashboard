@@ -1,5 +1,10 @@
 # Prompt para Claude — concluir IA da Central de Operações na VPS Hostinger
 
+> **Atualização — 2026-08-20.** O provedor mudou para **OpenAI (`gpt-5-mini`)**,
+> por decisão do Adler, alinhando com o serviço `opsquestion` que já roda na VPS.
+> As menções a Anthropic/Claude abaixo descrevem o que foi especificado na época
+> e ficam como registro. O estado atual está em `docs/HOSTINGER_DEPLOY.md`.
+
 Você vai assumir a continuação de uma implementação já iniciada no projeto **Central de Operações / Agency Ops Dashboard**. Não comece do zero.
 
 ## Objetivo final
