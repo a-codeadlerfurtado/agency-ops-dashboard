@@ -74,10 +74,34 @@ Deno.serve(async (req) => {
 
   const itemType = ["ESCALATION","CREATIVE_REQUEST","TECHNICAL","CLIENT_FOLLOWUP","CLICKUP","FINANCE","GENERAL"].includes(String(body.type)) ? String(body.type) : "GENERAL";
   const priority = ["CRITICAL","HIGH","MEDIUM","LOW"].includes(String(body.priority)) ? String(body.priority) : "MEDIUM";
-  const targetRole = typeof body.target_role === "string" ? body.target_role.slice(0, 40) : null;
-  const targetPerson = typeof body.target_person === "string" ? body.target_person.slice(0, 160) : null;
+  let targetRole = typeof body.target_role === "string" ? body.target_role.slice(0, 40) : null;
+  let targetPerson = typeof body.target_person === "string" ? body.target_person.slice(0, 160) : null;
   const metadata = typeof body.metadata === "object" && body.metadata ? { ...body.metadata } : {};
   let clickupTask: any = null;
+  let deterministicGtRoute: any = null;
+
+  // Para demanda de tráfego vinculada a cliente, o responsável não é escolhido pelo
+  // chamador nem pela IA. A fonte oficial é a carteira atual em clients.gt_owner e o
+  // vínculo de identidade do time com o ClickUp.
+  if (targetRole === "GT" && clientId) {
+    const { data: route, error: routeError } = await ops.rpc("resolve_gt_clickup_assignee", { p_client_id: clientId });
+    if (routeError) return respond({ error: "gt_assignment_query_failed", detail: routeError.message }, 500);
+    const assigneeId = Number(route?.clickup_user_id);
+    if (!route?.ok || !Number.isFinite(assigneeId)) {
+      return respond({
+        error: "gt_assignment_unresolved",
+        detail: route?.reason ?? "unknown",
+        client_id: clientId,
+        client_name: scopedClient?.display_name ?? route?.client_name ?? null,
+        gt_owner: route?.gt_owner ?? scopedClient?.gt_owner ?? null,
+      }, 409);
+    }
+    deterministicGtRoute = { ...route, clickup_user_id: String(route.clickup_user_id) };
+    targetPerson = String(route.gt_owner);
+    metadata.assignment_source = "clients.gt_owner+team_identity_map";
+    metadata.resolved_assignee_person = targetPerson;
+    metadata.resolved_clickup_user_id = String(route.clickup_user_id);
+  }
 
   if (body.create_clickup === true || itemType === "CLICKUP") {
     const { data: config, error: configError } = await ops.rpc("get_clickup_config");
@@ -93,16 +117,34 @@ Deno.serve(async (req) => {
     const listId = listByRole[targetRole ?? ""] ?? "901326095338";
     const assignees: number[] = [];
 
-    if (targetPerson) {
-      const { data: rosterTarget } = await ops.from("team_roster").select("clickup_user").eq("person", targetPerson).maybeSingle();
-      if (rosterTarget?.clickup_user) {
-        const { data: assigneeRows } = await ops.from("clickup_task_assignees")
-          .select("user_id,username")
-          .ilike("username", rosterTarget.clickup_user)
-          .limit(1);
-        const assigneeId = Number(assigneeRows?.[0]?.user_id);
-        if (Number.isFinite(assigneeId)) assignees.push(assigneeId);
+    if (deterministicGtRoute) {
+      assignees.push(Number(deterministicGtRoute.clickup_user_id));
+    } else if (targetPerson) {
+      const { data: identityTarget } = await ops.from("team_identity_map")
+        .select("clickup_user_id")
+        .eq("person", targetPerson)
+        .maybeSingle();
+      const identityId = Number(identityTarget?.clickup_user_id);
+      if (Number.isFinite(identityId)) {
+        assignees.push(identityId);
+      } else {
+        const { data: rosterTarget } = await ops.from("team_roster").select("clickup_user").eq("person", targetPerson).maybeSingle();
+        if (rosterTarget?.clickup_user) {
+          const { data: assigneeRows } = await ops.from("clickup_task_assignees")
+            .select("user_id,username")
+            .ilike("username", rosterTarget.clickup_user)
+            .limit(1);
+          const assigneeId = Number(assigneeRows?.[0]?.user_id);
+          if (Number.isFinite(assigneeId)) assignees.push(assigneeId);
+        }
       }
+    }
+
+    // Uma demanda explicitamente destinada a GT nunca é criada sem um único GT
+    // determinístico. Assim a configuração/default da lista não pode espalhar a task
+    // para todos os gestores quando o cliente já tem carteira definida.
+    if (targetRole === "GT" && assignees.length !== 1) {
+      return respond({ error: "gt_assignment_unresolved", detail: "expected_exactly_one_clickup_assignee", client_id: clientId }, 409);
     }
 
     const clickupName = scopedClient?.display_name ? `[${scopedClient.display_name}] ${title}` : title;
