@@ -222,8 +222,14 @@ export default function Dashboard() {
     window.localStorage.setItem("ops-theme", theme);
   }, [theme]);
 
+  const isDesignRestricted = data?.profile?.role === "DESIGN";
   const clients = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("pt-BR");
+    if (isDesignRestricted) {
+      return (data?.clients || [])
+        .filter((client) => !needle || text(client.display_name).toLocaleLowerCase("pt-BR").includes(needle))
+        .sort((a, b) => text(a.display_name).localeCompare(text(b.display_name), "pt-BR"));
+    }
     return (data?.clients || [])
       .filter((client) => {
         const haystack = [client.display_name, client.cs_owner, client.gt_owner, client.current_subject, client.next_step]
@@ -233,7 +239,7 @@ export default function Dashboard() {
         return lifecycleOk && (!needle || haystack.includes(needle)) && (filter === "ALL" || client.priority === filter);
       })
       .sort((a, b) => (priorityRank[a.priority] ?? 9) - (priorityRank[b.priority] ?? 9) || text(a.display_name).localeCompare(text(b.display_name)));
-  }, [data, query, filter, lifecycleFilter]);
+  }, [data, query, filter, lifecycleFilter, isDesignRestricted]);
 
   async function requestAccess() {
     if (!session?.access_token) return;
@@ -247,7 +253,7 @@ export default function Dashboard() {
   }
 
   async function openClient(clientId: string) {
-    if (!session?.access_token) return;
+    if (!session?.access_token || isDesignRestricted) return;
     setSelected({ display_name: "", carregando: true } as any);
     setDetailLoading(true);
     try {
@@ -265,7 +271,7 @@ export default function Dashboard() {
   const failedJobs = (health.failed_jobs_24h || []).length;
   const notion = health.latest_notion_sync;
   const allClients = data?.clients || [];
-  const activeClients = useMemo(() => allClients.filter((client) => ["ACTIVE","ONBOARDING"].includes(client.lifecycle)), [data]);
+  const activeClients = useMemo(() => isDesignRestricted ? allClients : allClients.filter((client) => ["ACTIVE","ONBOARDING"].includes(client.lifecycle)), [data, isDesignRestricted]);
   const actionClients = useMemo(() => activeClients
     .filter((client) => ["ATTENTION", "FOLLOW_UP", "DATA_INCOMPLETE"].includes(client.priority) || client.next_step)
     .sort((a, b) => (priorityRank[a.priority] ?? 9) - (priorityRank[b.priority] ?? 9)), [data]);
@@ -333,9 +339,11 @@ export default function Dashboard() {
       </section>
 
       {view === "focus" && <FocusCenter clients={actionClients} allClients={allClients} operations={data?.operations || {}} alerts={data?.alerts || []} openClient={openClient} />}
-      {view === "clients" && canSee("clients") && <><PortfolioCenter portfolio={data?.portfolio || null} openClient={openClient} />
-      <details className="card portfolio-fulllist"><summary>Lista completa de clientes <span>{allClients.length}</span></summary>
-      <ClientPortfolio clients={clients} total={allClients.length} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} lifecycleFilter={lifecycleFilter} setLifecycleFilter={setLifecycleFilter} openClient={openClient} /></details></>}
+      {view === "clients" && canSee("clients") && (isDesignRestricted
+        ? <ClientPortfolio restricted clients={clients} total={allClients.length} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} lifecycleFilter={lifecycleFilter} setLifecycleFilter={setLifecycleFilter} openClient={openClient} />
+        : <><PortfolioCenter portfolio={data?.portfolio || null} openClient={openClient} />
+          <details className="card portfolio-fulllist"><summary>Lista completa de clientes <span>{allClients.length}</span></summary>
+          <ClientPortfolio clients={clients} total={allClients.length} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} lifecycleFilter={lifecycleFilter} setLifecycleFilter={setLifecycleFilter} openClient={openClient} /></details></>)}
       {view === "onboarding" && canSee("onboarding") && <OnboardingBoard groups={onboardingGroups} stageLabels={data?.stage_labels || {}} openClient={openClient} />}
       {view === "campaigns" && canSee("campaigns") && <CampaignCenter media={media} campaigns={filteredCampaigns} clients={allClients} campaignFilter={campaignFilter} setCampaignFilter={setCampaignFilter} openClient={openClient} />}
       {view === "preclients" && canSee("preclients") && <PreClientCenter rows={data?.preclients || []} won={data?.won_events || []} />}
@@ -735,7 +743,8 @@ function FocusCenter({ clients, allClients, operations, alerts, openClient }: { 
   );
 }
 
-function ClientPortfolio({ clients, total, query, setQuery, filter, setFilter, lifecycleFilter, setLifecycleFilter, openClient }: { clients: Row[]; total: number; query: string; setQuery: (value: string) => void; filter: string; setFilter: (value: string) => void; lifecycleFilter:string; setLifecycleFilter:(value:string)=>void; openClient: (id: string) => void }) {
+function ClientPortfolio({ clients, total, query, setQuery, filter, setFilter, lifecycleFilter, setLifecycleFilter, openClient, restricted = false }: { clients: Row[]; total: number; query: string; setQuery: (value: string) => void; filter: string; setFilter: (value: string) => void; lifecycleFilter:string; setLifecycleFilter:(value:string)=>void; openClient: (id: string) => void; restricted?: boolean }) {
+  if (restricted) return <section className="workspace"><div className="workspace-head"><div><h2>Clientes</h2><p>Nome e tempo de relacionamento com a agência.</p></div><span className="counter">{clients.length} de {total}</span></div><section className="card section"><div className="toolbar portfolio-tools"><input className="control" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente" /></div><div className="table-wrap"><table><thead><tr><th scope="col">Cliente</th><th scope="col">Tempo conosco</th></tr></thead><tbody>{clients.map((client) => <tr key={client.client_id}><td><div className="name">{text(client.display_name)}</div></td><td>{client.client_days == null ? "—" : `${formatNumber(client.client_days, 0)} dias`}</td></tr>)}{!clients.length && <tr><td colSpan={2} className="empty">Nenhum cliente encontrado.</td></tr>}</tbody></table></div></section></section>;
   return <section className="workspace"><div className="workspace-head"><div><h2>Carteira completa</h2><p>Saúde, tempo como cliente, responsáveis e próxima ação.</p></div><span className="counter">{clients.length} de {total}</span></div><section className="card section"><div className="toolbar portfolio-tools"><input className="control" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente ou responsável" /><select className="control" value={lifecycleFilter} onChange={(event) => setLifecycleFilter(event.target.value)}><option value="ACTIVE">Ativos</option><option value="CHURNED">Churned</option><option value="ALL">Todos</option></select><select className="control" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="ALL">Todas as prioridades</option><option value="ATTENTION">Atenção</option><option value="FOLLOW_UP">Acompanhamento</option><option value="OK">OK</option><option value="UNDETERMINED">Indeterminado</option><option value="DATA_INCOMPLETE">Dados incompletos</option></select></div><div className="table-wrap"><table><thead><tr><th scope="col">Cliente</th><th scope="col">Status</th><th scope="col">Saúde</th><th scope="col">Tempo como cliente</th><th scope="col">Próxima ação</th><th scope="col">Responsável</th></tr></thead><tbody>{clients.map((client) => { const score = healthScore(client); return <tr key={client.client_id} onClick={() => openClient(client.client_id)}><td><button type="button" className="cell-open name" onClick={(e) => { e.stopPropagation(); openClient(client.client_id); }} aria-label={`Abrir ${text(client.display_name)}`}>{text(client.display_name)}</button><div className="small">{text(client.current_subject)}</div></td><td><Chip value={client.lifecycle}/></td><td><div className="score"><b>{score}</b><i><span style={{width:`${score}%`}} /></i></div></td><td>{client.entrada ? <><div>{formatNumber(client.client_days,0)} dias</div><div className="small">desde {new Intl.DateTimeFormat("pt-BR").format(new Date(`${client.entrada}T12:00:00`))}</div></> : "Revisão manual"}</td><td>{client.lifecycle === "CHURNED" ? "Histórico encerrado" : text(client.next_step)}<div className="small">{client.lifecycle === "CHURNED" ? "Sem alerta operacional" : relativeDate(client.next_step_due)}</div></td><td>{text(client.action_owner || client.cs_owner)}<div className="small">{client.carteira ? `Carteira ${client.carteira}` : "Sem carteira"}</div></td></tr>; })}{!clients.length && <tr><td colSpan={6} className="empty">Nenhum cliente nesse filtro.</td></tr>}</tbody></table></div></section></section>;
 }
 
