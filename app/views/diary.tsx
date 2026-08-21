@@ -16,6 +16,7 @@ const AREAS = [
 ] as const;
 const STATUSES = [["OPEN", "Aberto"], ["IN_PROGRESS", "Em correção"], ["RESOLVED", "Resolvido"], ["DISCARDED", "Descartado"]] as const;
 const SEVERITIES = [["", "Não informar"], ["LOW", "Baixo"], ["MEDIUM", "Médio"], ["HIGH", "Alto"], ["CRITICAL", "Crítico"]] as const;
+const TASKLOG_MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 
 function labelOf(options: readonly (readonly [string, string])[], value: unknown, fallback = "Não identificado") {
   return options.find(([key]) => key === String(value ?? ""))?.[1] ?? fallback;
@@ -36,6 +37,68 @@ function formatOpsDateTime(value: unknown) {
   return new Intl.DateTimeFormat("pt-BR", {
     timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short",
   }).format(new Date(String(value)));
+}
+function tasklogDateKey(value: unknown) {
+  const key = String(value ?? "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : "";
+}
+function tasklogLevelColor(count: number) {
+  if (count <= 0) return "rgba(255,255,255,.06)";
+  if (count === 1) return "#0e4429";
+  if (count <= 3) return "#006d32";
+  if (count <= 6) return "#26a641";
+  return "#39d353";
+}
+function buildTasklogActivity(rows: Row[]) {
+  const activity: Record<string, number> = {};
+  for (const row of rows) {
+    const key = tasklogDateKey(row.task_date);
+    if (key) activity[key] = (activity[key] || 0) + 1;
+  }
+  return activity;
+}
+function buildTasklogWeeks(activity: Record<string, number>, year: number) {
+  const first = new Date(Date.UTC(year, 0, 1));
+  const start = new Date(first);
+  start.setUTCDate(start.getUTCDate() - start.getUTCDay());
+  const last = new Date(Date.UTC(year, 11, 31));
+  const end = new Date(last);
+  end.setUTCDate(end.getUTCDate() + (6 - end.getUTCDay()));
+  const weeks: { date: string; count: number; inYear: boolean }[][] = [];
+  let week: { date: string; count: number; inYear: boolean }[] = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    const iso = cursor.toISOString().slice(0, 10);
+    week.push({ date: iso, count: activity[iso] || 0, inYear: cursor.getUTCFullYear() === year });
+    if (week.length === 7) { weeks.push(week); week = []; }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return weeks;
+}
+function tasklogCurrentStreak(activity: Record<string, number>) {
+  let streak = 0;
+  const today = opsDateTimeInput().slice(0, 10);
+  const cursor = new Date(`${today}T00:00:00Z`);
+  for (;;) {
+    const iso = cursor.toISOString().slice(0, 10);
+    if ((activity[iso] || 0) > 0) { streak += 1; cursor.setUTCDate(cursor.getUTCDate() - 1); continue; }
+    if (streak === 0 && iso === today) { cursor.setUTCDate(cursor.getUTCDate() - 1); continue; }
+    break;
+  }
+  return streak;
+}
+function tasklogYearStats(activity: Record<string, number>, year: number) {
+  let total = 0;
+  let activeDays = 0;
+  let bestDay = 0;
+  const prefix = `${year}-`;
+  for (const [date, count] of Object.entries(activity)) {
+    if (!date.startsWith(prefix)) continue;
+    total += count;
+    if (count > 0) activeDays += 1;
+    if (count > bestDay) bestDay = count;
+  }
+  return { total, activeDays, bestDay };
 }
 async function diaryRequest(view: string, token: string, options?: { method?: "GET" | "POST"; params?: Record<string, string>; body?: Row }) {
   const url = new URL(DIARY_API_URL);
@@ -87,6 +150,20 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
   const adjustments: Row[] = data?.adjustments || [];
   const taskRows: Row[] = data?.task_log || [];
   const counts = data?.counts || { adjustments: adjustments.length, tasks: taskRows.length };
+  const currentCalendarYear = Number(opsDateTimeInput().slice(0, 4));
+  const [taskCalendarYear, setTaskCalendarYear] = useState(currentCalendarYear);
+  const taskActivity = useMemo(() => scope === "mine" ? buildTasklogActivity(taskRows) : {}, [taskRows, scope]);
+  const taskCalendarYears = useMemo(() => {
+    const years = new Set<number>([currentCalendarYear]);
+    Object.keys(taskActivity).forEach((date) => {
+      const year = Number(date.slice(0, 4));
+      if (Number.isFinite(year)) years.add(year);
+    });
+    return Array.from(years).sort((a, b) => b - a);
+  }, [taskActivity, currentCalendarYear]);
+  const taskCalendarWeeks = useMemo(() => buildTasklogWeeks(taskActivity, taskCalendarYear), [taskActivity, taskCalendarYear]);
+  const taskCalendarStats = useMemo(() => tasklogYearStats(taskActivity, taskCalendarYear), [taskActivity, taskCalendarYear]);
+  const taskCurrentStreak = useMemo(() => tasklogCurrentStreak(taskActivity), [taskActivity]);
 
   const [adjClient, setAdjClient] = useState("");
   const [adjOccurredAt, setAdjOccurredAt] = useState(() => opsDateTimeInput());
@@ -265,6 +342,45 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
         {taskError && <div className="error-box" style={{ marginTop: 8 }}>{taskError}</div>}
         <button type="button" className="primary" style={{ marginTop: 10 }} disabled={taskSaving} onClick={submitTask}>{taskSaving ? "Salvando…" : "Registrar tarefa"}</button>
       </section>
+
+      {scope === "mine" && <section className="card section" style={{ marginTop: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
+          <div>
+            <div className="section-title">Calendário anual</div>
+            <p className="small" style={{ margin: "4px 0 0" }}>Seu desempenho no TaskLog. Cada quadrado representa um dia e fica mais intenso conforme aumenta a quantidade de tarefas registradas.</p>
+          </div>
+          <select className="control" aria-label="Ano do calendário do TaskLog" value={taskCalendarYear} onChange={(e) => setTaskCalendarYear(Number(e.target.value))} style={{ minWidth: 94 }}>
+            {taskCalendarYears.map((year) => <option key={year} value={year}>{year}</option>)}
+          </select>
+        </div>
+
+        <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginTop: 14 }}>
+          <div><strong style={{ display: "block", fontSize: 20 }}>{taskCalendarStats.total}</strong><small>tarefas no ano</small></div>
+          <div><strong style={{ display: "block", fontSize: 20 }}>{taskCalendarStats.activeDays}</strong><small>dias com atividade</small></div>
+          <div><strong style={{ display: "block", fontSize: 20 }}>{taskCurrentStreak}</strong><small>dias na sequência atual</small></div>
+          <div><strong style={{ display: "block", fontSize: 20 }}>{taskCalendarStats.bestDay}</strong><small>maior volume em um dia</small></div>
+        </div>
+
+        <div style={{ overflowX: "auto", paddingBottom: 4, marginTop: 14 }}>
+          <div style={{ minWidth: Math.max(690, taskCalendarWeeks.length * 13) }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(12,minmax(0,1fr))", gap: 4, marginBottom: 6, color: "#8aa3c0", fontSize: 11 }}>
+              {TASKLOG_MONTHS.map((month) => <span key={month}>{month}</span>)}
+            </div>
+            <div style={{ display: "flex", gap: 3 }}>
+              {taskCalendarWeeks.map((week, weekIndex) => <div key={weekIndex} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+                {week.map((day) => <div key={day.date} title={day.inYear ? `${day.date}: ${day.count} ${day.count === 1 ? "tarefa" : "tarefas"}` : ""} style={{ width: 10, height: 10, borderRadius: 2, background: day.inYear ? tasklogLevelColor(day.count) : "transparent" }} />)}
+              </div>)}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 5, marginTop: 8, color: "#8aa3c0", fontSize: 11 }}>
+          <span>Menos</span>
+          {[0, 1, 3, 6, 7].map((count) => <span key={count} style={{ width: 10, height: 10, borderRadius: 2, background: tasklogLevelColor(count), display: "inline-block" }} />)}
+          <span>Mais</span>
+        </div>
+      </section>}
+
       <section className="card section" style={{ marginTop: 16 }}><div className="section-title">{scope === "all" ? "TaskLog da equipe" : "Meu TaskLog"}</div>{taskRows.map((entry) => <div className="productivity-row" key={entry.id}><div><b>{text(entry.task_name)}</b><small>{text(entry.category)} · {text(entry.collaborator_name)}</small></div><strong>{formatDay(entry.task_date)}</strong></div>)}{!loading && !taskRows.length && <div className="empty">Nenhuma tarefa neste escopo.</div>}</section>
     </>}
   </section>;
