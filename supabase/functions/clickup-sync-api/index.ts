@@ -215,8 +215,10 @@ Deno.serve(async (req) => {
   }
 
   async function getTask(taskId: string) {
+    // Timeout explicito: a API do ClickUp engasga, e sem teto a chamada fica pendurada.
     const response = await fetch(`https://api.clickup.com/api/v2/task/${encodeURIComponent(taskId)}?include_subtasks=true`, {
       headers: { Authorization: clickupToken },
+      signal: AbortSignal.timeout(15_000),
     });
     if (!response.ok) throw new Error(`clickup_task_${response.status}:${await response.text()}`);
     return response.json();
@@ -308,15 +310,32 @@ Deno.serve(async (req) => {
     if (!error) accepted++;
   }
   if (!payload.task_id || !clickupToken) return reply({ ok: true, accepted, task_refreshed: false });
-  try {
-    const task = await getTask(String(payload.task_id));
-    const closed = await upsertTask(task);
-    await ops.from("clickup_task_events").update({ processing_status: "PROCESSED", processed_at: new Date().toISOString() }).eq("webhook_id", payload.webhook_id).eq("task_id", String(payload.task_id));
-    return reply({ ok: true, accepted, task_refreshed: true, closed });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await ops.from("clickup_task_events").update({ processing_status: "ERROR", processing_error: message, processed_at: new Date().toISOString() }).eq("webhook_id", payload.webhook_id).eq("task_id", String(payload.task_id));
-    return reply({ ok: true, accepted, task_refreshed: false, warning: message }, 202);
-  }
+
+  // A atualizacao da tarefa sai do caminho da resposta.
+  //
+  // Antes, este handler chamava a API do ClickUp e ESPERAVA antes de responder. Quando
+  // a API deles engasgava, a entrega do webhook estourava o tempo e o ClickUp contava
+  // falha. Em 20/08 foram 144 falhas seguidas entre 12:09 e 12:32 e ele suspendeu o
+  // webhook sozinho: o time passou o dia sem saber quem concluiu cada tarefa e ninguem
+  // percebeu, porque a falha acontecia ANTES de qualquer gravacao nossa - nao deixava
+  // rastro no banco.
+  //
+  // O evento ja' foi gravado acima, e e' ele que carrega quem concluiu. Responder agora
+  // e' seguro: o que falta e' so' espelhar o estado da tarefa, que o cron de 15 minutos
+  // tambem faz.
+  const atualizarTarefa = (async () => {
+    try {
+      const task = await getTask(String(payload.task_id));
+      await upsertTask(task);
+      await ops.from("clickup_task_events").update({ processing_status: "PROCESSED", processed_at: new Date().toISOString() }).eq("webhook_id", payload.webhook_id).eq("task_id", String(payload.task_id));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ops.from("clickup_task_events").update({ processing_status: "ERROR", processing_error: message, processed_at: new Date().toISOString() }).eq("webhook_id", payload.webhook_id).eq("task_id", String(payload.task_id));
+    }
+  })();
+  // waitUntil mantem o worker vivo ate' terminar sem segurar a resposta. Se nao existir,
+  // a promise roda solta mesmo - o catch acima garante que ela nunca rejeita.
+  try { (globalThis as any).EdgeRuntime?.waitUntil?.(atualizarTarefa); } catch { /* fora do Edge Runtime */ }
+  return reply({ ok: true, accepted, task_refreshed: "background" });
 });
 
