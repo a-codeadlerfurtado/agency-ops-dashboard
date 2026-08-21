@@ -114,10 +114,27 @@ Deno.serve(async (req: Request) => {
 
   let rows = data ?? [];
 
-  // Escopo de carteira, igual ao resto da Central: so' WALLET_ONLY filtra.
-  // Esconder na tela nao seria protecao - o corte acontece aqui.
-  if (identity.isWalletOnly) {
-    rows = rows.filter((row: any) => row.gt_owner === identity.person);
+  // Recorte por pessoa nesta aba, mais estreito que o resto da Central.
+  //
+  // Fora daqui, so' WALLET_ONLY filtra carteira. Aqui quem atende ve' apenas os
+  // proprios clientes, mesmo tendo acesso FULL: saude do cliente e' conversa de
+  // quem segura a relacao, e a base inteira vira relatorio de gestao. MGMT e AI
+  // continuam vendo tudo porque a leitura deles e' justamente o agregado.
+  //
+  // Compara as tres colunas de dono, e nao so' gt_owner, para o dia em que a
+  // atribuicao de CS existir a tela ja' funcionar sem mudanca de codigo.
+  const veTudo = identity.role === "MGMT" || identity.role === "AI";
+  const meu = (row: any) =>
+    identity.person !== null &&
+    (row.gt_owner === identity.person || row.cs_owner === identity.person || row.designer_owner === identity.person);
+
+  let semAtribuicao = false;
+  if (!veTudo) {
+    const meus = rows.filter(meu);
+    // Zero atribuicao nao e' "nenhum cliente com problema": e' cadastro faltando.
+    // A tela precisa saber a diferenca para explicar em vez de mostrar vazio.
+    semAtribuicao = meus.length === 0;
+    rows = meus;
   }
 
   const ativos = rows.filter((row: any) => row.lifecycle === "ACTIVE" || row.lifecycle === "ONBOARDING");
@@ -140,7 +157,13 @@ Deno.serve(async (req: Request) => {
       satisfacao_media: media("external_satisfaction_avg"),
       risco_medio: media("external_risk_avg"),
     },
-    profile: { person: identity.person, role: identity.role, access_level: identity.accessLevel, scoped: identity.isWalletOnly },
+    profile: {
+      person: identity.person,
+      role: identity.role,
+      access_level: identity.accessLevel,
+      scoped: !veTudo,
+      sem_atribuicao: semAtribuicao,
+    },
     generated_at: new Date().toISOString(),
   });
 });

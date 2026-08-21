@@ -38,6 +38,8 @@ type Linha = {
   prioridade: number | string | null;
 };
 
+type Perfil = { person: string | null; role: string | null; scoped: boolean; sem_atribuicao: boolean };
+
 type Resumo = {
   total: number; ativos: number; risco_alto: number; insatisfeitos: number;
   sentimento_negativo: number; divergentes: number; sem_dado_externo: number;
@@ -77,6 +79,7 @@ function Barra({ valor, cor }: { valor: number | null; cor: string }) {
 export function HealthCenter({ token }: { token: string }) {
   const [linhas, setLinhas] = useState<Linha[]>([]);
   const [resumo, setResumo] = useState<Resumo | null>(null);
+  const [perfil, setPerfil] = useState<Perfil | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
   const [busca, setBusca] = useState("");
@@ -96,6 +99,7 @@ export function HealthCenter({ token }: { token: string }) {
       const corpo = await resposta.json();
       setLinhas(corpo.clients || []);
       setResumo(corpo.resumo || null);
+      setPerfil(corpo.profile || null);
     } catch (caught) {
       setErro(caught instanceof Error ? caught.message : "Falha ao carregar a saúde dos clientes");
     } finally {
@@ -125,7 +129,9 @@ export function HealthCenter({ token }: { token: string }) {
           <h2>Saúde dos clientes</h2>
           <p>Satisfação e risco de churn ao lado do score interno da operação. Onde as duas leituras discordam, a linha avisa.</p>
         </div>
-        <span className="counter">{visiveis.length} de {resumo?.ativos ?? 0} ativos</span>
+        <span className="counter">
+          {visiveis.length} de {resumo?.ativos ?? 0} ativos{perfil?.scoped ? " · sua carteira" : ""}
+        </span>
       </div>
 
       <div className="grid clickup-kpis">
@@ -148,6 +154,15 @@ export function HealthCenter({ token }: { token: string }) {
         </div>
 
         {erro && <div className="error-box">{erro}</div>}
+        {!erro && perfil?.sem_atribuicao && (
+          <div className="empty compact">
+            <b>Nenhum cliente atribuído a você ainda.</b>
+            <div className="small" style={{ marginTop: 4 }}>
+              Esta aba mostra só os seus clientes. Hoje a atribuição existe para GT (carteira);
+              para {perfil.role === "CS" ? "CS" : "este papel"} ela ainda não foi cadastrada — fale com o Adler.
+            </div>
+          </div>
+        )}
         {carregando && !linhas.length && <div className="empty compact">Carregando…</div>}
         {!carregando && !visiveis.length && !erro && <div className="empty compact">Nenhum cliente neste filtro.</div>}
 
