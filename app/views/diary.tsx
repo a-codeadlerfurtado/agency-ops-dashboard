@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { SUPABASE_ANON_KEY, SUPABASE_URL, formatDay, text } from "../shared";
+import { SUPABASE_URL, authenticatedFetch, formatDay, text } from "../shared";
 import type { Row } from "../shared";
 
 const DIARY_API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-diary-api`;
@@ -88,17 +88,13 @@ function tasklogYearStats(activity: Record<string, number>, year: number) {
   }
   return { total, activeDays, bestDay };
 }
-async function diaryRequest(view: string, token: string, options?: { method?: "GET" | "POST"; params?: Record<string, string>; body?: Row }) {
+async function diaryRequest(view: string, _token: string, options?: { method?: "GET" | "POST"; params?: Record<string, string>; body?: Row }) {
   const url = new URL(DIARY_API_URL);
   url.searchParams.set("view", view);
   for (const [key, value] of Object.entries(options?.params ?? {})) if (value) url.searchParams.set(key, value);
-  const response = await fetch(url.toString(), {
+  const response = await authenticatedFetch(url.toString(), {
     method: options?.method ?? "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      apikey: SUPABASE_ANON_KEY,
-      ...(options?.method === "POST" ? { "content-type": "application/json" } : {}),
-    },
+    headers: options?.method === "POST" ? { "content-type": "application/json" } : undefined,
     body: options?.method === "POST" ? JSON.stringify(options.body ?? {}) : undefined,
     cache: "no-store",
   });
