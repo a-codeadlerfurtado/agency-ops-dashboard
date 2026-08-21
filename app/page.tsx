@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { API_URL, CONTRACTS_API, SUPABASE_ANON_KEY, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
 import type { HomeData, Row, TeamMember, View } from "./shared";
 import { PortfolioCenter } from "./views/portfolio";
+import { DiaryCenter as StructuredDiaryCenter } from "./views/diary";
 // A aba de contratos entra por import dinamico de proposito: assim o codigo da
 // area privada so' e' baixado por quem o backend autorizou. Para os demais
 // colaboradores ele nem chega ao navegador.
@@ -360,7 +361,7 @@ export default function Dashboard() {
       {view === "health" && canSee("health") && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando saúde dos clientes…</div>}><HealthCenter token={session.access_token} /></Suspense>}
       {view === "opsperf" && canSee("opsperf") && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando desempenho...</div>}><OpsPerfCenter token={session.access_token} /></Suspense>}
       {view === "team" && canSee("team") && <TeamCenter team={data?.team || []} teamMembers={Number(kpis.team_members || 0)} unassigned={data?.unassigned_clients || []} openClient={openClient} />}
-      {view === "diary" && canSee("diary") && <DiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />}
+      {view === "diary" && canSee("diary") && <StructuredDiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />}
       {view === "clickup" && canSee("clickup") && <ClickUpCenter clickup={data?.clickup || {}} reload={load} token={session.access_token} />}
       {view === "evidence" && canSee("evidence") && <EvidenceCenter clients={allClients} operations={data?.operations || {}} openClient={openClient} />}
       {view === "audit" && canSee("audit") && <AuditCenter runs={data?.audit_runs || []} issues={data?.audit_issues || []} />}
