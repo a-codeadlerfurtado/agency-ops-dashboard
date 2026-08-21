@@ -1,8 +1,9 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const ENGINE_VERSION = 11;
-const VALIDATION_VERSION = "grounding-rich-context-v4.1";
+const ENGINE_VERSION = 12;
+const VALIDATION_VERSION = "grounding-rich-context-v4.2";
+const AI_BACKEND_TIMEOUT_MS = 130_000;
 const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
@@ -439,7 +440,7 @@ async function chamarOpenAI(key: string, model: string, contexto: any, excerpt: 
 
 async function chamarBackend(endpoint: string, secret: string, contexto: any, excerpt: string) {
   const prompt = `${SISTEMA}\n\nCONTEXTO VERIFICADO DO CLIENTE:\n${JSON.stringify(contexto)}\n\nMENSAGENS DO EVENTO ATUAL:\n${excerpt}`;
-  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 55_000);
+  const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), AI_BACKEND_TIMEOUT_MS);
   try {
     const r = await fetch(endpoint, { method: "POST", headers: { "content-type":"application/json", "x-ai-read-secret":secret }, body: JSON.stringify({
       question: prompt, original_question: "Gerar e rotear demandas operacionais com contexto rico", source: "TaskEngine",
@@ -458,7 +459,8 @@ Deno.serve(async (req) => {
   if (url.searchParams.get("health") === "1") return json({
     ok:true, service:"agency-ops-task-engine", version:ENGINE_VERSION, validation_version:VALIDATION_VERSION,
     naming:"[CLIENTE] - CATEGORIA - ACAO", campaign_adjustment_category:"Ajuste na campanha",
-    context:"whatsapp_full_corpus_search+notion+integrations+open_tasks", routing:"CLICKUP|CENTRAL|IGNORE"
+    context:"whatsapp_full_corpus_search+notion+integrations+open_tasks", routing:"CLICKUP|CENTRAL|IGNORE",
+    backend_timeout_ms:AI_BACKEND_TIMEOUT_MS
   });
 
   const cronSecret = await segredo("TASK_ENGINE_CRON_SECRET");
