@@ -1,0 +1,138 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { createClient, type Session } from "@supabase/supabase-js";
+
+const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
+const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
+const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-weekend-balance-api`;
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+type AlertRow = {
+  id: string;
+  slot_key: string;
+  client_id: string;
+  client_name: string;
+  min_balance: number | string;
+  checked_at: string;
+  low_accounts?: Array<{ account_key?: string; available_balance?: number | string }>;
+};
+type AlertBundle = { slot_key: string; alerts: AlertRow[] };
+
+function money(value: unknown) {
+  return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value || 0));
+}
+function time(value: unknown) {
+  if (!value) return "—";
+  return new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", hour: "2-digit", minute: "2-digit" }).format(new Date(String(value)));
+}
+function slotLabel(slotKey: string) {
+  const hhmm = slotKey.match(/-(\d{2})(\d{2})$/);
+  return hhmm ? `${hhmm[1]}:${hhmm[2]}` : "sexta-feira";
+}
+
+export default function WeekendBalanceAlert() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [eligible, setEligible] = useState<boolean | null>(null);
+  const [bundle, setBundle] = useState<AlertBundle | null>(null);
+  const [acking, setAcking] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => {
+      setSession(next);
+      setEligible(null);
+      if (!next) setBundle(null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const load = useCallback(async () => {
+    if (!session?.access_token) { setBundle(null); setEligible(null); return; }
+    try {
+      const response = await fetch(API_URL, {
+        headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },
+        cache: "no-store",
+      });
+      if (!response.ok) return;
+      const body = await response.json();
+      const canReceive = Boolean(body?.eligible);
+      setEligible(canReceive);
+      if (!canReceive || !body?.slot_key || !Array.isArray(body?.alerts) || !body.alerts.length) {
+        setBundle(null);
+        return;
+      }
+      setBundle({ slot_key: String(body.slot_key), alerts: body.alerts });
+    } catch {
+      // O aviso é complementar: falha de rede não derruba o dashboard.
+    }
+  }, [session?.access_token]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (!session?.access_token || eligible !== true) return;
+    const timer = window.setInterval(load, 15_000);
+    return () => window.clearInterval(timer);
+  }, [eligible, load, session?.access_token]);
+
+  const sorted = useMemo(() => [...(bundle?.alerts || [])].sort((a, b) => Number(a.min_balance) - Number(b.min_balance) || a.client_name.localeCompare(b.client_name, "pt-BR")), [bundle]);
+
+  const acknowledge = useCallback(async (openTraffic = false) => {
+    if (!bundle || !session?.access_token || acking) return;
+    setAcking(true);
+    try {
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY, "content-type": "application/json" },
+        body: JSON.stringify({ slot_key: bundle.slot_key }),
+      });
+      if (!response.ok) return;
+      setBundle(null);
+      if (openTraffic) window.location.assign("/campaigns");
+    } finally {
+      setAcking(false);
+    }
+  }, [acking, bundle, session?.access_token]);
+
+  if (!bundle || !sorted.length) return null;
+
+  return <div className="wba-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="wba-title" aria-describedby="wba-desc">
+    <style>{styles}</style>
+    <section className="wba-card">
+      <div className="wba-warning" aria-hidden="true">⚠</div>
+      <div className="wba-heading">
+        <span>SEXTA-FEIRA · {slotLabel(bundle.slot_key)} · SOMENTE SUA CARTEIRA</span>
+        <h2 id="wba-title">Saldo baixo para o fim de semana</h2>
+        <p id="wba-desc">Você tem <strong>{sorted.length} cliente{sorted.length === 1 ? "" : "s"}</strong> com campanha ativa e menos de <strong>R$ 100,00</strong> de saldo. Confira agora para evitar campanha parada durante o fim de semana.</p>
+      </div>
+
+      <div className="wba-list">
+        {sorted.map((alert) => <article key={alert.id}>
+          <div className="wba-client">
+            <b>{alert.client_name}</b>
+            <small>Saldo consultado às {time(alert.checked_at)}{(alert.low_accounts?.length || 0) > 1 ? ` · ${alert.low_accounts!.length} contas abaixo de R$ 100` : ""}</small>
+          </div>
+          <strong className={Number(alert.min_balance) <= 0 ? "zero" : ""}>{money(alert.min_balance)}</strong>
+        </article>)}
+      </div>
+
+      <div className="wba-footer">
+        <div><b>Antes de encerrar a sexta:</b><span>confira a recarga dos clientes acima.</span></div>
+        <div className="wba-actions">
+          <button className="secondary" disabled={acking} onClick={() => acknowledge(true)}>Abrir Central de Tráfego</button>
+          <button disabled={acking} onClick={() => acknowledge(false)}>{acking ? "Registrando…" : "Ciente — vou resolver"}</button>
+        </div>
+      </div>
+    </section>
+  </div>;
+}
+
+const styles = `
+.wba-backdrop{position:fixed;inset:0;z-index:2147483000;background:rgba(4,7,12,.94);backdrop-filter:blur(10px);display:grid;place-items:center;padding:24px;font-family:Inter,system-ui,sans-serif;color:#f7f9fc}
+.wba-card{width:min(920px,100%);max-height:min(88vh,900px);overflow:hidden;border:1px solid #5c4920;border-radius:22px;background:radial-gradient(circle at 15% 0,rgba(255,192,73,.16),transparent 35%),linear-gradient(145deg,#151208,#0b0f16 55%);box-shadow:0 35px 100px rgba(0,0,0,.58);padding:26px;display:grid;grid-template-columns:78px 1fr;gap:8px 18px}
+.wba-warning{grid-row:1/3;width:72px;height:72px;border-radius:18px;display:grid;place-items:center;background:#f5bd3e;color:#161109;font-size:46px;font-weight:900;box-shadow:0 0 0 8px rgba(245,189,62,.09)}
+.wba-heading span{display:block;color:#f5c85e;font-size:11px;font-weight:800;letter-spacing:.12em}.wba-heading h2{font-family:'Inter Tight',Inter,sans-serif;font-size:clamp(30px,5vw,50px);line-height:1;letter-spacing:-.04em;margin:7px 0 10px}.wba-heading p{margin:0;color:#c5cfdd;line-height:1.55;max-width:760px}.wba-heading p strong{color:#fff}
+.wba-list{grid-column:1/-1;margin-top:12px;border:1px solid #322b1d;border-radius:14px;background:rgba(5,8,13,.72);overflow:auto;max-height:42vh}.wba-list article{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:13px 15px;border-bottom:1px solid #26231b}.wba-list article:last-child{border-bottom:0}.wba-client{min-width:0}.wba-client b,.wba-client small{display:block}.wba-client b{font-size:14px}.wba-client small{margin-top:4px;color:#8796aa;font-size:11px}.wba-list article>strong{font-family:'Inter Tight',Inter,sans-serif;color:#ffd56e;font-size:20px;white-space:nowrap}.wba-list article>strong.zero{color:#ff7d87}
+.wba-footer{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:18px;padding-top:10px}.wba-footer>div:first-child b,.wba-footer>div:first-child span{display:block}.wba-footer>div:first-child b{font-size:12px}.wba-footer>div:first-child span{color:#8d9bae;font-size:11px;margin-top:3px}.wba-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.wba-actions button{border:1px solid #e0a92f;background:#f5bd3e;color:#171109;border-radius:11px;padding:11px 15px;font-weight:800;cursor:pointer}.wba-actions button.secondary{background:#151b25;color:#e6ebf2;border-color:#344155}.wba-actions button:disabled{opacity:.55;cursor:wait}
+@media(max-width:650px){.wba-backdrop{padding:10px}.wba-card{padding:18px;grid-template-columns:54px 1fr;border-radius:17px}.wba-warning{width:50px;height:50px;border-radius:13px;font-size:31px}.wba-heading h2{font-size:30px}.wba-footer{align-items:stretch;flex-direction:column}.wba-actions{display:grid;grid-template-columns:1fr}.wba-actions button{width:100%}.wba-list{max-height:46vh}}
+`;
