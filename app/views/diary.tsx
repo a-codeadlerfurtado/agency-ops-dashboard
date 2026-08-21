@@ -38,24 +38,12 @@ function formatOpsDateTime(value: unknown) {
     timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short",
   }).format(new Date(String(value)));
 }
-function tasklogDateKey(value: unknown) {
-  const key = String(value ?? "").slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(key) ? key : "";
-}
 function tasklogLevelColor(count: number) {
   if (count <= 0) return "rgba(255,255,255,.06)";
   if (count === 1) return "#0e4429";
   if (count <= 3) return "#006d32";
   if (count <= 6) return "#26a641";
   return "#39d353";
-}
-function buildTasklogActivity(rows: Row[]) {
-  const activity: Record<string, number> = {};
-  for (const row of rows) {
-    const key = tasklogDateKey(row.task_date);
-    if (key) activity[key] = (activity[key] || 0) + 1;
-  }
-  return activity;
 }
 function buildTasklogWeeks(activity: Record<string, number>, year: number) {
   const first = new Date(Date.UTC(year, 0, 1));
@@ -123,8 +111,10 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
   const [tab, setTab] = useState<"ajustes" | "tasklog">("ajustes");
   const [scope, setScope] = useState<"mine" | "all">("mine");
   const [data, setData] = useState<Row | null>(null);
+  const [selfPerformance, setSelfPerformance] = useState<Row | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [performanceError, setPerformanceError] = useState("");
   const [helpOpen, setHelpOpen] = useState(false);
   const [filters, setFilters] = useState({ author_user_id: "", client_id: "", category_code: "", subcategory_code: "", responsible_area: "", status: "", since: "", until: "" });
 
@@ -133,7 +123,15 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
     try {
       const params: Record<string, string> = { scope };
       if (scope === "all") Object.assign(params, Object.fromEntries(Object.entries(filters).filter(([, value]) => value)));
-      setData(await diaryRequest("data", token, { params }));
+      const diaryData = await diaryRequest("data", token, { params });
+      setData(diaryData);
+      try {
+        const performanceData = await diaryRequest("self-performance", token);
+        setSelfPerformance(performanceData);
+        setPerformanceError("");
+      } catch (error) {
+        setPerformanceError(error instanceof Error ? error.message : "Falha ao carregar o desempenho pessoal");
+      }
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "Falha ao carregar o Diário");
     } finally { setLoading(false); }
@@ -152,15 +150,21 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
   const counts = data?.counts || { adjustments: adjustments.length, tasks: taskRows.length };
   const currentCalendarYear = Number(opsDateTimeInput().slice(0, 4));
   const [taskCalendarYear, setTaskCalendarYear] = useState(currentCalendarYear);
-  const taskActivity = useMemo(() => scope === "mine" ? buildTasklogActivity(taskRows) : {}, [taskRows, scope]);
+  const taskActivity: Record<string, number> = useMemo(() => selfPerformance?.activity || {}, [selfPerformance]);
   const taskCalendarYears = useMemo(() => {
     const years = new Set<number>([currentCalendarYear]);
+    if (Array.isArray(selfPerformance?.years)) {
+      selfPerformance.years.forEach((value: unknown) => {
+        const year = Number(value);
+        if (Number.isFinite(year)) years.add(year);
+      });
+    }
     Object.keys(taskActivity).forEach((date) => {
       const year = Number(date.slice(0, 4));
       if (Number.isFinite(year)) years.add(year);
     });
     return Array.from(years).sort((a, b) => b - a);
-  }, [taskActivity, currentCalendarYear]);
+  }, [selfPerformance, taskActivity, currentCalendarYear]);
   const taskCalendarWeeks = useMemo(() => buildTasklogWeeks(taskActivity, taskCalendarYear), [taskActivity, taskCalendarYear]);
   const taskCalendarStats = useMemo(() => tasklogYearStats(taskActivity, taskCalendarYear), [taskActivity, taskCalendarYear]);
   const taskCurrentStreak = useMemo(() => tasklogCurrentStreak(taskActivity), [taskActivity]);
@@ -347,15 +351,17 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", flexWrap: "wrap" }}>
           <div>
             <div className="section-title">Calendário anual</div>
-            <p className="small" style={{ margin: "4px 0 0" }}>Seu desempenho no TaskLog. Cada quadrado representa um dia e fica mais intenso conforme aumenta a quantidade de tarefas registradas.</p>
+            <p className="small" style={{ margin: "4px 0 0" }}>Seu desempenho pessoal. O calendário considera tarefas concluídas no ClickUp, tarefas registradas no TaskLog e ajustes do Diário.</p>
           </div>
           <select className="control" aria-label="Ano do calendário do TaskLog" value={taskCalendarYear} onChange={(e) => setTaskCalendarYear(Number(e.target.value))} style={{ minWidth: 94 }}>
             {taskCalendarYears.map((year) => <option key={year} value={year}>{year}</option>)}
           </select>
         </div>
 
+        {performanceError && <div className="error-box" style={{ marginTop: 10 }}>Não foi possível atualizar o calendário: {performanceError}</div>}
+
         <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginTop: 14 }}>
-          <div><strong style={{ display: "block", fontSize: 20 }}>{taskCalendarStats.total}</strong><small>tarefas no ano</small></div>
+          <div><strong style={{ display: "block", fontSize: 20 }}>{taskCalendarStats.total}</strong><small>atividades no ano</small></div>
           <div><strong style={{ display: "block", fontSize: 20 }}>{taskCalendarStats.activeDays}</strong><small>dias com atividade</small></div>
           <div><strong style={{ display: "block", fontSize: 20 }}>{taskCurrentStreak}</strong><small>dias na sequência atual</small></div>
           <div><strong style={{ display: "block", fontSize: 20 }}>{taskCalendarStats.bestDay}</strong><small>maior volume em um dia</small></div>
@@ -368,7 +374,7 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
             </div>
             <div style={{ display: "flex", gap: 3 }}>
               {taskCalendarWeeks.map((week, weekIndex) => <div key={weekIndex} style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-                {week.map((day) => <div key={day.date} title={day.inYear ? `${day.date}: ${day.count} ${day.count === 1 ? "tarefa" : "tarefas"}` : ""} style={{ width: 10, height: 10, borderRadius: 2, background: day.inYear ? tasklogLevelColor(day.count) : "transparent" }} />)}
+                {week.map((day) => <div key={day.date} title={day.inYear ? `${day.date}: ${day.count} ${day.count === 1 ? "atividade" : "atividades"}` : ""} style={{ width: 10, height: 10, borderRadius: 2, background: day.inYear ? tasklogLevelColor(day.count) : "transparent" }} />)}
               </div>)}
             </div>
           </div>
