@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
@@ -16,52 +16,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Apply ClickUp metric legibility patch
-        if: github.event_name == 'pull_request'
-        shell: python
-        run: |
-          from pathlib import Path
-          p = Path('app/page.tsx')
-          s = p.read_text()
-          if 'Sem atraso registrado' in s and 'tarefas vinculadas' in s:
-              print('Patch already applied')
-              raise SystemExit(0)
-          pairs = [
-            ('''      <span key={dateKey}>\n        <b>{row ? row.tasks_done : 0}</b>\n        {label}\n      </span>''', '''      <span key={dateKey}>\n        <b>{formatNumber(row ? row.tasks_done : 0, 0)} tarefas</b>\n        {label}\n      </span>'''),
-            ('''      <div className="section-title">Produtividade por periodo</div>''', '''      <div className="section-title">Produtividade por periodo</div>\n      <div className="small">Critério de prazo atual: tarefas sem prazo cadastrado contam como sem atraso.</div>'''),
-            ('''          {(rangeData.summary ?? []).map((row: any) => (\n            <div className="productivity-row" key={row.user_id}>\n              <div>\n                <b>{row.person}</b>\n                <small>{row.tasks_done} tasks - ciclo medio {row.avg_cycle_hours ?? "-"}h</small>\n              </div>\n              <strong>{row.completed_on_time}/{row.completed_on_time + row.completed_late}</strong>\n            </div>\n          ))}''', '''          {(rangeData.summary ?? []).map((row: any) => {\n            const totalConsiderado = Number(row.completed_on_time ?? 0) + Number(row.completed_late ?? 0);\n            const semAtrasoPct = totalConsiderado > 0 ? (100 * Number(row.completed_on_time ?? 0)) / totalConsiderado : null;\n            return (\n              <div className="productivity-row" key={row.user_id}>\n                <div>\n                  <b>{row.person}</b>\n                  <small>{formatNumber(row.tasks_done, 0)} tarefas concluídas · {row.avg_cycle_hours == null ? "Ciclo médio não disponível" : `Ciclo médio ${formatNumber(row.avg_cycle_hours)}h`}</small>\n                </div>\n                <div title="Critério atual: tarefas concluídas até o prazo e tarefas sem prazo cadastrado contam como sem atraso; atraso é conclusão após a data limite do ClickUp." style={{ textAlign: "right" }}>\n                  <small style={{ display: "block" }}>Sem atraso registrado</small>\n                  <strong style={{ display: "block" }}>{formatNumber(row.completed_on_time, 0)} / {formatNumber(totalConsiderado, 0)} tarefas</strong>\n                  <small style={{ display: "block" }}>{semAtrasoPct == null ? "Percentual não disponível" : `${formatNumber(semAtrasoPct, 1)}% sem atraso`}</small>\n                </div>\n              </div>\n            );\n          })}'''),
-            ('''      <Metric label="Concluídas registradas" value={formatNumber(clickup.total_completed)} tone="green" hint="desde janeiro de 2026"/>\n      <Metric label="Indexadas por cliente" value={indexing.matched == null ? "—" : `${formatNumber(indexing.matched)} · ${formatNumber(indexing.match_rate)}%`} tone="blue" hint={indexing.unmatched_label == null ? "acesso restrito" : `${formatNumber(indexing.unmatched_label)} rótulos pendentes`}/>\n      <Metric label="Pessoas com entregas" value={formatNumber(productivity.length)} tone="blue" hint="últimos 30 dias"/>\n      <Metric label="Última sincronização" value={clickup.last_sync ? text(clickup.last_sync.status) : "—"} tone={clickup.last_sync?.status === "SUCCESS" ? "green" : "yellow"} hint={formatDate(clickup.last_sync?.finished_at || clickup.last_sync?.started_at)}/>''', '''      <Metric label="Concluídas registradas" value={`${formatNumber(clickup.total_completed, 0)} tarefas`} tone="green" hint="desde janeiro de 2026"/>\n      <Metric label="Indexadas por cliente" value={indexing.matched == null ? "Acesso restrito" : `${formatNumber(indexing.matched, 0)} tarefas vinculadas`} tone="blue" hint={indexing.unmatched_label == null ? "Disponível apenas para perfis com visão global do ClickUp" : `${formatNumber(indexing.unmatched_label, 0)} com rótulo sem correspondência · ${formatNumber(indexing.without_label || 0, 0)} sem rótulo`}/>\n      <Metric label="Pessoas com entregas" value={`${formatNumber(productivity.length, 0)} pessoas`} tone="blue" hint="últimos 30 dias"/>\n      <Metric label="Última sincronização" value={clickup.last_sync ? (pt[text(clickup.last_sync.status)] || text(clickup.last_sync.status)) : "Sem sincronização"} tone={clickup.last_sync?.status === "SUCCESS" ? "green" : "yellow"} hint={clickup.last_sync ? formatDate(clickup.last_sync.finished_at || clickup.last_sync.started_at) : "Nenhuma execução registrada"}/>'''),
-            ('''<small>{formatNumber(row.tracked_hours)}h registradas · {row.on_time_pct == null ? "SLA sem base" : `${formatNumber(row.on_time_pct)}% no prazo`}</small></div><strong>{formatNumber(row.tasks_done)}</strong>''', '''<small title="Critério atual: tarefas sem prazo cadastrado também contam como sem atraso.">{formatNumber(row.tracked_hours)} horas registradas · {row.on_time_pct == null ? "Sem base para indicador de prazo" : `${formatNumber(row.on_time_pct)}% sem atraso registrado`}</small></div><strong>{formatNumber(row.tasks_done, 0)} tarefas</strong>'''),
-            ('''<strong>{formatNumber(row.task_count)}</strong></div>)}</section>}''', '''<strong>{formatNumber(row.task_count, 0)} tarefas</strong></div>)}</section>}'''),
-          ]
-          for old,new in pairs:
-              n=s.count(old)
-              if n != 1:
-                  raise SystemExit(f'anchor count={n}: {old[:100]}')
-              s=s.replace(old,new,1)
-          p.write_text(s)
       - name: Install dependencies
         run: npm ci
       - name: Typecheck
         run: npm run typecheck
       - name: Build
         run: npm run build
-      - name: Commit validated app patch
-        if: github.event_name == 'pull_request'
-        run: |
-          if git diff --quiet -- app/page.tsx; then
-            echo "No app patch to commit"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/page.tsx
-          git commit -m "Clarify ClickUp productivity metrics"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
