@@ -4,6 +4,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import type { Session } from "@supabase/supabase-js";
 import { API_URL, CONTRACTS_API, SUPABASE_ANON_KEY, SUPABASE_URL, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
 import type { HomeData, Row, TeamMember, View } from "./shared";
+import { TabHelp } from "./tab-help";
 import { PortfolioCenter } from "./views/portfolio";
 import { DiaryCenter as StructuredDiaryCenter } from "./views/diary";
 // A aba de contratos entra por import dinamico de proposito: assim o codigo da
@@ -323,6 +324,7 @@ export default function Dashboard() {
   return (
 <>
     <main className={`shell ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
+      <TabHelp view={view} profile={data?.profile || {}} />
       <header className="top">
         <div className="brand">
           <div className="logo"><BrandMark /></div>
