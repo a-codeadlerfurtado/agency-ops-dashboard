@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
@@ -16,52 +16,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Fix Diary operation timezone rendering
-        if: github.event_name == 'pull_request'
-        shell: python
-        run: |
-          from pathlib import Path
-          p = Path('app/views/diary.tsx')
-          s = p.read_text()
-          s = s.replace('import { SUPABASE_ANON_KEY, SUPABASE_URL, formatDate, text } from "../shared";', 'import { SUPABASE_ANON_KEY, SUPABASE_URL, formatDay, text } from "../shared";')
-          anchor = '''function toOpsTimestamp(value: string) {
-            if (!/^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}$/.test(value)) return "";
-            return `${value}:00-03:00`;
-          }'''
-          addition = anchor + '''
-          function formatOpsDateTime(value: unknown) {
-            if (!value) return "sem registro";
-            return new Intl.DateTimeFormat("pt-BR", {
-              timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short",
-            }).format(new Date(String(value)));
-          }'''
-          if 'function formatOpsDateTime' not in s:
-            if s.count(anchor) != 1: raise SystemExit(f'timestamp helper anchor count={s.count(anchor)}')
-            s = s.replace(anchor, addition, 1)
-          s = s.replace('formatDate(entry.occurred_at)', 'formatOpsDateTime(entry.occurred_at)')
-          s = s.replace('formatDate(entry.created_at)', 'formatOpsDateTime(entry.created_at)')
-          s = s.replace('formatDate(entry.task_date)', 'formatDay(entry.task_date)')
-          if 'formatDate(' in s: raise SystemExit('unexpected formatDate remains in Diary')
-          p.write_text(s)
       - name: Install dependencies
         run: npm ci
       - name: Typecheck
         run: npm run typecheck
       - name: Build
         run: npm run build
-      - name: Commit validated timezone patch
-        if: github.event_name == 'pull_request'
-        run: |
-          if git diff --quiet -- app/views/diary.tsx; then exit 0; fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/views/diary.tsx
-          git commit -m "Render Diary dates in operation timezone"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
