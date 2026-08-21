@@ -35,8 +35,8 @@ jobs:
           if import_line not in s:
               if s.count(import_anchor) != 1: raise SystemExit('portfolio import anchor not unique')
               s = s.replace(import_anchor, import_anchor + '\n' + import_line, 1)
-          call_anchor = '<DiaryCenter clients={data.clients} adjustments={data.adjustments || []} taskLog={data.operations?.task_log || {}} profile={data.profile || {}} token={session!.access_token} reload={load} />'
-          call_new = '<StructuredDiaryCenter clients={data.clients} adjustments={data.adjustments || []} taskLog={data.operations?.task_log || {}} profile={data.profile || {}} token={session!.access_token} reload={load} />'
+          call_anchor = '<DiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />'
+          call_new = '<StructuredDiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />'
           if call_new not in s:
               if s.count(call_anchor) != 1: raise SystemExit(f'diary call anchor count={s.count(call_anchor)}')
               s = s.replace(call_anchor, call_new, 1)
