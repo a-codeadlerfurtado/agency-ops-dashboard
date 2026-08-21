@@ -223,6 +223,7 @@ export default function Dashboard() {
   }, [theme]);
 
   const isDesignRestricted = data?.profile?.role === "DESIGN";
+  const isGtPortfolio = data?.profile?.role === "GT" && !data?.profile?.elevated;
   const clients = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("pt-BR");
     if (isDesignRestricted) {
@@ -297,8 +298,8 @@ export default function Dashboard() {
           <div className="logo"><BrandMark /></div>
           <div>
             <span className="brand-name">Leonardo Imobi</span>
-            <h1>Central de Operações</h1>
-            <div className="subtitle">Clientes, onboarding, WhatsApp e mídia em um só lugar</div>
+            <h1>{isGtPortfolio ? "Central do Gestor de Tráfego" : "Central de Operações"}</h1>
+            <div className="subtitle">{isGtPortfolio ? `Sua carteira, campanhas e próximas ações em um só lugar${data?.profile?.carteira ? ` · Carteira ${data.profile.carteira}` : ""}` : "Clientes, onboarding, WhatsApp e mídia em um só lugar"}</div>
           </div>
         </div>
         <div className="live">
@@ -358,7 +359,8 @@ export default function Dashboard() {
       {view === "contracts" && contractsAllowed && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando contratos…</div>}><ContractsCenter token={session.access_token} /></Suspense>}
       {view === "alerts" && canSee("alerts") && <AlertCenter alerts={data?.alerts || []} clients={allClients} openClient={openClient} />}
 
-      {view === "overview" && <><SmartSearch question={opsQuestion} setQuestion={setOpsQuestion} clients={allClients} conversations={data?.conversations || []} commitments={data?.commitments || []} openClient={openClient} />
+      {view === "overview" && <>{isGtPortfolio && <GtPortfolioOverview profile={data?.profile || {}} clients={activeClients} campaigns={filteredCampaigns} alerts={data?.alerts || []} commitments={data?.commitments || []} conversations={data?.conversations || []} openClient={openClient} setView={setView} />}
+      <SmartSearch question={opsQuestion} setQuestion={setOpsQuestion} clients={allClients} conversations={data?.conversations || []} commitments={data?.commitments || []} openClient={openClient} />
       <AttentionCenter clients={activeClients} operations={data?.operations || {}} preclients={data?.preclients || []} />
       <ExecutiveBrief ready={!!data} clients={activeClients} onboardingGroups={onboardingGroups} stageLabels={data?.stage_labels || {}} openClient={openClient} />
       <section className="card section media-section">
@@ -440,6 +442,27 @@ export default function Dashboard() {
       {session?.access_token && <AIAskWidget token={session.access_token} />}
 </>
   );
+}
+
+function GtPortfolioOverview({ profile, clients, campaigns, alerts, commitments, conversations, openClient, setView }: { profile: Row; clients: Row[]; campaigns: Row[]; alerts: Row[]; commitments: Row[]; conversations: Row[]; openClient: (id: string) => void; setView: (view: View) => void }) {
+  const now = Date.now();
+  const action = clients.filter((client) => ["ATTENTION", "FOLLOW_UP", "DATA_INCOMPLETE"].includes(text(client.priority)) || Boolean(client.next_step));
+  const critical = alerts.filter((alert) => ["CRITICAL", "HIGH"].includes(text(alert.severity)));
+  const overdue = commitments.filter((item) => item.due_at && new Date(item.due_at).getTime() < now);
+  const waiting = conversations.filter((item) => item.waiting_for_agency || item.conversation_status === "WAITING_AGENCY");
+  const stale = campaigns.filter((campaign) => campaign.is_stale);
+  const priorities = [...clients].sort((a, b) => (priorityRank[a.priority] ?? 9) - (priorityRank[b.priority] ?? 9)).slice(0, 6);
+  return <section className="gt-home" aria-label="Minha carteira hoje">
+    <div className="gt-home-head"><div><span className="eyebrow">Minha carteira hoje</span><h2>{text(profile.person || "Gestor")}</h2><p>{profile.carteira ? `Carteira ${text(profile.carteira)} · ` : ""}{clients.length} clientes ativos e em onboarding. Todos os dados abaixo já estão limitados à sua carteira.</p></div><span className="gt-scope-lock">Escopo protegido</span></div>
+    <div className="gt-action-grid">
+      <button onClick={() => setView("focus")}><strong>{action.length}</strong><span>ações e acompanhamentos</span><small>Abrir Foco do dia</small></button>
+      <button onClick={() => setView("alerts")}><strong>{critical.length}</strong><span>alertas críticos ou altos</span><small>Revisar alertas</small></button>
+      <button onClick={() => setView("campaigns")}><strong>{stale.length}</strong><span>contas com mídia desatualizada</span><small>Abrir campanhas</small></button>
+      <button onClick={() => setView("conversations")}><strong>{waiting.length}</strong><span>conversas aguardando agência</span><small>Ver conversas</small></button>
+      <button onClick={() => setView("focus")}><strong>{overdue.length}</strong><span>compromissos vencidos</span><small>Resolver pendências</small></button>
+    </div>
+    <div className="gt-priority-list"><div className="section-head"><div><div className="section-title">Prioridades da carteira</div><div className="subtitle">Ordenadas pelo que exige ação primeiro</div></div><button className="btn" onClick={() => setView("clients")}>Ver carteira completa</button></div>{priorities.map((client) => <button key={client.client_id} onClick={() => openClient(String(client.client_id))}><span><b>{text(client.display_name)}</b><small>{text(client.next_step || client.current_subject || "Sem próxima ação registrada")}</small></span><Chip value={client.priority} /></button>)}{!priorities.length && <div className="empty">Nenhuma prioridade pendente na sua carteira.</div>}</div>
+  </section>;
 }
 
 function AIAskWidget({ token }: { token: string }) {
