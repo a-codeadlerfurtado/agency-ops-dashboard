@@ -41,7 +41,10 @@ export async function buildClientContext(client: ClientRow | null) {
 
 /**
  * Evidencia operacional do OpsQuestion, usada como fonte interna adicional.
- * Falha silenciosa de proposito: o chat nao pode cair porque o fallback caiu.
+ *
+ * Ela e' AUXILIAR, nao pode bloquear o chat principal. As perguntas reconhecidas
+ * pelo fast-path do OpsQuestion respondem rapidamente; se a rota precisar iniciar
+ * outra investigacao longa, o chat segue sem esperar duas IAs em sequencia.
  */
 export async function operationalEvidence(
   supabaseUrl: string,
@@ -50,7 +53,7 @@ export async function operationalEvidence(
   question: string,
 ): Promise<string | null> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 20_000);
+  const timer = setTimeout(() => controller.abort(), 6_000);
   try {
     const response = await fetch(`${supabaseUrl}/functions/v1/agency-ops-ai-ask`, {
       method: "POST",
