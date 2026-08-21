@@ -1148,7 +1148,7 @@ function ClickUpRangeExplorer({ token, people }: { token: string; people: string
     const row: any = byDate.get(dateKey);
     return (
       <span key={dateKey}>
-        <b>{row ? row.tasks_done : 0}</b>
+        <b>{formatNumber(row ? row.tasks_done : 0, 0)} tarefas</b>
         {label}
       </span>
     );
@@ -1157,6 +1157,7 @@ function ClickUpRangeExplorer({ token, people }: { token: string; people: string
   return (
     <section className="card section">
       <div className="section-title">Produtividade por periodo</div>
+      <div className="small">Critério de prazo atual: tarefas sem prazo cadastrado contam como sem atraso.</div>
       <div className="filter-tabs">
         {presets.map((p) => (
           <button key={p.key} type="button" className={preset === p.key ? "active" : ""} onClick={() => setPreset(p.key)}>
@@ -1191,15 +1192,23 @@ function ClickUpRangeExplorer({ token, people }: { token: string; people: string
       {rangeLoading && <div className="empty">Carregando...</div>}
       {!rangeLoading && rangeData && (
         <div>
-          {(rangeData.summary ?? []).map((row: any) => (
-            <div className="productivity-row" key={row.user_id}>
-              <div>
-                <b>{row.person}</b>
-                <small>{row.tasks_done} tasks - ciclo medio {row.avg_cycle_hours ?? "-"}h</small>
+          {(rangeData.summary ?? []).map((row: any) => {
+            const totalConsiderado = Number(row.completed_on_time ?? 0) + Number(row.completed_late ?? 0);
+            const semAtrasoPct = totalConsiderado > 0 ? (100 * Number(row.completed_on_time ?? 0)) / totalConsiderado : null;
+            return (
+              <div className="productivity-row" key={row.user_id}>
+                <div>
+                  <b>{row.person}</b>
+                  <small>{formatNumber(row.tasks_done, 0)} tarefas concluídas · {row.avg_cycle_hours == null ? "Ciclo médio não disponível" : `Ciclo médio ${formatNumber(row.avg_cycle_hours)}h`}</small>
+                </div>
+                <div title="Critério atual: tarefas concluídas até o prazo e tarefas sem prazo cadastrado contam como sem atraso; atraso é conclusão após a data limite do ClickUp." style={{ textAlign: "right" }}>
+                  <small style={{ display: "block" }}>Sem atraso registrado</small>
+                  <strong style={{ display: "block" }}>{formatNumber(row.completed_on_time, 0)} / {formatNumber(totalConsiderado, 0)} tarefas</strong>
+                  <small style={{ display: "block" }}>{semAtrasoPct == null ? "Percentual não disponível" : `${formatNumber(semAtrasoPct, 1)}% sem atraso`}</small>
+                </div>
               </div>
-              <strong>{row.completed_on_time}/{row.completed_on_time + row.completed_late}</strong>
-            </div>
-          ))}
+            );
+          })}
           {!(rangeData.summary ?? []).length && <div className="empty">Sem dados no periodo selecionado.</div>}
         </div>
       )}
@@ -1381,18 +1390,18 @@ function ClickUpCenter({ clickup, reload, token }: { clickup: Row; reload: () =>
     <div className="workspace-head"><div><h2>Produtividade no ClickUp</h2><p>Tarefas finalizadas são espelhadas no Supabase; a execução continua no ClickUp.</p></div><div className="clickup-actions"><Chip value={connected ? "CONECTADO" : "AGUARDANDO TOKEN"}/>{collaborators.length > 0 && <select className="control" value={collabFilter} onChange={(event) => setCollabFilter(event.target.value)}><option value="ALL">Todos os colaboradores</option>{collaborators.map((name) => <option key={name} value={name}>{name}</option>)}</select>}{clickup.configured && !clickup.webhook_configured && <button disabled={Boolean(busy)} onClick={() => run("register")}>{busy === "register" ? "Ativando…" : "Ativar tempo real"}</button>}{clickup.configured && <button disabled={Boolean(busy)} onClick={() => run("sync")}>{busy === "sync" ? "Importando…" : "Atualizar dados"}</button>}</div></div>
     {message && <div className="action-message">{message}</div>}
     <div className="grid clickup-kpis">
-      <Metric label="Concluídas registradas" value={formatNumber(clickup.total_completed)} tone="green" hint="desde janeiro de 2026"/>
-      <Metric label="Indexadas por cliente" value={indexing.matched == null ? "—" : `${formatNumber(indexing.matched)} · ${formatNumber(indexing.match_rate)}%`} tone="blue" hint={indexing.unmatched_label == null ? "acesso restrito" : `${formatNumber(indexing.unmatched_label)} rótulos pendentes`}/>
-      <Metric label="Pessoas com entregas" value={formatNumber(productivity.length)} tone="blue" hint="últimos 30 dias"/>
-      <Metric label="Última sincronização" value={clickup.last_sync ? text(clickup.last_sync.status) : "—"} tone={clickup.last_sync?.status === "SUCCESS" ? "green" : "yellow"} hint={formatDate(clickup.last_sync?.finished_at || clickup.last_sync?.started_at)}/>
+      <Metric label="Concluídas registradas" value={`${formatNumber(clickup.total_completed, 0)} tarefas`} tone="green" hint="desde janeiro de 2026"/>
+      <Metric label="Indexadas por cliente" value={indexing.matched == null ? "Acesso restrito" : `${formatNumber(indexing.matched, 0)} tarefas vinculadas`} tone="blue" hint={indexing.unmatched_label == null ? "Disponível apenas para perfis com visão global do ClickUp" : `${formatNumber(indexing.unmatched_label, 0)} com rótulo sem correspondência · ${formatNumber(indexing.without_label || 0, 0)} sem rótulo`}/>
+      <Metric label="Pessoas com entregas" value={`${formatNumber(productivity.length, 0)} pessoas`} tone="blue" hint="últimos 30 dias"/>
+      <Metric label="Última sincronização" value={clickup.last_sync ? (pt[text(clickup.last_sync.status)] || text(clickup.last_sync.status)) : "Sem sincronização"} tone={clickup.last_sync?.status === "SUCCESS" ? "green" : "yellow"} hint={clickup.last_sync ? formatDate(clickup.last_sync.finished_at || clickup.last_sync.started_at) : "Nenhuma execução registrada"}/>
     </div>
     {!connected && <div className="connection-note"><b>A ponte e o banco já estão prontos.</b><p>Falta configurar o token da API e o ID do Workspace ClickUp. O segredo do webhook será criado e guardado automaticamente ao ativar o tempo real.</p></div>}
     <ClickUpRangeExplorer token={token} people={(clickup.productivity_30d ?? []).map((r: any) => r.person)} />
     <div className="grid clickup-split">
-      <section className="card section"><div className="section-title">Produção por pessoa · 30 dias{collabFilter !== "ALL" && ` · ${collabFilter}`}</div>{filteredProductivity.map((row: Row, index: number) => <div className="productivity-row" key={row.user_id}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>{text(row.person)}</b><small>{formatNumber(row.tracked_hours)}h registradas · {row.on_time_pct == null ? "SLA sem base" : `${formatNumber(row.on_time_pct)}% no prazo`}</small></div><strong>{formatNumber(row.tasks_done)}</strong></div>)}{!filteredProductivity.length && <div className="empty">{productivity.length ? "Nenhum resultado para esse colaborador." : "Os indicadores aparecerão após a primeira sincronização."}</div>}</section>
+      <section className="card section"><div className="section-title">Produção por pessoa · 30 dias{collabFilter !== "ALL" && ` · ${collabFilter}`}</div>{filteredProductivity.map((row: Row, index: number) => <div className="productivity-row" key={row.user_id}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>{text(row.person)}</b><small title="Critério atual: tarefas sem prazo cadastrado também contam como sem atraso.">{formatNumber(row.tracked_hours)} horas registradas · {row.on_time_pct == null ? "Sem base para indicador de prazo" : `${formatNumber(row.on_time_pct)}% sem atraso registrado`}</small></div><strong>{formatNumber(row.tasks_done, 0)} tarefas</strong></div>)}{!filteredProductivity.length && <div className="empty">{productivity.length ? "Nenhum resultado para esse colaborador." : "Os indicadores aparecerão após a primeira sincronização."}</div>}</section>
       <section className="card section"><div className="section-title">Últimas tarefas concluídas{collabFilter !== "ALL" && ` · ${collabFilter}`}</div><div className="table-wrap"><table className="completed-table"><thead><tr><th scope="col">Tarefa</th><th scope="col">Colaborador</th><th scope="col">Lista e conclusão</th><th scope="col">Status</th></tr></thead><tbody>{filteredRecent.slice(0,20).map((task: Row) => { const assignees = Array.isArray(task.clickup_task_assignees) ? task.clickup_task_assignees : []; const collaboratorsLabel = assignees.map((person: Row) => person.username || person.email).filter(Boolean).join(", ") || "Não atribuído"; return <tr key={task.task_id}><td><a href={task.url || undefined} target="_blank" rel="noreferrer"><b>{text(task.name)}</b></a></td><td>{collaboratorsLabel}</td><td>{text(task.list_name)}<div className="small">{formatDate(task.date_closed)}</div></td><td><Chip value={task.status}/></td></tr>; })}{!filteredRecent.length && <tr><td colSpan={4} className="empty">{recent.length ? "Nenhuma tarefa desse colaborador." : "Nenhuma tarefa importada ainda."}</td></tr>}</tbody></table></div></section>
     </div>
-    {unmatchedLabels.length > 0 && <section className="card section"><div className="section-title">Rótulos sem correspondência na base de clientes</div>{unmatchedLabels.slice(0,20).map((row: Row, index: number) => <div className="productivity-row" key={`${row.client_label}-${index}`}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>[{text(row.client_label)}]</b><small>Requer cliente cadastrado ou confirmação de equivalência</small></div><strong>{formatNumber(row.task_count)}</strong></div>)}</section>}
+    {unmatchedLabels.length > 0 && <section className="card section"><div className="section-title">Rótulos sem correspondência na base de clientes</div>{unmatchedLabels.slice(0,20).map((row: Row, index: number) => <div className="productivity-row" key={`${row.client_label}-${index}`}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>[{text(row.client_label)}]</b><small>Requer cliente cadastrado ou confirmação de equivalência</small></div><strong>{formatNumber(row.task_count, 0)} tarefas</strong></div>)}</section>}
   </section>;
 }
 
