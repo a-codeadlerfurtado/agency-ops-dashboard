@@ -1,4 +1,6 @@
+import type { Viewport } from "next";
 import "./globals.css";
+import "./mobile.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -7,6 +9,12 @@ import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
