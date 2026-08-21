@@ -21,6 +21,33 @@ export const WORK_ITEM_CREATE_API = `${SUPABASE_URL}/functions/v1/agency-ops-wor
 export const AI_API_BASE = "/api/ai";
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// O dashboard aceita a mesma conta em mais de um computador. O logout padrao do
+// Supabase pode revogar outras sessoes; aqui qualquer signOut() sem escopo passa a
+// encerrar somente esta sessao/browser. Chamadas que precisem explicitamente de outro
+// escopo ainda podem informa-lo normalmente.
+const rawSignOut = supabase.auth.signOut.bind(supabase.auth);
+supabase.auth.signOut = ((options?: Parameters<typeof rawSignOut>[0]) => rawSignOut(options ?? { scope: "local" })) as typeof supabase.auth.signOut;
+
+// Identificador persistente por navegador/perfil. Nao e fingerprint e nao tenta
+// identificar hardware: serve somente para diferenciar dois PCs/navegadores usando a
+// mesma conta. Vai em todas as chamadas autenticadas para auditoria futura no backend.
+const DEVICE_ID_KEY = "agency-ops-device-id";
+export function deviceId() {
+  if (typeof window === "undefined") return "server";
+  try {
+    let value = window.localStorage.getItem(DEVICE_ID_KEY);
+    if (!value) {
+      value = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `dev-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+      window.localStorage.setItem(DEVICE_ID_KEY, value);
+    }
+    return value;
+  } catch {
+    return "browser-no-storage";
+  }
+}
+
 export type Row = Record<string, any>;
 export type TeamMember = {
   person: string;
@@ -226,6 +253,7 @@ function authHeaders(init: RequestInit, token: string) {
   const headers = new Headers(init.headers || {});
   headers.set("Authorization", `Bearer ${token}`);
   headers.set("apikey", SUPABASE_ANON_KEY);
+  headers.set("x-ops-device-id", deviceId());
   return headers;
 }
 
