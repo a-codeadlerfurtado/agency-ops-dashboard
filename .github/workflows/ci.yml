@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
@@ -16,49 +16,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Connect structured Diary view
-        if: github.event_name == 'pull_request'
-        shell: python
-        run: |
-          from pathlib import Path
-          page = Path('app/page.tsx')
-          s = page.read_text()
-          import_anchor = 'import { PortfolioCenter } from "./views/portfolio";'
-          import_line = 'import { DiaryCenter as StructuredDiaryCenter } from "./views/diary";'
-          if import_line not in s:
-              if s.count(import_anchor) != 1: raise SystemExit('portfolio import anchor not unique')
-              s = s.replace(import_anchor, import_anchor + '\n' + import_line, 1)
-          call_anchor = '<DiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />'
-          call_new = '<StructuredDiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />'
-          if call_new not in s:
-              if s.count(call_anchor) != 1: raise SystemExit(f'diary call anchor count={s.count(call_anchor)}')
-              s = s.replace(call_anchor, call_new, 1)
-          page.write_text(s)
-          diary = Path('app/views/diary.tsx')
-          d = diary.read_text().replace('import { Chip, SUPABASE_ANON_KEY, SUPABASE_URL, formatDate, text } from "../shared";', 'import { SUPABASE_ANON_KEY, SUPABASE_URL, formatDate, text } from "../shared";')
-          diary.write_text(d)
       - name: Install dependencies
         run: npm ci
       - name: Typecheck
         run: npm run typecheck
       - name: Build
         run: npm run build
-      - name: Commit validated integration
-        if: github.event_name == 'pull_request'
-        run: |
-          if git diff --quiet -- app/page.tsx app/views/diary.tsx; then
-            echo "No Diary patch to commit"
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/page.tsx app/views/diary.tsx
-          git commit -m "Connect isolated structured Diary"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
