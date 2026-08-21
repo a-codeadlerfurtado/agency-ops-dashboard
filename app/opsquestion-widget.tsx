@@ -5,7 +5,9 @@ import { createClient, type Session } from "@supabase/supabase-js";
 
 const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
-const ASK_URL = `${SUPABASE_URL}/functions/v1/agency-ops-ai-ask`;
+const ASK_URL_ADMIN = `${SUPABASE_URL}/functions/v1/agency-ops-ai-ask`;
+const ASK_URL_TEAM = `${SUPABASE_URL}/functions/v1/agency-ops-ai-ask-team`;
+const ADLER_USER_ID = "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 type ChatMessage = {
@@ -40,7 +42,8 @@ export default function OpsQuestionWidget() {
     setQuestion("");
     setAsking(true);
     try {
-      const response = await fetch(ASK_URL, {
+      const askUrl = session.user.id === ADLER_USER_ID ? ASK_URL_ADMIN : ASK_URL_TEAM;
+      const response = await fetch(askUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${session.access_token}`,
