@@ -30,7 +30,8 @@ supabase.auth.signOut = ((options?: Parameters<typeof rawSignOut>[0]) => rawSign
 
 // Identificador persistente por navegador/perfil. Nao e fingerprint e nao tenta
 // identificar hardware: serve somente para diferenciar dois PCs/navegadores usando a
-// mesma conta. Vai em todas as chamadas autenticadas para auditoria futura no backend.
+// mesma conta. O ID permanece local; nao e enviado como header global porque headers
+// customizados quebram CORS em Edge Functions que ainda nao os declaram.
 const DEVICE_ID_KEY = "agency-ops-device-id";
 export function deviceId() {
   if (typeof window === "undefined") return "server";
@@ -253,7 +254,6 @@ function authHeaders(init: RequestInit, token: string) {
   const headers = new Headers(init.headers || {});
   headers.set("Authorization", `Bearer ${token}`);
   headers.set("apikey", SUPABASE_ANON_KEY);
-  headers.set("x-ops-device-id", deviceId());
   return headers;
 }
 
