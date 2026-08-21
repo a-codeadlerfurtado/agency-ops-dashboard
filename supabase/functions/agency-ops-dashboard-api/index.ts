@@ -140,8 +140,15 @@ Deno.serve(async (req) => {
     if (accessLevel === "RESTRICTED" && approvals.some((row: any) => row.kind === "ELEVATION")) elevated = true;
   }
 
-  const isFull = accessLevel === "FULL" || elevated;
+  // FULL define o cadastro, mas o papel continua limitando o alcance. CS trabalha
+  // apenas os clientes sob sua responsabilidade; visao de empresa inteira fica com
+  // Operacoes/Diretoria e IA, ou com uma elevacao nominal aprovada.
+  const isFull = elevated || (accessLevel === "FULL" && (!viaLogin || ["MGMT", "AI"].includes(profileRole ?? "")));
   const isWalletOnly = accessLevel === "WALLET_ONLY" && !elevated;
+  // O papel GT e' uma fronteira de seguranca alem da configuracao individual.
+  const isGtScoped = viaLogin && profileRole === "GT" && !elevated;
+  const isPortfolioScoped = isWalletOnly || isGtScoped;
+  const isCsScoped = viaLogin && profileRole === "CS" && !elevated;
   const isRestrictedBase = accessLevel === "RESTRICTED" && !elevated;
   // Conta travada: ou o cadastro ainda nao foi aprovado pelo gestor, ou o login nao
   // esta vinculado a ninguem do quadro. Nos dois casos a pessoa nao ve dado nenhum.
@@ -243,18 +250,31 @@ Deno.serve(async (req) => {
   if (req.method === "POST") {
     const body = await req.json().catch(() => ({}));
     if (view === "notifications-read") {
-      let query = ops.from("platform_notifications").update({ read_at: new Date().toISOString() });
-      if (body.id) {
-        query = query.eq("id", String(body.id));
-      } else {
-        query = query.is("read_at", null);
-        if (isDesignRestricted) {
-          query = query
-            .in("type", ["DESIGNER_MENTION", "MATERIAL_UPLOADED"])
-            .contains("metadata", { target_role: "DESIGN", target_person: profilePerson });
-        }
+      const { data: candidates, error: candidateError } = await ops.from("platform_notifications")
+        .select("id,type,client_id,metadata").order("occurred_at", { ascending: false }).limit(1000);
+      if (candidateError) return respond({ error: "query_failed", detail: candidateError.message }, 500);
+
+      let walletClientIds: Set<string> | null = null;
+      if (isPortfolioScoped) {
+        const { data: walletClients } = await ops.from("dashboard_client_overview").select("client_id").eq("gt_owner", profilePerson ?? "");
+        walletClientIds = new Set((walletClients ?? []).map((row: any) => String(row.client_id)));
       }
-      const result = await query.select("id");
+      const visible = (row: any) => {
+        if (isAdler) return true;
+        if (walletClientIds && row.client_id && !walletClientIds.has(String(row.client_id))) return false;
+        const isWork = String(row.type).startsWith("WORK_ITEM_");
+        if (isWork) return row.metadata?.target_person === profilePerson || (!row.metadata?.target_person && row.metadata?.target_role === profileRole);
+        if (isDesignRestricted) return ["DESIGNER_MENTION","MATERIAL_UPLOADED"].includes(String(row.type)) && row.metadata?.target_role === "DESIGN" && row.metadata?.target_person === profilePerson;
+        return true;
+      };
+      const requested = body.id
+        ? (candidates ?? []).filter((row: any) => String(row.id) === String(body.id) && visible(row))
+        : (candidates ?? []).filter(visible);
+      if (body.id && !requested.length) return respond({ error: "not_found_or_forbidden" }, 404);
+      if (!requested.length) return respond({ ok: true, updated: 0 });
+
+      const readRows = requested.map((row: any) => ({ notification_id: row.id, user_key: currentUserKey, read_at: new Date().toISOString() }));
+      const result = await ops.from("platform_notification_reads").upsert(readRows, { onConflict: "notification_id,user_key" }).select("notification_id");
       if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
       return respond({ ok: true, updated: result.data?.length ?? 0 });
     }
@@ -293,7 +313,7 @@ Deno.serve(async (req) => {
       if (!clientId || !descricao) return respond({ error: "missing_fields", required: ["client_id", "descricao"] }, 400);
       const { data: clientRow } = await ops.from("dashboard_client_overview").select("client_id,gt_owner").eq("client_id", clientId).maybeSingle();
       if (!clientRow) return respond({ error: "not_found" }, 404);
-      if (isWalletOnly && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
+      if (isPortfolioScoped && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
       const result = await ops.from("client_adjustments").insert({
         client_id: clientId,
         source: "diario_ajustes",
@@ -335,15 +355,63 @@ Deno.serve(async (req) => {
       const description = typeof body.description === "string" ? body.description.trim() : "";
       const clientId = body.client_id ? String(body.client_id) : null;
       if (!title) return respond({ error: "missing_fields", required: ["title"] }, 400);
+
+      let scopedClient: any = null;
       if (clientId) {
-        const { data: scopedClient } = await ops.from("dashboard_client_overview").select("client_id,gt_owner").eq("client_id", clientId).maybeSingle();
+        const { data } = await ops.from("dashboard_client_overview").select("client_id,display_name,gt_owner,cs_owner,designer_owner").eq("client_id", clientId).maybeSingle();
+        scopedClient = data;
         if (!scopedClient) return respond({ error: "client_not_found" }, 404);
-        if (isWalletOnly && scopedClient.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
+        if (isPortfolioScoped && scopedClient.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
+        if (isCsScoped && scopedClient.cs_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
       }
+
       const itemType = ["ESCALATION","CREATIVE_REQUEST","TECHNICAL","CLIENT_FOLLOWUP","CLICKUP","FINANCE","GENERAL"].includes(String(body.type)) ? String(body.type) : "GENERAL";
       const priority = ["CRITICAL","HIGH","MEDIUM","LOW"].includes(String(body.priority)) ? String(body.priority) : "MEDIUM";
       const targetRole = typeof body.target_role === "string" ? body.target_role.slice(0, 40) : null;
       const targetPerson = typeof body.target_person === "string" ? body.target_person.slice(0, 160) : null;
+      const metadata = typeof body.metadata === "object" && body.metadata ? { ...body.metadata } : {};
+      let clickupTask: any = null;
+
+      // ClickUp continua sendo a fonte oficial da execucao. O botao dedicado
+      // cria a task real e guarda o vinculo dentro da demanda do dashboard.
+      if (body.create_clickup === true || itemType === "CLICKUP") {
+        const config: any = value(await ops.rpc("get_clickup_config"), {});
+        if (!config?.token) return respond({ error: "clickup_not_configured" }, 503);
+        const listByRole: Record<string, string> = {
+          GT: "901317155229",
+          DESIGN: "901317155418",
+          CS: "1000210000004387",
+          MGMT: "901326095338",
+          AI: "901326095338",
+        };
+        const listId = listByRole[targetRole ?? ""] ?? "901326095338";
+        const assignees: number[] = [];
+        if (targetPerson) {
+          const { data: rosterTarget } = await ops.from("team_roster").select("clickup_user").eq("person", targetPerson).maybeSingle();
+          if (rosterTarget?.clickup_user) {
+            const { data: assigneeRows } = await ops.from("clickup_task_assignees").select("user_id,username").ilike("username", rosterTarget.clickup_user).limit(1);
+            const assigneeId = Number(assigneeRows?.[0]?.user_id);
+            if (Number.isFinite(assigneeId)) assignees.push(assigneeId);
+          }
+        }
+        const clickupName = scopedClient?.display_name ? `[${scopedClient.display_name}] ${title}` : title;
+        const clickupResponse = await fetch(`https://api.clickup.com/api/v2/list/${listId}/task`, {
+          method: "POST",
+          headers: { Authorization: config.token, "content-type": "application/json" },
+          body: JSON.stringify({
+            name: clickupName.slice(0, 240),
+            description: description.slice(0, 4000) || undefined,
+            assignees,
+            due_date: body.due_at ? new Date(body.due_at).getTime() : undefined,
+          }),
+        });
+        if (!clickupResponse.ok) return respond({ error: "clickup_create_failed", detail: await clickupResponse.text() }, 502);
+        clickupTask = await clickupResponse.json();
+        metadata.clickup_task_id = String(clickupTask.id);
+        metadata.clickup_url = clickupTask.url ?? null;
+        metadata.clickup_list_id = listId;
+      }
+
       const result = await ops.from("work_items").insert({
         client_id: clientId,
         type: itemType,
@@ -351,16 +419,16 @@ Deno.serve(async (req) => {
         title: title.slice(0, 240),
         description: description.slice(0, 4000) || null,
         source: typeof body.source === "string" ? body.source.slice(0, 80) : "dashboard",
-        source_id: typeof body.source_id === "string" ? body.source_id.slice(0, 240) : null,
+        source_id: typeof body.source_id === "string" ? body.source_id.slice(0, 240) : (clickupTask?.id ? String(clickupTask.id) : null),
         created_by_user_key: currentUserKey,
         created_by_person: profilePerson ?? "Adler Furtado",
         target_role: targetRole,
         target_person: targetPerson,
         due_at: body.due_at ?? null,
-        metadata: typeof body.metadata === "object" && body.metadata ? body.metadata : {},
+        metadata,
       }).select().single();
       if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
-      return respond({ ok: true, item: result.data });
+      return respond({ ok: true, item: result.data, clickup: clickupTask ? { id: String(clickupTask.id), url: clickupTask.url ?? null } : null });
     }
     if (view === "work-item-update") {
       if (isLocked || !canView("work")) return respond({ error: "forbidden" }, 403);
@@ -509,7 +577,7 @@ Deno.serve(async (req) => {
         waiting: open.filter((row: any) => ["WAITING","SNOOZED"].includes(row.status)).length,
         completed_30d: rows.filter((row: any) => row.status === "COMPLETED" && row.completed_at && new Date(row.completed_at) >= new Date(Date.now() - 30 * 86400000)).length,
       },
-      roster: isAdler ? value<any[]>(await ops.from("team_roster").select("person,role").eq("is_former", false).order("person"), []) : [],
+      roster: value<any[]>(await ops.from("team_roster").select("person,role").eq("is_former", false).order("person"), []),
       generated_at: new Date().toISOString(),
     });
   }
@@ -655,7 +723,8 @@ Deno.serve(async (req) => {
     if (core[0].error) return respond({ error: "query_failed", detail: core[0].error.message }, 500);
     const clientRow: any = core[0].data;
     if (!clientRow) return respond({ error: "not_found" }, 404);
-    if (isWalletOnly && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
+    if (isPortfolioScoped && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
+    if (isCsScoped && clientRow.cs_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
     // core fica antes de proposito: e' ele que carrega a checagem de permissao
     // (cliente inexistente ou de carteira alheia para'm aqui). Ja' context e history
     // nao dependem um do outro e passam a rodar juntos.
@@ -718,7 +787,7 @@ Deno.serve(async (req) => {
     // Foco do Designer: tarefas abertas e conclusoes recentes com os responsaveis.
     // O filtro pessoal e aplicado abaixo, depois que o perfil ja foi resolvido.
     ops.from("clickup_tasks").select("task_id,name,status,status_type,date_created,date_updated,start_date,due_date,time_estimate_ms,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", false).order("due_date", { ascending: true, nullsFirst: false }).limit(1000),
-    ops.from("clickup_tasks").select("task_id,name,status,date_closed,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", true).gte("date_closed", new Date(Date.now() - 36 * 3600000).toISOString()).order("date_closed", { ascending: false }).limit(500),
+    ops.from("clickup_tasks").select("task_id,name,status,date_closed,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", true).gte("date_closed", new Date(Date.now() - 36 * 86400000 / 24).toISOString()).order("date_closed", { ascending: false }).limit(500),
     ]),
     Promise.all([
     ops.from("platform_notifications").select("*").order("occurred_at", { ascending: false }).limit(100),
@@ -767,7 +836,11 @@ Deno.serve(async (req) => {
   // CS restrito e perfis FULL nao tem restricao de carteira (mas team/produtividade e' filtrado a parte).
   const walletSet = isLocked
     ? new Set<string>()
-    : isWalletOnly ? new Set(allClients.filter((row) => row.gt_owner === profilePerson).map((row) => row.client_id)) : null;
+    : isPortfolioScoped
+      ? new Set(allClients.filter((row) => row.gt_owner === profilePerson).map((row) => row.client_id))
+      : isCsScoped
+        ? new Set(allClients.filter((row) => row.cs_owner === profilePerson).map((row) => row.client_id))
+        : null;
   const inScope = (clientId: string | null) => !walletSet || (clientId && walletSet.has(clientId));
 
   const clients = walletSet ? allClients.filter((row) => walletSet.has(row.client_id)) : allClients;
@@ -907,10 +980,12 @@ Deno.serve(async (req) => {
   // ---- Pre-clientes: filtra registros sinteticos de teste e, para carteiras (GT), oculta a
   // aba inteira (nao e' area de trabalho de gestor de trafego).
   const preclientsRaw = value<any[]>(platformData[1], []).filter((row) => !SYNTHETIC_NAME.test(String(row.name ?? "").trim()) && !SYNTHETIC_NAME.test(String(row.company ?? "").trim()));
-  const preclients = isWalletOnly ? [] : preclientsRaw;
+  const preclients = isPortfolioScoped ? [] : preclientsRaw;
 
   // ---- Notificacoes: DESIGN recebe apenas eventos individuais do proprio trabalho.
   // Saldo, tarefa concluida e alertas gerais nunca saem no payload desse perfil.
+  const notificationReadRows = value<any[]>(await ops.from("platform_notification_reads").select("notification_id,read_at").eq("user_key", currentUserKey), []);
+  const notificationReadAt = new Map(notificationReadRows.map((row: any) => [String(row.notification_id), row.read_at]));
   const notifications = value<any[]>(platformData[0], [])
     .filter((row) => inScope(row.client_id))
     .filter((row) => !String(row.type).startsWith("WORK_ITEM_") || isAdler || row.metadata?.target_person === profilePerson || (!row.metadata?.target_person && row.metadata?.target_role === profileRole))
@@ -920,7 +995,7 @@ Deno.serve(async (req) => {
     ))
     .map((row) => {
       const meta = row.client_id ? clientMeta.get(row.client_id) : null;
-      return { ...row, client_display_name: meta?.display_name ?? null, gestor: meta?.gt_owner ?? null, cs_owner: meta?.cs_owner ?? null, carteira: walletName(meta?.gt_owner) };
+      return { ...row, read_at: notificationReadAt.get(String(row.id)) ?? null, client_display_name: meta?.display_name ?? null, gestor: meta?.gt_owner ?? null, cs_owner: meta?.cs_owner ?? null, carteira: walletName(meta?.gt_owner) };
     });
 
   // 70 das 191 conversas nao tem client_id e apareciam com o chat_id cru na tela.
@@ -978,7 +1053,16 @@ Deno.serve(async (req) => {
   // ja' prometia no titulo ("Minhas ultimas tarefas").
   const taskLogRows = value<any[]>(platformData[7], []);
   const taskLog = aggregateTaskLog(isFull ? taskLogRows : taskLogRows.filter((row: any) => row.user_key === currentUserKey));
+  // Cada registro do Diario pertence ao perfil que o criou. O filtro e' aplicado
+  // no payload da API (nao apenas na tela), impedindo que Davi receba ajustes do
+  // Joel, ou qualquer colaborador veja o historico de outro perfil.
   const adjustments = value<any[]>(platformData[8], [])
+    .filter((row: any) => {
+      const authorUserKey = String(row.metadata?.author_user_key ?? "");
+      if (authorUserKey) return authorUserKey === currentUserKey;
+      // Compatibilidade com registros antigos, anteriores ao author_user_key.
+      return norm(row.metadata?.author_name ?? row.responsible_person) === norm(profilePerson);
+    })
     .filter((row: any) => inScope(row.client_id))
     .map((row: any) => ({ ...row, client_display_name: row.client_id ? (clientMeta.get(row.client_id)?.display_name ?? null) : null }));
 
@@ -1010,9 +1094,11 @@ Deno.serve(async (req) => {
     // Quem nao decide nao precisa da fila: o gate era isFull, entao todo perfil de
     // acesso total recebia os nomes de quem esta esperando aprovacao sem poder aprovar.
     access_requests_pending: canDecideAccessRequests ? value(teamData[4], []) : [],
-    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, can_manage_finance: isAdler && canView("finance"), is_executive: isLeonardo && canView("executive"), locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson) },
+    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, portfolio_scoped: isPortfolioScoped, elevated, can_decide_access_requests: canDecideAccessRequests, can_manage_finance: isAdler && canView("finance"), is_executive: isLeonardo && canView("executive"), locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson) },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
     auth_mode: currentUserKey === "adler-furtado" && suppliedKey.length >= 40 ? "dashboard_key" : "login",
     generated_at: new Date().toISOString(),
   });
 });
+
+
