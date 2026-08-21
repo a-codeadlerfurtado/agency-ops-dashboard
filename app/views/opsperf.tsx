@@ -11,20 +11,20 @@ import { createElement as h, useEffect, useMemo, useState } from "react";
 import { api } from "../shared";
 
 const MUTED = { color: "#8aa3c0" };
-const ROLE_LABEL = { CS: "CS", DESIGN: "Design", GT: "Gestor de trafego", MGMT: "Gestao", AI: "IA" };
+const ROLE_LABEL: Record<string, string> = { CS: "CS", DESIGN: "Design", GT: "Gestor de trafego", MGMT: "Gestao", AI: "IA" };
 
-function formatHours(hours) {
+function formatHours(hours: any) {
   if (hours === null || hours === undefined) return "-";
   if (hours < 24) return hours.toFixed(1) + "h";
   return (hours / 24).toFixed(1) + "d";
 }
-function formatMinutes(min) {
+function formatMinutes(min: any) {
   if (min === null || min === undefined) return "-";
   if (min < 60) return Math.round(min) + " min";
   return (min / 60).toFixed(1) + "h";
 }
 
-function buildHeatmapWeeks(activity, since) {
+function buildHeatmapWeeks(activity: any, since: any) {
   const start = new Date(since + "T00:00:00Z");
   const startDow = start.getUTCDay();
   start.setUTCDate(start.getUTCDate() - startDow);
@@ -40,14 +40,14 @@ function buildHeatmapWeeks(activity, since) {
   for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
   return weeks;
 }
-function levelColor(count) {
+function levelColor(count: any) {
   if (count <= 0) return "rgba(255,255,255,.06)";
   if (count === 1) return "#0e4429";
   if (count <= 3) return "#006d32";
   if (count <= 6) return "#26a641";
   return "#39d353";
 }
-function currentStreak(activity) {
+function currentStreak(activity: any) {
   let streak = 0;
   const cursor = new Date();
   const todayIso = cursor.toISOString().slice(0, 10);
@@ -60,7 +60,7 @@ function currentStreak(activity) {
   return streak;
 }
 
-function PersonHeatmap(props) {
+function PersonHeatmap(props: any) {
   const person = props.person;
   const activity = props.activity;
   const since = props.since;
@@ -89,14 +89,14 @@ function PersonHeatmap(props) {
   ]);
 }
 
-function statBlock(key, label, valueNode) {
+function statBlock(key: any, label: any, valueNode: any) {
   return h("div", { key: key }, [
     h("small", { key: "l", style: MUTED }, label),
     h("div", { key: "v", style: { fontSize: 20, fontWeight: 600 } }, valueNode),
   ]);
 }
 
-function PersonCard(props) {
+function PersonCard(props: any) {
   const row = props.row;
   const blocks = [
     statBlock("tc", "Tasks concluidas", String(row.tasks_completed)),
@@ -122,10 +122,10 @@ function PersonCard(props) {
   ]);
 }
 
-export function OpsPerfCenter(props) {
+export function OpsPerfCenter(props: any) {
   const token = props.token;
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
+  const [data, setData] = useState<any>(null);
+  const [error, setError] = useState<any>(null);
   const [roleFilter, setRoleFilter] = useState("ALL");
 
   useEffect(function () {
@@ -149,15 +149,15 @@ export function OpsPerfCenter(props) {
     ]);
   }
 
-  const roleSet = {};
-  data.people.forEach(function (p) { roleSet[p.role] = true; });
+  const roleSet: Record<string, boolean> = {};
+  data.people.forEach(function (p: any) { roleSet[p.role] = true; });
   const roles = ["ALL"].concat(Object.keys(roleSet));
-  const visiblePeople = roleFilter === "ALL" ? data.people : data.people.filter(function (p) { return p.role === roleFilter; });
+  const visiblePeople = roleFilter === "ALL" ? data.people : data.people.filter(function (p: any) { return p.role === roleFilter; });
 
   const unmappedBanner = data.unmapped_collaborators.length > 0
     ? h("div", { className: "card section", style: { marginBottom: 12, borderColor: "#f7c95c" } }, [
         h("b", { key: "b" }, "Colaboradores ativos no ClickUp sem cadastro no roster: "),
-        data.unmapped_collaborators.map(function (u) { return u.username + " (" + u.tasks + ")"; }).join(", "),
+        data.unmapped_collaborators.map(function (u: any) { return u.username + " (" + u.tasks + ")"; }).join(", "),
       ])
     : null;
 
@@ -169,13 +169,13 @@ export function OpsPerfCenter(props) {
     }, role === "ALL" ? "Todos" : (ROLE_LABEL[role] || role));
   }));
 
-  const heatmaps = visiblePeople.map(function (row) {
+  const heatmaps = visiblePeople.map(function (row: any) {
     return h(PersonHeatmap, { key: row.person, person: row.person, activity: data.heatmap[row.person] || {}, since: data.period.heatmap_since });
   });
 
   const cards = visiblePeople.length === 0
     ? h("div", { className: "card section" }, "Sem colaboradores para este filtro.")
-    : visiblePeople.map(function (row) { return h(PersonCard, { key: row.person, row: row }); });
+    : visiblePeople.map(function (row: any) { return h(PersonCard, { key: row.person, row: row }); });
 
   return h("section", { className: "workspace" }, [
     h("div", { key: "hd", className: "workspace-head" }, h("div", null, [
