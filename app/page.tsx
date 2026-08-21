@@ -12,6 +12,7 @@ const ContractsCenter = lazy(() => import("./views/contracts").then((m) => ({ de
 // Saude do cliente carrega sob demanda: nao e a tela inicial, e puxa a propria API.
 const HealthCenter = lazy(() => import("./views/health").then((m) => ({ default: m.HealthCenter })));
 const ClientContractSection = lazy(() => import("./views/contracts").then((m) => ({ default: m.ClientContractSection })));
+const OpsPerfCenter = lazy(() => import("./views/opsperf").then((m) => ({ default: m.OpsPerfCenter })));
 
 function AuthScreen() {
   const [mode, setMode] = useState<"login" | "signup">("login");
@@ -138,7 +139,7 @@ export default function Dashboard() {
   const viewsKey = viewsFrescas && !viewsStale ? viewsFrescas.join(",") : viewsCache;
   const allowedViews = useMemo(() => new Set<string>(viewsKey ? viewsKey.split(",") : ["overview", "focus"]), [viewsKey]);
   const navItems = useMemo(() => ([
-    ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["health", "Saúde"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"],
+    ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["health", "Saúde"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"], ["opsperf", "Desempenho OP"],
   ] as [View, string][]).filter(([key]) => allowedViews.has(key)), [allowedViews]);
   // Aba aberta que deixou de ser permitida volta para a primeira disponivel.
   useEffect(() => {
@@ -340,6 +341,7 @@ export default function Dashboard() {
       {view === "preclients" && canSee("preclients") && <PreClientCenter rows={data?.preclients || []} won={data?.won_events || []} />}
       {view === "conversations" && canSee("conversations") && <ConversationCenter conversations={data?.conversations || []} clients={allClients} openClient={openClient} />}
       {view === "health" && canSee("health") && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando saúde dos clientes…</div>}><HealthCenter token={session.access_token} /></Suspense>}
+      {view === "opsperf" && canSee("opsperf") && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando desempenho...</div>}><OpsPerfCenter token={session.access_token} /></Suspense>}
       {view === "team" && canSee("team") && <TeamCenter team={data?.team || []} teamMembers={Number(kpis.team_members || 0)} unassigned={data?.unassigned_clients || []} openClient={openClient} />}
       {view === "diary" && canSee("diary") && <DiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />}
       {view === "clickup" && canSee("clickup") && <ClickUpCenter clickup={data?.clickup || {}} reload={load} token={session.access_token} />}
