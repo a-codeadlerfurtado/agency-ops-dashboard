@@ -15,6 +15,7 @@ type DeliveryFilter = "ALL" | "ACTIVE_DELIVERY" | "NO_META_ACCOUNT" | "NO_DELIVE
 type PeriodKey = "TODAY" | "YESTERDAY" | "LAST_7D" | "LAST_14D" | "LAST_28D" | "LAST_30D" | "THIS_MONTH" | "LAST_MONTH" | "LAST_90D" | "CUSTOM";
 type DateRange = { since: string; until: string; label: string };
 type ClientTab = "summary" | "strategy" | "audience" | "campaigns" | "integrations" | "history";
+type TimelineEvent = { at: unknown; type: string; title: unknown; detail?: unknown; tone?: unknown; url?: string | null };
 
 const statusLabel: Record<string, string> = {
   ACTIVE_DELIVERY: "Com entrega",
@@ -230,11 +231,11 @@ function TrafficClient({ client, campaigns, tab, setTab, rangeText }: { client: 
   const commitments: Row[] = ctx.commitments || [];
   const tasks: Row[] = ctx.traffic_tasks || [];
   const conversation: Row | null = ctx.conversation || null;
-  const timeline = useMemo(() => [
-    ...alerts.map((row) => ({ at: eventDate(row), type: "Alerta", title: row.title || row.description, detail: row.next_action, tone: row.severity })),
-    ...commitments.map((row) => ({ at: eventDate(row), type: "Compromisso", title: row.descricao, detail: row.owner, tone: row.status })),
-    ...tasks.map((row) => ({ at: eventDate(row), type: row.is_closed ? "Task concluída" : "Task de tráfego", title: row.name, detail: row.assignee_names || row.list_name, tone: row.status, url: row.url })),
-    ...(conversation ? [{ at: eventDate(conversation), type: "Conversa", title: conversation.open_question || conversation.last_summary || conversation.last_intent, detail: conversation.waiting_for_agency ? "Cliente aguardando a agência" : conversation.waiting_for_client ? "Agência aguardando o cliente" : conversation.conversation_status, tone: conversation.conversation_status }] : []),
+  const timeline = useMemo<TimelineEvent[]>(() => [
+    ...alerts.map((row) => ({ at: eventDate(row), type: "Alerta", title: row.title || row.description, detail: row.next_action, tone: row.severity, url: null })),
+    ...commitments.map((row) => ({ at: eventDate(row), type: "Compromisso", title: row.descricao, detail: row.owner, tone: row.status, url: null })),
+    ...tasks.map((row) => ({ at: eventDate(row), type: row.is_closed ? "Task concluída" : "Task de tráfego", title: row.name, detail: row.assignee_names || row.list_name, tone: row.status, url: row.url || null })),
+    ...(conversation ? [{ at: eventDate(conversation), type: "Conversa", title: conversation.open_question || conversation.last_summary || conversation.last_intent, detail: conversation.waiting_for_agency ? "Cliente aguardando a agência" : conversation.waiting_for_client ? "Agência aguardando o cliente" : conversation.conversation_status, tone: conversation.conversation_status, url: null }] : []),
   ].filter((row) => row.at).sort((a, b) => new Date(String(b.at)).getTime() - new Date(String(a.at)).getTime()).slice(0, 14), [alerts, commitments, tasks, conversation]);
 
   const tabs: [ClientTab, string][] = [["summary","Resumo para operar"],["strategy","Estratégia"],["audience","Público & conversão"],["campaigns","Campanhas"],["integrations","Integrações"],["history","Histórico"]];
