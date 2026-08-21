@@ -15,5 +15,5 @@
     "incremental": true
   },
   "include": ["**/*.ts", "**/*.tsx"],
-  "exclude": ["node_modules", "supabase/functions"]
+  "exclude": ["node_modules", "supabase/functions", "server"]
 }
