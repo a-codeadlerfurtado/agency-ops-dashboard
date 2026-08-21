@@ -26,34 +26,25 @@ jobs:
           path = Path('supabase/functions/agency-ops-dashboard-api/index.ts')
           text = path.read_text()
 
-          # A API dedicada do Diário é a única porta de escrita. Os endpoints antigos
-          # usavam service_role e poderiam criar registros sem author_user_id.
           pattern_adjust = re.compile(r'    // ---- Diario de Ajustes\.[\s\S]*?    // ---- Registro de Tarefas\.', re.M)
           replacement_adjust = '''    // ---- Diario de Ajustes. Escrita movida para agency-ops-diary-api, que deriva o ator do JWT\n    // e chama RPCs SECURITY DEFINER. Manter esta rota antiga ativa permitiria contornar autoria.\n    if (view === "adjustment-create") {\n      return respond({ error: "deprecated_diary_endpoint" }, 410);\n    }\n    // ---- Registro de Tarefas.'''
-          if pattern_adjust.search(text):
-              text = pattern_adjust.sub(replacement_adjust, text, count=1)
-          elif 'deprecated_diary_endpoint' not in text:
-              raise SystemExit('adjustment legacy block not found')
+          if pattern_adjust.search(text): text = pattern_adjust.sub(replacement_adjust, text, count=1)
+          elif 'deprecated_diary_endpoint' not in text: raise SystemExit('adjustment legacy block not found')
 
           pattern_task = re.compile(r'    // ---- Registro de Tarefas\.[\s\S]*?    if \(view === "work-item-create"\)', re.M)
           replacement_task = '''    // ---- Registro de Tarefas. Também fica exclusivamente na API dedicada do Diário.\n    if (view === "tasklog-create") {\n      return respond({ error: "deprecated_tasklog_endpoint" }, 410);\n    }\n    if (view === "work-item-create")'''
-          if pattern_task.search(text):
-              text = pattern_task.sub(replacement_task, text, count=1)
-          elif 'deprecated_tasklog_endpoint' not in text:
-              raise SystemExit('tasklog legacy block not found')
+          if pattern_task.search(text): text = pattern_task.sub(replacement_task, text, count=1)
+          elif 'deprecated_tasklog_endpoint' not in text: raise SystemExit('tasklog legacy block not found')
 
           old_tasklog = '  const taskLog = aggregateTaskLog(isFull ? taskLogRows : taskLogRows.filter((row: any) => row.user_key === currentUserKey));'
           new_tasklog = '  const taskLog = aggregateTaskLog(taskLogRows.filter((row: any) => row.user_key === currentUserKey));'
-          if old_tasklog in text:
-              text = text.replace(old_tasklog, new_tasklog, 1)
-          elif new_tasklog not in text:
-              raise SystemExit('tasklog home scope anchor not found')
+          if old_tasklog in text: text = text.replace(old_tasklog, new_tasklog, 1)
+          elif new_tasklog not in text: raise SystemExit('tasklog home scope anchor not found')
 
-          pattern_rows = re.compile(r'  const adjustments = value<any\[]>\(platformData\[8\], \[\]\)\n    \.filter\(\(row: any\) => inScope\(row\.client_id\)\)\n    \.map\(\(row: any\) => \(\{ \.\.\.row, client_display_name: row\.client_id \? \(clientMeta\.get\(row\.client_id\)\?\.display_name \?\? null\) : null \}\)\);')
+          pattern_rows = re.compile(r'  const adjustments = value<any\[]>\(platformData\[8\], \[\]\)[\s\S]*?\n\n  return respond\(\{', re.M)
           if pattern_rows.search(text):
-              text = pattern_rows.sub('  // Registros pessoais não trafegam mais no payload geral; a API dedicada aplica autoria/escopo.\n  const adjustments: any[] = [];', text, count=1)
-          elif 'const adjustments: any[] = [];' not in text:
-              raise SystemExit('adjustments home payload anchor not found')
+              text = pattern_rows.sub('  // Registros pessoais não trafegam mais no payload geral; a API dedicada aplica autoria/escopo.\n  const adjustments: any[] = [];\n\n  return respond({', text, count=1)
+          elif 'const adjustments: any[] = [];' not in text: raise SystemExit('adjustments home payload anchor not found')
 
           path.write_text(text)
       - name: Setup Node
