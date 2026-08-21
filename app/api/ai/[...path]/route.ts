@@ -1,5 +1,4 @@
-const AI_UPSTREAM = "https://centralops.yb4hto.easypanel.host/api/ai";
-const AI_AUTHORIZE = "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-ai-authorize";
+const AI_DATA = "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-ai-workspace";
 
 export const dynamic = "force-dynamic";
 
@@ -8,21 +7,6 @@ function json(body: unknown, status: number) {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
-}
-
-async function authorizeAdler(request: Request) {
-  const authorization = request.headers.get("authorization") ?? "";
-  if (!authorization.startsWith("Bearer ")) return { response: json({ ok: false, error: "unauthorized" }, 401), authorization: "" };
-
-  const authorizationResponse = await fetch(AI_AUTHORIZE, {
-    method: "GET",
-    headers: { authorization },
-    cache: "no-store",
-  });
-  if (authorizationResponse.status === 401) return { response: json({ ok: false, error: "unauthorized" }, 401), authorization: "" };
-  if (authorizationResponse.status === 403) return { response: json({ ok: false, error: "ai_beta" }, 403), authorization: "" };
-  if (!authorizationResponse.ok) return { response: json({ ok: false, error: "auth_unavailable" }, 503), authorization: "" };
-  return { response: null, authorization };
 }
 
 async function proxy(request: Request) {
@@ -34,21 +18,23 @@ async function proxy(request: Request) {
     .map((segment) => encodeURIComponent(decodeURIComponent(segment)))
     .join("/");
 
-  // Healthcheck contains no customer data and remains public for monitoring.
-  let validatedAuthorization = "";
-  if (!(request.method === "GET" && safeSuffix === "health")) {
-    const auth = await authorizeAdler(request);
-    if (auth.response) return auth.response;
-    validatedAuthorization = auth.authorization;
+  // Em producao o Worker intercepta /api/ai antes desta rota e executa a geracao
+  // no binding Workers AI. Esta rota existe apenas como fallback para CRUD/health
+  // em ambientes sem o runtime do Cloudflare. Nunca volta para a VPS/Hostinger.
+  if (request.method === "POST" && safeSuffix === "chat") {
+    return json({ ok: false, error: "workers_ai_runtime_required" }, 503);
   }
 
-  const target = `${AI_UPSTREAM}${safeSuffix ? `/${safeSuffix}` : ""}${incoming.search}`;
-  const headers = new Headers();
-  if (validatedAuthorization) headers.set("authorization", validatedAuthorization);
-  for (const name of ["content-type", "accept"]) {
-    const value = request.headers.get(name);
-    if (value) headers.set(name, value);
+  const authorization = request.headers.get("authorization") ?? "";
+  if (!(request.method === "GET" && safeSuffix === "health") && !authorization.startsWith("Bearer ")) {
+    return json({ ok: false, error: "unauthorized" }, 401);
   }
+
+  const target = `${AI_DATA}${safeSuffix ? `/${safeSuffix}` : ""}${incoming.search}`;
+  const headers = new Headers();
+  if (authorization) headers.set("authorization", authorization);
+  const contentType = request.headers.get("content-type");
+  if (contentType) headers.set("content-type", contentType);
 
   const body = request.method === "GET" || request.method === "HEAD"
     ? undefined
@@ -63,10 +49,9 @@ async function proxy(request: Request) {
   });
 
   const responseHeaders = new Headers();
-  const contentType = upstream.headers.get("content-type");
-  if (contentType) responseHeaders.set("content-type", contentType);
+  responseHeaders.set("content-type", upstream.headers.get("content-type") || "application/json; charset=utf-8");
   responseHeaders.set("cache-control", "no-store");
-  responseHeaders.set("x-ai-proxy", "centralops");
+  responseHeaders.set("x-ai-proxy", "supabase-edge-fallback");
 
   return new Response(upstream.body, {
     status: upstream.status,
