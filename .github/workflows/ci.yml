@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
@@ -16,29 +16,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.ref || github.ref }}
-      - name: Stop polling integration health after access denial
-        if: github.event_name == 'pull_request'
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('app/integration-health-bar.tsx')
-          s = p.read_text()
-          old = '''    let active = true;\n    async function load() {\n      setLoading(true);'''
-          new = '''    let active = true;\n    let accessDenied = false;\n    async function load() {\n      if (accessDenied) return;\n      setLoading(true);'''
-          if old in s:
-              s = s.replace(old, new, 1)
-          elif 'let accessDenied = false;' not in s:
-              raise SystemExit('anchor 1 not found')
-          old2 = '''        // 403 = perfil sem acesso a esta visao. Nao e' falha: a barra some.\n        if (response.status === 403) { if (active) { setForbidden(true); setData(null); } return; }'''
-          new2 = '''        // 403 = perfil sem acesso a esta visao. Nao e' falha: a barra some e\n        // esta sessao para de consultar o endpoint para nao gerar polling inutil.\n        if (response.status === 403) {\n          accessDenied = true;\n          if (active) { setForbidden(true); setData(null); }\n          return;\n        }'''
-          if old2 in s:
-              s = s.replace(old2, new2, 1)
-          elif 'accessDenied = true;' not in s:
-              raise SystemExit('anchor 2 not found')
-          p.write_text(s)
-          PY
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -50,14 +27,3 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
-      - name: Commit validated polling fix
-        if: github.event_name == 'pull_request'
-        run: |
-          if git diff --quiet -- app/integration-health-bar.tsx; then
-            exit 0
-          fi
-          git config user.name "chatgpt-automation"
-          git config user.email "actions@users.noreply.github.com"
-          git add app/integration-health-bar.tsx
-          git commit -m "Stop integration health polling after forbidden"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
