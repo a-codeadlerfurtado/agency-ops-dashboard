@@ -101,14 +101,22 @@ Deno.serve(async (req: Request) => {
   let assignmentNotifications: any[] = [];
   if (canAssign) {
     const { data: requests, error: requestError } = await ops.from("onboarding_gt_assignment_requests")
-      .select("id,case_id,client_id,status,trigger_status,requested_at,metadata,clients(display_name)")
+      .select("id,case_id,client_id,status,trigger_status,requested_at,metadata")
       .eq("status", "PENDING")
       .order("requested_at", { ascending: false })
       .limit(100);
     if (requestError) return respond({ error: "query_failed", detail: requestError.message }, 500);
 
+    const ids = Array.from(new Set((requests ?? []).map((request: any) => String(request.client_id)).filter(Boolean)));
+    const clientNames = new Map<string, string>();
+    if (ids.length) {
+      const { data: clientRows, error: clientError } = await ops.from("clients").select("id,display_name").in("id", ids);
+      if (clientError) return respond({ error: "query_failed", detail: clientError.message }, 500);
+      for (const client of clientRows ?? []) clientNames.set(String(client.id), String(client.display_name ?? "Cliente"));
+    }
+
     assignmentNotifications = (requests ?? []).map((request: any) => {
-      const clientName = request.clients?.display_name ?? "Cliente";
+      const clientName = clientNames.get(String(request.client_id)) ?? "Cliente";
       const confirmed = request.trigger_status === "DONE";
       return {
         id: `gt-assignment:${request.id}`,
