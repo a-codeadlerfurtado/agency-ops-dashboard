@@ -36,7 +36,11 @@ export const env = {
     .filter(Boolean),
 
   maxMessageChars: Number(optional("MAX_MESSAGE_CHARS", "30000")),
-  historyLimit: Number(optional("HISTORY_LIMIT", "30")),
+  // Memoria curta por chamada: 8 mensagens = aproximadamente 4 trocas.
+  // O historico completo continua salvo no Supabase e visivel na interface; apenas
+  // nao e' reenviado inteiro ao modelo em toda pergunta, evitando ancoragem em
+  // respostas antigas e crescimento de latencia/tokens ao longo da conversa.
+  historyLimit: Number(optional("HISTORY_LIMIT", "8")),
   rateLimitPerMinute: Number(optional("RATE_LIMIT_PER_MINUTE", "20")),
 
   gitCommit: optional("GIT_COMMIT", "desconhecido"),

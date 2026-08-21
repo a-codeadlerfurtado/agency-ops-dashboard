@@ -54,6 +54,15 @@ export async function listMessages(conversationId: string) {
   return data ?? [];
 }
 
+/**
+ * Memoria operacional curta por chamada.
+ *
+ * O historico completo continua salvo em ai_messages para a interface e auditoria.
+ * Aqui entram somente as trocas mais recentes, com teto de caracteres. Isso evita
+ * que uma resposta antiga enorme (por exemplo uma lista de dezenas de clientes)
+ * domine a pergunta atual, aumente tokens e deixe o modelo "preso" no assunto
+ * anterior.
+ */
 export async function recentTurns(conversationId: string, limit: number) {
   const { data, error } = await ops
     .from("ai_messages")
@@ -63,10 +72,31 @@ export async function recentTurns(conversationId: string, limit: number) {
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(error.message);
-  return [...(data ?? [])]
-    .reverse()
-    .map((row: Record<string, any>) => ({
-      role: row.role === "assistant" ? ("assistant" as const) : ("user" as const),
-      content: String(row.content),
-    }));
+
+  const MAX_CONTEXT_CHARS = 16_000;
+  const MAX_TURN_CHARS = 6_000;
+  let used = 0;
+  const newestFirst: Array<{ role: "user" | "assistant"; content: string }> = [];
+
+  for (const row of data ?? []) {
+    if (used >= MAX_CONTEXT_CHARS) break;
+    let content = String((row as Record<string, any>).content ?? "").trim();
+    if (!content) continue;
+
+    if (content.length > MAX_TURN_CHARS) {
+      content = `${content.slice(0, MAX_TURN_CHARS)}\n[trecho antigo reduzido para preservar foco na pergunta atual]`;
+    }
+
+    const remaining = MAX_CONTEXT_CHARS - used;
+    if (content.length > remaining) content = content.slice(0, remaining);
+    if (!content) break;
+
+    newestFirst.push({
+      role: (row as Record<string, any>).role === "assistant" ? "assistant" : "user",
+      content,
+    });
+    used += content.length;
+  }
+
+  return newestFirst.reverse();
 }

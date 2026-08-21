@@ -2,9 +2,11 @@
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { API_URL, CONTRACTS_API, SUPABASE_ANON_KEY, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
+import { API_URL, CONTRACTS_API, SUPABASE_ANON_KEY, SUPABASE_URL, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
 import type { HomeData, Row, TeamMember, View } from "./shared";
+import { TabHelp } from "./tab-help";
 import { PortfolioCenter } from "./views/portfolio";
+import { DiaryCenter as StructuredDiaryCenter } from "./views/diary";
 // A aba de contratos entra por import dinamico de proposito: assim o codigo da
 // area privada so' e' baixado por quem o backend autorizou. Para os demais
 // colaboradores ele nem chega ao navegador.
@@ -167,6 +169,32 @@ export default function Dashboard() {
     setError("");
     try {
       const next = await api("home", session.access_token);
+      // Complemento de perfil: usa uma Edge Function pequena e autenticada para resolver
+      // a identidade ClickUp por ID e enriquecer o payload sem depender de deploy da API geral.
+      try {
+        const profileResponse = await fetch(`${SUPABASE_URL}/functions/v1/agency-ops-profile-data-api`, {
+          headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },
+          cache: "no-store",
+        });
+        if (profileResponse.ok) {
+          const extra = await profileResponse.json();
+          const gtByClient = new Map((extra.client_gt || []).map((row: Row) => [String(row.client_id), row.gt_owner ?? null]));
+          next.clients = (next.clients || []).map((client: Row) => ({
+            ...client,
+            gt_owner: client.gt_owner ?? gtByClient.get(String(client.client_id)) ?? null,
+          }));
+          next.operations = {
+            ...(next.operations || {}),
+            personal_focus: extra.focus || next.operations?.personal_focus || null,
+            design_focus: extra.profile?.role === "DESIGN" ? (extra.focus || next.operations?.design_focus || null) : next.operations?.design_focus,
+          };
+          next.profile = {
+            ...(next.profile || {}),
+            clickup_user_id: extra.profile?.clickup_user_id ?? next.profile?.clickup_user_id ?? null,
+            clickup_user: extra.profile?.clickup_username ?? next.profile?.clickup_user ?? null,
+          };
+        }
+      } catch { /* complemento nunca derruba a tela principal */ }
       preferencesRef.current = next.preferences || {};
       const newest = next.notifications?.[0];
       if (loadedRef.current && newest?.id && newest.id !== lastNotificationRef.current) {
@@ -231,7 +259,7 @@ export default function Dashboard() {
     const needle = query.trim().toLocaleLowerCase("pt-BR");
     if (isDesignRestricted) {
       return (data?.clients || [])
-        .filter((client) => !needle || text(client.display_name).toLocaleLowerCase("pt-BR").includes(needle))
+        .filter((client) => !needle || [client.display_name, client.gt_owner].join(" ").toLocaleLowerCase("pt-BR").includes(needle))
         .sort((a, b) => text(a.display_name).localeCompare(text(b.display_name), "pt-BR"));
     }
     return (data?.clients || [])
@@ -296,6 +324,7 @@ export default function Dashboard() {
   return (
 <>
     <main className={`shell ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
+      <TabHelp view={view} profile={data?.profile || {}} />
       <header className="top">
         <div className="brand">
           <div className="logo"><BrandMark /></div>
@@ -360,7 +389,7 @@ export default function Dashboard() {
       {view === "health" && canSee("health") && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando saúde dos clientes…</div>}><HealthCenter token={session.access_token} /></Suspense>}
       {view === "opsperf" && canSee("opsperf") && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando desempenho...</div>}><OpsPerfCenter token={session.access_token} /></Suspense>}
       {view === "team" && canSee("team") && <TeamCenter team={data?.team || []} teamMembers={Number(kpis.team_members || 0)} unassigned={data?.unassigned_clients || []} openClient={openClient} />}
-      {view === "diary" && canSee("diary") && <DiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />}
+      {view === "diary" && canSee("diary") && <StructuredDiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />}
       {view === "clickup" && canSee("clickup") && <ClickUpCenter clickup={data?.clickup || {}} reload={load} token={session.access_token} />}
       {view === "evidence" && canSee("evidence") && <EvidenceCenter clients={allClients} operations={data?.operations || {}} openClient={openClient} />}
       {view === "audit" && canSee("audit") && <AuditCenter runs={data?.audit_runs || []} issues={data?.audit_issues || []} />}
@@ -511,7 +540,7 @@ function WorkCenter({ token, clients, profile, focusId, clearFocus }: { token: s
       await apiPost("work-item-create", token, { ...form, client_id: form.client_id || null, target_person: personForRole(String(form.target_role)), due_at: form.due_at ? new Date(form.due_at).toISOString() : null, create_clickup: form.type === "CLICKUP" });
       setForm({ client_id: "", type: "GENERAL", priority: "MEDIUM", target_role: "CS", title: "", description: "", due_at: "" });
       setFormOpen(false); await loadWork();
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Falha ao criar demanda."); }
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Falha ao criar solicitação."); }
     finally { setBusy(""); }
   }
 
@@ -520,18 +549,18 @@ function WorkCenter({ token, clients, profile, focusId, clearFocus }: { token: s
     if (status === "COMPLETED" && !note) { setError("Descreva o que foi feito antes de concluir."); setExpanded(String(item.id)); return; }
     setBusy(String(item.id)); setError("");
     try { await apiPost("work-item-update", token, { id: item.id, status, resolution: note || undefined, snoozed_until: status === "SNOOZED" ? new Date(Date.now() + 86400000).toISOString() : undefined }); await loadWork(); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "Falha ao atualizar demanda."); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Falha ao atualizar solicitação."); }
     finally { setBusy(""); }
   }
 
   const summary = payload.summary || {};
   return <section className="workspace work-center">
-    <div className="workspace-head"><div><span className="eyebrow">Execução rastreável</span><h2>Central de Trabalho</h2><p>Receba, abra, execute e conclua demandas. Cada mudança fica registrada no banco e retorna uma notificação para quem solicitou.</p></div><button className="primary work-new" onClick={() => setFormOpen((open) => !open)}>{formOpen ? "Cancelar" : "+ Nova demanda"}</button></div>
+    <div className="workspace-head"><div><span className="eyebrow">Execução rastreável</span><h2>Central de Trabalho</h2><p>Receba, abra, execute e conclua solicitações. Cada mudança fica registrada no banco e retorna uma notificação para quem solicitou.</p></div><button className="primary work-new" onClick={() => setFormOpen((open) => !open)}>{formOpen ? "Cancelar" : "+ Nova solicitação"}</button></div>
     <div className="grid work-kpis"><Metric label="Em aberto" value={formatNumber(summary.open, 0)} tone="blue" hint="aguardando ação" /><Metric label="Críticas" value={formatNumber(summary.critical, 0)} tone="red" hint="prioridade máxima" /><Metric label="Atrasadas" value={formatNumber(summary.overdue, 0)} tone="yellow" hint="prazo vencido" /><Metric label="Concluídas 30d" value={formatNumber(summary.completed_30d, 0)} tone="green" hint="com evidência" /></div>
-    {formOpen && <form className="card work-form" onSubmit={createItem}><div className="section-title">Criar solicitação</div><div className="work-form-grid"><label>Cliente<select className="control" value={form.client_id} onChange={(event) => setForm((current: Row) => ({ ...current, client_id: event.target.value }))}><option value="">Demanda geral</option>{clients.map((client) => <option key={client.client_id} value={client.client_id}>{client.display_name}</option>)}</select></label><label>Tipo<select className="control" value={form.type} onChange={(event) => setForm((current: Row) => ({ ...current, type: event.target.value }))}><option value="GENERAL">Geral</option><option value="ESCALATION">Escalonamento</option><option value="CREATIVE_REQUEST">Solicitação para designer</option><option value="TECHNICAL">Problema técnico</option><option value="CLIENT_FOLLOWUP">Acompanhamento do cliente</option><option value="CLICKUP">Criar também no ClickUp</option></select></label><label>Responsável<select className="control" value={form.target_role} onChange={(event) => setForm((current: Row) => ({ ...current, target_role: event.target.value }))}><option value="CS">CS</option><option value="DESIGN">Designer</option><option value="GT">Gestor de Tráfego</option><option value="MGMT">Operações</option></select></label><label>Prioridade<select className="control" value={form.priority} onChange={(event) => setForm((current: Row) => ({ ...current, priority: event.target.value }))}><option value="CRITICAL">Crítica</option><option value="HIGH">Alta</option><option value="MEDIUM">Média</option><option value="LOW">Baixa</option></select></label><label>Prazo<input className="control" type="datetime-local" value={form.due_at} onChange={(event) => setForm((current: Row) => ({ ...current, due_at: event.target.value }))} /></label></div><label>Título<input className="control" required value={form.title} onChange={(event) => setForm((current: Row) => ({ ...current, title: event.target.value }))} placeholder="O que precisa ser feito" /></label><label>Contexto<textarea className="control" value={form.description} onChange={(event) => setForm((current: Row) => ({ ...current, description: event.target.value }))} placeholder="Explique o problema, a evidência e o resultado esperado" /></label><div className="work-form-footer"><span>{personForRole(String(form.target_role)) ? `Notificação para ${personForRole(String(form.target_role))}` : `Notificação para o perfil ${text(form.target_role)}`}</span><button className="primary" disabled={busy === "create"}>{busy === "create" ? "Criando…" : "Criar e notificar"}</button></div></form>}
+    {formOpen && <form className="card work-form" onSubmit={createItem}><div className="section-title">Criar solicitação</div><div className="work-form-grid"><label>Cliente<select className="control" value={form.client_id} onChange={(event) => setForm((current: Row) => ({ ...current, client_id: event.target.value }))}><option value="">Solicitação geral</option>{clients.map((client) => <option key={client.client_id} value={client.client_id}>{client.display_name}</option>)}</select></label><label>Tipo<select className="control" value={form.type} onChange={(event) => setForm((current: Row) => ({ ...current, type: event.target.value }))}><option value="GENERAL">Geral</option><option value="ESCALATION">Escalonamento</option><option value="CREATIVE_REQUEST">Solicitação para designer</option><option value="TECHNICAL">Problema técnico</option><option value="CLIENT_FOLLOWUP">Acompanhamento do cliente</option><option value="CLICKUP">Criar também no ClickUp</option></select></label><label>Responsável<select className="control" value={form.target_role} onChange={(event) => setForm((current: Row) => ({ ...current, target_role: event.target.value }))}><option value="CS">CS</option><option value="DESIGN">Designer</option><option value="GT">Gestor de Tráfego</option><option value="MGMT">Operações</option></select></label><label>Prioridade<select className="control" value={form.priority} onChange={(event) => setForm((current: Row) => ({ ...current, priority: event.target.value }))}><option value="CRITICAL">Crítica</option><option value="HIGH">Alta</option><option value="MEDIUM">Média</option><option value="LOW">Baixa</option></select></label><label>Prazo<input className="control" type="datetime-local" value={form.due_at} onChange={(event) => setForm((current: Row) => ({ ...current, due_at: event.target.value }))} /></label></div><label>Título<input className="control" required value={form.title} onChange={(event) => setForm((current: Row) => ({ ...current, title: event.target.value }))} placeholder="O que precisa ser feito" /></label><label>Contexto<textarea className="control" value={form.description} onChange={(event) => setForm((current: Row) => ({ ...current, description: event.target.value }))} placeholder="Explique o problema, a evidência e o resultado esperado" /></label><div className="work-form-footer"><span>{personForRole(String(form.target_role)) ? `Notificação para ${personForRole(String(form.target_role))}` : `Notificação para o perfil ${text(form.target_role)}`}</span><button className="primary" disabled={busy === "create"}>{busy === "create" ? "Criando…" : "Criar e notificar"}</button></div></form>}
     {error && <div className="error-box">{error}</div>}
     <div className="filter-tabs work-filters">{[["OPEN", "Em aberto"], ["IN_PROGRESS", "Em andamento"], ["WAITING", "Aguardando"], ["SNOOZED", "Adiados"], ["COMPLETED", "Concluídos"], ["ALL", "Todos"]].map(([key, label]) => <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key)}>{label}</button>)}</div>
-    <div className="work-list">{visible.map((item) => { const open = expanded === String(item.id); const client = item.clients || {}; return <article id={`work-${item.id}`} className={`card work-item${open ? " expanded" : ""}`} key={item.id}><button className="work-item-main" onClick={() => setExpanded(open ? null : String(item.id))}><Chip value={item.priority} /><span><b>{text(item.title)}</b><small>{text(client.display_name || "Demanda geral")} · de {text(item.created_by_person)} para {text(item.target_person || item.target_role)}</small></span><Chip value={item.status} /></button>{open && <div className="work-item-detail"><p>{text(item.description || "Sem descrição adicional.")}</p><div className="work-meta"><span>Criada em {formatDate(item.created_at)}</span><span>Prazo: {item.due_at ? formatDate(item.due_at) : "sem prazo"}</span>{item.completed_by && <span>Concluída por {text(item.completed_by)}</span>}</div>{item.metadata?.clickup_url && <a className="work-clickup" href={item.metadata.clickup_url} target="_blank" rel="noreferrer">Abrir tarefa no ClickUp ↗</a>}{!["COMPLETED", "DISMISSED"].includes(item.status) && <><textarea className="control" value={resolution[String(item.id)] || ""} onChange={(event) => setResolution((current) => ({ ...current, [String(item.id)]: event.target.value }))} placeholder="Registre o que foi feito, a decisão ou o motivo…" /><div className="work-actions"><button disabled={busy === String(item.id)} onClick={() => updateItem(item, "IN_PROGRESS")}>Iniciar</button><button disabled={busy === String(item.id)} onClick={() => updateItem(item, "WAITING")}>Aguardando</button><button disabled={busy === String(item.id)} onClick={() => updateItem(item, "SNOOZED")}>Adiar 1 dia</button><button className="success" disabled={busy === String(item.id)} onClick={() => updateItem(item, "COMPLETED")}>Concluir</button><button className="muted" disabled={busy === String(item.id)} onClick={() => updateItem(item, "DISMISSED")}>Descartar</button></div></>}{item.resolution && <div className="work-resolution"><b>Conclusão</b><p>{text(item.resolution)}</p></div>}</div>}</article>; })}{!loading && !visible.length && <div className="card empty">Nenhuma demanda nesse filtro.</div>}{loading && <div className="card empty">Carregando demandas…</div>}</div>
+    <div className="work-list">{visible.map((item) => { const open = expanded === String(item.id); const client = item.clients || {}; return <article id={`work-${item.id}`} className={`card work-item${open ? " expanded" : ""}`} key={item.id}><button className="work-item-main" onClick={() => setExpanded(open ? null : String(item.id))}><Chip value={item.priority} /><span><b>{text(item.title)}</b><small>{text(client.display_name || "Solicitação geral")} · de {text(item.created_by_person)} para {text(item.target_person || item.target_role)}</small></span><Chip value={item.status} /></button>{open && <div className="work-item-detail"><p>{text(item.description || "Sem descrição adicional.")}</p><div className="work-meta"><span>Criada em {formatDate(item.created_at)}</span><span>Prazo: {item.due_at ? formatDate(item.due_at) : "sem prazo"}</span>{item.completed_by && <span>Concluída por {text(item.completed_by)}</span>}</div>{item.metadata?.clickup_url && <a className="work-clickup" href={item.metadata.clickup_url} target="_blank" rel="noreferrer">Abrir tarefa no ClickUp ↗</a>}{!["COMPLETED", "DISMISSED"].includes(item.status) && <><textarea className="control" value={resolution[String(item.id)] || ""} onChange={(event) => setResolution((current) => ({ ...current, [String(item.id)]: event.target.value }))} placeholder="Registre o que foi feito, a decisão ou o motivo…" /><div className="work-actions"><button disabled={busy === String(item.id)} onClick={() => updateItem(item, "IN_PROGRESS")}>Iniciar</button><button disabled={busy === String(item.id)} onClick={() => updateItem(item, "WAITING")}>Aguardando</button><button disabled={busy === String(item.id)} onClick={() => updateItem(item, "SNOOZED")}>Adiar 1 dia</button><button className="success" disabled={busy === String(item.id)} onClick={() => updateItem(item, "COMPLETED")}>Concluir</button><button className="muted" disabled={busy === String(item.id)} onClick={() => updateItem(item, "DISMISSED")}>Descartar</button></div></>}{item.resolution && <div className="work-resolution"><b>Conclusão</b><p>{text(item.resolution)}</p></div>}</div>}</article>; })}{!loading && !visible.length && <div className="card empty">Nenhuma solicitação nesse filtro.</div>}{loading && <div className="card empty">Carregando solicitações…</div>}</div>
   </section>;
 }
 
@@ -822,6 +851,7 @@ function FocusCenter({ clients, allClients, operations, alerts, openClient }: { 
   const waiting: Row[] = operations.sla?.waiting_agency || [];
   const overdue: Row[] = operations.sla?.overdue_commitments || [];
   const criticos = useMemo(() => alerts.filter((alert) => ["CRITICAL", "HIGH"].includes(alert.severity)), [alerts]);
+  const personalClickup: Row[] = operations.personal_focus?.open_tasks || [];
 
   const filas = useMemo(() => {
     const responder: FocoItem[] = waiting.map((row) => ({
@@ -862,6 +892,24 @@ function FocusCenter({ clients, allClients, operations, alerts, openClient }: { 
       chip: alert.severity,
     }));
 
+    const now = new Date();
+    const clickupResolver: FocoItem[] = personalClickup
+      .filter((row) => row.due_date && new Date(String(row.due_date)) <= now)
+      .map((row) => ({
+        key: `clickup-${row.task_id}`, lane: "solve" as const, client_id: row.client_id ?? null,
+        cliente: nome(row.client_id, text(row.client_display_name || row.list_name || "Demanda interna")),
+        titulo: text(row.name || "Tarefa do ClickUp"), detalhe: `ClickUp · ${text(row.status || "aberta")} · ${row.due_date ? `prazo ${formatDate(row.due_date)}` : "sem prazo"}`,
+        dono: text(operations.personal_focus?.owner || "você"), horas: horasDesde(row.due_date), chip: "CLICKUP",
+      }));
+    const clickupAcompanhar: FocoItem[] = personalClickup
+      .filter((row) => !row.due_date || new Date(String(row.due_date)) > now)
+      .map((row) => ({
+        key: `clickup-${row.task_id}`, lane: "follow" as const, client_id: row.client_id ?? null,
+        cliente: nome(row.client_id, text(row.client_display_name || row.list_name || "Demanda interna")),
+        titulo: text(row.name || "Tarefa do ClickUp"), detalhe: `ClickUp · ${text(row.status || "aberta")} · ${row.due_date ? `prazo ${formatDate(row.due_date)}` : "sem prazo"}`,
+        dono: text(operations.personal_focus?.owner || "você"), horas: horasDesde(row.date_updated || row.date_created), chip: row.due_date ? "CLICKUP" : "SEM PRAZO",
+      }));
+
     const acompanhar: FocoItem[] = clients
       .filter((client) => ["ATTENTION", "FOLLOW_UP", "DATA_INCOMPLETE"].includes(client.priority) && client.next_step)
       .map((client) => ({
@@ -881,10 +929,10 @@ function FocusCenter({ clients, allClients, operations, alerts, openClient }: { 
     const porAtraso = (a: FocoItem, b: FocoItem) => (b.horas ?? -1) - (a.horas ?? -1);
     return {
       reply: responder.sort(porAtraso),
-      solve: [...resolverCompromissos, ...resolverAlertas].sort(porAtraso),
-      follow: acompanhar.sort(porAtraso),
+      solve: [...resolverCompromissos, ...resolverAlertas, ...clickupResolver].sort(porAtraso),
+      follow: [...acompanhar, ...clickupAcompanhar].sort(porAtraso),
     };
-  }, [waiting, overdue, criticos, clients, clientePorId]);
+  }, [waiting, overdue, criticos, clients, clientePorId, personalClickup, operations.personal_focus?.owner]);
 
   const lanes = [
     { key: "reply" as const, verbo: "Responder", titulo: "Alguém está esperando você", ajuda: "Conversas em que o cliente falou por último e a agência ainda não voltou.", itens: filas.reply, tom: "danger" },
@@ -960,7 +1008,7 @@ function FocusCenter({ clients, allClients, operations, alerts, openClient }: { 
 }
 
 function ClientPortfolio({ clients, total, query, setQuery, filter, setFilter, lifecycleFilter, setLifecycleFilter, openClient, restricted = false }: { clients: Row[]; total: number; query: string; setQuery: (value: string) => void; filter: string; setFilter: (value: string) => void; lifecycleFilter:string; setLifecycleFilter:(value:string)=>void; openClient: (id: string) => void; restricted?: boolean }) {
-  if (restricted) return <section className="workspace"><div className="workspace-head"><div><h2>Clientes</h2><p>Nome e tempo de relacionamento com a agência.</p></div><span className="counter">{clients.length} de {total}</span></div><section className="card section"><div className="toolbar portfolio-tools"><input className="control" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente" /></div><div className="table-wrap"><table><thead><tr><th scope="col">Cliente</th><th scope="col">Tempo conosco</th></tr></thead><tbody>{clients.map((client) => <tr key={client.client_id}><td><div className="name">{text(client.display_name)}</div></td><td>{client.client_days == null ? "—" : `${formatNumber(client.client_days, 0)} dias`}</td></tr>)}{!clients.length && <tr><td colSpan={2} className="empty">Nenhum cliente encontrado.</td></tr>}</tbody></table></div></section></section>;
+  if (restricted) return <section className="workspace"><div className="workspace-head"><div><h2>Clientes</h2><p>Cliente, Gestor de Tráfego responsável e tempo de relacionamento com a agência.</p></div><span className="counter">{clients.length} de {total}</span></div><section className="card section"><div className="toolbar portfolio-tools"><input className="control" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente ou Gestor de Tráfego" /></div><div className="table-wrap"><table><thead><tr><th scope="col">Cliente</th><th scope="col">Gestor de Tráfego</th><th scope="col">Tempo conosco</th></tr></thead><tbody>{clients.map((client) => <tr key={client.client_id}><td><div className="name">{text(client.display_name)}</div></td><td>{text(client.gt_owner || "Sem GT vinculado")}</td><td>{client.client_days == null ? "—" : `${formatNumber(client.client_days, 0)} dias`}</td></tr>)}{!clients.length && <tr><td colSpan={3} className="empty">Nenhum cliente encontrado.</td></tr>}</tbody></table></div></section></section>;
   return <section className="workspace"><div className="workspace-head"><div><h2>Carteira completa</h2><p>Saúde, tempo como cliente, responsáveis e próxima ação.</p></div><span className="counter">{clients.length} de {total}</span></div><section className="card section"><div className="toolbar portfolio-tools"><input className="control" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente ou responsável" /><select className="control" value={lifecycleFilter} onChange={(event) => setLifecycleFilter(event.target.value)}><option value="ACTIVE">Ativos</option><option value="CHURNED">Churned</option><option value="ALL">Todos</option></select><select className="control" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="ALL">Todas as prioridades</option><option value="ATTENTION">Atenção</option><option value="FOLLOW_UP">Acompanhamento</option><option value="OK">OK</option><option value="UNDETERMINED">Indeterminado</option><option value="DATA_INCOMPLETE">Dados incompletos</option></select></div><div className="table-wrap"><table><thead><tr><th scope="col">Cliente</th><th scope="col">Status</th><th scope="col">Saúde</th><th scope="col">Tempo como cliente</th><th scope="col">Próxima ação</th><th scope="col">Responsável</th></tr></thead><tbody>{clients.map((client) => { const score = healthScore(client); return <tr key={client.client_id} onClick={() => openClient(client.client_id)}><td><button type="button" className="cell-open name" onClick={(e) => { e.stopPropagation(); openClient(client.client_id); }} aria-label={`Abrir ${text(client.display_name)}`}>{text(client.display_name)}</button><div className="small">{text(client.current_subject)}</div></td><td><Chip value={client.lifecycle}/></td><td><div className="score"><b>{score}</b><i><span style={{width:`${score}%`}} /></i></div></td><td>{client.entrada ? <><div>{formatNumber(client.client_days,0)} dias</div><div className="small">desde {new Intl.DateTimeFormat("pt-BR").format(new Date(`${client.entrada}T12:00:00`))}</div></> : "Revisão manual"}</td><td>{client.lifecycle === "CHURNED" ? "Histórico encerrado" : text(client.next_step)}<div className="small">{client.lifecycle === "CHURNED" ? "Sem alerta operacional" : relativeDate(client.next_step_due)}</div></td><td>{text(client.action_owner || client.cs_owner)}<div className="small">{client.carteira ? `Carteira ${client.carteira}` : "Sem carteira"}</div></td></tr>; })}{!clients.length && <tr><td colSpan={6} className="empty">Nenhum cliente nesse filtro.</td></tr>}</tbody></table></div></section></section>;
 }
 
@@ -1148,7 +1196,7 @@ function ClickUpRangeExplorer({ token, people }: { token: string; people: string
     const row: any = byDate.get(dateKey);
     return (
       <span key={dateKey}>
-        <b>{row ? row.tasks_done : 0}</b>
+        <b>{formatNumber(row ? row.tasks_done : 0, 0)} tarefas</b>
         {label}
       </span>
     );
@@ -1157,6 +1205,7 @@ function ClickUpRangeExplorer({ token, people }: { token: string; people: string
   return (
     <section className="card section">
       <div className="section-title">Produtividade por periodo</div>
+      <div className="small">Critério de prazo atual: tarefas sem prazo cadastrado contam como sem atraso.</div>
       <div className="filter-tabs">
         {presets.map((p) => (
           <button key={p.key} type="button" className={preset === p.key ? "active" : ""} onClick={() => setPreset(p.key)}>
@@ -1191,15 +1240,23 @@ function ClickUpRangeExplorer({ token, people }: { token: string; people: string
       {rangeLoading && <div className="empty">Carregando...</div>}
       {!rangeLoading && rangeData && (
         <div>
-          {(rangeData.summary ?? []).map((row: any) => (
-            <div className="productivity-row" key={row.user_id}>
-              <div>
-                <b>{row.person}</b>
-                <small>{row.tasks_done} tasks - ciclo medio {row.avg_cycle_hours ?? "-"}h</small>
+          {(rangeData.summary ?? []).map((row: any) => {
+            const totalConsiderado = Number(row.completed_on_time ?? 0) + Number(row.completed_late ?? 0);
+            const semAtrasoPct = totalConsiderado > 0 ? (100 * Number(row.completed_on_time ?? 0)) / totalConsiderado : null;
+            return (
+              <div className="productivity-row" key={row.user_id}>
+                <div>
+                  <b>{row.person}</b>
+                  <small>{formatNumber(row.tasks_done, 0)} tarefas concluídas · {row.avg_cycle_hours == null ? "Ciclo médio não disponível" : `Ciclo médio ${formatNumber(row.avg_cycle_hours)}h`}</small>
+                </div>
+                <div title="Critério atual: tarefas concluídas até o prazo e tarefas sem prazo cadastrado contam como sem atraso; atraso é conclusão após a data limite do ClickUp." style={{ textAlign: "right" }}>
+                  <small style={{ display: "block" }}>Sem atraso registrado</small>
+                  <strong style={{ display: "block" }}>{formatNumber(row.completed_on_time, 0)} / {formatNumber(totalConsiderado, 0)} tarefas</strong>
+                  <small style={{ display: "block" }}>{semAtrasoPct == null ? "Percentual não disponível" : `${formatNumber(semAtrasoPct, 1)}% sem atraso`}</small>
+                </div>
               </div>
-              <strong>{row.completed_on_time}/{row.completed_on_time + row.completed_late}</strong>
-            </div>
-          ))}
+            );
+          })}
           {!(rangeData.summary ?? []).length && <div className="empty">Sem dados no periodo selecionado.</div>}
         </div>
       )}
@@ -1381,18 +1438,18 @@ function ClickUpCenter({ clickup, reload, token }: { clickup: Row; reload: () =>
     <div className="workspace-head"><div><h2>Produtividade no ClickUp</h2><p>Tarefas finalizadas são espelhadas no Supabase; a execução continua no ClickUp.</p></div><div className="clickup-actions"><Chip value={connected ? "CONECTADO" : "AGUARDANDO TOKEN"}/>{collaborators.length > 0 && <select className="control" value={collabFilter} onChange={(event) => setCollabFilter(event.target.value)}><option value="ALL">Todos os colaboradores</option>{collaborators.map((name) => <option key={name} value={name}>{name}</option>)}</select>}{clickup.configured && !clickup.webhook_configured && <button disabled={Boolean(busy)} onClick={() => run("register")}>{busy === "register" ? "Ativando…" : "Ativar tempo real"}</button>}{clickup.configured && <button disabled={Boolean(busy)} onClick={() => run("sync")}>{busy === "sync" ? "Importando…" : "Atualizar dados"}</button>}</div></div>
     {message && <div className="action-message">{message}</div>}
     <div className="grid clickup-kpis">
-      <Metric label="Concluídas registradas" value={formatNumber(clickup.total_completed)} tone="green" hint="desde janeiro de 2026"/>
-      <Metric label="Indexadas por cliente" value={indexing.matched == null ? "—" : `${formatNumber(indexing.matched)} · ${formatNumber(indexing.match_rate)}%`} tone="blue" hint={indexing.unmatched_label == null ? "acesso restrito" : `${formatNumber(indexing.unmatched_label)} rótulos pendentes`}/>
-      <Metric label="Pessoas com entregas" value={formatNumber(productivity.length)} tone="blue" hint="últimos 30 dias"/>
-      <Metric label="Última sincronização" value={clickup.last_sync ? text(clickup.last_sync.status) : "—"} tone={clickup.last_sync?.status === "SUCCESS" ? "green" : "yellow"} hint={formatDate(clickup.last_sync?.finished_at || clickup.last_sync?.started_at)}/>
+      <Metric label="Concluídas registradas" value={`${formatNumber(clickup.total_completed, 0)} tarefas`} tone="green" hint="desde janeiro de 2026"/>
+      <Metric label="Indexadas por cliente" value={indexing.matched == null ? "Acesso restrito" : `${formatNumber(indexing.matched, 0)} tarefas vinculadas`} tone="blue" hint={indexing.unmatched_label == null ? "Disponível apenas para perfis com visão global do ClickUp" : `${formatNumber(indexing.unmatched_label, 0)} com rótulo sem correspondência · ${formatNumber(indexing.without_label || 0, 0)} sem rótulo`}/>
+      <Metric label="Pessoas com entregas" value={`${formatNumber(productivity.length, 0)} pessoas`} tone="blue" hint="últimos 30 dias"/>
+      <Metric label="Última sincronização" value={clickup.last_sync ? (pt[text(clickup.last_sync.status)] || text(clickup.last_sync.status)) : "Sem sincronização"} tone={clickup.last_sync?.status === "SUCCESS" ? "green" : "yellow"} hint={clickup.last_sync ? formatDate(clickup.last_sync.finished_at || clickup.last_sync.started_at) : "Nenhuma execução registrada"}/>
     </div>
     {!connected && <div className="connection-note"><b>A ponte e o banco já estão prontos.</b><p>Falta configurar o token da API e o ID do Workspace ClickUp. O segredo do webhook será criado e guardado automaticamente ao ativar o tempo real.</p></div>}
     <ClickUpRangeExplorer token={token} people={(clickup.productivity_30d ?? []).map((r: any) => r.person)} />
     <div className="grid clickup-split">
-      <section className="card section"><div className="section-title">Produção por pessoa · 30 dias{collabFilter !== "ALL" && ` · ${collabFilter}`}</div>{filteredProductivity.map((row: Row, index: number) => <div className="productivity-row" key={row.user_id}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>{text(row.person)}</b><small>{formatNumber(row.tracked_hours)}h registradas · {row.on_time_pct == null ? "SLA sem base" : `${formatNumber(row.on_time_pct)}% no prazo`}</small></div><strong>{formatNumber(row.tasks_done)}</strong></div>)}{!filteredProductivity.length && <div className="empty">{productivity.length ? "Nenhum resultado para esse colaborador." : "Os indicadores aparecerão após a primeira sincronização."}</div>}</section>
+      <section className="card section"><div className="section-title">Produção por pessoa · 30 dias{collabFilter !== "ALL" && ` · ${collabFilter}`}</div>{filteredProductivity.map((row: Row, index: number) => <div className="productivity-row" key={row.user_id}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>{text(row.person)}</b><small title="Critério atual: tarefas sem prazo cadastrado também contam como sem atraso.">{formatNumber(row.tracked_hours)} horas registradas · {row.on_time_pct == null ? "Sem base para indicador de prazo" : `${formatNumber(row.on_time_pct)}% sem atraso registrado`}</small></div><strong>{formatNumber(row.tasks_done, 0)} tarefas</strong></div>)}{!filteredProductivity.length && <div className="empty">{productivity.length ? "Nenhum resultado para esse colaborador." : "Os indicadores aparecerão após a primeira sincronização."}</div>}</section>
       <section className="card section"><div className="section-title">Últimas tarefas concluídas{collabFilter !== "ALL" && ` · ${collabFilter}`}</div><div className="table-wrap"><table className="completed-table"><thead><tr><th scope="col">Tarefa</th><th scope="col">Colaborador</th><th scope="col">Lista e conclusão</th><th scope="col">Status</th></tr></thead><tbody>{filteredRecent.slice(0,20).map((task: Row) => { const assignees = Array.isArray(task.clickup_task_assignees) ? task.clickup_task_assignees : []; const collaboratorsLabel = assignees.map((person: Row) => person.username || person.email).filter(Boolean).join(", ") || "Não atribuído"; return <tr key={task.task_id}><td><a href={task.url || undefined} target="_blank" rel="noreferrer"><b>{text(task.name)}</b></a></td><td>{collaboratorsLabel}</td><td>{text(task.list_name)}<div className="small">{formatDate(task.date_closed)}</div></td><td><Chip value={task.status}/></td></tr>; })}{!filteredRecent.length && <tr><td colSpan={4} className="empty">{recent.length ? "Nenhuma tarefa desse colaborador." : "Nenhuma tarefa importada ainda."}</td></tr>}</tbody></table></div></section>
     </div>
-    {unmatchedLabels.length > 0 && <section className="card section"><div className="section-title">Rótulos sem correspondência na base de clientes</div>{unmatchedLabels.slice(0,20).map((row: Row, index: number) => <div className="productivity-row" key={`${row.client_label}-${index}`}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>[{text(row.client_label)}]</b><small>Requer cliente cadastrado ou confirmação de equivalência</small></div><strong>{formatNumber(row.task_count)}</strong></div>)}</section>}
+    {unmatchedLabels.length > 0 && <section className="card section"><div className="section-title">Rótulos sem correspondência na base de clientes</div>{unmatchedLabels.slice(0,20).map((row: Row, index: number) => <div className="productivity-row" key={`${row.client_label}-${index}`}><span className="rank">{String(index+1).padStart(2,"0")}</span><div><b>[{text(row.client_label)}]</b><small>Requer cliente cadastrado ou confirmação de equivalência</small></div><strong>{formatNumber(row.task_count, 0)} tarefas</strong></div>)}</section>}
   </section>;
 }
 

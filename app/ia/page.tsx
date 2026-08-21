@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { AI_API_BASE, BrandMark, supabase } from "../shared";
+import { TabHelp } from "../tab-help";
 import "./ai.css";
 
 type Conversation = {
@@ -245,6 +246,7 @@ export default function AIWorkspace() {
 
   return (
     <main className={`ai-shell ${sidebarOpen ? "ai-sidebar-open" : "ai-sidebar-closed"}`}>
+      <TabHelp view="ai" profile={{ person: profile?.person, role: profile?.role, access_level: profile?.accessLevel }} />
       <aside className="ai-sidebar">
         <div className="ai-brand-row">
           <a className="ai-brand" href="/" title="Voltar à Central de Operações"><span className="ai-logo"><BrandMark /></span><span><b>Central de Operações</b><small>IA da agência</small></span></a>

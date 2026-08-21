@@ -13,11 +13,20 @@ export const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7
 export const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api`;
 export const CONTRACTS_API = `${SUPABASE_URL}/functions/v1/agency-ops-contracts-api`;
 export const CLICKUP_API_URL = `${SUPABASE_URL}/functions/v1/clickup-sync-api`;
+export const CS_CLIENTS_API = `${SUPABASE_URL}/functions/v1/agency-ops-cs-clients-api`;
+export const WORK_ITEM_CREATE_API = `${SUPABASE_URL}/functions/v1/agency-ops-work-item-create-api`;
 // Backend da IA roda na VPS Hostinger, atras do mesmo dominio do Dashboard.
 // Same-origin de proposito: nenhum preflight de CORS e nenhuma credencial
 // privilegiada precisa transitar pelo navegador.
 export const AI_API_BASE = "/api/ai";
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+// O dashboard aceita a mesma conta em mais de um computador. O logout padrao do
+// Supabase pode revogar outras sessoes; aqui qualquer signOut() sem escopo passa a
+// encerrar somente esta sessao/browser. Chamadas que precisem explicitamente de outro
+// escopo ainda podem informa-lo normalmente.
+const rawSignOut = supabase.auth.signOut.bind(supabase.auth);
+supabase.auth.signOut = ((options?: Parameters<typeof rawSignOut>[0]) => rawSignOut(options ?? { scope: "local" })) as typeof supabase.auth.signOut;
 
 export type Row = Record<string, any>;
 export type TeamMember = {
@@ -186,28 +195,123 @@ export function initials(value: unknown) {
   return String(value || "CO").trim().split(/\s+/).map((part) => part[0]).slice(0,2).join("").toUpperCase();
 }
 
+// Todas as chamadas autenticadas passam por esta camada. O token recebido pelos
+// componentes serve apenas para compatibilidade com as assinaturas antigas; antes de
+// sair para a rede consultamos a sessao atual do Supabase. Assim, uma aba antiga que
+// ficou com um access token em um closure para imediatamente de bater nas APIs depois
+// de logout. Se o access token apenas venceu, fazemos UM refresh compartilhado e
+// repetimos a requisicao uma unica vez.
+let refreshSessionPromise: Promise<string | null> | null = null;
 
-export async function api(view: string, token: string, params: Record<string, string> = {}) {
+export class SessionExpiredError extends Error {
+  code = "SESSION_EXPIRED";
+  constructor() { super("Sessão encerrada. Entre novamente para continuar."); this.name = "SessionExpiredError"; }
+}
+
+export function isSessionExpiredError(error: unknown): error is SessionExpiredError {
+  return error instanceof SessionExpiredError || (error instanceof Error && (error as any).code === "SESSION_EXPIRED");
+}
+
+async function liveAccessToken(): Promise<string | null> {
+  const { data, error } = await supabase.auth.getSession();
+  if (error) return null;
+  return data.session?.access_token ?? null;
+}
+
+async function refreshAccessToken(): Promise<string | null> {
+  if (!refreshSessionPromise) {
+    refreshSessionPromise = (async () => {
+      const { data, error } = await supabase.auth.refreshSession();
+      if (error || !data.session?.access_token) return null;
+      return data.session.access_token;
+    })().finally(() => { refreshSessionPromise = null; });
+  }
+  return refreshSessionPromise;
+}
+
+function authHeaders(init: RequestInit, token: string) {
+  const headers = new Headers(init.headers || {});
+  headers.set("Authorization", `Bearer ${token}`);
+  headers.set("apikey", SUPABASE_ANON_KEY);
+  return headers;
+}
+
+export async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const currentToken = await liveAccessToken();
+  if (!currentToken) throw new SessionExpiredError();
+
+  const request = (token: string) => fetch(input, { ...init, headers: authHeaders(init, token) });
+  let response = await request(currentToken);
+  if (response.status !== 401) return response;
+
+  const refreshedToken = await refreshAccessToken();
+  if (!refreshedToken) {
+    await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+    throw new SessionExpiredError();
+  }
+
+  response = await request(refreshedToken);
+  if (response.status === 401) {
+    await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+    throw new SessionExpiredError();
+  }
+  return response;
+}
+
+export async function api(view: string, _token: string, params: Record<string, string> = {}) {
   const url = new URL(API_URL);
   url.searchParams.set("view", view);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  const response = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
+  const response = await authenticatedFetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
+  const json = await response.json();
+
+  // CS precisa abrir solicitações para qualquer cliente da operação. O endpoint
+  // principal continua com o escopo histórico de CS, então enriquecemos o payload
+  // do home por uma rota autenticada específica, sem elevar o perfil inteiro.
+  if (view === "home" && json?.profile?.role === "CS") {
+    try {
+      const clientResponse = await authenticatedFetch(CS_CLIENTS_API, { cache: "no-store" });
+      if (clientResponse.ok) {
+        const extra = await clientResponse.json();
+        if (Array.isArray(extra?.clients)) {
+          const currentById = new Map<string, Row>((json.clients || []).map((client: Row) => [String(client.client_id), client] as [string, Row]));
+          json.clients = extra.clients.map((client: Row) => ({ ...client, ...(currentById.get(String(client.client_id)) || {}) }));
+        }
+      }
+    } catch {
+      // Falha complementar não derruba o dashboard; a API principal continua válida.
+    }
+  }
+
+  // Defesa em profundidade no navegador: GT nunca recebe na Central de Notificações
+  // evento de cliente fora da própria carteira. Notificação sem client_id também não
+  // entra para GT, evitando ruído genérico e vazamento entre carteiras. Alertas de
+  // saldo seguem exatamente a mesma regra porque também carregam client_id.
+  if (view === "home" && json?.profile?.role === "GT") {
+    const walletIds = new Set((json.clients || []).map((client: Row) => String(client.client_id)).filter(Boolean));
+    json.notifications = (json.notifications || []).filter((item: Row) => item?.client_id && walletIds.has(String(item.client_id)));
+  }
+
+  return json;
+}
+
+export async function apiPost(view: string, _token: string, body: Row = {}) {
+  const endpoint = view === "work-item-create"
+    ? WORK_ITEM_CREATE_API
+    : `${API_URL}?view=${encodeURIComponent(view)}`;
+  const response = await authenticatedFetch(endpoint, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
   });
   if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
   return response.json();
 }
 
-export async function apiPost(view: string, token: string, body: Row = {}) {
-  const response = await fetch(`${API_URL}?view=${encodeURIComponent(view)}`, { method:"POST", headers:{Authorization:`Bearer ${token}`,"content-type":"application/json"}, body:JSON.stringify(body) });
-  if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
-  return response.json();
-}
-
-export async function clickupAction(action: "register" | "sync", token: string) {
+export async function clickupAction(action: "register" | "sync", _token: string) {
   if (action === "register") {
-    const response = await fetch(`${CLICKUP_API_URL}?action=register`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+    const response = await authenticatedFetch(`${CLICKUP_API_URL}?action=register`, { method: "POST" });
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || body.error || `ClickUp ${response.status}`);
     return body;
@@ -215,7 +319,7 @@ export async function clickupAction(action: "register" | "sync", token: string) 
   let pageStart = 0;
   const totals = { tasks_seen: 0, tasks_upserted: 0, tasks_closed: 0 };
   for (let batch = 0; batch < 100; batch++) {
-    const response = await fetch(`${CLICKUP_API_URL}?action=sync&since_days=180&page_start=${pageStart}&max_pages=5`, { method: "POST", headers: { Authorization: `Bearer ${token}` } });
+    const response = await authenticatedFetch(`${CLICKUP_API_URL}?action=sync&since_days=180&page_start=${pageStart}&max_pages=5`, { method: "POST" });
     const body = await response.json();
     if (!response.ok) throw new Error(body.detail || body.error || `ClickUp ${response.status}`);
     totals.tasks_seen += Number(body.tasks_seen || 0);

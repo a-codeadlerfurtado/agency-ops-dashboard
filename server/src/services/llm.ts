@@ -25,13 +25,25 @@ export type LlmResult = {
 export async function askLlm(system: string, turns: Turn[]): Promise<LlmResult> {
   const started = Date.now();
   const model = env.openaiModel;
+  const focusedSystem = [
+    system,
+    "REGRA DE FOCO DA CONVERSA:",
+    "- A pergunta MAIS RECENTE do usuario tem prioridade absoluta sobre o historico.",
+    "- Use mensagens anteriores apenas para resolver referencias como 'ele', 'esse cliente', 'isso' ou para manter continuidade quando a pergunta realmente depender delas.",
+    "- Se a pergunta atual mudou de assunto, ignore numeros, listas e conclusoes de respostas anteriores que nao sejam necessarios para responder ao novo assunto.",
+    "- Nunca reutilize um numero de uma resposta anterior como se fosse resposta da pergunta atual sem evidencia atual que sustente esse mesmo numero.",
+    "- Quando houver evidencia operacional da rodada atual, ela vence qualquer memoria da conversa que entre em conflito.",
+    "- Seja conciso por padrao; detalhe apenas quando a pergunta exigir.",
+  ].join("\n");
 
   try {
     const response = await client.chat.completions.create({
       model,
-      max_completion_tokens: env.openaiMaxTokens,
+      // Mantemos teto suficiente para analises, mas impedimos respostas enormes de
+      // varios milhares de tokens de aumentar latencia e contaminar a proxima rodada.
+      max_completion_tokens: Math.min(env.openaiMaxTokens, 3000),
       messages: [
-        { role: "system", content: system },
+        { role: "system", content: focusedSystem },
         ...turns.map((turn) => ({ role: turn.role, content: turn.content }) as const),
       ],
     });
