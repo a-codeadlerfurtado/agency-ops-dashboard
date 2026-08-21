@@ -167,7 +167,7 @@ Deno.serve(async (req) => {
     .lt("locked_at", staleBefore);
 
   const { data: eventos, error: erroFila } = await ops.from("task_generation_events")
-    .select("*").in("status", ["PENDING", "ERROR"]).lte(\"available_at\", agora)
+    .select("*").in("status", ["PENDING", "ERROR"]).lte("available_at", agora)
     .order("urgency", { ascending: true }).order("id", { ascending: true }).limit(limite);
   if (erroFila) return json({ ok: false, error: erroFila.message }, 500);
   if (!eventos?.length) return json({ ok: true, processados: 0, modo, provider, modelo });
