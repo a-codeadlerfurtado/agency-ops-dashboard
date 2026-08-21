@@ -1,0 +1,32 @@
+-- PAINEL DE DESEMPENHO OP - camada de dados.
+--
+-- As definicoes exatas de whatsapp_message_actor, whatsapp_response_times,
+-- identidade_whatsapp_para_quadro e performance_report(int) foram aplicadas em
+-- producao nas migrations 20260820223021 a 20260820223625. Este arquivo registra as
+-- DECISOES DE METODO, que sao a parte que nao da' para reconstruir lendo o SQL:
+--
+-- 1) MEDIANA E P90, NUNCA MEDIA. Medido nesta base: a media chega a 35x a mediana
+--    (Adler - mediana 2 min, media 69 min). Uma resposta esquecida num fim de semana
+--    desloca a media do mes inteiro. Mediana = o dia normal. p90 = o dia ruim.
+--
+-- 2) MINUTOS UTEIS (08h-18h, America/Sao_Paulo), via agency_ops.business_minutes.
+--    Mensagem das 22h respondida as 8h30 vale 30 minutos, nao 10 horas.
+--
+-- 3) UMA ESPERA POR CONVERSA, nao uma por mensagem. Cliente que manda cinco mensagens
+--    seguidas gera UMA espera - senao quem atende cliente falante parece pior.
+--
+-- 4) PONTUALIDADE JUSTA. Descoberta que mudou o painel: 442 das 1.104 tarefas com
+--    prazo (40%) tem due_date ANTERIOR a' data de criacao - nascem vencidas. Cobrar
+--    isso do responsavel e' cobrar o impossivel. A pontualidade so' conta tarefa com
+--    prazo real; as nascidas vencidas viram o sinal PRAZO_IRREAL, que aponta para o
+--    processo e nao para a pessoa. Efeito: Vitor Hugo sai de 23% para 52%, Felipe de
+--    21% para 48%. Joel e Gustavo tem ZERO tarefas nascidas vencidas e 91% de
+--    pontualidade - o fluxo de task do CS e' saudavel, o do GT nao e'.
+--
+-- 5) COMPARACAO DENTRO DO PAPEL. CS responde muito e entrega pouca task; designer faz
+--    o inverso. Ranking geral nao significaria nada, entao vai junto a mediana do papel.
+--
+-- 6) DESEMPENHO NAO SE MEDE EM 11 SEGUNDOS. A primeira versao da view usava lateral
+--    correlacionado e levava 11,7s. Reescrita com funcao de janela: 678ms. Mesmo assim
+--    NAO entra no payload de "home" (que ja' leva ~1,9s e recarrega a cada 30s) - tem
+--    que ser rota propria, sob demanda.
