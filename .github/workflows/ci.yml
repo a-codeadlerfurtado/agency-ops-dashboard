@@ -25,27 +25,21 @@ jobs:
           import re
           path = Path('supabase/functions/agency-ops-dashboard-api/index.ts')
           text = path.read_text()
-
           pattern_adjust = re.compile(r'    // ---- Diario de Ajustes\.[\s\S]*?    // ---- Registro de Tarefas\.', re.M)
           replacement_adjust = '''    // ---- Diario de Ajustes. Escrita movida para agency-ops-diary-api, que deriva o ator do JWT\n    // e chama RPCs SECURITY DEFINER. Manter esta rota antiga ativa permitiria contornar autoria.\n    if (view === "adjustment-create") {\n      return respond({ error: "deprecated_diary_endpoint" }, 410);\n    }\n    // ---- Registro de Tarefas.'''
           if pattern_adjust.search(text): text = pattern_adjust.sub(replacement_adjust, text, count=1)
           elif 'deprecated_diary_endpoint' not in text: raise SystemExit('adjustment legacy block not found')
-
           pattern_task = re.compile(r'    // ---- Registro de Tarefas\.[\s\S]*?    if \(view === "work-item-create"\)', re.M)
           replacement_task = '''    // ---- Registro de Tarefas. Também fica exclusivamente na API dedicada do Diário.\n    if (view === "tasklog-create") {\n      return respond({ error: "deprecated_tasklog_endpoint" }, 410);\n    }\n    if (view === "work-item-create")'''
           if pattern_task.search(text): text = pattern_task.sub(replacement_task, text, count=1)
           elif 'deprecated_tasklog_endpoint' not in text: raise SystemExit('tasklog legacy block not found')
-
           old_tasklog = '  const taskLog = aggregateTaskLog(isFull ? taskLogRows : taskLogRows.filter((row: any) => row.user_key === currentUserKey));'
           new_tasklog = '  const taskLog = aggregateTaskLog(taskLogRows.filter((row: any) => row.user_key === currentUserKey));'
           if old_tasklog in text: text = text.replace(old_tasklog, new_tasklog, 1)
           elif new_tasklog not in text: raise SystemExit('tasklog home scope anchor not found')
-
           pattern_rows = re.compile(r'  const adjustments = value<any\[]>\(platformData\[8\], \[\]\)[\s\S]*?\n\n  return respond\(\{', re.M)
-          if pattern_rows.search(text):
-              text = pattern_rows.sub('  // Registros pessoais não trafegam mais no payload geral; a API dedicada aplica autoria/escopo.\n  const adjustments: any[] = [];\n\n  return respond({', text, count=1)
+          if pattern_rows.search(text): text = pattern_rows.sub('  // Registros pessoais não trafegam mais no payload geral; a API dedicada aplica autoria/escopo.\n  const adjustments: any[] = [];\n\n  return respond({', text, count=1)
           elif 'const adjustments: any[] = [];' not in text: raise SystemExit('adjustments home payload anchor not found')
-
           path.write_text(text)
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -58,6 +52,15 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
+      - name: Commit validated hardening
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --quiet -- supabase/functions/agency-ops-dashboard-api/index.ts; then exit 0; fi
+          git config user.name "chatgpt-automation"
+          git config user.email "chatgpt-automation@users.noreply.github.com"
+          git add supabase/functions/agency-ops-dashboard-api/index.ts
+          git commit -m "Harden legacy Diary API paths"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
       - name: Setup Supabase CLI
         if: github.event_name == 'pull_request'
         uses: supabase/setup-cli@v1
@@ -70,12 +73,3 @@ jobs:
         run: |
           test -n "$SUPABASE_ACCESS_TOKEN" || { echo "SUPABASE_ACCESS_TOKEN secret is missing"; exit 1; }
           supabase functions deploy agency-ops-dashboard-api --project-ref bfzdetibfcwihfkltbkp --no-verify-jwt
-      - name: Commit validated hardening
-        if: github.event_name == 'pull_request'
-        run: |
-          if git diff --quiet -- supabase/functions/agency-ops-dashboard-api/index.ts; then exit 0; fi
-          git config user.name "chatgpt-automation"
-          git config user.email "chatgpt-automation@users.noreply.github.com"
-          git add supabase/functions/agency-ops-dashboard-api/index.ts
-          git commit -m "Harden legacy Diary API paths"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
