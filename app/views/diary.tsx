@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { SUPABASE_ANON_KEY, SUPABASE_URL, formatDate, text } from "../shared";
+import { SUPABASE_ANON_KEY, SUPABASE_URL, formatDay, text } from "../shared";
 import type { Row } from "../shared";
 
 const DIARY_API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-diary-api`;
@@ -30,6 +30,12 @@ function opsDateTimeInput(date = new Date()) {
 function toOpsTimestamp(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return "";
   return `${value}:00-03:00`;
+}
+function formatOpsDateTime(value: unknown) {
+  if (!value) return "sem registro";
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo", dateStyle: "short", timeStyle: "short",
+  }).format(new Date(String(value)));
 }
 async function diaryRequest(view: string, token: string, options?: { method?: "GET" | "POST"; params?: Record<string, string>; body?: Row }) {
   const url = new URL(DIARY_API_URL);
@@ -234,7 +240,7 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
               <p style={{ margin: "6px 0 0" }}><b>O que:</b> {text(entry.description)}</p>
               <p style={{ margin: "4px 0 0" }}><b>Por quê:</b> {entry.reason ? text(entry.reason) : "Não identificado no registro legado."}</p>
               {entry.resolution && <p style={{ margin: "4px 0 0" }}><b>Solução:</b> {text(entry.resolution)}</p>}
-              <small style={{ display: "block", marginTop: 6 }}>Registrado por {text(entry.author_name || "Autor não identificado")} · ajuste em {formatDate(entry.occurred_at)}{entry.created_at ? ` · registrado em ${formatDate(entry.created_at)}` : " · data de registro indisponível (legado)"}</small>
+              <small style={{ display: "block", marginTop: 6 }}>Registrado por {text(entry.author_name || "Autor não identificado")} · ajuste em {formatOpsDateTime(entry.occurred_at)}{entry.created_at ? ` · registrado em ${formatOpsDateTime(entry.created_at)}` : " · data de registro indisponível (legado)"}</small>
               <small>{entry.request_origin ? `Origem: ${labelOf(ORIGINS, entry.request_origin)}` : "Origem não identificada (legado)"}{entry.responsible_area ? ` · Área: ${labelOf(AREAS, entry.responsible_area)}` : ""}</small>
               {editId === Number(entry.id) && <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
                 <select className="control" value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>{STATUSES.map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select>
@@ -259,7 +265,7 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
         {taskError && <div className="error-box" style={{ marginTop: 8 }}>{taskError}</div>}
         <button type="button" className="primary" style={{ marginTop: 10 }} disabled={taskSaving} onClick={submitTask}>{taskSaving ? "Salvando…" : "Registrar tarefa"}</button>
       </section>
-      <section className="card section" style={{ marginTop: 16 }}><div className="section-title">{scope === "all" ? "TaskLog da equipe" : "Meu TaskLog"}</div>{taskRows.map((entry) => <div className="productivity-row" key={entry.id}><div><b>{text(entry.task_name)}</b><small>{text(entry.category)} · {text(entry.collaborator_name)}</small></div><strong>{formatDate(entry.task_date)}</strong></div>)}{!loading && !taskRows.length && <div className="empty">Nenhuma tarefa neste escopo.</div>}</section>
+      <section className="card section" style={{ marginTop: 16 }}><div className="section-title">{scope === "all" ? "TaskLog da equipe" : "Meu TaskLog"}</div>{taskRows.map((entry) => <div className="productivity-row" key={entry.id}><div><b>{text(entry.task_name)}</b><small>{text(entry.category)} · {text(entry.collaborator_name)}</small></div><strong>{formatDay(entry.task_date)}</strong></div>)}{!loading && !taskRows.length && <div className="empty">Nenhuma tarefa neste escopo.</div>}</section>
     </>}
   </section>;
 }
