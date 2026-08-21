@@ -784,6 +784,10 @@ Deno.serve(async (req) => {
     ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).eq("client_match_status", "UNMATCHED"),
     ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).eq("client_match_status", "NO_LABEL"),
     ops.from("clickup_client_label_audit").select("client_label,task_count,status").eq("status", "UNMATCHED").order("task_count", { ascending: false }).limit(30),
+    // Foco do Designer: tarefas abertas e conclusoes recentes com os responsaveis.
+    // O filtro pessoal e aplicado abaixo, depois que o perfil ja foi resolvido.
+    ops.from("clickup_tasks").select("task_id,name,status,status_type,date_created,date_updated,start_date,due_date,time_estimate_ms,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", false).order("due_date", { ascending: true, nullsFirst: false }).limit(1000),
+    ops.from("clickup_tasks").select("task_id,name,status,date_closed,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", true).gte("date_closed", new Date(Date.now() - 36 * 86400000 / 24).toISOString()).order("date_closed", { ascending: false }).limit(500),
     ]),
     Promise.all([
     ops.from("platform_notifications").select("*").order("occurred_at", { ascending: false }).limit(100),
@@ -940,6 +944,39 @@ Deno.serve(async (req) => {
   const productivityDaily = clickupScoped ? rawProductivityDaily : rawProductivityDaily.filter((row) => norm(row.person) === norm(profileClickupUser));
   const recentCompleted = clickupScoped ? rawRecentCompleted : rawRecentCompleted.filter((row: any) => (row.clickup_task_assignees ?? []).some((a: any) => norm(a.username) === norm(profileClickupUser)));
 
+  // ---- Foco pessoal de Design. Nao reaproveita alertas, conversas, compromissos
+  // nem prioridades de carteira: cada item nasce de uma tarefa ClickUp aberta e
+  // atribuida ao designer autenticado.
+  const designOwnerKeys = new Set([norm(profileClickupUser), norm(profilePerson)].filter(Boolean));
+  const assignedToDesigner = (row: any) => (row.clickup_task_assignees ?? []).some((assignee: any) => {
+    const email = norm(assignee.email);
+    return [assignee.user_id, assignee.username, assignee.email, email.split("@")[0]]
+      .some((candidate) => designOwnerKeys.has(norm(candidate)));
+  });
+  const exposeDesignTask = (row: any) => ({
+    task_id: row.task_id,
+    name: row.name,
+    status: row.status,
+    status_type: row.status_type ?? null,
+    date_created: row.date_created ?? null,
+    date_updated: row.date_updated ?? null,
+    start_date: row.start_date ?? null,
+    due_date: row.due_date ?? null,
+    time_estimate_ms: row.time_estimate_ms ?? null,
+    list_name: row.list_name ?? null,
+    client_id: row.client_id ?? null,
+    client_display_name: row.client_id ? (clientMeta.get(row.client_id)?.display_name ?? null) : null,
+    url: row.url ?? null,
+  });
+  const designOpenTasks = isDesignRestricted
+    ? value<any[]>(clickupData[9], []).filter(assignedToDesigner).map(exposeDesignTask)
+    : [];
+  const designClosedToday = isDesignRestricted
+    ? value<any[]>(clickupData[10], [])
+        .filter((row: any) => assignedToDesigner(row) && row.date_closed && opsDay(new Date(row.date_closed)) === opsDay())
+        .map(exposeDesignTask)
+    : [];
+
   // ---- Pre-clientes: filtra registros sinteticos de teste e, para carteiras (GT), oculta a
   // aba inteira (nao e' area de trabalho de gestor de trafego).
   const preclientsRaw = value<any[]>(platformData[1], []).filter((row) => !SYNTHETIC_NAME.test(String(row.name ?? "").trim()) && !SYNTHETIC_NAME.test(String(row.company ?? "").trim()));
@@ -1016,7 +1053,16 @@ Deno.serve(async (req) => {
   // ja' prometia no titulo ("Minhas ultimas tarefas").
   const taskLogRows = value<any[]>(platformData[7], []);
   const taskLog = aggregateTaskLog(isFull ? taskLogRows : taskLogRows.filter((row: any) => row.user_key === currentUserKey));
+  // Cada registro do Diario pertence ao perfil que o criou. O filtro e' aplicado
+  // no payload da API (nao apenas na tela), impedindo que Davi receba ajustes do
+  // Joel, ou qualquer colaborador veja o historico de outro perfil.
   const adjustments = value<any[]>(platformData[8], [])
+    .filter((row: any) => {
+      const authorUserKey = String(row.metadata?.author_user_key ?? "");
+      if (authorUserKey) return authorUserKey === currentUserKey;
+      // Compatibilidade com registros antigos, anteriores ao author_user_key.
+      return norm(row.metadata?.author_name ?? row.responsible_person) === norm(profilePerson);
+    })
     .filter((row: any) => inScope(row.client_id))
     .map((row: any) => ({ ...row, client_display_name: row.client_id ? (clientMeta.get(row.client_id)?.display_name ?? null) : null }));
 
@@ -1032,6 +1078,7 @@ Deno.serve(async (req) => {
       // Evidencias e' tela de gestao: quem nao tem a aba tambem nao recebe o dado.
       evidence_review: canView("evidence") ? evidenceReview.slice(0, 100) : [],
       task_log: taskLog,
+      design_focus: isDesignRestricted ? { owner: profilePerson, open_tasks: designOpenTasks, closed_today: designClosedToday } : null,
     },
     adjustments,
     clickup: isFull ? { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: totalClickup, last_sync: lastClickupSync, configured: Boolean(clickupConfig?.token && clickupConfig?.team_id), webhook_configured: Boolean(clickupConfig?.webhook_secret), indexing: { matched: matchedClickup, match_rate: totalClickup ? Number((100 * matchedClickup / totalClickup).toFixed(1)) : 0, unmatched_label: results[18].count ?? 0, without_label: results[19].count ?? 0, unmatched_labels: value(results[20], []) } } : { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: recentCompleted.length, last_sync: null, configured: null, webhook_configured: null, indexing: null },
@@ -1053,4 +1100,5 @@ Deno.serve(async (req) => {
     generated_at: new Date().toISOString(),
   });
 });
+
 
