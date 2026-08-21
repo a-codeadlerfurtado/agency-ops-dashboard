@@ -1,6 +1,7 @@
 import "./globals.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
+import CampaignNotesBridge from "./campaign-notes-bridge";
 import OnboardingNavBridge from "./onboarding-nav-bridge";
 import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OpsQuestionBrand from "./opsquestion-brand";
@@ -24,6 +25,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         {children}
         <CampaignsNavBridge />
+        <CampaignNotesBridge />
         <OnboardingNavBridge />
         <OnboardingAssignmentBridge />
         <IntegrationHealthBar />
