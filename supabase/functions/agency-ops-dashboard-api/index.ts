@@ -184,9 +184,13 @@ Deno.serve(async (req) => {
       }
     }
   }
-  const canView = (key: string) => allowedViews.includes(key);
   const isAdler = !viaLogin || profilePerson === "Adler Furtado";
   const isLeonardo = profilePerson === "Leonardo Augusto";
+  // Alertas operacionais sao dados de decisao: somente Operacoes (Adler), CS e GT.
+  // GT/CS continuam submetidos ao escopo da propria carteira logo abaixo.
+  const canViewOperationalAlerts = isAdler || profileRole === "CS" || profileRole === "GT";
+  if (!canViewOperationalAlerts) allowedViews = allowedViews.filter((key) => key !== "alerts");
+  const canView = (key: string) => allowedViews.includes(key);
 
   // ---- Central de Diretrizes Criativas: manual historico + identidade + sinais vivos.
   if (req.method === "GET" && view === "creative") {
@@ -846,7 +850,9 @@ Deno.serve(async (req) => {
   const clients = walletSet ? allClients.filter((row) => walletSet.has(row.client_id)) : allClients;
   const activeClients = clients.filter((row) => ["ACTIVE", "ONBOARDING"].includes(row.lifecycle));
   const activeIds = new Set(activeClients.map((row) => row.client_id));
-  const alerts: any[] = value(results[1], []).filter((row: any) => inScope(row.client_id));
+  const alerts: any[] = canViewOperationalAlerts
+    ? value(results[1], []).filter((row: any) => inScope(row.client_id))
+    : [];
   const commitments: any[] = value(results[2], []).filter((row: any) => inScope(row.client_id));
   const conversations: any[] = value(results[3], []).filter((row: any) => inScope(row.client_id));
   const briefings: any[] = value(results[4], []).filter((row: any) => inScope(row.client_id));
@@ -1094,7 +1100,7 @@ Deno.serve(async (req) => {
     // Quem nao decide nao precisa da fila: o gate era isFull, entao todo perfil de
     // acesso total recebia os nomes de quem esta esperando aprovacao sem poder aprovar.
     access_requests_pending: canDecideAccessRequests ? value(teamData[4], []) : [],
-    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, portfolio_scoped: isPortfolioScoped, elevated, can_decide_access_requests: canDecideAccessRequests, can_manage_finance: isAdler && canView("finance"), is_executive: isLeonardo && canView("executive"), locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson) },
+    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, portfolio_scoped: isPortfolioScoped, elevated, can_decide_access_requests: canDecideAccessRequests, can_view_operational_alerts: canViewOperationalAlerts, can_manage_finance: isAdler && canView("finance"), is_executive: isLeonardo && canView("executive"), locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson) },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
     auth_mode: currentUserKey === "adler-furtado" && suppliedKey.length >= 40 ? "dashboard_key" : "login",
     generated_at: new Date().toISOString(),

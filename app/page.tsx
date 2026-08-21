@@ -13,6 +13,7 @@ const ContractsCenter = lazy(() => import("./views/contracts").then((m) => ({ de
 const HealthCenter = lazy(() => import("./views/health").then((m) => ({ default: m.HealthCenter })));
 const ClientContractSection = lazy(() => import("./views/contracts").then((m) => ({ default: m.ClientContractSection })));
 const OpsPerfCenter = lazy(() => import("./views/opsperf").then((m) => ({ default: m.OpsPerfCenter })));
+const CreativeCenter = lazy(() => import("./views/creative").then((m) => ({ default: m.CreativeCenter })));
 
 function AuthScreen() {
   const [mode, setMode] = useState<"login" | "signup">("login");
@@ -140,7 +141,7 @@ export default function Dashboard() {
   const viewsKey = viewsFrescas && !viewsStale ? viewsFrescas.join(",") : viewsCache;
   const allowedViews = useMemo(() => new Set<string>(viewsKey ? viewsKey.split(",") : ["overview", "focus"]), [viewsKey]);
   const navItems = useMemo(() => ([
-    ["overview", "Visão geral"], ["focus", "Foco do dia"], ["work", "Central de Trabalho"], ["clients", "Clientes"], ["health", "Saúde"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"], ["opsperf", "Desempenho OP"],
+    ["overview", "Visão geral"], ["focus", "Foco do dia"], ["work", "Central de Trabalho"], ["clients", "Clientes"], ["creative", "Central Criativa"], ["health", "Saúde"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"], ["opsperf", "Desempenho OP"],
   ] as [View, string][]).filter(([key]) => allowedViews.has(key)), [allowedViews]);
   // Aba aberta que deixou de ser permitida volta para a primeira disponivel.
   useEffect(() => {
@@ -224,6 +225,7 @@ export default function Dashboard() {
   }, [theme]);
 
   const isDesignRestricted = data?.profile?.role === "DESIGN";
+  const isAdlerAccount = session?.user?.id === "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
   const isGtPortfolio = data?.profile?.role === "GT" && !data?.profile?.elevated;
   const clients = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("pt-BR");
@@ -323,23 +325,22 @@ export default function Dashboard() {
             ...navItems,
             ...(contractsAllowed ? [["contracts", "Contratos"]] : []),
           ] as [View, string][]).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} title={label}>{label}{key === "contracts" && contractsUnread > 0 && <span className="chip" style={{ marginLeft: 6 }}>{contractsUnread}</span>}</button>)}
-          {/* A IA e' rota propria, nao aba de estado: link de verdade, para abrir
-              direto em /ia e continuar funcionando no voltar do navegador. */}
-          <a href="/ia" title="IA da agência">IA</a>
+          {isAdlerAccount
+            ? <a href="/ia" title="IA da agência">IA</a>
+            : <button type="button" title="IA em desenvolvimento" onClick={() => window.alert("Esta função está em desenvolvimento pelo PAI DO OP.")}>IA (Beta)</button>}
         </div>
       </aside>
 
       {error && <div className="error-box">{error}</div>}
 
-      {isDesignRestricted && view === "focus"
-        ? <DesignFocusMetrics focus={data?.operations?.design_focus || {}} loading={!data} />
-        : <section className="grid kpis">
+      {isDesignRestricted && view === "focus" && <DesignFocusMetrics focus={data?.operations?.design_focus || {}} loading={!data} />}
+      {view === "overview" && <section className="grid kpis">
             <Metric label="Clientes ativos" value={formatNumber(kpis.active_clients)} tone="blue" hint="Ativos + onboarding" loading={!data} />
             <Metric label="Atenção agora" value={formatNumber(kpis.attention_now)} tone="red" hint="prioridade operacional" loading={!data} />
             <Metric label="Follow-up" value={formatNumber(kpis.follow_up)} tone="yellow" hint="ação em acompanhamento" loading={!data} />
             <Metric label="Operação OK" value={formatNumber(kpis.ok)} tone="green" hint="sem pendência crítica" loading={!data} />
             <Metric label="Compromissos vencidos" value={formatNumber(kpis.overdue_commitments)} tone={kpis.overdue_commitments ? "red" : "green"} hint="em aberto" loading={!data} />
-            <Metric label="Alertas abertos" value={formatNumber(kpis.open_alerts)} tone={kpis.critical_alerts ? "red" : "yellow"} hint={`${formatNumber(kpis.critical_alerts)} críticos/altos`} loading={!data} />
+            {data?.profile?.can_view_operational_alerts && <Metric label="Alertas abertos" value={formatNumber(kpis.open_alerts)} tone={kpis.critical_alerts ? "red" : "yellow"} hint={`${formatNumber(kpis.critical_alerts)} críticos/altos`} loading={!data} />}
           </section>}
 
       {view === "focus" && (isDesignRestricted
@@ -351,6 +352,7 @@ export default function Dashboard() {
         : <><PortfolioCenter portfolio={data?.portfolio || null} openClient={openClient} />
           <details className="card portfolio-fulllist"><summary>Lista completa de clientes <span>{allClients.length}</span></summary>
           <ClientPortfolio clients={clients} total={allClients.length} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} lifecycleFilter={lifecycleFilter} setLifecycleFilter={setLifecycleFilter} openClient={openClient} /></details></>)}
+      {view === "creative" && canSee("creative") && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando Central Criativa…</div>}><CreativeCenter token={session.access_token} /></Suspense>}
       {view === "onboarding" && canSee("onboarding") && <OnboardingBoard groups={onboardingGroups} stageLabels={data?.stage_labels || {}} openClient={openClient} />}
       {view === "campaigns" && canSee("campaigns") && <CampaignCenter media={media} campaigns={filteredCampaigns} clients={allClients} campaignFilter={campaignFilter} setCampaignFilter={setCampaignFilter} openClient={openClient} />}
       {view === "preclients" && canSee("preclients") && <PreClientCenter rows={data?.preclients || []} won={data?.won_events || []} />}
@@ -1291,7 +1293,7 @@ function DiaryCenter({ clients, adjustments, taskLog, profile, token, reload }: 
       </div>
       <div className="filter-tabs">
         <button type="button" className={tab === "ajustes" ? "active" : ""} onClick={() => setTab("ajustes")}>Diário de Ajustes</button>
-        <button type="button" className={tab === "tasklog" ? "active" : ""} onClick={() => setTab("tasklog")}>Registro de Tarefas</button>
+        <button type="button" className={tab === "tasklog" ? "active" : ""} onClick={() => setTab("tasklog")}>TaskLog</button>
       </div>
 
       {tab === "ajustes" && (

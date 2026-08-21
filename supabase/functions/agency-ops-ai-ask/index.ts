@@ -270,9 +270,8 @@ Deno.serve(async (req) => {
   const approved = approvals ?? [];
   const accountApproved = approved.some((r: any) => r.kind === "SIGNUP");
   const elevated = accessLevel === "RESTRICTED" && approved.some((r: any) => r.kind === "ELEVATION");
-  const isFull = accessLevel === "FULL" || elevated;
   if (!accountApproved || !person) return reply({ ok: false, error: "OpsQuestion indisponível: conta ainda não liberada." }, 403);
-  if (!isFull) return reply({ ok: false, error: "OpsQuestion está liberado somente para perfis de gestão/acesso total por enquanto." }, 403);
+  if (user.id !== "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476") return reply({ ok: false, error: "OpsQuestion está em Beta e disponível somente para Adler." }, 403);
 
   const body = await req.json().catch(() => ({}));
   const question = typeof body?.question === "string" ? body.question.trim() : "";

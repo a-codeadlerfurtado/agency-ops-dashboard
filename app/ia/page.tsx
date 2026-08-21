@@ -241,6 +241,7 @@ export default function AIWorkspace() {
 
   if (!authReady) return <main className="ai-auth"><span className="ai-spinner" /> Validando sua sessão…</main>;
   if (!session) return <main className="ai-auth"><div><h1>Faça login na Central de Operações</h1><p>A IA usa o mesmo perfil e as mesmas permissões do Dashboard.</p><a href="/">Voltar para o login</a></div></main>;
+  if (session.user.id !== "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476") return <main className="ai-auth"><div><h1>IA (Beta)</h1><p>Esta função está em desenvolvimento pelo PAI DO OP.</p><a href="/">Voltar para a Central de Operações</a></div></main>;
 
   return (
     <main className={`ai-shell ${sidebarOpen ? "ai-sidebar-open" : "ai-sidebar-closed"}`}>
