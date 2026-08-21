@@ -80,12 +80,13 @@ Deno.serve(async (req) => {
     const email = norm(a.email);
     return [a.username, a.email, email.split("@")[0]].some((candidate) => ownerKeys.has(norm(candidate)));
   });
+
+  // Regra operacional: somente GT tem carteira. CS e DESIGN atendem as 3 carteiras.
   const clientInScope = (row: any) => {
     if (!row.client_id) return true;
     const client = clientMap.get(String(row.client_id));
     if (!client) return true;
     if (roster.role === "GT") return client.gt_owner === person;
-    if (roster.role === "CS") return client.cs_owner === person;
     return true;
   };
   const isDesignTask = (row: any) => {
@@ -117,6 +118,7 @@ Deno.serve(async (req) => {
       clickup_user_id: clickupUserId, clickup_username: clickupUsername,
       auth_user_id: identity?.auth_user_id ?? null,
       synchronized_pct: Number(identity?.sincronizado_pct ?? 0), missing_identities: identity?.faltando ?? [],
+      scope_model: roster.role === "GT" ? "OWN_WALLET" : (["CS", "DESIGN"].includes(roster.role) ? "ALL_WALLETS" : "ROLE_DEFAULT"),
     },
     focus: { owner: person, open_tasks: openTasks, closed_today: closedToday, summary: designSummaryRes.data ?? null },
     stats: teamStats ?? null,
