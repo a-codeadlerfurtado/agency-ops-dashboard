@@ -15,7 +15,7 @@ type DeliveryFilter = "ALL" | "ACTIVE_DELIVERY" | "NO_META_ACCOUNT" | "NO_DELIVE
 type PeriodKey = "TODAY" | "YESTERDAY" | "LAST_7D" | "LAST_14D" | "LAST_28D" | "LAST_30D" | "THIS_MONTH" | "LAST_MONTH" | "LAST_90D" | "CUSTOM";
 type DateRange = { since: string; until: string; label: string };
 type ClientTab = "summary" | "strategy" | "audience" | "campaigns" | "integrations" | "history";
-type TimelineEvent = { at: unknown; type: string; title: unknown; detail?: unknown; tone?: unknown; url?: string | null };
+type TimelineEvent = { at: any; type: string; title: any; detail?: any; tone?: any; url?: string | null };
 
 const statusLabel: Record<string, string> = {
   ACTIVE_DELIVERY: "Com entrega",
