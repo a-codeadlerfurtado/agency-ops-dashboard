@@ -5,6 +5,7 @@ import OnboardingNavBridge from "./onboarding-nav-bridge";
 import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
+import WeekendBalanceAlert from "./weekend-balance-alert";
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
@@ -26,6 +27,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OnboardingNavBridge />
         <OnboardingAssignmentBridge />
         <IntegrationHealthBar />
+        <WeekendBalanceAlert />
         <OpsQuestionWidget />
         <OpsQuestionBrand />
       </body>
