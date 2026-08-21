@@ -185,15 +185,22 @@ export default function IntegrationHealthBar() {
   useEffect(() => {
     if (!session?.access_token) { setData(null); return; }
     let active = true;
+    let accessDenied = false;
     async function load() {
+      if (accessDenied) return;
       setLoading(true);
       try {
         const response = await fetch(HEALTH_API_URL, {
           headers: { Authorization: `Bearer ${session!.access_token}`, apikey: SUPABASE_ANON_KEY },
           cache: "no-store",
         });
-        // 403 = perfil sem acesso a esta visao. Nao e' falha: a barra some.
-        if (response.status === 403) { if (active) { setForbidden(true); setData(null); } return; }
+        // 403 = perfil sem acesso a esta visao. Nao e' falha: a barra some e
+        // esta sessao para de consultar o endpoint para nao gerar polling inutil.
+        if (response.status === 403) {
+          accessDenied = true;
+          if (active) { setForbidden(true); setData(null); }
+          return;
+        }
         if (!response.ok) throw new Error(String(response.status));
         if (active) setForbidden(false);
         const payload = await response.json();
