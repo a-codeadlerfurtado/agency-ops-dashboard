@@ -1,4 +1,6 @@
 do $activate_task_engine_live$
+declare
+  v_command text;
 begin
   if not exists (
     select 1
@@ -18,10 +20,19 @@ begin
     raise exception 'CLICKUP_API_TOKEN is not configured';
   end if;
 
-  update cron.job
-  set command = replace(command, 'modo=SHADOW', 'modo=LIVE')
+  select command into v_command
+  from cron.job
   where jobid = 50
     and command like '%agency-ops-task-engine%';
+
+  if v_command is null then
+    raise exception 'Task Engine cron job 50 was not found';
+  end if;
+
+  perform cron.alter_job(
+    job_id := 50,
+    command := replace(v_command, 'modo=SHADOW', 'modo=LIVE')
+  );
 
   if not exists (
     select 1
