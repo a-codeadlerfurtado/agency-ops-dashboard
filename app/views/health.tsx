@@ -38,7 +38,7 @@ type Linha = {
   prioridade: number | string | null;
 };
 
-type Perfil = { person: string | null; role: string | null; scoped: boolean; sem_atribuicao: boolean };
+type Perfil = { person: string | null; role: string | null; scoped: boolean; carteira: string | null };
 
 type Resumo = {
   total: number; ativos: number; risco_alto: number; insatisfeitos: number;
@@ -130,7 +130,7 @@ export function HealthCenter({ token }: { token: string }) {
           <p>Satisfação e risco de churn ao lado do score interno da operação. Onde as duas leituras discordam, a linha avisa.</p>
         </div>
         <span className="counter">
-          {visiveis.length} de {resumo?.ativos ?? 0} ativos{perfil?.scoped ? " · sua carteira" : ""}
+          {visiveis.length} de {resumo?.ativos ?? 0} ativos{perfil?.carteira ? ` · carteira ${perfil.carteira}` : ""}
         </span>
       </div>
 
@@ -154,15 +154,6 @@ export function HealthCenter({ token }: { token: string }) {
         </div>
 
         {erro && <div className="error-box">{erro}</div>}
-        {!erro && perfil?.sem_atribuicao && (
-          <div className="empty compact">
-            <b>Nenhum cliente atribuído a você ainda.</b>
-            <div className="small" style={{ marginTop: 4 }}>
-              Esta aba mostra só os seus clientes. Hoje a atribuição existe para GT (carteira);
-              para {perfil.role === "CS" ? "CS" : "este papel"} ela ainda não foi cadastrada — fale com o Adler.
-            </div>
-          </div>
-        )}
         {carregando && !linhas.length && <div className="empty compact">Carregando…</div>}
         {!carregando && !visiveis.length && !erro && <div className="empty compact">Nenhum cliente neste filtro.</div>}
 

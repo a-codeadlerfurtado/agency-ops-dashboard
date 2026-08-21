@@ -114,27 +114,21 @@ Deno.serve(async (req: Request) => {
 
   let rows = data ?? [];
 
-  // Recorte por pessoa nesta aba, mais estreito que o resto da Central.
+  // Quem tem carteira ve' a carteira; quem nao tem, ve' a base.
   //
-  // Fora daqui, so' WALLET_ONLY filtra carteira. Aqui quem atende ve' apenas os
-  // proprios clientes, mesmo tendo acesso FULL: saude do cliente e' conversa de
-  // quem segura a relacao, e a base inteira vira relatorio de gestao. MGMT e AI
-  // continuam vendo tudo porque a leitura deles e' justamente o agregado.
-  //
-  // Compara as tres colunas de dono, e nao so' gt_owner, para o dia em que a
-  // atribuicao de CS existir a tela ja' funcionar sem mudanca de codigo.
-  const veTudo = identity.role === "MGMT" || identity.role === "AI";
-  const meu = (row: any) =>
-    identity.person !== null &&
-    (row.gt_owner === identity.person || row.cs_owner === identity.person || row.designer_owner === identity.person);
+  // O recorte pergunta ao wallet_registry em vez de decidir por papel. Hoje isso
+  // significa GT recortado e CS inteiro - CS nao tem divisao de carteira, atende
+  // todo mundo, e recortar por dono devolveria zero para eles. Amanha, se algum
+  // CS ganhar carteira, basta cadastrar: a regra nao muda.
+  let carteiraDe: string | null = null;
+  if (identity.person) {
+    const { data: carteira } = await ops
+      .from("wallet_registry").select("carteira").eq("gt_owner", identity.person).maybeSingle();
+    carteiraDe = carteira?.carteira ?? null;
+  }
 
-  let semAtribuicao = false;
-  if (!veTudo) {
-    const meus = rows.filter(meu);
-    // Zero atribuicao nao e' "nenhum cliente com problema": e' cadastro faltando.
-    // A tela precisa saber a diferenca para explicar em vez de mostrar vazio.
-    semAtribuicao = meus.length === 0;
-    rows = meus;
+  if (carteiraDe) {
+    rows = rows.filter((row: any) => row.gt_owner === identity.person);
   }
 
   const ativos = rows.filter((row: any) => row.lifecycle === "ACTIVE" || row.lifecycle === "ONBOARDING");
@@ -161,8 +155,8 @@ Deno.serve(async (req: Request) => {
       person: identity.person,
       role: identity.role,
       access_level: identity.accessLevel,
-      scoped: !veTudo,
-      sem_atribuicao: semAtribuicao,
+      scoped: Boolean(carteiraDe),
+      carteira: carteiraDe,
     },
     generated_at: new Date().toISOString(),
   });
