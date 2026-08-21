@@ -27,3 +27,9 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
+      - name: Export dashboard API source
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-api-source
+          path: supabase/functions/agency-ops-dashboard-api/index.ts
+          if-no-files-found: error
