@@ -23,16 +23,18 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Wire profile data API
+        run: python scripts/wire_profile_data_api.py
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
-      - name: Mark validated head
+      - name: Commit validated frontend and marker
         run: |
           printf '%s\n' "validated $(git rev-parse HEAD)" > .github/final-consolidated-validation.ok
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/final-consolidated-validation.ok
-          git commit -m "chore: mark consolidated build validated"
+          git add app/page.tsx .github/final-consolidated-validation.ok
+          git commit -m "fix: wire ID-based profile data into dashboard"
           git push origin HEAD:chatgpt/diary-43-44-20260821
 
-# trigger 2
+# trigger 3
