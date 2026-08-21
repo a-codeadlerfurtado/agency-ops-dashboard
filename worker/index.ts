@@ -1,28 +1,21 @@
 import handler from "vinext/server/fetch-handler";
 
-// O site nao devolvia nenhum cabecalho de seguranca. Sem eles o navegador aceita
-// coisas que o dashboard nunca deveria permitir: ser embutido num iframe de outro
-// site (clickjacking - a pessoa clica achando que esta em outro lugar e aprova um
-// acesso aqui), carregar script de dominio estranho se alguem conseguir injetar
-// HTML, e vazar a URL interna no Referer ao clicar num link externo.
-//
-// A CSP e' a trava principal. Ela e' escrita como lista do que o app REALMENTE usa:
-// se amanha alguem injetar <script src="site-do-atacante">, o navegador recusa,
-// porque o dominio nao esta aqui.
 const SUPABASE = "https://bfzdetibfcwihfkltbkp.supabase.co";
+const AI_WORKSPACE = `${SUPABASE}/functions/v1/agency-ops-ai-workspace`;
+const AI_MODEL = "@cf/zai-org/glm-4.7-flash";
+
+type WorkerEnv = {
+  AI?: {
+    run: (model: string, input: Record<string, unknown>) => Promise<any>;
+  };
+};
 
 const CSP = [
   "default-src 'self'",
-  // O bundle do vinext injeta estilo inline e o React hidrata com script inline
-  // marcado; sem 'unsafe-inline' aqui a tela nao pinta.
   "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com data:",
-  // O app nao tem nenhuma tag <img>: so' o favicon e SVG inline.
   "img-src 'self' data:",
-  // Unico destino externo: o Supabase (API, auth, realtime). O OpsQuestion nao entra
-  // porque o widget fala com a edge function, nao com a VPS. Qualquer outro destino
-  // e' recusado pelo navegador - inclusive uma tentativa de exfiltrar dado.
   `connect-src 'self' ${SUPABASE} wss://bfzdetibfcwihfkltbkp.supabase.co`,
   "frame-ancestors 'none'",
   "base-uri 'self'",
@@ -33,31 +26,154 @@ const CSP = [
 
 const SECURITY_HEADERS: Record<string, string> = {
   "content-security-policy": CSP,
-  // HTTPS obrigatorio por 2 anos, subdominios inclusos. Impede o downgrade para
-  // http em rede hostil (wifi de coworking, por exemplo).
   "strict-transport-security": "max-age=63072000; includeSubDomains; preload",
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
   "referrer-policy": "strict-origin-when-cross-origin",
-  // O dashboard nao usa nenhuma dessas capacidades; negar evita que um script
-  // injetado peca camera ou localizacao em nome do site.
   "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
   "cross-origin-opener-policy": "same-origin",
   "cross-origin-resource-policy": "same-origin",
 };
 
-export default {
-  async fetch(request: Request, env: unknown, context: unknown): Promise<Response> {
-    const response = await handler.fetch(request, env, context);
+function secure(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
-    // Resposta nova porque a original pode vir com headers imutaveis (asset estatico).
-    const headers = new Headers(response.headers);
-    for (const [nome, valor] of Object.entries(SECURITY_HEADERS)) headers.set(nome, valor);
+function json(body: unknown, status = 200): Response {
+  return secure(new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  }));
+}
 
-    return new Response(response.body, {
-      status: response.status,
-      statusText: response.statusText,
-      headers,
+function aiText(result: any): string | null {
+  const candidates = [
+    result?.response,
+    result?.result?.response,
+    result?.result?.text,
+    result?.text,
+    result?.choices?.[0]?.message?.content,
+  ];
+  for (const value of candidates) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return null;
+}
+
+async function edgeCall(request: Request, action: string, payload?: unknown): Promise<Response> {
+  const headers = new Headers();
+  const authorization = request.headers.get("authorization");
+  if (authorization) headers.set("authorization", authorization);
+  headers.set("content-type", "application/json");
+  return fetch(`${AI_WORKSPACE}/${action}`, {
+    method: action === "health" ? "GET" : "POST",
+    headers,
+    body: action === "health" ? undefined : JSON.stringify(payload ?? {}),
+    redirect: "manual",
+  });
+}
+
+async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
+  const url = new URL(request.url);
+  const action = url.pathname.slice("/api/ai/".length).replace(/^\/+|\/+$/g, "");
+
+  if (request.method === "GET" && action === "health") {
+    const edge = await edgeCall(request, "health");
+    const edgeBody = await edge.json().catch(() => ({}));
+    return json({
+      ok: edge.ok,
+      service: "agency-ops-ai-cloudflare",
+      runtime: "cloudflare-workers-ai+supabase-edge",
+      model: AI_MODEL,
+      easy_panel_required: false,
+      data_backend: edgeBody,
+    }, edge.ok ? 200 : 503);
+  }
+
+  if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
+  if (!request.headers.get("authorization")?.startsWith("Bearer ")) return json({ ok: false, error: "unauthorized" }, 401);
+
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+
+  if (action !== "chat") {
+    const upstream = await edgeCall(request, action, body);
+    const raw = await upstream.text();
+    return secure(new Response(raw, {
+      status: upstream.status,
+      headers: { "content-type": upstream.headers.get("content-type") || "application/json; charset=utf-8", "cache-control": "no-store" },
+    }));
+  }
+
+  if (!env.AI) return json({ ok: false, error: "workers_ai_not_configured" }, 503);
+
+  const preparedResponse = await edgeCall(request, "prepare-chat", body);
+  const prepared = await preparedResponse.json().catch(() => null) as any;
+  if (!preparedResponse.ok || !prepared?.ok) {
+    return json(prepared || { ok: false, error: "prepare_chat_failed" }, preparedResponse.status || 502);
+  }
+
+  const messages = [
+    { role: "system", content: String(prepared.system || "") },
+    ...((prepared.turns || []) as Array<{ role: string; content: string }>).map((turn) => ({
+      role: turn.role === "assistant" ? "assistant" : "user",
+      content: String(turn.content || ""),
+    })),
+  ];
+
+  const started = Date.now();
+  let result: any;
+  try {
+    result = await env.AI.run(AI_MODEL, {
+      messages,
+      max_tokens: 2200,
     });
+  } catch (error) {
+    return json({ ok: false, error: "workers_ai_failed", detail: error instanceof Error ? error.message : String(error) }, 502);
+  }
+
+  const answer = aiText(result);
+  if (!answer) return json({ ok: false, error: "empty_ai_answer" }, 502);
+
+  const usage = result?.usage || result?.result?.usage || {};
+  const completionResponse = await edgeCall(request, "complete-chat", {
+    conversation_id: prepared.conversation_id,
+    request_id: prepared.request_id,
+    answer,
+    original_message: String(body.message || ""),
+    model: AI_MODEL,
+    latency_ms: Date.now() - started,
+    input_tokens: Number(usage.prompt_tokens || usage.input_tokens || 0) || null,
+    output_tokens: Number(usage.completion_tokens || usage.output_tokens || 0) || null,
+  });
+  const completed = await completionResponse.json().catch(() => null) as any;
+  if (!completionResponse.ok || !completed?.ok) {
+    return json(completed || { ok: false, error: "complete_chat_failed" }, completionResponse.status || 502);
+  }
+
+  return json({
+    ok: true,
+    user_message: prepared.user_message,
+    assistant_message: completed.assistant_message,
+    conversation: completed.conversation,
+    source: "workers_ai",
+    provider_error: null,
+  });
+}
+
+export default {
+  async fetch(request: Request, env: WorkerEnv, context: unknown): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === "/api/ai" || url.pathname.startsWith("/api/ai/")) {
+      return handleAI(request, env);
+    }
+
+    const response = await handler.fetch(request, env, context);
+    return secure(response);
   },
 };
