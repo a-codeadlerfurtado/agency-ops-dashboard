@@ -142,6 +142,11 @@ Deno.serve(async (req) => {
 
   const isFull = accessLevel === "FULL" || elevated;
   const isWalletOnly = accessLevel === "WALLET_ONLY" && !elevated;
+  // O papel e' a ultima fronteira de seguranca: um GT nunca pode herdar a base
+  // inteira por um access_level configurado incorretamente. Elevacao aprovada e'
+  // a unica excecao, usada por Operacoes para suporte temporario.
+  const isGtScoped = profileRole === "GT" && !elevated;
+  const isPortfolioScoped = isWalletOnly || isGtScoped;
   const isRestrictedBase = accessLevel === "RESTRICTED" && !elevated;
   // Conta travada: ou o cadastro ainda nao foi aprovado pelo gestor, ou o login nao
   // esta vinculado a ninguem do quadro. Nos dois casos a pessoa nao ve dado nenhum.
@@ -225,7 +230,7 @@ Deno.serve(async (req) => {
       if (!clientId || !descricao) return respond({ error: "missing_fields", required: ["client_id", "descricao"] }, 400);
       const { data: clientRow } = await ops.from("dashboard_client_overview").select("client_id,gt_owner").eq("client_id", clientId).maybeSingle();
       if (!clientRow) return respond({ error: "not_found" }, 404);
-      if (isWalletOnly && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
+      if (isPortfolioScoped && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
       const result = await ops.from("client_adjustments").insert({
         client_id: clientId,
         source: "diario_ajustes",
@@ -427,7 +432,7 @@ Deno.serve(async (req) => {
     if (core[0].error) return respond({ error: "query_failed", detail: core[0].error.message }, 500);
     const clientRow: any = core[0].data;
     if (!clientRow) return respond({ error: "not_found" }, 404);
-    if (isWalletOnly && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
+    if (isPortfolioScoped && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
     // core fica antes de proposito: e' ele que carrega a checagem de permissao
     // (cliente inexistente ou de carteira alheia para'm aqui). Ja' context e history
     // nao dependem um do outro e passam a rodar juntos.
@@ -535,7 +540,7 @@ Deno.serve(async (req) => {
   // CS restrito e perfis FULL nao tem restricao de carteira (mas team/produtividade e' filtrado a parte).
   const walletSet = isLocked
     ? new Set<string>()
-    : isWalletOnly ? new Set(allClients.filter((row) => row.gt_owner === profilePerson).map((row) => row.client_id)) : null;
+    : isPortfolioScoped ? new Set(allClients.filter((row) => row.gt_owner === profilePerson).map((row) => row.client_id)) : null;
   const inScope = (clientId: string | null) => !walletSet || (clientId && walletSet.has(clientId));
 
   const clients = walletSet ? allClients.filter((row) => walletSet.has(row.client_id)) : allClients;
@@ -642,7 +647,7 @@ Deno.serve(async (req) => {
   // ---- Pre-clientes: filtra registros sinteticos de teste e, para carteiras (GT), oculta a
   // aba inteira (nao e' area de trabalho de gestor de trafego).
   const preclientsRaw = value<any[]>(platformData[1], []).filter((row) => !SYNTHETIC_NAME.test(String(row.name ?? "").trim()) && !SYNTHETIC_NAME.test(String(row.company ?? "").trim()));
-  const preclients = isWalletOnly ? [] : preclientsRaw;
+  const preclients = isPortfolioScoped ? [] : preclientsRaw;
 
   // ---- Notificacoes: enriquecidas com gestor/carteira do cliente e escopadas por carteira.
   const notifications = value<any[]>(platformData[0], [])
@@ -738,7 +743,7 @@ Deno.serve(async (req) => {
     // Quem nao decide nao precisa da fila: o gate era isFull, entao todo perfil de
     // acesso total recebia os nomes de quem esta esperando aprovacao sem poder aprovar.
     access_requests_pending: canDecideAccessRequests ? value(teamData[4], []) : [],
-    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson) },
+    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, portfolio_scoped: isPortfolioScoped, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson) },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
     auth_mode: currentUserKey === "adler-furtado" && suppliedKey.length >= 40 ? "dashboard_key" : "login",
     generated_at: new Date().toISOString(),
