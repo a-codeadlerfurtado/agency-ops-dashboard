@@ -1,0 +1,34 @@
+name: Temporary wire profile helper
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/temp-wire-profile-helper.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/wire-profile-helper-20260821
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: python scripts/wire_profile_helper.py
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Commit validated wiring
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/page.tsx
+          git commit -m "fix: wire profile helper into dashboard load"
+          git push origin HEAD:chatgpt/wire-profile-helper-20260821
