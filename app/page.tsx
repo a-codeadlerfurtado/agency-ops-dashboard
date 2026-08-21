@@ -2,7 +2,7 @@
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { API_URL, CONTRACTS_API, SUPABASE_ANON_KEY, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
+import { API_URL, CONTRACTS_API, SUPABASE_ANON_KEY, SUPABASE_URL, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
 import type { HomeData, Row, TeamMember, View } from "./shared";
 import { PortfolioCenter } from "./views/portfolio";
 import { DiaryCenter as StructuredDiaryCenter } from "./views/diary";
@@ -168,6 +168,32 @@ export default function Dashboard() {
     setError("");
     try {
       const next = await api("home", session.access_token);
+      // Complemento de perfil: usa uma Edge Function pequena e autenticada para resolver
+      // a identidade ClickUp por ID e enriquecer o payload sem depender de deploy da API geral.
+      try {
+        const profileResponse = await fetch(`${SUPABASE_URL}/functions/v1/agency-ops-profile-data-api`, {
+          headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },
+          cache: "no-store",
+        });
+        if (profileResponse.ok) {
+          const extra = await profileResponse.json();
+          const gtByClient = new Map((extra.client_gt || []).map((row: Row) => [String(row.client_id), row.gt_owner ?? null]));
+          next.clients = (next.clients || []).map((client: Row) => ({
+            ...client,
+            gt_owner: client.gt_owner ?? gtByClient.get(String(client.client_id)) ?? null,
+          }));
+          next.operations = {
+            ...(next.operations || {}),
+            personal_focus: extra.focus || next.operations?.personal_focus || null,
+            design_focus: extra.profile?.role === "DESIGN" ? (extra.focus || next.operations?.design_focus || null) : next.operations?.design_focus,
+          };
+          next.profile = {
+            ...(next.profile || {}),
+            clickup_user_id: extra.profile?.clickup_user_id ?? next.profile?.clickup_user_id ?? null,
+            clickup_user: extra.profile?.clickup_username ?? next.profile?.clickup_user ?? null,
+          };
+        }
+      } catch { /* complemento nunca derruba a tela principal */ }
       preferencesRef.current = next.preferences || {};
       const newest = next.notifications?.[0];
       if (loadedRef.current && newest?.id && newest.id !== lastNotificationRef.current) {
