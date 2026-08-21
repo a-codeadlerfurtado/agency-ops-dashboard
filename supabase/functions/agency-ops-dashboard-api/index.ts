@@ -112,6 +112,7 @@ Deno.serve(async (req) => {
   let profilePerson: string | null = null;
   let profileRole: string | null = null;
   let profileClickupUser: string | null = null;
+  let profileClickupUserId: string | null = null;
   let accessLevel: AccessLevel = "FULL";
   let elevated = false;
   // Chave fixa do dashboard e' o acesso legado do gestor: nao passa por aprovacao.
@@ -122,11 +123,15 @@ Deno.serve(async (req) => {
     const { data: prefRow } = await ops.from("user_preferences").select("collaborator_person").eq("user_key", currentUserKey).maybeSingle();
     const collaboratorPerson = prefRow?.collaborator_person ?? null;
     if (collaboratorPerson) {
-      const { data: rosterRow } = await ops.from("team_roster").select("person,role,access_level,clickup_user").eq("person", collaboratorPerson).eq("is_former", false).maybeSingle();
+      const [{ data: rosterRow }, { data: identityRow }] = await Promise.all([
+        ops.from("team_roster").select("person,role,access_level,clickup_user").eq("person", collaboratorPerson).eq("is_former", false).maybeSingle(),
+        ops.from("team_identity_map").select("clickup_user_id,clickup_username").eq("person", collaboratorPerson).maybeSingle(),
+      ]);
       if (rosterRow) {
         profilePerson = rosterRow.person;
         profileRole = rosterRow.role;
-        profileClickupUser = rosterRow.clickup_user;
+        profileClickupUser = identityRow?.clickup_username ?? rosterRow.clickup_user;
+        profileClickupUserId = identityRow?.clickup_user_id ? String(identityRow.clickup_user_id) : null;
         accessLevel = (rosterRow.access_level as AccessLevel) ?? "RESTRICTED";
       }
     }
@@ -834,7 +839,7 @@ Deno.serve(async (req) => {
   // Nada de saude, financeiro, prioridade ou responsaveis - o campo e' filtrado aqui,
   // no proprio payload da API, nao so' escondido na tela (a fronteira de seguranca
   // real e' a resposta HTTP, nao o componente React que a desenha).
-  const clientsBasic = activeClients.map((row) => ({ client_id: row.client_id, display_name: row.display_name, client_days: row.client_days }));
+  const clientsBasic = activeClients.map((row) => ({ client_id: row.client_id, display_name: row.display_name, gt_owner: row.gt_owner ?? null, client_days: row.client_days }));
   const count = (fn: (row: any) => boolean) => activeClients.filter(fn).length;
   const severity: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
   const now = new Date();
@@ -907,21 +912,18 @@ Deno.serve(async (req) => {
   const rawProductivity30 = value<any[]>(results[12], []);
   const rawProductivityDaily = value<any[]>(results[13], []);
   const rawRecentCompleted = value<any[]>(results[14], []);
+  const currentOwnerKeys = new Set([norm(profileClickupUserId), norm(profileClickupUser), norm(profilePerson)].filter(Boolean));
+  const assignedToCurrent = (row: any) => (row.clickup_task_assignees ?? []).some((assignee: any) => {
+    const email = norm(assignee.email);
+    return [assignee.user_id, assignee.username, assignee.email, email.split("@")[0]]
+      .some((candidate) => currentOwnerKeys.has(norm(candidate)));
+  });
   const clickupScoped = isFull;
   const productivity30 = clickupScoped ? rawProductivity30 : rawProductivity30.filter((row) => norm(row.person) === norm(profileClickupUser));
   const productivityDaily = clickupScoped ? rawProductivityDaily : rawProductivityDaily.filter((row) => norm(row.person) === norm(profileClickupUser));
-  const recentCompleted = clickupScoped ? rawRecentCompleted : rawRecentCompleted.filter((row: any) => (row.clickup_task_assignees ?? []).some((a: any) => norm(a.username) === norm(profileClickupUser)));
+  const recentCompleted = clickupScoped ? rawRecentCompleted : rawRecentCompleted.filter(assignedToCurrent);
 
-  // ---- Foco pessoal de Design. Nao reaproveita alertas, conversas, compromissos
-  // nem prioridades de carteira: cada item nasce de uma tarefa ClickUp aberta e
-  // atribuida ao designer autenticado.
-  const designOwnerKeys = new Set([norm(profileClickupUser), norm(profilePerson)].filter(Boolean));
-  const assignedToDesigner = (row: any) => (row.clickup_task_assignees ?? []).some((assignee: any) => {
-    const email = norm(assignee.email);
-    return [assignee.user_id, assignee.username, assignee.email, email.split("@")[0]]
-      .some((candidate) => designOwnerKeys.has(norm(candidate)));
-  });
-  const exposeDesignTask = (row: any) => ({
+  const exposePersonalTask = (row: any) => ({
     task_id: row.task_id,
     name: row.name,
     status: row.status,
@@ -936,13 +938,28 @@ Deno.serve(async (req) => {
     client_display_name: row.client_id ? (clientMeta.get(row.client_id)?.display_name ?? null) : null,
     url: row.url ?? null,
   });
+  const personalOpenTasks = viaLogin
+    ? value<any[]>(clickupData[9], []).filter(assignedToCurrent).map(exposePersonalTask)
+    : [];
+  const personalClosedToday = viaLogin
+    ? value<any[]>(clickupData[10], [])
+        .filter((row: any) => assignedToCurrent(row) && row.date_closed && opsDay(new Date(row.date_closed)) === opsDay())
+        .map(exposePersonalTask)
+    : [];
+
+  // Design continua restrito ao trabalho criativo. A classificação usa lista +
+  // categorias recorrentes do nome, sem depender apenas da palavra "design".
+  const isDesignRelevantTask = (row: any) => {
+    const haystack = norm(`${row.list_name ?? ""} ${row.name ?? ""}`);
+    return /criativ|design|arte|video|vídeo|imagem|copy|roteiro|edicao|edição|revisao|revisão|ajuste na campanha/.test(haystack);
+  };
   const designOpenTasks = isDesignRestricted
-    ? value<any[]>(clickupData[9], []).filter(assignedToDesigner).map(exposeDesignTask)
+    ? value<any[]>(clickupData[9], []).filter((row: any) => assignedToCurrent(row) && isDesignRelevantTask(row)).map(exposePersonalTask)
     : [];
   const designClosedToday = isDesignRestricted
     ? value<any[]>(clickupData[10], [])
-        .filter((row: any) => assignedToDesigner(row) && row.date_closed && opsDay(new Date(row.date_closed)) === opsDay())
-        .map(exposeDesignTask)
+        .filter((row: any) => assignedToCurrent(row) && isDesignRelevantTask(row) && row.date_closed && opsDay(new Date(row.date_closed)) === opsDay())
+        .map(exposePersonalTask)
     : [];
 
   // ---- Pre-clientes: filtra registros sinteticos de teste e, para carteiras (GT), oculta a
@@ -1039,7 +1056,8 @@ Deno.serve(async (req) => {
       // Evidencias e' tela de gestao: quem nao tem a aba tambem nao recebe o dado.
       evidence_review: canView("evidence") ? evidenceReview.slice(0, 100) : [],
       task_log: taskLog,
-      design_focus: isDesignRestricted ? { owner: profilePerson, open_tasks: designOpenTasks, closed_today: designClosedToday } : null,
+      personal_focus: viaLogin ? { owner: profilePerson, clickup_user_id: profileClickupUserId, open_tasks: personalOpenTasks, closed_today: personalClosedToday } : null,
+      design_focus: isDesignRestricted ? { owner: profilePerson, clickup_user_id: profileClickupUserId, open_tasks: designOpenTasks, closed_today: designClosedToday } : null,
     },
     adjustments,
     clickup: isFull ? { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: totalClickup, last_sync: lastClickupSync, configured: Boolean(clickupConfig?.token && clickupConfig?.team_id), webhook_configured: Boolean(clickupConfig?.webhook_secret), indexing: { matched: matchedClickup, match_rate: totalClickup ? Number((100 * matchedClickup / totalClickup).toFixed(1)) : 0, unmatched_label: results[18].count ?? 0, without_label: results[19].count ?? 0, unmatched_labels: value(results[20], []) } } : { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: recentCompleted.length, last_sync: null, configured: null, webhook_configured: null, indexing: null },
@@ -1055,7 +1073,7 @@ Deno.serve(async (req) => {
     // Quem nao decide nao precisa da fila: o gate era isFull, entao todo perfil de
     // acesso total recebia os nomes de quem esta esperando aprovacao sem poder aprovar.
     access_requests_pending: canDecideAccessRequests ? value(teamData[4], []) : [],
-    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, portfolio_scoped: isPortfolioScoped, elevated, can_decide_access_requests: canDecideAccessRequests, can_view_operational_alerts: canViewOperationalAlerts, can_manage_finance: isAdler && canView("finance"), is_executive: isLeonardo && canView("executive"), locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson) },
+    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, clickup_user: profileClickupUser, clickup_user_id: profileClickupUserId, portfolio_scoped: isPortfolioScoped, elevated, can_decide_access_requests: canDecideAccessRequests, can_view_operational_alerts: canViewOperationalAlerts, can_manage_finance: isAdler && canView("finance"), is_executive: isLeonardo && canView("executive"), locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson) },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
     auth_mode: currentUserKey === "adler-furtado" && suppliedKey.length >= 40 ? "dashboard_key" : "login",
     generated_at: new Date().toISOString(),
