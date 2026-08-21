@@ -108,7 +108,7 @@ async function diaryRequest(view: string, token: string, options?: { method?: "G
 }
 
 export function DiaryCenter({ clients: fallbackClients, profile, token, reload }: { clients: Row[]; adjustments: Row[]; taskLog: Row; profile: Row; token: string; reload: () => Promise<void> }) {
-  const [tab, setTab] = useState<"ajustes" | "tasklog">("ajustes");
+  const [tab, setTab] = useState<"ajustes" | "tasklog" | "report">("ajustes");
   const [scope, setScope] = useState<"mine" | "all">("mine");
   const [data, setData] = useState<Row | null>(null);
   const [selfPerformance, setSelfPerformance] = useState<Row | null>(null);
@@ -147,7 +147,8 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
   const staff: Row[] = data?.staff || [];
   const adjustments: Row[] = data?.adjustments || [];
   const taskRows: Row[] = data?.task_log || [];
-  const counts = data?.counts || { adjustments: adjustments.length, tasks: taskRows.length };
+  const dailyReports: Row[] = data?.daily_reports || [];
+  const counts = data?.counts || { adjustments: adjustments.length, tasks: taskRows.length, reports: dailyReports.length };
   const currentCalendarYear = Number(opsDateTimeInput().slice(0, 4));
   const [taskCalendarYear, setTaskCalendarYear] = useState(currentCalendarYear);
   const taskActivity: Record<string, number> = useMemo(() => selfPerformance?.activity || {}, [selfPerformance]);
@@ -220,7 +221,7 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
     finally { setEditBusy(false); }
   }
 
-  const role = String(profile?.role || "").toUpperCase();
+  const role = String(data?.actor_role || profile?.role || "").toUpperCase();
   const taskCategories: Record<string, string[]> = {
     GT: ["Campanha nova subida", "Otimização de campanha", "Ajuste de orçamento", "Análise de métricas", "Reunião com cliente", "Outro"],
     CS: ["Atendimento ao cliente", "Onboarding", "Reunião com cliente", "Resolução de pendência", "Relatório de resultados", "Outro"],
@@ -244,18 +245,51 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
     finally { setTaskSaving(false); }
   }
 
+  const canWriteDailyReport = role === "DESIGN";
+  const canSeeDailyReports = canWriteDailyReport || canViewAll;
+  const [reportDate, setReportDate] = useState(() => opsDateTimeInput().slice(0, 10));
+  const [reportText, setReportText] = useState("");
+  const [reportSaving, setReportSaving] = useState(false);
+  const [reportError, setReportError] = useState("");
+  const [reportSaved, setReportSaved] = useState("");
+
+  useEffect(() => {
+    if (!canWriteDailyReport || scope !== "mine") return;
+    const existing = dailyReports.find((entry) => String(entry.report_date || "").slice(0, 10) === reportDate);
+    setReportText(existing ? String(existing.report_text || "") : "");
+    setReportError("");
+    setReportSaved("");
+  }, [reportDate, dailyReports, canWriteDailyReport, scope]);
+
+  useEffect(() => {
+    if (tab === "report" && !canSeeDailyReports) setTab("ajustes");
+  }, [tab, canSeeDailyReports]);
+
+  async function submitDailyReport() {
+    if (!reportDate) { setReportError("Selecione a data do relatório."); return; }
+    if (!reportText.trim()) { setReportError("Escreva o relatório do dia antes de salvar."); return; }
+    setReportSaving(true); setReportError(""); setReportSaved("");
+    try {
+      await diaryRequest("daily-report-save", token, { method: "POST", body: { report_date: reportDate, report_text: reportText.trim() } });
+      setReportSaved("Relatório salvo. Se você salvar novamente nesta data, o mesmo relatório será atualizado.");
+      await refresh();
+    } catch (error) { setReportError(error instanceof Error ? error.message : "Falha ao salvar o relatório do dia"); }
+    finally { setReportSaving(false); }
+  }
+
   const updateFilter = (key: keyof typeof filters, value: string) => setFilters((current) => ({ ...current, [key]: value, ...(key === "category_code" ? { subcategory_code: "" } : {}) }));
   const helpText = "Use este espaço para registrar ajustes, correções ou retrabalhos que precisaram ser feitos para um cliente. Informe o que precisou ser corrigido e, principalmente, por que o ajuste aconteceu. Não use para atividades normais do dia a dia — para isso utilize o TaskLog. Correto: cliente pediu para trocar a imagem porque foi utilizado um render antigo. Não usar para: hoje alterei o criativo do cliente.";
 
   return <section className="workspace">
     <div className="workspace-head">
       <div><h2>Diário</h2><p>Histórico pessoal de ajustes e atividades, com autoria registrada pela sessão autenticada.</p></div>
-      <span className="counter">{counts.adjustments ?? adjustments.length} ajustes · {counts.tasks ?? taskRows.length} tarefas</span>
+      <span className="counter">{counts.adjustments ?? adjustments.length} ajustes · {counts.tasks ?? taskRows.length} tarefas{canSeeDailyReports ? ` · ${counts.reports ?? dailyReports.length} relatórios` : ""}</span>
     </div>
 
     <div className="filter-tabs">
       <button type="button" className={tab === "ajustes" ? "active" : ""} onClick={() => setTab("ajustes")}>Diário de Ajustes</button>
       <button type="button" className={tab === "tasklog" ? "active" : ""} onClick={() => setTab("tasklog")}>TaskLog</button>
+      {canSeeDailyReports && <button type="button" className={tab === "report" ? "active" : ""} onClick={() => { setTab("report"); if (canViewAll && !canWriteDailyReport) setScope("all"); }}>Relatório do dia</button>}
     </div>
 
     {canViewAll && <div className="filter-tabs" style={{ marginTop: 10 }} aria-label="Escopo do Diário">
@@ -388,6 +422,35 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
       </section>}
 
       <section className="card section" style={{ marginTop: 16 }}><div className="section-title">{scope === "all" ? "TaskLog da equipe" : "Meu TaskLog"}</div>{taskRows.map((entry) => <div className="productivity-row" key={entry.id}><div><b>{text(entry.task_name)}</b><small>{text(entry.category)} · {text(entry.collaborator_name)}</small></div><strong>{formatDay(entry.task_date)}</strong></div>)}{!loading && !taskRows.length && <div className="empty">Nenhuma tarefa neste escopo.</div>}</section>
+    </>}
+
+    {tab === "report" && canSeeDailyReports && <>
+      {canWriteDailyReport && scope === "mine" && <section className="card section" style={{ marginTop: 16 }}>
+        <div className="section-title">Relatório do dia</div>
+        <p className="small">Use este espaço para deixar registrado o que aconteceu no dia, principalmente impedimentos, dependências e tarefas que não puderam ser concluídas. Você pode selecionar outra data; por padrão o Diário abre no dia em que você está acessando o dashboard.</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10, alignItems: "end" }}>
+          <label style={{ minWidth: 190 }}>Data do relatório<input className="control" type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} /></label>
+          <button type="button" className="link-btn" onClick={() => setReportDate(opsDateTimeInput().slice(0, 10))}>Hoje</button>
+        </div>
+        <label style={{ display: "block", marginTop: 10 }}>Relatório<textarea className="control" style={{ width: "100%", minHeight: 180, resize: "vertical" }} value={reportText} onChange={(e) => { setReportText(e.target.value); setReportSaved(""); }} placeholder="Ex.: A task X está para hoje, mas estamos sem créditos no Google Flow e preciso gerar um vídeo de IA para concluir. Assim que os créditos forem repostos, consigo finalizar e entregar." /></label>
+        <div className="connection-note" style={{ marginTop: 10 }}><b>O que vale registrar aqui</b><p style={{ marginBottom: 0 }}>Bloqueios de ferramenta ou crédito, dependência de material/acesso, task prevista para hoje que não pôde ser concluída, atraso com contexto, prioridade alterada ou qualquer informação importante para entender como o dia terminou.</p></div>
+        {reportError && <div className="error-box" style={{ marginTop: 8 }}>{reportError}</div>}
+        {reportSaved && <div className="connection-note" style={{ marginTop: 8 }}>{reportSaved}</div>}
+        <button type="button" className="primary" style={{ marginTop: 10 }} disabled={reportSaving} onClick={submitDailyReport}>{reportSaving ? "Salvando…" : "Salvar relatório do dia"}</button>
+      </section>}
+
+      <section className="card section" style={{ marginTop: 16 }}>
+        <div className="section-title">{scope === "all" ? "Relatórios dos designers" : "Meus relatórios"}</div>
+        {dailyReports.map((entry) => <div className="productivity-row" key={entry.id} style={{ alignItems: "flex-start" }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <b>{text(entry.author_name || "Designer")}</b>
+            <small>{formatDay(entry.report_date)}{entry.updated_at ? ` · atualizado em ${formatOpsDateTime(entry.updated_at)}` : ""}</small>
+            <p style={{ margin: "8px 0 0", whiteSpace: "pre-wrap", lineHeight: 1.55 }}>{text(entry.report_text)}</p>
+          </div>
+          <strong style={{ whiteSpace: "nowrap" }}>{formatDay(entry.report_date)}</strong>
+        </div>)}
+        {!loading && !dailyReports.length && <div className="empty">Nenhum relatório do dia neste escopo.</div>}
+      </section>
     </>}
   </section>;
 }
