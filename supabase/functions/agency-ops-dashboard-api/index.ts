@@ -20,7 +20,7 @@ const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
 const SYNTHETIC_NAME = /^[A-Za-z]+-\d{9,}-[a-z0-9]{4,8}$/;
 // Abas do dashboard. A chave fixa do gestor (acesso legado, fora do quadro) recebe
 // todas; quem entra por login recebe o que agency_ops.dashboard_view_permissions disser.
-const ALL_VIEWS = ["overview","focus","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health","opsperf"];
+const ALL_VIEWS = ["overview","focus","work","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health","opsperf","creative","finance","executive"];
 // Dia de operacao no fuso de Brasilia: task fechada as 22h e' de hoje, nao de amanha.
 const opsDay = (date = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 
@@ -149,9 +149,7 @@ Deno.serve(async (req) => {
   // e enxergaria os 155 clientes com nome, prioridade e proxima acao.
   const isLocked = viaLogin && (!accountApproved || (!profilePerson && !elevated));
   const canDecideAccessRequests = isFull && (!viaLogin || profileRole === "MGMT");
-  // DESIGN pode consultar a lista minima da aba Clientes, mas nunca o dossie
-  // individual. A regra fica disponivel antes das rotas para bloquear o detalhe
-  // antes de qualquer consulta com dados sensiveis.
+  // DESIGN recebe somente a lista minima e nunca o dossie individual.
   const isDesignRestricted = profileRole === "DESIGN";
 
   // ---- Quais ABAS a pessoa abre. Pergunta separada de QUANTO DADO ela alcanca:
@@ -180,12 +178,82 @@ Deno.serve(async (req) => {
     }
   }
   const canView = (key: string) => allowedViews.includes(key);
+  const isAdler = !viaLogin || profilePerson === "Adler Furtado";
+  const isLeonardo = profilePerson === "Leonardo Augusto";
+
+  // ---- Central de Diretrizes Criativas: manual historico + identidade + sinais vivos.
+  if (req.method === "GET" && view === "creative") {
+    if (isLocked || !canView("creative")) return respond({ error: "forbidden" }, 403);
+    const [clientResult, ruleResult, candidateResult, brandResult, materialResult, adjustmentResult, briefingResult] = await Promise.all([
+      ops.from("clients").select("id,display_name,lifecycle,designer_owner").in("lifecycle", ["ACTIVE","ONBOARDING"]).order("display_name"),
+      ops.from("creative_client_rules").select("*").not("status","eq","REJECTED").order("created_at",{ascending:false}),
+      ops.from("creative_rule_candidates").select("*").in("status",["PENDING","CONFIRMED_FIXED","CONFIRMED_PRODUCT"]).order("source_at",{ascending:false}),
+      ops.from("creative_brand_profiles").select("*"),
+      ops.from("client_raw_material_uploads").select("id,client_id,file_name,file_kind,drive_uploaded_at,detected_at,metadata").order("detected_at",{ascending:false}).limit(1000),
+      ops.from("client_adjustments").select("id,client_id,tipo,descricao,occurred_at,metadata").order("occurred_at",{ascending:false}).limit(1000),
+      ops.from("notion_briefing_pages").select("client_id,title,page_url,sync_status,match_status,extracted_profile,last_fetched_at").order("last_fetched_at",{ascending:false}).limit(1000),
+    ]);
+    const clients = value<any[]>(clientResult, []);
+    const rules = value<any[]>(ruleResult, []);
+    const candidates = value<any[]>(candidateResult, []);
+    const brands = value<any[]>(brandResult, []);
+    const materials = value<any[]>(materialResult, []);
+    const adjustments = value<any[]>(adjustmentResult, []);
+    const briefings = value<any[]>(briefingResult, []);
+    const grouped = clients.map((client: any) => {
+      const cr = rules.filter((r: any) => r.client_id === client.id);
+      const cc = candidates.filter((r: any) => r.client_id === client.id);
+      const cb = brands.find((r: any) => r.client_id === client.id) ?? null;
+      const cm = materials.filter((r: any) => r.client_id === client.id);
+      const ca = adjustments.filter((r: any) => r.client_id === client.id);
+      const bf = briefings.filter((r: any) => r.client_id === client.id);
+      const historical = cr.filter((r: any) => r.status === "HISTORICAL" || r.status === "NEEDS_VALIDATION").length;
+      return {
+        client_id: client.id, display_name: client.display_name, lifecycle: client.lifecycle,
+        designer_owner: client.designer_owner, brand: cb,
+        rules: cr, candidates: cc, recent_materials: cm.slice(0,20),
+        recent_adjustments: ca.slice(0,20), briefings: bf,
+        health: {
+          total_rules: cr.length, historical_rules: historical,
+          pending_candidates: cc.filter((r: any) => r.status === "PENDING").length,
+          brand_status: cb?.status ?? "INCOMPLETE",
+          briefing_count: bf.length, material_count: cm.length,
+          needs_attention: historical > 0 || !cb || cc.some((r: any) => r.status === "PENDING"),
+        },
+      };
+    });
+    return respond({
+      clients: grouped,
+      summary: {
+        active_clients: clients.length,
+        clients_with_rules: grouped.filter((c: any) => c.rules.length > 0).length,
+        clients_without_rules: grouped.filter((c: any) => c.rules.length === 0).length,
+        pending_candidates: candidates.filter((c: any) => c.status === "PENDING").length,
+        incomplete_brand_profiles: grouped.filter((c: any) => !c.brand || c.brand.status !== "CONFIRMED").length,
+      },
+      taxonomy: {
+        classifications: ["REGRA_FIXA","POR_PRODUTO","TESTE_PENDENTE","TESTE_ESTRATEGICO","SEM_REGRA_CONFIRMADA"],
+        rule_kinds: ["DESEJA","EVITAR","COMO_APLICAR","IDENTIDADE","PROCESSO","DADO_TECNICO"],
+        candidate_statuses: ["PENDING","CONFIRMED_FIXED","CONFIRMED_PRODUCT","REJECTED","DUPLICATE"],
+      },
+      generated_at: new Date().toISOString(),
+    });
+  }
 
   if (req.method === "POST") {
     const body = await req.json().catch(() => ({}));
     if (view === "notifications-read") {
       let query = ops.from("platform_notifications").update({ read_at: new Date().toISOString() });
-      if (body.id) query = query.eq("id", String(body.id)); else query = query.is("read_at", null);
+      if (body.id) {
+        query = query.eq("id", String(body.id));
+      } else {
+        query = query.is("read_at", null);
+        if (isDesignRestricted) {
+          query = query
+            .in("type", ["DESIGNER_MENTION", "MATERIAL_UPLOADED"])
+            .contains("metadata", { target_role: "DESIGN", target_person: profilePerson });
+        }
+      }
       const result = await query.select("id");
       if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
       return respond({ ok: true, updated: result.data?.length ?? 0 });
@@ -261,6 +329,113 @@ Deno.serve(async (req) => {
       if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
       return respond({ ok: true, entry: result.data });
     }
+    if (view === "work-item-create") {
+      if (isLocked || !canView("work")) return respond({ error: "forbidden" }, 403);
+      const title = typeof body.title === "string" ? body.title.trim() : "";
+      const description = typeof body.description === "string" ? body.description.trim() : "";
+      const clientId = body.client_id ? String(body.client_id) : null;
+      if (!title) return respond({ error: "missing_fields", required: ["title"] }, 400);
+      if (clientId) {
+        const { data: scopedClient } = await ops.from("dashboard_client_overview").select("client_id,gt_owner").eq("client_id", clientId).maybeSingle();
+        if (!scopedClient) return respond({ error: "client_not_found" }, 404);
+        if (isWalletOnly && scopedClient.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
+      }
+      const itemType = ["ESCALATION","CREATIVE_REQUEST","TECHNICAL","CLIENT_FOLLOWUP","CLICKUP","FINANCE","GENERAL"].includes(String(body.type)) ? String(body.type) : "GENERAL";
+      const priority = ["CRITICAL","HIGH","MEDIUM","LOW"].includes(String(body.priority)) ? String(body.priority) : "MEDIUM";
+      const targetRole = typeof body.target_role === "string" ? body.target_role.slice(0, 40) : null;
+      const targetPerson = typeof body.target_person === "string" ? body.target_person.slice(0, 160) : null;
+      const result = await ops.from("work_items").insert({
+        client_id: clientId,
+        type: itemType,
+        priority,
+        title: title.slice(0, 240),
+        description: description.slice(0, 4000) || null,
+        source: typeof body.source === "string" ? body.source.slice(0, 80) : "dashboard",
+        source_id: typeof body.source_id === "string" ? body.source_id.slice(0, 240) : null,
+        created_by_user_key: currentUserKey,
+        created_by_person: profilePerson ?? "Adler Furtado",
+        target_role: targetRole,
+        target_person: targetPerson,
+        due_at: body.due_at ?? null,
+        metadata: typeof body.metadata === "object" && body.metadata ? body.metadata : {},
+      }).select().single();
+      if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
+      return respond({ ok: true, item: result.data });
+    }
+    if (view === "work-item-update") {
+      if (isLocked || !canView("work")) return respond({ error: "forbidden" }, 403);
+      const id = String(body.id ?? "");
+      if (!id) return respond({ error: "missing_fields", required: ["id"] }, 400);
+      const { data: current } = await ops.from("work_items").select("*").eq("id", id).maybeSingle();
+      if (!current) return respond({ error: "not_found" }, 404);
+      const canAct = isAdler || current.created_by_person === profilePerson || current.target_person === profilePerson || (!current.target_person && current.target_role === profileRole);
+      if (!canAct) return respond({ error: "forbidden" }, 403);
+      const status = ["OPEN","IN_PROGRESS","WAITING","SNOOZED","COMPLETED","DISMISSED"].includes(String(body.status)) ? String(body.status) : current.status;
+      const patch: Record<string, unknown> = {
+        status,
+        completed_by: status === "COMPLETED" ? (profilePerson ?? "Adler Furtado") : current.completed_by,
+        resolution: typeof body.resolution === "string" ? body.resolution.slice(0, 4000) : current.resolution,
+        snoozed_until: status === "SNOOZED" ? body.snoozed_until ?? current.snoozed_until : null,
+      };
+      if (typeof body.target_person === "string") patch.target_person = body.target_person.slice(0, 160) || null;
+      if (typeof body.target_role === "string") patch.target_role = body.target_role.slice(0, 40) || null;
+      if (typeof body.priority === "string" && ["CRITICAL","HIGH","MEDIUM","LOW"].includes(body.priority)) patch.priority = body.priority;
+      const result = await ops.from("work_items").update(patch).eq("id", id).select().single();
+      if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
+      return respond({ ok: true, item: result.data });
+    }
+    if (view === "finance-control-upsert") {
+      if (!isAdler || !canView("finance")) return respond({ error: "forbidden" }, 403);
+      const clientId = String(body.client_id ?? "");
+      if (!clientId) return respond({ error: "missing_fields", required: ["client_id"] }, 400);
+      const { data: client } = await ops.from("clients").select("id,display_name,cs_owner,gt_owner,designer_owner").eq("id", clientId).maybeSingle();
+      if (!client) return respond({ error: "client_not_found" }, 404);
+      const paymentStatus = ["UNKNOWN","CURRENT","DUE_SOON","OVERDUE","NEGOTIATING","PAID","CANCELLED"].includes(String(body.payment_status)) ? String(body.payment_status) : "UNKNOWN";
+      const operationalStatus = ["RELEASED","PAUSE_REQUESTED","PAUSED"].includes(String(body.operational_status)) ? String(body.operational_status) : "RELEASED";
+      const financePatch = {
+        client_id: clientId,
+        payment_status: paymentStatus,
+        operational_status: operationalStatus,
+        monthly_value: body.monthly_value === null || body.monthly_value === "" ? null : Number(body.monthly_value),
+        next_due_date: body.next_due_date || null,
+        overdue_since: body.overdue_since || null,
+        pause_reason: typeof body.pause_reason === "string" ? body.pause_reason.slice(0, 1000) : null,
+        notes: typeof body.notes === "string" ? body.notes.slice(0, 4000) : null,
+        last_contact_at: body.last_contact_at || null,
+        last_payment_at: body.last_payment_at || null,
+        updated_by: profilePerson ?? "Adler Furtado",
+        updated_at: new Date().toISOString(),
+      };
+      const result = await ops.from("client_finance_controls").upsert(financePatch, { onConflict: "client_id" }).select().single();
+      if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
+      if (["PAUSE_REQUESTED","PAUSED"].includes(operationalStatus)) {
+        const targets = [
+          { role: "GT", person: client.gt_owner },
+          { role: "CS", person: client.cs_owner },
+          { role: "DESIGN", person: client.designer_owner },
+        ].filter((target) => target.person);
+        for (const target of targets) {
+          const sourceId = `finance:${clientId}:${operationalStatus}:${target.role}`;
+          const { data: existing } = await ops.from("work_items").select("id").eq("source_id", sourceId).in("status", ["OPEN","IN_PROGRESS","WAITING","SNOOZED"]).maybeSingle();
+          if (!existing) await ops.from("work_items").insert({
+            client_id: clientId,
+            type: "FINANCE",
+            status: "OPEN",
+            priority: operationalStatus === "PAUSED" ? "CRITICAL" : "HIGH",
+            title: `${operationalStatus === "PAUSED" ? "Trabalhos pausados" : "Pausa operacional solicitada"} — ${client.display_name}`,
+            description: financePatch.pause_reason || "Verifique a orientação financeira antes de continuar qualquer entrega.",
+            source: "finance_center",
+            source_id: sourceId,
+            created_by_user_key: currentUserKey,
+            created_by_person: profilePerson ?? "Adler Furtado",
+            target_role: target.role,
+            target_person: target.person,
+            metadata: { payment_status: paymentStatus, operational_status: operationalStatus },
+          });
+        }
+      }
+      return respond({ ok: true, control: result.data });
+    }
     if (view === "note-create") {
       // O texto do colaborador entra cru e inteiro. O vinculo com cliente e' um
       // palpite marcado como tal - nunca altera o que a pessoa escreveu.
@@ -312,6 +487,59 @@ Deno.serve(async (req) => {
       return respond({ ok: true, note: result.data });
     }
     return respond({ error: "unknown_action" }, 404);
+  }
+
+  if (view === "work") {
+    if (isLocked || !canView("work")) return respond({ error: "forbidden" }, 403);
+    const { data, error } = await ops.from("work_items").select("*,clients(display_name,gt_owner,cs_owner,designer_owner)").order("created_at", { ascending: false }).limit(800);
+    if (error) return respond({ error: "query_failed", detail: error.message }, 500);
+    const rows = (data ?? []).filter((row: any) => {
+      if (isAdler) return true;
+      if (row.created_by_person === profilePerson || row.target_person === profilePerson) return true;
+      if (!row.target_person && row.target_role === profileRole) return true;
+      return false;
+    });
+    const open = rows.filter((row: any) => !["COMPLETED","DISMISSED"].includes(row.status));
+    return respond({
+      items: rows,
+      summary: {
+        open: open.length,
+        critical: open.filter((row: any) => row.priority === "CRITICAL").length,
+        overdue: open.filter((row: any) => row.due_at && new Date(row.due_at) < new Date()).length,
+        waiting: open.filter((row: any) => ["WAITING","SNOOZED"].includes(row.status)).length,
+        completed_30d: rows.filter((row: any) => row.status === "COMPLETED" && row.completed_at && new Date(row.completed_at) >= new Date(Date.now() - 30 * 86400000)).length,
+      },
+      roster: isAdler ? value<any[]>(await ops.from("team_roster").select("person,role").eq("is_former", false).order("person"), []) : [],
+      generated_at: new Date().toISOString(),
+    });
+  }
+
+  if (view === "finance") {
+    if (!isAdler || !canView("finance")) return respond({ error: "forbidden" }, 403);
+    const [controlsRes, clientsRes, contractsRes, notesRes] = await Promise.all([
+      ops.from("client_finance_controls").select("*").order("updated_at", { ascending: false }),
+      ops.from("clients").select("id,display_name,lifecycle,cs_owner,gt_owner,designer_owner,entrada").in("lifecycle", ["ACTIVE","ONBOARDING"]).order("display_name"),
+      ops.from("client_contract_status").select("client_id,contract_state,contract_end_date,days_remaining,renewal_pending,document_status"),
+      ops.from("client_billing_notes").select("*").order("reference_date", { ascending: false }).limit(1000),
+    ]);
+    const controls = value<any[]>(controlsRes, []);
+    const controlByClient = new Map(controls.map((row: any) => [row.client_id, row]));
+    const contractByClient = new Map(value<any[]>(contractsRes, []).map((row: any) => [row.client_id, row]));
+    const notesByClient = new Map<string, any[]>();
+    for (const row of value<any[]>(notesRes, [])) notesByClient.set(row.client_id, [...(notesByClient.get(row.client_id) ?? []), row]);
+    const clients = value<any[]>(clientsRes, []).map((client: any) => ({ ...client, finance: controlByClient.get(client.id) ?? null, contract: contractByClient.get(client.id) ?? null, billing_notes: (notesByClient.get(client.id) ?? []).slice(0, 10) }));
+    return respond({
+      clients,
+      summary: {
+        tracked: controls.length,
+        overdue: controls.filter((row: any) => row.payment_status === "OVERDUE").length,
+        due_soon: controls.filter((row: any) => row.payment_status === "DUE_SOON").length,
+        paused: controls.filter((row: any) => row.operational_status === "PAUSED").length,
+        pause_requested: controls.filter((row: any) => row.operational_status === "PAUSE_REQUESTED").length,
+        mrr_tracked: controls.reduce((sum: number, row: any) => sum + number(row.monthly_value), 0),
+      },
+      generated_at: new Date().toISOString(),
+    });
   }
 
   // ---- Produtividade do ClickUp por periodo (aba ClickUp). Rota que o front ja' chamava
@@ -487,6 +715,10 @@ Deno.serve(async (req) => {
     ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).eq("client_match_status", "UNMATCHED"),
     ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).eq("client_match_status", "NO_LABEL"),
     ops.from("clickup_client_label_audit").select("client_label,task_count,status").eq("status", "UNMATCHED").order("task_count", { ascending: false }).limit(30),
+    // Foco do Designer: tarefas abertas e conclusoes recentes com os responsaveis.
+    // O filtro pessoal e aplicado abaixo, depois que o perfil ja foi resolvido.
+    ops.from("clickup_tasks").select("task_id,name,status,status_type,date_created,date_updated,start_date,due_date,time_estimate_ms,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", false).order("due_date", { ascending: true, nullsFirst: false }).limit(1000),
+    ops.from("clickup_tasks").select("task_id,name,status,date_closed,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", true).gte("date_closed", new Date(Date.now() - 36 * 3600000).toISOString()).order("date_closed", { ascending: false }).limit(500),
     ]),
     Promise.all([
     ops.from("platform_notifications").select("*").order("occurred_at", { ascending: false }).limit(100),
@@ -639,14 +871,53 @@ Deno.serve(async (req) => {
   const productivityDaily = clickupScoped ? rawProductivityDaily : rawProductivityDaily.filter((row) => norm(row.person) === norm(profileClickupUser));
   const recentCompleted = clickupScoped ? rawRecentCompleted : rawRecentCompleted.filter((row: any) => (row.clickup_task_assignees ?? []).some((a: any) => norm(a.username) === norm(profileClickupUser)));
 
+  // ---- Foco pessoal de Design. Nao reaproveita alertas, conversas, compromissos
+  // nem prioridades de carteira: cada item nasce de uma tarefa ClickUp aberta e
+  // atribuida ao designer autenticado.
+  const designOwnerKeys = new Set([norm(profileClickupUser), norm(profilePerson)].filter(Boolean));
+  const assignedToDesigner = (row: any) => (row.clickup_task_assignees ?? []).some((assignee: any) => {
+    const email = norm(assignee.email);
+    return [assignee.user_id, assignee.username, assignee.email, email.split("@")[0]]
+      .some((candidate) => designOwnerKeys.has(norm(candidate)));
+  });
+  const exposeDesignTask = (row: any) => ({
+    task_id: row.task_id,
+    name: row.name,
+    status: row.status,
+    status_type: row.status_type ?? null,
+    date_created: row.date_created ?? null,
+    date_updated: row.date_updated ?? null,
+    start_date: row.start_date ?? null,
+    due_date: row.due_date ?? null,
+    time_estimate_ms: row.time_estimate_ms ?? null,
+    list_name: row.list_name ?? null,
+    client_id: row.client_id ?? null,
+    client_display_name: row.client_id ? (clientMeta.get(row.client_id)?.display_name ?? null) : null,
+    url: row.url ?? null,
+  });
+  const designOpenTasks = isDesignRestricted
+    ? value<any[]>(clickupData[9], []).filter(assignedToDesigner).map(exposeDesignTask)
+    : [];
+  const designClosedToday = isDesignRestricted
+    ? value<any[]>(clickupData[10], [])
+        .filter((row: any) => assignedToDesigner(row) && row.date_closed && opsDay(new Date(row.date_closed)) === opsDay())
+        .map(exposeDesignTask)
+    : [];
+
   // ---- Pre-clientes: filtra registros sinteticos de teste e, para carteiras (GT), oculta a
   // aba inteira (nao e' area de trabalho de gestor de trafego).
   const preclientsRaw = value<any[]>(platformData[1], []).filter((row) => !SYNTHETIC_NAME.test(String(row.name ?? "").trim()) && !SYNTHETIC_NAME.test(String(row.company ?? "").trim()));
   const preclients = isWalletOnly ? [] : preclientsRaw;
 
-  // ---- Notificacoes: enriquecidas com gestor/carteira do cliente e escopadas por carteira.
+  // ---- Notificacoes: DESIGN recebe apenas eventos individuais do proprio trabalho.
+  // Saldo, tarefa concluida e alertas gerais nunca saem no payload desse perfil.
   const notifications = value<any[]>(platformData[0], [])
     .filter((row) => inScope(row.client_id))
+    .filter((row) => !String(row.type).startsWith("WORK_ITEM_") || isAdler || row.metadata?.target_person === profilePerson || (!row.metadata?.target_person && row.metadata?.target_role === profileRole))
+    .filter((row) => !isDesignRestricted || (
+      (["DESIGNER_MENTION", "MATERIAL_UPLOADED"].includes(String(row.type)) && row.metadata?.target_role === "DESIGN" && row.metadata?.target_person === profilePerson) ||
+      (String(row.type).startsWith("WORK_ITEM_") && (row.metadata?.target_person === profilePerson || (!row.metadata?.target_person && row.metadata?.target_role === "DESIGN")))
+    ))
     .map((row) => {
       const meta = row.client_id ? clientMeta.get(row.client_id) : null;
       return { ...row, client_display_name: meta?.display_name ?? null, gestor: meta?.gt_owner ?? null, cs_owner: meta?.cs_owner ?? null, carteira: walletName(meta?.gt_owner) };
@@ -723,6 +994,7 @@ Deno.serve(async (req) => {
       // Evidencias e' tela de gestao: quem nao tem a aba tambem nao recebe o dado.
       evidence_review: canView("evidence") ? evidenceReview.slice(0, 100) : [],
       task_log: taskLog,
+      design_focus: isDesignRestricted ? { owner: profilePerson, open_tasks: designOpenTasks, closed_today: designClosedToday } : null,
     },
     adjustments,
     clickup: isFull ? { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: totalClickup, last_sync: lastClickupSync, configured: Boolean(clickupConfig?.token && clickupConfig?.team_id), webhook_configured: Boolean(clickupConfig?.webhook_secret), indexing: { matched: matchedClickup, match_rate: totalClickup ? Number((100 * matchedClickup / totalClickup).toFixed(1)) : 0, unmatched_label: results[18].count ?? 0, without_label: results[19].count ?? 0, unmatched_labels: value(results[20], []) } } : { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: recentCompleted.length, last_sync: null, configured: null, webhook_configured: null, indexing: null },
@@ -738,7 +1010,7 @@ Deno.serve(async (req) => {
     // Quem nao decide nao precisa da fila: o gate era isFull, entao todo perfil de
     // acesso total recebia os nomes de quem esta esperando aprovacao sem poder aprovar.
     access_requests_pending: canDecideAccessRequests ? value(teamData[4], []) : [],
-    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson) },
+    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, elevated, can_decide_access_requests: canDecideAccessRequests, can_manage_finance: isAdler && canView("finance"), is_executive: isLeonardo && canView("executive"), locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson) },
     health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
     auth_mode: currentUserKey === "adler-furtado" && suppliedKey.length >= 40 ? "dashboard_key" : "login",
     generated_at: new Date().toISOString(),

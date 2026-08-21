@@ -329,16 +329,20 @@ export default function Dashboard() {
 
       {error && <div className="error-box">{error}</div>}
 
-      <section className="grid kpis">
-        <Metric label="Clientes ativos" value={formatNumber(kpis.active_clients)} tone="blue" hint="Ativos + onboarding" loading={!data} />
-        <Metric label="Atenção agora" value={formatNumber(kpis.attention_now)} tone="red" hint="prioridade operacional" loading={!data} />
-        <Metric label="Follow-up" value={formatNumber(kpis.follow_up)} tone="yellow" hint="ação em acompanhamento" loading={!data} />
-        <Metric label="Operação OK" value={formatNumber(kpis.ok)} tone="green" hint="sem pendência crítica" loading={!data} />
-        <Metric label="Compromissos vencidos" value={formatNumber(kpis.overdue_commitments)} tone={kpis.overdue_commitments ? "red" : "green"} hint="em aberto" loading={!data} />
-        <Metric label="Alertas abertos" value={formatNumber(kpis.open_alerts)} tone={kpis.critical_alerts ? "red" : "yellow"} hint={`${formatNumber(kpis.critical_alerts)} críticos/altos`} loading={!data} />
-      </section>
+      {isDesignRestricted && view === "focus"
+        ? <DesignFocusMetrics focus={data?.operations?.design_focus || {}} loading={!data} />
+        : <section className="grid kpis">
+            <Metric label="Clientes ativos" value={formatNumber(kpis.active_clients)} tone="blue" hint="Ativos + onboarding" loading={!data} />
+            <Metric label="Atenção agora" value={formatNumber(kpis.attention_now)} tone="red" hint="prioridade operacional" loading={!data} />
+            <Metric label="Follow-up" value={formatNumber(kpis.follow_up)} tone="yellow" hint="ação em acompanhamento" loading={!data} />
+            <Metric label="Operação OK" value={formatNumber(kpis.ok)} tone="green" hint="sem pendência crítica" loading={!data} />
+            <Metric label="Compromissos vencidos" value={formatNumber(kpis.overdue_commitments)} tone={kpis.overdue_commitments ? "red" : "green"} hint="em aberto" loading={!data} />
+            <Metric label="Alertas abertos" value={formatNumber(kpis.open_alerts)} tone={kpis.critical_alerts ? "red" : "yellow"} hint={`${formatNumber(kpis.critical_alerts)} críticos/altos`} loading={!data} />
+          </section>}
 
-      {view === "focus" && <FocusCenter clients={actionClients} allClients={allClients} operations={data?.operations || {}} alerts={data?.alerts || []} openClient={openClient} />}
+      {view === "focus" && (isDesignRestricted
+        ? <DesignFocusCenter focus={data?.operations?.design_focus || {}} />
+        : <FocusCenter clients={actionClients} allClients={allClients} operations={data?.operations || {}} alerts={data?.alerts || []} openClient={openClient} />)}
       {view === "clients" && canSee("clients") && (isDesignRestricted
         ? <ClientPortfolio restricted clients={clients} total={allClients.length} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} lifecycleFilter={lifecycleFilter} setLifecycleFilter={setLifecycleFilter} openClient={openClient} />
         : <><PortfolioCenter portfolio={data?.portfolio || null} openClient={openClient} />
@@ -579,6 +583,129 @@ function atrasoLabel(horas: number | null) {
   const dias = Math.floor(horas / 24);
   if (dias < 14) return `há ${dias} ${dias === 1 ? "dia" : "dias"}`;
   return `há ${Math.floor(dias / 7)} semanas`;
+}
+
+type DesignLaneKey = "now" | "doing" | "next";
+
+function designText(row: Row) {
+  return [row.name, row.status, row.list_name].map((value) => text(value))
+    .join(" ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function designActivity(row: Row) {
+  const value = designText(row);
+  if (/ajuste|alteracao|correcao|refacao|revisao|feedback|aprovacao/.test(value)) return "Ajuste/revisão";
+  if (/video|reel|motion|edicao|audiovisual/.test(value)) return "Vídeo";
+  if (/carrossel|feed|story|criativo|estatic|arte|banner|thumbnail|capa/.test(value)) return "Criativo estático";
+  if (/landing|pagina|site|web|email/.test(value)) return "Peça digital";
+  return "Design";
+}
+
+function designDueDay(row: Row) {
+  if (!row.due_date) return null;
+  const date = new Date(String(row.due_date));
+  return Number.isNaN(date.getTime()) ? null : diaSaoPaulo(date);
+}
+
+function designIsDoing(row: Row) {
+  return /andamento|progress|doing|producao|produzindo|editando|revisao|review|ajuste|feedback|aprovacao/.test(designText(row));
+}
+
+function DesignFocusMetrics({ focus, loading }: { focus: Row; loading: boolean }) {
+  const tasks: Row[] = focus.open_tasks || [];
+  const today = diaSaoPaulo();
+  const dueToday = tasks.filter((row) => designDueDay(row) === today).length;
+  const overdue = tasks.filter((row) => {
+    const due = designDueDay(row);
+    return Boolean(due && due < today);
+  }).length;
+  const doing = tasks.filter(designIsDoing).length;
+  const adjustments = tasks.filter((row) => designActivity(row) === "Ajuste/revisão").length;
+  const next = Math.max(0, tasks.length - tasks.filter((row) => {
+    const due = designDueDay(row);
+    return Boolean((due && due <= today) || designIsDoing(row));
+  }).length);
+
+  return <section className="grid kpis">
+    <Metric label="Demandas abertas" value={formatNumber(tasks.length)} tone="blue" hint="atribuídas a você" loading={loading} />
+    <Metric label="Para hoje" value={formatNumber(dueToday)} tone={dueToday ? "yellow" : "green"} hint="entregas com prazo hoje" loading={loading} />
+    <Metric label="Atrasadas" value={formatNumber(overdue)} tone={overdue ? "red" : "green"} hint="precisam de prioridade" loading={loading} />
+    <Metric label="Em andamento" value={formatNumber(doing)} tone="blue" hint="produção, ajuste ou revisão" loading={loading} />
+    <Metric label="Ajustes e revisões" value={formatNumber(adjustments)} tone={adjustments ? "yellow" : "green"} hint="feedbacks em aberto" loading={loading} />
+    <Metric label="Concluídas hoje" value={formatNumber((focus.closed_today || []).length)} tone="green" hint={`${formatNumber(next)} próximas na fila`} loading={loading} />
+  </section>;
+}
+
+function DesignFocusCenter({ focus }: { focus: Row }) {
+  const [lane, setLane] = useState<"all" | DesignLaneKey>("all");
+  const tasks: Row[] = focus.open_tasks || [];
+  const today = diaSaoPaulo();
+
+  const lanes = useMemo(() => {
+    const grouped: Record<DesignLaneKey, Row[]> = { now: [], doing: [], next: [] };
+    tasks.forEach((row) => {
+      const due = designDueDay(row);
+      if (due && due <= today) grouped.now.push(row);
+      else if (designIsDoing(row)) grouped.doing.push(row);
+      else grouped.next.push(row);
+    });
+    const byDue = (a: Row, b: Row) => {
+      const aDue = a.due_date ? new Date(String(a.due_date)).getTime() : Number.MAX_SAFE_INTEGER;
+      const bDue = b.due_date ? new Date(String(b.due_date)).getTime() : Number.MAX_SAFE_INTEGER;
+      return aDue - bDue || text(a.name).localeCompare(text(b.name), "pt-BR");
+    };
+    (Object.keys(grouped) as DesignLaneKey[]).forEach((key) => grouped[key].sort(byDue));
+    return [
+      { key: "now" as const, verbo: "Fazer agora", titulo: "Atrasadas ou com entrega hoje", ajuda: "Somente demandas de design atribuídas a você que exigem ação imediata.", itens: grouped.now, tom: "danger" },
+      { key: "doing" as const, verbo: "Em andamento", titulo: "Produção, ajustes e revisões", ajuda: "Peças que já estão em produção ou retornaram para ajuste, revisão ou aprovação.", itens: grouped.doing, tom: "warn" },
+      { key: "next" as const, verbo: "Próximas", titulo: "Fila de produção", ajuda: "Demandas de design abertas que ainda não chegaram ao prazo do dia.", itens: grouped.next, tom: "" },
+    ];
+  }, [tasks, today]);
+
+  const visible = lane === "all" ? lanes : lanes.filter((item) => item.key === lane);
+  const total = tasks.length;
+  const urgent = lanes[0].itens.length;
+  const plan = [
+    `Foco de Design · ${new Intl.DateTimeFormat("pt-BR", { dateStyle: "long" }).format(new Date())}`,
+    `${total} demandas abertas · ${urgent} para fazer agora · ${(focus.closed_today || []).length} concluídas hoje`,
+    "",
+    ...lanes.flatMap((item) => item.itens.length
+      ? [`${item.verbo.toUpperCase()}:`, ...item.itens.slice(0, 8).map((row, index) => `${index + 1}. ${text(row.client_display_name || row.list_name || "Sem cliente")} — ${text(row.name)} (${designActivity(row)} · ${row.due_date ? formatDate(row.due_date) : "sem prazo"})`), ""]
+      : []),
+  ].join("\n");
+
+  return <section className="workspace foco">
+    <div className="foco-head card">
+      <div>
+        <span className="eyebrow">Foco de Design</span>
+        <h2>{total ? `${total} ${total === 1 ? "demanda criativa aberta" : "demandas criativas abertas"} · ${urgent} para fazer agora` : "Nenhuma demanda de design aberta hoje"}</h2>
+        <p>Esta fila mostra exclusivamente tarefas de design atribuídas a você. A execução e a baixa continuam no ClickUp.</p>
+      </div>
+      <button type="button" onClick={() => navigator.clipboard?.writeText(plan)}>Copiar plano de design</button>
+    </div>
+
+    <div className="filter-tabs foco-tabs">
+      <button type="button" className={lane === "all" ? "active" : ""} onClick={() => setLane("all")}>Tudo <b>{total}</b></button>
+      {lanes.map((item) => <button key={item.key} type="button" className={lane === item.key ? "active" : ""} onClick={() => setLane(item.key)}>{item.verbo} <b>{item.itens.length}</b></button>)}
+    </div>
+
+    <div className={`foco-lanes${lane === "all" ? "" : " single"}`}>
+      {visible.map((item) => <section className={`card foco-lane ${item.tom}`} key={item.key}>
+        <div className="foco-lane-head"><div><b>{item.verbo}</b><span>{item.titulo}</span></div><strong>{item.itens.length}</strong></div>
+        <p className="foco-lane-help">{item.ajuda}</p>
+        {item.itens.map((row) => {
+          const due = designDueDay(row);
+          const late = Boolean(due && due < today);
+          const when = !due ? "sem prazo" : due === today ? "entrega hoje" : late ? "atrasada" : `entrega ${formatDate(row.due_date)}`;
+          const content = <><span className={`foco-age${late ? " late" : ""}`}>{when}</span><span className="foco-body"><b>{text(row.client_display_name || row.list_name || "Demanda interna")}</b><span>{text(row.name)}</span><small>{designActivity(row)} · {text(row.status || "aberta")}{row.list_name ? ` · ${text(row.list_name)}` : ""}</small></span><Chip value={late ? "ATRASADO" : due === today ? "HOJE" : designActivity(row)} /></>;
+          return row.url
+            ? <a className="foco-item" key={row.task_id} href={row.url} target="_blank" rel="noreferrer">{content}</a>
+            : <div className="foco-item" key={row.task_id}>{content}</div>;
+        })}
+        {!item.itens.length && <div className="empty compact">Nada aqui hoje.</div>}
+      </section>)}
+    </div>
+  </section>;
 }
 
 type FocoItem = {
