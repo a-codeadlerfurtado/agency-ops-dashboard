@@ -1,8 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const ENGINE_VERSION = 10;
-const VALIDATION_VERSION = "grounding-rich-context-v4";
+const ENGINE_VERSION = 11;
+const VALIDATION_VERSION = "grounding-rich-context-v4.1";
 const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
   auth: { persistSession: false, autoRefreshToken: false },
 });
@@ -91,10 +91,13 @@ function evidenciaEstaNoEvento(evidencia: unknown, excerpt: unknown): boolean {
   const e = norm(evidencia);
   const x = norm(excerpt);
   if (!e || !x) return false;
-  if (x.includes(e)) return true;
-  const tokens = [...new Set(e.split(" ").filter((t) => t.length >= 4))];
-  if (!tokens.length) return false;
-  return tokens.filter((t) => x.includes(t)).length / tokens.length >= 0.78;
+  if (x.includes(e) || e.includes(x)) return true;
+  const eTokens = [...new Set(e.split(" ").filter((t) => t.length >= 4))];
+  const xTokens = [...new Set(x.split(" ").filter((t) => t.length >= 4))];
+  if (!eTokens.length || !xTokens.length) return false;
+  const evidenceCoverage = eTokens.filter((t) => xTokens.includes(t)).length / eTokens.length;
+  const eventCoverage = xTokens.filter((t) => eTokens.includes(t)).length / xTokens.length;
+  return evidenceCoverage >= 0.72 || eventCoverage >= 0.72;
 }
 
 const STOP = new Set(["para","pela","pelo","pelos","pelas","com","sem","sobre","entre","mais","menos","uma","umas","uns","dos","das","que","isso","essa","esse","esta","este","aqui","ali","como","quando","onde","depois","antes","tambem"]);
@@ -169,9 +172,14 @@ function tipoCentral(t: any): string {
 const CATEGORIAS = new Set(["Campanha","Ajuste na campanha","Criativos","Integração","CRM","Automação","Relatório","Retorno ao cliente","Onboarding","Reunião","Conta/Plataforma","Outro"]);
 
 function categoriaDeterministica(t: any, dest: Destino): string {
-  const x = norm(`${t?.acao ?? t?.titulo ?? ""} ${t?.descricao_execucao ?? t?.descricao ?? ""} ${t?.categoria ?? ""}`);
-  if (/(campanh|anunci|conjunto).{0,90}(ajust|otimiz|paus|ativ|desativ|corrig|alter|orcament|segment|ausencia de lead|sem lead)|(?:ajust|otimiz|paus|ativ|desativ|corrig|alter).{0,90}(campanh|anunci|conjunto)/.test(x)) return "Ajuste na campanha";
-  if (/\b(criar|subir|publicar|montar).{0,80}(campanh|anunci|conjunto)|(?:campanh|anunci|conjunto).{0,80}(criar|subir|publicar|montar)\b/.test(x)) return "Campanha";
+  const action = norm(t?.acao ?? t?.titulo ?? "");
+  const campaignAdjustment = /(campanh|anunci|conjunto).{0,90}(ajust|otimiz|paus|ativ|desativ|corrig|alter|orcament|segment|ausencia de lead|sem lead)|(?:ajust|otimiz|paus|ativ|desativ|corrig|alter).{0,90}(campanh|anunci|conjunto)/;
+  const campaignCreate = /\b(criar|subir|publicar|montar).{0,80}(campanh|anunci|conjunto)|(?:campanh|anunci|conjunto).{0,80}(criar|subir|publicar|montar)\b/;
+  if (campaignAdjustment.test(action)) return "Ajuste na campanha";
+  if (campaignCreate.test(action)) return "Campanha";
+  const x = norm(`${action} ${t?.descricao_execucao ?? t?.descricao ?? ""} ${t?.categoria ?? ""}`);
+  if (campaignAdjustment.test(x)) return "Ajuste na campanha";
+  if (campaignCreate.test(x)) return "Campanha";
   if (/criativ|arte|video|copy|roteiro/.test(x)) return "Criativos";
   if (/\bcrm\b/.test(x)) return "CRM";
   if (/automacao|\bmake\b|webhook|z api|zapier|n8n/.test(x)) return "Automação";
@@ -396,7 +404,7 @@ const SISTEMA = [
   "",
   "REGRAS DE SEGURANCA",
   "1. Uma acao por item; nao misture execucao tecnica e comunicacao.",
-  "2. evidencia e um TRECHO LITERAL das MENSAGENS DO EVENTO ATUAL que prova a acao.",
+  "2. evidencia e SOMENTE um TRECHO LITERAL copiado das MENSAGENS DO EVENTO ATUAL que prova a acao. Nao coloque aspas extras, autor, data, explicacao ou parenteses no campo evidencia.",
   "3. acao deve ser curta, objetiva e usar somente o objeto/assunto comprovado no evento atual. O detalhe extra vai em descricao_execucao/contexto, nao na acao.",
   "4. descricao_execucao deve explicar exatamente o que fazer usando contexto verificado; nao invente requisito.",
   "5. criterios_conclusao devem ser verificaveis e coerentes com a acao; nao invente condicao comercial.",
@@ -502,10 +510,14 @@ Deno.serve(async (req) => {
         const category = categoriaDeterministica(t,dest);
         const title = tituloPadrao(clientName,category,action);
         const requester = matchRequester(contexto,t?.evidencia,ev.message_id);
-        const responsavel = await resolverResponsavel(t,contexto ?? {},team,ev.client_id);
-        const traffic = areaEhTrafego(t?.area);
+        const canonicalEvidence = requester?.body && evidenciaEstaNoEvento(requester.body, ev.excerpt)
+          ? String(requester.body)
+          : t?.evidencia;
+        const effectiveTask = { ...t, evidencia: canonicalEvidence };
+        const responsavel = await resolverResponsavel(effectiveTask,contexto ?? {},team,ev.client_id);
+        const traffic = areaEhTrafego(effectiveTask?.area);
         const gtRouteOk = !traffic || (responsavel?.role === "GT" && responsavel?.person && responsavel?.clickup_user_id);
-        const evidenceOk = evidenciaEstaNoEvento(t?.evidencia,ev.excerpt);
+        const evidenceOk = evidenciaEstaNoEvento(canonicalEvidence,ev.excerpt);
         const actionCheck = acaoGrounded(action,ev.excerpt);
         const internal = tarefaInterna(action);
         const ignored = dest === "IGNORE";
@@ -527,27 +539,27 @@ Deno.serve(async (req) => {
         const discarded = !grounded;
         if (grounded && !duplicated) accepted.push(current);
 
-        const description = descricaoRica({ t,contexto,grupo:group,requester,event:ev,category,model });
+        const description = descricaoRica({ t:effectiveTask,contexto,grupo:group,requester,event:ev,category,model });
         const { data:normTitle } = await ops.rpc("normalize_task_subject",{p_nome:title});
         const normalizedTitle = String(normTitle || norm(title));
         const prazoDias = Number(t?.prazo_dias);
-        const contextSources = asArray(t?.fontes_usadas);
-        const conflicts = asArray(t?.conflitos);
-        const completion = asArray(t?.criterios_conclusao);
+        const contextSources = asArray(effectiveTask?.fontes_usadas);
+        const conflicts = asArray(effectiveTask?.conflitos);
+        const completion = asArray(effectiveTask?.criterios_conclusao);
 
         const row:any = {
           event_id:ev.id,client_id:ev.client_id,chat_id:ev.chat_id,titulo:title,titulo_norm:normalizedTitle,descricao:description,
-          area:t?.area ?? null,responsavel_sugerido:responsavel?.person ?? t?.responsavel_sugerido ?? null,
+          area:effectiveTask?.area ?? null,responsavel_sugerido:responsavel?.person ?? effectiveTask?.responsavel_sugerido ?? null,
           resolved_assignee_person:responsavel?.person ?? null,resolved_clickup_user_id:responsavel?.clickup_user_id ? String(responsavel.clickup_user_id) : null,
-          assignment_source:responsavel?.source ?? null,prioridade:t?.prioridade ?? null,
+          assignment_source:responsavel?.source ?? null,prioridade:effectiveTask?.prioridade ?? null,
           prazo_sugerido:Number.isFinite(prazoDias) ? new Date(Date.now()+prazoDias*86400000).toISOString().slice(0,10) : null,
           urgencia:ev.urgency,sinais:ev.signals,contexto:contexto ?? null,grounding_score:Number(actionCheck.score.toFixed(4)),grounding_reason:reason,
           source_excerpt_hash:sourceHash,validation_version:VALIDATION_VERSION,destination:dest,central_type:central,task_category:category,
-          source_group_name:group,requester_name:requester?.sender_name ?? cleanText(t?.quem_pediu,200),requester_phone:requester?.sender_phone ?? null,
-          requester_message_id:requester?.message_id ?? ev.message_id ?? null,operational_context:t?.configuracao_cliente ?? {},context_conflicts:conflicts,
+          source_group_name:group,requester_name:requester?.sender_name ?? cleanText(effectiveTask?.quem_pediu,200),requester_phone:requester?.sender_phone ?? null,
+          requester_message_id:requester?.message_id ?? ev.message_id ?? null,operational_context:effectiveTask?.configuracao_cliente ?? {},context_conflicts:conflicts,
           context_sources:contextSources,completion_criteria:completion,
-          evidencia:{ trecho:t?.evidencia ?? null,motivo:t?.motivo ?? null,message_id:requester?.message_id ?? ev.message_id,chat_id:ev.chat_id,group_name:group,
-            requester_name:requester?.sender_name ?? t?.quem_pediu ?? null,requester_phone:requester?.sender_phone ?? null,provider,destination:dest,central_type:central,
+          evidencia:{ trecho:canonicalEvidence ?? null,motivo:effectiveTask?.motivo ?? null,message_id:requester?.message_id ?? ev.message_id,chat_id:ev.chat_id,group_name:group,
+            requester_name:requester?.sender_name ?? effectiveTask?.quem_pediu ?? null,requester_phone:requester?.sender_phone ?? null,provider,destination:dest,central_type:central,
             category,duplicate_intra_event:duplicateInEvent,duplicate_work_item_id:centralDup?.id ?? null,duplicata_provavel_ia:aiDup,
             grounded_in_current_event:evidenceOk,action_grounded_in_current_event:actionCheck.ok,unsupported_action_terms:actionCheck.unsupported,
             discard_reason:discarded ? reason : null,validation_version:VALIDATION_VERSION,context_search:contexto?.historico_search ?? null,
@@ -565,10 +577,10 @@ Deno.serve(async (req) => {
         }
         resumo.propostas++;
         if (mode !== "LIVE") continue;
-        const intentHash = (await sha256(`${ev.id}|${dest}|${central ?? ""}|${normalizedTitle}|${norm(t?.evidencia)}`)).slice(0,24);
+        const intentHash = (await sha256(`${ev.id}|${dest}|${central ?? ""}|${normalizedTitle}|${norm(canonicalEvidence)}`)).slice(0,24);
 
         if (dest === "CENTRAL") {
-          const wi = await criarWorkItem({ ev,t,titulo:title,description,group,requester,central:central || "ACOMPANHAR",responsavel,generatedTaskId:saved?.id,sourceId:`task-event:${ev.id}:${intentHash}`,model });
+          const wi = await criarWorkItem({ ev,t:effectiveTask,titulo:title,description,group,requester,central:central || "ACOMPANHAR",responsavel,generatedTaskId:saved?.id,sourceId:`task-event:${ev.id}:${intentHash}`,model });
           await ops.from("generated_tasks").update({status:"CENTRAL",work_item_id:wi.id,erro:null}).eq("id",saved?.id);
           resumo.enviadas_central++; continue;
         }
@@ -577,7 +589,7 @@ Deno.serve(async (req) => {
           const [tokenCu,list] = await Promise.all([segredo("CLICKUP_API_TOKEN"),segredo("TASK_ENGINE_CLICKUP_LIST")]);
           if (!tokenCu || !list) { await ops.from("generated_tasks").update({status:"ERRO",erro:"missing_clickup_configuration"}).eq("id",saved?.id); continue; }
           const prio:Record<string,number> = {Urgente:1,Alta:2,Media:3,"Média":3,Baixa:4};
-          const body:any = { name:title,description,priority:prio[String(t?.prioridade)] ?? 3 };
+          const body:any = { name:title,description,priority:prio[String(effectiveTask?.prioridade)] ?? 3 };
           const assignee = Number(responsavel?.clickup_user_id); if (Number.isFinite(assignee)) body.assignees=[assignee];
           const r = await fetch(`https://api.clickup.com/api/v2/list/${list}/task`,{method:"POST",headers:{Authorization:tokenCu,"content-type":"application/json"},body:JSON.stringify(body)});
           const jr = await r.json().catch(()=>({}));
