@@ -149,6 +149,10 @@ Deno.serve(async (req) => {
   // e enxergaria os 155 clientes com nome, prioridade e proxima acao.
   const isLocked = viaLogin && (!accountApproved || (!profilePerson && !elevated));
   const canDecideAccessRequests = isFull && (!viaLogin || profileRole === "MGMT");
+  // DESIGN pode consultar a lista minima da aba Clientes, mas nunca o dossie
+  // individual. A regra fica disponivel antes das rotas para bloquear o detalhe
+  // antes de qualquer consulta com dados sensiveis.
+  const isDesignRestricted = profileRole === "DESIGN";
 
   // ---- Quais ABAS a pessoa abre. Pergunta separada de QUANTO DADO ela alcanca:
   // access_level continua governando o escopo (carteira x base inteira), enquanto a
@@ -227,6 +231,7 @@ Deno.serve(async (req) => {
         source: "diario_ajustes",
         tipo: typeof body.tipo === "string" ? body.tipo.slice(0, 120) : null,
         descricao: descricao.slice(0, 4000),
+        responsible_person: profilePerson ?? null,
         metadata: { author_user_key: currentUserKey, author_name: profilePerson ?? null, origem: "dashboard" },
       }).select().single();
       if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
@@ -410,6 +415,7 @@ Deno.serve(async (req) => {
   }
 
   if (view === "client") {
+    if (isDesignRestricted) return respond({ error: "forbidden" }, 403);
     const clientId = url.searchParams.get("id");
     if (!clientId) return respond({ error: "missing_client_id" }, 400);
     const core = await Promise.all([
@@ -551,6 +557,11 @@ Deno.serve(async (req) => {
   // briefing_profile vem do select("*") da view e nenhuma tela le': ~800 bytes por
   // cliente, ~127 kB por carga. O drawer busca o cliente a parte quando precisa.
   const enrichedClients = clients.map(({ briefing_profile: _ignorado, ...client }) => ({ ...client, carteira: walletName(client.gt_owner), health: latestHealthByClient.get(client.client_id) ?? null }));
+  // ---- Design: aba "Clientes" liberada, mas so' enxerga nome + tempo como cliente.
+  // Nada de saude, financeiro, prioridade ou responsaveis - o campo e' filtrado aqui,
+  // no proprio payload da API, nao so' escondido na tela (a fronteira de seguranca
+  // real e' a resposta HTTP, nao o componente React que a desenha).
+  const clientsBasic = activeClients.map((row) => ({ client_id: row.client_id, display_name: row.display_name, client_days: row.client_days }));
   const count = (fn: (row: any) => boolean) => activeClients.filter(fn).length;
   const severity: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
   const now = new Date();
@@ -702,7 +713,7 @@ Deno.serve(async (req) => {
 
   return respond({
     kpis: { active_clients: activeClients.length, churned_clients: clients.filter((row) => row.lifecycle === "CHURNED").length, onboarding_clients: clients.filter((row) => row.lifecycle === "ONBOARDING").length, operation_clients: clients.filter((row) => row.lifecycle === "ACTIVE").length, attention_now: count((row) => row.priority === "ATTENTION"), follow_up: count((row) => row.priority === "FOLLOW_UP"), ok: count((row) => row.priority === "OK"), undetermined: count((row) => row.priority === "UNDETERMINED"), data_incomplete: count((row) => row.priority === "DATA_INCOMPLETE"), client_waiting_agency: count((row) => row.waiting_direction === "CLIENT_WAITING_AGENCY"), agency_waiting_client: count((row) => row.waiting_direction === "AGENCY_WAITING_CLIENT"), overdue_commitments: overdue.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, open_alerts: alerts.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, critical_alerts: alerts.filter((row) => (!row.client_id || activeIds.has(row.client_id)) && ["CRITICAL", "HIGH"].includes(row.severity)).length, semantic_review: conversations.filter((row) => row.needs_semantic_review && (!row.client_id || activeIds.has(row.client_id))).length, briefing_pages: briefings.length, briefing_pending: briefings.filter((row) => row.sync_status === "DISCOVERED").length, briefing_unlinked: briefings.filter((row) => !row.client_id).length, queue_pending: isFull ? queue.filter((row) => row.status === "PENDING").length : 0, queue_errors: isFull ? queue.filter((row) => row.status === "ERROR").length : 0, team_members: team.filter((row) => row.in_roster).length, clients_unassigned: unassignedClients.length, team_unassigned: team.filter((row) => !row.in_roster && !row.is_former).length },
-    clients: enrichedClients, campaigns,
+    clients: isDesignRestricted ? clientsBasic : enrichedClients, campaigns,
     alerts: alerts.sort((a, b) => (severity[a.severity] ?? 9) - (severity[b.severity] ?? 9)).slice(0, 100),
     commitments, conversations: conversationsEnriched, media: aggregateMedia(activeMediaRows),
     operations: {
@@ -723,7 +734,7 @@ Deno.serve(async (req) => {
     team, unassigned_clients: canView("team") ? unassignedClients : [],
     // Quem opera uma carteira ve o codinome dela; quem ve o quadro inteiro ve todas.
     wallets: canView("team") ? wallets : [],
-    portfolio: canView("clients") ? portfolio : null, stage_labels: stageLabels,
+    portfolio: (canView("clients") && !isDesignRestricted) ? portfolio : null, stage_labels: stageLabels,
     // Quem nao decide nao precisa da fila: o gate era isFull, entao todo perfil de
     // acesso total recebia os nomes de quem esta esperando aprovacao sem poder aprovar.
     access_requests_pending: canDecideAccessRequests ? value(teamData[4], []) : [],
