@@ -29,11 +29,43 @@ type InsightRow = {
   actions?: Action[];
   cost_per_action_type?: Action[];
 };
-type Integration = { client_id: string; external_id: string | null; meta_ad_account_id: string | null };
+type Integration = {
+  client_id: string;
+  system: string;
+  external_id: string | null;
+  external_name: string | null;
+  is_primary: boolean | null;
+  confidence: string | null;
+  meta_ad_account_id: string | null;
+  created_at: string | null;
+};
+type Briefing = {
+  client_id: string;
+  title: string | null;
+  page_url: string | null;
+  extracted_profile: Record<string, unknown> | null;
+  last_fetched_at: string | null;
+  sync_status: string | null;
+  match_status: string | null;
+};
+
+type SourcedField = {
+  value: unknown;
+  key: string;
+  source_title: string | null;
+  source_url: string | null;
+  source_at: string | null;
+} | null;
 
 function toNum(v: unknown) {
   const n = Number(v ?? 0);
   return Number.isFinite(n) ? n : 0;
+}
+function nonEmpty(v: unknown) {
+  if (v === null || v === undefined || v === "") return false;
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === "object") return Object.keys(v as Record<string, unknown>).length > 0;
+  return true;
 }
 function exact(actions: Action[] | undefined, type: string) {
   const row = (actions ?? []).find((a) => a.action_type.toLowerCase() === type.toLowerCase());
@@ -68,6 +100,42 @@ function validDate(v: string | null) {
 function daysBetween(a: string, b: string) {
   return Math.round((Date.parse(`${b}T12:00:00Z`) - Date.parse(`${a}T12:00:00Z`)) / 86400000) + 1;
 }
+function fieldFromBriefings(rows: Briefing[], aliases: string[]): SourcedField {
+  for (const row of rows) {
+    const profile = row.extracted_profile ?? {};
+    for (const key of aliases) {
+      const value = profile[key];
+      if (nonEmpty(value)) return {
+        value,
+        key,
+        source_title: row.title ?? null,
+        source_url: row.page_url ?? null,
+        source_at: row.last_fetched_at ?? null,
+      };
+    }
+  }
+  return null;
+}
+function fixedContext(rows: Briefing[]) {
+  return {
+    client_type: fieldFromBriefings(rows, ["tipo_cliente", "client_type"]),
+    objectives: fieldFromBriefings(rows, ["objetivos", "objectives"]),
+    product_focus: fieldFromBriefings(rows, ["focos_produto", "product_focus"]),
+    audience: fieldFromBriefings(rows, ["publico", "audience"]),
+    region: fieldFromBriefings(rows, ["regiao", "region"]),
+    media_budget: fieldFromBriefings(rows, ["orcamento_midia", "media_budget", "media_budget_monthly_brl", "media_budget_monthly_brl_range", "media_budget_minimum_monthly_brl"]),
+    crm: fieldFromBriefings(rows, ["crm"]),
+    bottlenecks: fieldFromBriefings(rows, ["gargalos", "bottlenecks"]),
+    pending_items: fieldFromBriefings(rows, ["pendencias", "pending_items"]),
+    responsibles: fieldFromBriefings(rows, ["responsaveis", "responsibles", "responsible_parties"]),
+    onboarding_preferences: fieldFromBriefings(rows, ["onboarding_preferences"]),
+  };
+}
+function trafficTask(row: any) {
+  const raw = `${row?.name ?? ""} ${row?.list_name ?? ""}`
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return /(campanh|trafego|ads|meta|google|otimiz|orcament|saldo|lead|crm|pixel|gtm|publico|segment|anuncio)/.test(raw);
+}
 async function fetchInsights(accountId: string, token: string, since: string, until: string) {
   const fields = ["campaign_id","campaign_name","date_start","date_stop","spend","impressions","clicks","ctr","cpc","cpm","reach","frequency","actions","cost_per_action_type"].join(",");
   const rows: InsightRow[] = [];
@@ -84,9 +152,7 @@ async function fetchInsights(accountId: string, token: string, since: string, un
 }
 async function inBatches<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>) {
   const out: R[] = [];
-  for (let i = 0; i < items.length; i += size) {
-    out.push(...await Promise.all(items.slice(i, i + size).map(fn)));
-  }
+  for (let i = 0; i < items.length; i += size) out.push(...await Promise.all(items.slice(i, i + size).map(fn)));
   return out;
 }
 
@@ -123,6 +189,8 @@ Deno.serve(async (req) => {
   const elevated = accessLevel === "RESTRICTED" && (approvals ?? []).some((r: any) => r.kind === "ELEVATION");
   const isFull = accessLevel === "FULL" || elevated;
   const isWalletOnly = accessLevel === "WALLET_ONLY" && !elevated;
+  const isGtScoped = role === "GT" && !elevated;
+  const trafficContextEnabled = role === "GT" || role === "MGMT" || elevated;
   if (!accountApproved || (!person && !elevated)) return reply({ error: "forbidden" }, 403);
 
   const url = new URL(req.url);
@@ -139,7 +207,7 @@ Deno.serve(async (req) => {
   let q = ops.from("campaign_client_latest").select("*");
   if (lifecycle === "ACTIVE") q = q.in("lifecycle", ["ACTIVE", "ONBOARDING"]);
   else if (lifecycle !== "ALL") q = q.eq("lifecycle", lifecycle);
-  if (isWalletOnly && person) q = q.eq("gt_owner", person);
+  if ((isWalletOnly || isGtScoped) && person) q = q.eq("gt_owner", person);
   const { data: baseClients, error: baseError } = await q.order("display_name");
   if (baseError) return reply({ error: "query_failed", detail: baseError.message }, 500);
   const base = baseClients ?? [];
@@ -148,16 +216,37 @@ Deno.serve(async (req) => {
   if (!ids.length) return reply({
     clients: [], campaigns: [],
     summary: { lifecycle_filter: lifecycle, clients_total: 0, since, until, day_count: dayCount, source: "META_MARKETING_API", graph_api_version: GRAPH_API_VERSION, fetched_at: new Date().toISOString() },
-    profile: { person, role, access_level: accessLevel, elevated, scope: isFull ? "FULL" : isWalletOnly ? "WALLET" : "RESTRICTED" },
+    profile: { person, role, access_level: accessLevel, elevated, scope: isFull && !isGtScoped ? "FULL" : (isWalletOnly || isGtScoped) ? "WALLET" : "RESTRICTED", traffic_context_enabled: trafficContextEnabled },
   });
 
-  const { data: integrationsData, error: integrationError } = await ops.from("client_integrations")
-    .select("client_id,external_id,meta_ad_account_id")
-    .eq("system", "META_BM")
-    .not("meta_ad_account_id", "is", null)
-    .in("client_id", ids);
-  if (integrationError) return reply({ error: "query_failed", detail: integrationError.message }, 500);
-  const integrations = (integrationsData ?? []) as Integration[];
+  const emptyResult = { data: [] as any[], error: null as any };
+  const [allIntegrationsRes, briefingsRes, conversationsRes, alertsRes, commitmentsRes, tasksRes] = await Promise.all([
+    ops.from("client_integrations").select("client_id,system,external_id,external_name,is_primary,confidence,meta_ad_account_id,created_at").in("client_id", ids),
+    trafficContextEnabled ? ops.from("notion_briefing_pages").select("client_id,title,page_url,extracted_profile,last_fetched_at,sync_status,match_status").in("client_id", ids).not("extracted_profile", "is", null).order("last_fetched_at", { ascending: false }).limit(1000) : Promise.resolve(emptyResult),
+    trafficContextEnabled ? ops.from("conversation_state").select("client_id,conversation_status,waiting_for_agency,waiting_for_client,waiting_since,open_question,last_summary,last_intent,last_client_message_at,last_team_message_at,updated_at").in("client_id", ids).order("updated_at", { ascending: false }).limit(1000) : Promise.resolve(emptyResult),
+    trafficContextEnabled ? ops.from("operational_alerts").select("id,client_id,type,severity,title,description,next_action,first_detected_at,last_detected_at,status").in("client_id", ids).eq("status", "OPEN").order("last_detected_at", { ascending: false }).limit(1000) : Promise.resolve(emptyResult),
+    trafficContextEnabled ? ops.from("commitments").select("id,client_id,origem,descricao,owner,due_at,status,evidencia,confirmed_by_human,created_at,updated_at").in("client_id", ids).in("status", ["OPEN", "IN_PROGRESS"]).order("due_at", { ascending: true, nullsFirst: false }).limit(1000) : Promise.resolve(emptyResult),
+    trafficContextEnabled ? ops.from("clickup_tasks").select("task_id,client_id,name,status,is_closed,date_created,date_updated,date_closed,due_date,list_name,url,assignee_names").in("client_id", ids).order("date_updated", { ascending: false }).limit(2500) : Promise.resolve(emptyResult),
+  ]);
+  if (allIntegrationsRes.error) return reply({ error: "query_failed", detail: allIntegrationsRes.error.message }, 500);
+
+  const allIntegrations = (allIntegrationsRes.data ?? []) as Integration[];
+  const integrations = allIntegrations.filter((row) => row.system === "META_BM" && row.meta_ad_account_id) as Integration[];
+  const contextErrors = [briefingsRes, conversationsRes, alertsRes, commitmentsRes, tasksRes]
+    .map((res: any) => res?.error?.message).filter(Boolean).slice(0, 5);
+
+  const briefingByClient = new Map<string, Briefing[]>();
+  for (const row of (briefingsRes.data ?? []) as Briefing[]) briefingByClient.set(row.client_id, [...(briefingByClient.get(row.client_id) ?? []), row]);
+  const integrationByClient = new Map<string, Integration[]>();
+  for (const row of allIntegrations) integrationByClient.set(row.client_id, [...(integrationByClient.get(row.client_id) ?? []), row]);
+  const conversationByClient = new Map<string, any[]>();
+  for (const row of conversationsRes.data ?? []) conversationByClient.set(row.client_id, [...(conversationByClient.get(row.client_id) ?? []), row]);
+  const alertByClient = new Map<string, any[]>();
+  for (const row of alertsRes.data ?? []) alertByClient.set(row.client_id, [...(alertByClient.get(row.client_id) ?? []), row]);
+  const commitmentByClient = new Map<string, any[]>();
+  for (const row of commitmentsRes.data ?? []) commitmentByClient.set(row.client_id, [...(commitmentByClient.get(row.client_id) ?? []), row]);
+  const tasksByClient = new Map<string, any[]>();
+  for (const row of tasksRes.data ?? []) if (trafficTask(row)) tasksByClient.set(row.client_id, [...(tasksByClient.get(row.client_id) ?? []), row]);
 
   const accountResults = await inBatches(integrations, 10, async (integration) => {
     try {
@@ -230,6 +319,18 @@ Deno.serve(async (req) => {
     else if (client.lifecycle === "CHURNED" && Number(client.active_campaigns ?? 0) > 0 && (spend > 0 || impressions > 0)) deliveryStatus = "CHURNED_WITH_DELIVERY";
     else if (Number(client.active_campaigns ?? 0) === 0) deliveryStatus = "NO_ACTIVE_CAMPAIGN";
     else if (spend === 0 && impressions === 0) deliveryStatus = "NO_DELIVERY";
+
+    const briefings = briefingByClient.get(client.client_id) ?? [];
+    const context = trafficContextEnabled ? {
+      fixed: fixedContext(briefings),
+      briefings: briefings.slice(0, 3).map((row) => ({ title: row.title, page_url: row.page_url, last_fetched_at: row.last_fetched_at, sync_status: row.sync_status, match_status: row.match_status })),
+      integrations: (integrationByClient.get(client.client_id) ?? []).map((row) => ({ system: row.system, external_id: row.external_id, external_name: row.external_name, is_primary: row.is_primary, confidence: row.confidence, meta_ad_account_id: row.meta_ad_account_id, created_at: row.created_at })),
+      conversation: (conversationByClient.get(client.client_id) ?? [])[0] ?? null,
+      alerts: (alertByClient.get(client.client_id) ?? []).slice(0, 8),
+      commitments: (commitmentByClient.get(client.client_id) ?? []).slice(0, 8),
+      traffic_tasks: (tasksByClient.get(client.client_id) ?? []).slice(0, 16),
+    } : null;
+
     return {
       ...client,
       spend, impressions, clicks, results, leads,
@@ -243,6 +344,7 @@ Deno.serve(async (req) => {
       period_since: since,
       period_until: until,
       partial_data: Number(client.account_errors ?? 0) > 0,
+      traffic_context: context,
     };
   });
 
@@ -303,8 +405,10 @@ Deno.serve(async (req) => {
       accounts_failed: failedAccounts.length,
       partial: failedAccounts.length > 0,
       failures: failedAccounts.slice(0, 8).map((r) => ({ client_id: r.integration.client_id, account_key: r.integration.external_id, error: r.error })),
+      traffic_context_enabled: trafficContextEnabled,
+      traffic_context_errors: contextErrors,
     },
-    profile: { person, role, access_level: accessLevel, elevated, scope: isFull ? "FULL" : isWalletOnly ? "WALLET" : "RESTRICTED" },
+    profile: { person, role, access_level: accessLevel, elevated, scope: isFull && !isGtScoped ? "FULL" : (isWalletOnly || isGtScoped) ? "WALLET" : "RESTRICTED", traffic_context_enabled: trafficContextEnabled },
     generated_at: fetchedAt,
   });
 });
