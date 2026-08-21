@@ -52,3 +52,5 @@ jobs:
           git add app/page.tsx
           git commit -m "Hide operational overview from designer profiles"
           git push origin HEAD:chatgpt/design-overview-restriction-20260821
+
+# one-shot trigger
