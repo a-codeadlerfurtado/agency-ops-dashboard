@@ -306,52 +306,14 @@ Deno.serve(async (req) => {
       if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
       return respond({ ok: true, request: result.data });
     }
-    // ---- Diario de Ajustes. A tela existia e o botao "Registrar ajuste" respondia 404:
-    // a rota nunca foi implementada aqui. Cliente e' validado contra o escopo da pessoa -
-    // esconder o cliente no <select> nao e' seguranca.
+    // ---- Diario de Ajustes. Escrita movida para agency-ops-diary-api, que deriva o ator do JWT
+    // e chama RPCs SECURITY DEFINER. Manter esta rota antiga ativa permitiria contornar autoria.
     if (view === "adjustment-create") {
-      if (isLocked) return respond({ error: "forbidden" }, 403);
-      if (!canView("diary")) return respond({ error: "forbidden" }, 403);
-      const clientId = String(body.client_id ?? "").trim();
-      const descricao = typeof body.descricao === "string" ? body.descricao.trim() : "";
-      if (!clientId || !descricao) return respond({ error: "missing_fields", required: ["client_id", "descricao"] }, 400);
-      const { data: clientRow } = await ops.from("dashboard_client_overview").select("client_id,gt_owner").eq("client_id", clientId).maybeSingle();
-      if (!clientRow) return respond({ error: "not_found" }, 404);
-      if (isPortfolioScoped && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403);
-      const result = await ops.from("client_adjustments").insert({
-        client_id: clientId,
-        source: "diario_ajustes",
-        tipo: typeof body.tipo === "string" ? body.tipo.slice(0, 120) : null,
-        descricao: descricao.slice(0, 4000),
-        responsible_person: profilePerson ?? null,
-        metadata: { author_user_key: currentUserKey, author_name: profilePerson ?? null, origem: "dashboard" },
-      }).select().single();
-      if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
-      return respond({ ok: true, adjustment: result.data });
+      return respond({ error: "deprecated_diary_endpoint" }, 410);
     }
-    // ---- Registro de Tarefas. Mesmo caso: o front postava, a rota nao existia.
-    // O id e' montado aqui porque task_log_entries.id e' text sem default (a chave vem
-    // do app desktop que alimenta a mesma tabela) - o prefixo diz de onde o registro veio.
+    // ---- Registro de Tarefas. Também fica exclusivamente na API dedicada do Diário.
     if (view === "tasklog-create") {
-      if (isLocked) return respond({ error: "forbidden" }, 403);
-      if (!canView("diary")) return respond({ error: "forbidden" }, 403);
-      const taskName = typeof body.task_name === "string" ? body.task_name.trim() : "";
-      const category = typeof body.category === "string" ? body.category.trim() : "";
-      if (!taskName || !category) return respond({ error: "missing_fields", required: ["category", "task_name"] }, 400);
-      const taskDate = /^\d{4}-\d{2}-\d{2}$/.test(String(body.task_date ?? "")) ? String(body.task_date) : opsDay();
-      const author = profilePerson ?? String(value(await ops.from("user_preferences").select("name").eq("user_key", currentUserKey).maybeSingle(), {} as any)?.name ?? "Colaborador");
-      const result = await ops.from("task_log_entries").insert({
-        id: `dash-${currentUserKey}-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
-        user_key: currentUserKey,
-        collaborator_name: author,
-        category: category.slice(0, 120),
-        task_name: taskName.slice(0, 500),
-        task_date: taskDate,
-        created_at_client: new Date().toISOString(),
-        source: "dashboard_diario",
-      }).select().single();
-      if (result.error) return respond({ error: "query_failed", detail: result.error.message }, 500);
-      return respond({ ok: true, entry: result.data });
+      return respond({ error: "deprecated_tasklog_endpoint" }, 410);
     }
     if (view === "work-item-create") {
       if (isLocked || !canView("work")) return respond({ error: "forbidden" }, 403);
@@ -1058,19 +1020,12 @@ Deno.serve(async (req) => {
   // FULL ve a equipe, os demais veem o que eles mesmos escreveram - que e' o que a tela
   // ja' prometia no titulo ("Minhas ultimas tarefas").
   const taskLogRows = value<any[]>(platformData[7], []);
-  const taskLog = aggregateTaskLog(isFull ? taskLogRows : taskLogRows.filter((row: any) => row.user_key === currentUserKey));
+  const taskLog = aggregateTaskLog(taskLogRows.filter((row: any) => row.user_key === currentUserKey));
   // Cada registro do Diario pertence ao perfil que o criou. O filtro e' aplicado
   // no payload da API (nao apenas na tela), impedindo que Davi receba ajustes do
   // Joel, ou qualquer colaborador veja o historico de outro perfil.
-  const adjustments = value<any[]>(platformData[8], [])
-    .filter((row: any) => {
-      const authorUserKey = String(row.metadata?.author_user_key ?? "");
-      if (authorUserKey) return authorUserKey === currentUserKey;
-      // Compatibilidade com registros antigos, anteriores ao author_user_key.
-      return norm(row.metadata?.author_name ?? row.responsible_person) === norm(profilePerson);
-    })
-    .filter((row: any) => inScope(row.client_id))
-    .map((row: any) => ({ ...row, client_display_name: row.client_id ? (clientMeta.get(row.client_id)?.display_name ?? null) : null }));
+  // Registros pessoais não trafegam mais no payload geral; a API dedicada aplica autoria/escopo.
+  const adjustments: any[] = [];
 
   return respond({
     kpis: { active_clients: activeClients.length, churned_clients: clients.filter((row) => row.lifecycle === "CHURNED").length, onboarding_clients: clients.filter((row) => row.lifecycle === "ONBOARDING").length, operation_clients: clients.filter((row) => row.lifecycle === "ACTIVE").length, attention_now: count((row) => row.priority === "ATTENTION"), follow_up: count((row) => row.priority === "FOLLOW_UP"), ok: count((row) => row.priority === "OK"), undetermined: count((row) => row.priority === "UNDETERMINED"), data_incomplete: count((row) => row.priority === "DATA_INCOMPLETE"), client_waiting_agency: count((row) => row.waiting_direction === "CLIENT_WAITING_AGENCY"), agency_waiting_client: count((row) => row.waiting_direction === "AGENCY_WAITING_CLIENT"), overdue_commitments: overdue.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, open_alerts: alerts.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, critical_alerts: alerts.filter((row) => (!row.client_id || activeIds.has(row.client_id)) && ["CRITICAL", "HIGH"].includes(row.severity)).length, semantic_review: conversations.filter((row) => row.needs_semantic_review && (!row.client_id || activeIds.has(row.client_id))).length, briefing_pages: briefings.length, briefing_pending: briefings.filter((row) => row.sync_status === "DISCOVERED").length, briefing_unlinked: briefings.filter((row) => !row.client_id).length, queue_pending: isFull ? queue.filter((row) => row.status === "PENDING").length : 0, queue_errors: isFull ? queue.filter((row) => row.status === "ERROR").length : 0, team_members: team.filter((row) => row.in_roster).length, clients_unassigned: unassignedClients.length, team_unassigned: team.filter((row) => !row.in_roster && !row.is_former).length },
