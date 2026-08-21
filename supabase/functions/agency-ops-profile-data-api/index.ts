@@ -36,9 +36,10 @@ Deno.serve(async (req) => {
   const person = pref?.collaborator_person ?? pref?.name ?? null;
   if (!person || !(approvals ?? []).some((row: any) => row.kind === "SIGNUP")) return respond({ error: "profile_locked" }, 403);
 
-  const [{ data: roster }, { data: identity }] = await Promise.all([
+  const [{ data: roster }, { data: identity }, { data: teamStats }] = await Promise.all([
     ops.from("team_roster").select("person,role,access_level,clickup_user").eq("person", person).eq("is_former", false).maybeSingle(),
-    ops.from("team_identity_map").select("clickup_user_id,clickup_username").eq("person", person).maybeSingle(),
+    ops.from("team_identity_map").select("clickup_user_id,clickup_username,auth_user_id,sincronizado_pct,faltando").eq("person", person).maybeSingle(),
+    ops.from("team_overview").select("clients_active,clients_onboarding,clients_attention,clients_follow_up,tasks_done,tasks_open,tasks_overdue,tasks_done_30d,clients_touched,last_task_done_at").eq("person", person).maybeSingle(),
   ]);
   if (!roster) return respond({ error: "profile_not_found" }, 404);
 
@@ -47,12 +48,29 @@ Deno.serve(async (req) => {
   if (!clickupUserId && !clickupUsername) return respond({ error: "clickup_identity_missing", profile: { person, role: roster.role } }, 200);
 
   const startToday = `${opsDay()}T00:00:00-03:00`;
-  const [openRes, closedRes, clientsRes] = await Promise.all([
-    ops.from("clickup_tasks").select("task_id,name,status,status_type,date_created,date_updated,start_date,due_date,time_estimate_ms,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", false).order("due_date", { ascending: true, nullsFirst: false }).limit(2000),
-    ops.from("clickup_tasks").select("task_id,name,status,status_type,date_created,date_updated,date_closed,start_date,due_date,time_estimate_ms,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", true).gte("date_closed", startToday).order("date_closed", { ascending: false }).limit(1000),
+  let openRes: any;
+  let closedRes: any;
+
+  if (clickupUserId) {
+    [openRes, closedRes] = await Promise.all([
+      ops.from("clickup_tasks").select("task_id,name,status,status_type,date_created,date_updated,start_date,due_date,time_estimate_ms,list_name,client_id,url,clickup_task_assignees!inner(user_id,username,email)")
+        .eq("is_closed", false).eq("clickup_task_assignees.user_id", clickupUserId).order("due_date", { ascending: true, nullsFirst: false }).limit(2000),
+      ops.from("clickup_tasks").select("task_id,name,status,status_type,date_created,date_updated,date_closed,start_date,due_date,time_estimate_ms,list_name,client_id,url,clickup_task_assignees!inner(user_id,username,email)")
+        .eq("is_closed", true).eq("clickup_task_assignees.user_id", clickupUserId).gte("date_closed", startToday).order("date_closed", { ascending: false }).limit(1000),
+    ]);
+  } else {
+    [openRes, closedRes] = await Promise.all([
+      ops.from("clickup_tasks").select("task_id,name,status,status_type,date_created,date_updated,start_date,due_date,time_estimate_ms,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", false).order("due_date", { ascending: true, nullsFirst: false }).limit(2000),
+      ops.from("clickup_tasks").select("task_id,name,status,status_type,date_created,date_updated,date_closed,start_date,due_date,time_estimate_ms,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", true).gte("date_closed", startToday).order("date_closed", { ascending: false }).limit(1000),
+    ]);
+  }
+
+  const [clientsRes, designSummaryRes] = await Promise.all([
     ops.from("dashboard_client_overview").select("client_id,display_name,lifecycle,gt_owner,cs_owner").limit(500),
+    roster.role === "DESIGN" ? ops.from("designer_profile_overview").select("*").eq("person", person).maybeSingle() : Promise.resolve({ data: null, error: null }),
   ]);
   if (openRes.error) return respond({ error: "query_failed", detail: openRes.error.message }, 500);
+  if (closedRes.error) return respond({ error: "query_failed", detail: closedRes.error.message }, 500);
 
   const allClients: any[] = clientsRes.data ?? [];
   const clientMap = new Map(allClients.map((row: any) => [String(row.client_id), row]));
@@ -72,10 +90,8 @@ Deno.serve(async (req) => {
   };
   const isDesignTask = (row: any) => {
     if (roster.role !== "DESIGN") return true;
-    const list = norm(row.list_name);
-    const name = norm(row.name);
-    if (list.includes("criativo")) return true;
-    return /(criativ|vídeo|video|copy|arte|imagem|roteiro|carrossel|design|edi[cç][aã]o|feed|story|thumb|banner|logo)/i.test(name);
+    const haystack = norm(`${row.list_name ?? ""} ${row.name ?? ""}`);
+    return /(criativ|design|arte|vídeo|video|copy|imagem|roteiro|carrossel|edi[cç][aã]o|revis[aã]o|ajuste na campanha|feed|story|thumb|banner|logo)/i.test(haystack);
   };
   const expose = (row: any) => {
     const client = row.client_id ? clientMap.get(String(row.client_id)) : null;
@@ -96,8 +112,14 @@ Deno.serve(async (req) => {
     : [];
 
   return respond({
-    profile: { person, role: roster.role, clickup_user_id: clickupUserId, clickup_username: clickupUsername },
-    focus: { owner: person, open_tasks: openTasks, closed_today: closedToday },
+    profile: {
+      person, role: roster.role, access_level: roster.access_level,
+      clickup_user_id: clickupUserId, clickup_username: clickupUsername,
+      auth_user_id: identity?.auth_user_id ?? null,
+      synchronized_pct: Number(identity?.sincronizado_pct ?? 0), missing_identities: identity?.faltando ?? [],
+    },
+    focus: { owner: person, open_tasks: openTasks, closed_today: closedToday, summary: designSummaryRes.data ?? null },
+    stats: teamStats ?? null,
     client_gt: clientGt,
     generated_at: new Date().toISOString(),
   });
