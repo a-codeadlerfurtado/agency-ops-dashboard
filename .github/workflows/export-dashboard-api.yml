@@ -1,0 +1,19 @@
+name: Export dashboard API
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-api-source
+          path: supabase/functions/agency-ops-dashboard-api/index.ts
+          if-no-files-found: error
