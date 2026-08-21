@@ -1,0 +1,13 @@
+from pathlib import Path
+p=Path('app/page.tsx')
+s=p.read_text()
+old='import { API_URL, CONTRACTS_API, SUPABASE_ANON_KEY, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";'
+new='import { API_URL, CONTRACTS_API, SUPABASE_ANON_KEY, SUPABASE_URL, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";'
+if s.count(old)!=1: raise SystemExit('import anchor mismatch')
+s=s.replace(old,new,1)
+old='''      const next = await api("home", session.access_token);\n      preferencesRef.current = next.preferences || {};'''
+new='''      const next = await api("home", session.access_token);\n      // Complemento de perfil: usa uma Edge Function pequena e autenticada para resolver\n      // a identidade ClickUp por ID e enriquecer o payload sem depender de deploy da API geral.\n      try {\n        const profileResponse = await fetch(`${SUPABASE_URL}/functions/v1/agency-ops-profile-data-api`, {\n          headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },\n          cache: "no-store",\n        });\n        if (profileResponse.ok) {\n          const extra = await profileResponse.json();\n          const gtByClient = new Map((extra.client_gt || []).map((row: Row) => [String(row.client_id), row.gt_owner ?? null]));\n          next.clients = (next.clients || []).map((client: Row) => ({\n            ...client,\n            gt_owner: client.gt_owner ?? gtByClient.get(String(client.client_id)) ?? null,\n          }));\n          next.operations = {\n            ...(next.operations || {}),\n            personal_focus: extra.focus || next.operations?.personal_focus || null,\n            design_focus: extra.profile?.role === "DESIGN" ? (extra.focus || next.operations?.design_focus || null) : next.operations?.design_focus,\n          };\n          next.profile = {\n            ...(next.profile || {}),\n            clickup_user_id: extra.profile?.clickup_user_id ?? next.profile?.clickup_user_id ?? null,\n            clickup_user: extra.profile?.clickup_username ?? next.profile?.clickup_user ?? null,\n          };\n        }\n      } catch { /* complemento nunca derruba a tela principal */ }\n      preferencesRef.current = next.preferences || {};'''
+if s.count(old)!=1: raise SystemExit('load anchor mismatch')
+s=s.replace(old,new,1)
+p.write_text(s)
+print('wired profile helper')
