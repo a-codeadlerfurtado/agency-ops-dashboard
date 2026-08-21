@@ -1,0 +1,34 @@
+name: Temporary final ops patch
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/temp-final-ops-patch.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-branch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/final-ops-consolidation-20260821-v5
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: python scripts/final_ops_consolidation.py
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Commit validated patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/page.tsx app/views/creative.tsx supabase/functions/agency-ops-dashboard-api/index.ts supabase/migrations/20260821143500_work_center_solicitation_wording.sql
+          git commit -m "fix: finalize profiles ClickUp focus and work center"
+          git push origin HEAD:chatgpt/final-ops-consolidation-20260821-v5
