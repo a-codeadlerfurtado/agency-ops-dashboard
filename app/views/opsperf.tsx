@@ -1,14 +1,9 @@
 "use client";
 
-// Aba "Desempenho OP" - visao por colaborador: tasks concluidas, diario de ajustes,
-// tasklog, tempo de entrega de criativo/trafego (novo x ajuste) e tempo de resposta do
-// CS no WhatsApp, com um mapa de atividade diaria estilo GitHub. Dado sensivel de
-// performance individual - fica atras da permissao "opsperf" (MGMT/AI por padrao).
-//
-// Escrito com React.createElement (em vez de JSX) de proposito: evita o auto-fechamento
-// de tags do editor web do GitHub, que duplicava fechamentos ao digitar JSX direto.
+// Aba "Desempenho OP" - visao por colaborador e por carteira de GT.
 import { createElement as h, useEffect, useMemo, useState } from "react";
 import { api } from "../shared";
+import { WalletPerformanceCenter } from "./wallet-performance";
 
 const MUTED = { color: "#8aa3c0" };
 const ROLE_LABEL: Record<string, string> = { CS: "CS", DESIGN: "Design", GT: "Gestor de trafego", MGMT: "Gestao", AI: "IA" };
@@ -127,6 +122,7 @@ export function OpsPerfCenter(props: any) {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState<any>(null);
   const [roleFilter, setRoleFilter] = useState("ALL");
+  const [mode, setMode] = useState<"people" | "wallets">("people");
 
   useEffect(function () {
     let cancelled = false;
@@ -136,15 +132,33 @@ export function OpsPerfCenter(props: any) {
     return function () { cancelled = true; };
   }, [token]);
 
+  const modeTabs = h("div", { className: "filter-tabs", style: { marginBottom: 14 } }, [
+    h("button", { key: "p", className: mode === "people" ? "active" : "", onClick: function () { setMode("people"); } }, "Colaboradores"),
+    h("button", { key: "w", className: mode === "wallets" ? "active" : "", onClick: function () { setMode("wallets"); } }, "Carteiras de GT"),
+  ]);
+
+  if (mode === "wallets") {
+    return h("section", { className: "workspace" }, [
+      h("div", { key: "hd", className: "workspace-head" }, h("div", null, [
+        h("h2", { key: "t" }, "Desempenho OP"),
+        h("p", { key: "sub", style: { color: "#8aa3c0", margin: "4px 0 0" } }, "Compare a operação por carteira e abra Alfa, Bravo, Charlie ou qualquer nova carteira cadastrada."),
+      ])),
+      h("div", { key: "m" }, modeTabs),
+      h(WalletPerformanceCenter, { key: "wallets" }),
+    ]);
+  }
+
   if (error) {
     return h("section", { className: "workspace" }, [
       h("div", { key: "hd", className: "workspace-head" }, h("div", null, h("h2", null, "Desempenho OP"))),
+      h("div", { key: "m" }, modeTabs),
       h("div", { key: "err", className: "card section" }, "Nao foi possivel carregar: " + error),
     ]);
   }
   if (!data) {
     return h("section", { className: "workspace" }, [
       h("div", { key: "hd", className: "workspace-head" }, h("div", null, h("h2", null, "Desempenho OP"))),
+      h("div", { key: "m" }, modeTabs),
       h("div", { key: "ld", className: "auth-loading" }, [h("span", { key: "d", className: "dot loading" }), " Carregando desempenho..."]),
     ]);
   }
@@ -181,8 +195,9 @@ export function OpsPerfCenter(props: any) {
     h("div", { key: "hd", className: "workspace-head" }, h("div", null, [
       h("h2", { key: "t" }, "Desempenho OP"),
       h("p", { key: "sub", style: { color: "#8aa3c0", margin: "4px 0 0" } },
-        "Visao por colaborador - janela de " + data.period.since + " ate " + data.period.until + ". Diario de ajustes e tasklog entram aqui automaticamente assim que passarem a ser preenchidos - hoje ainda tem pouco ou nenhum registro."),
+        "Visao por colaborador - janela de " + data.period.since + " ate " + data.period.until + ". Diario de ajustes e tasklog entram aqui automaticamente assim que passarem a ser preenchidos."),
     ])),
+    h("div", { key: "m" }, modeTabs),
     unmappedBanner,
     roleTabs,
     h("h3", { key: "h1", style: { margin: "4px 0 8px" } }, "Atividade"),
