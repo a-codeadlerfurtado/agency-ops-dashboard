@@ -20,7 +20,7 @@ const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
 const SYNTHETIC_NAME = /^[A-Za-z]+-\d{9,}-[a-z0-9]{4,8}$/;
 // Abas do dashboard. A chave fixa do gestor (acesso legado, fora do quadro) recebe
 // todas; quem entra por login recebe o que agency_ops.dashboard_view_permissions disser.
-const ALL_VIEWS = ["overview","focus","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health"];
+const ALL_VIEWS = ["overview","focus","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health","opsperf"];
 // Dia de operacao no fuso de Brasilia: task fechada as 22h e' de hoje, nao de amanha.
 const opsDay = (date = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 
@@ -271,6 +271,26 @@ Deno.serve(async (req) => {
       if (error) return respond({ error: "query_failed", detail: error.message }, 500);
       return respond(data);
     }
+    if (view === "review-resolve") {
+      // A fila de revisao existe porque o sistema preferiu perguntar a chutar. So' que
+      // ate' agora nao havia onde responder: o alerta dizia "154 esperando alguem
+      // decidir" e nao existia tela. Este e' o botao que faltava.
+      const id = Number(body.id ?? 0);
+      const decisao = String(body.decisao ?? "").toUpperCase();
+      if (!id || !["VINCULAR", "IGNORAR"].includes(decisao)) {
+        return respond({ error: "missing_fields", required: ["id", "decisao"] }, 400);
+      }
+      const { data, error } = await ops.rpc("resolve_match_review", { p: {
+        id,
+        decisao,
+        client_id: body.client_id ?? null,
+        nota: body.nota ?? null,
+        quem: profilePerson ?? currentUserKey,
+      } });
+      if (error) return respond({ error: "query_failed", detail: error.message }, 500);
+      return respond(data);
+    }
+
     if (view === "note-confirm") {
       // Confirmacao humana do cliente quando o palpite ficou ambiguo ou errado.
       const id = String(body.id ?? "");
@@ -292,6 +312,17 @@ Deno.serve(async (req) => {
   // ---- Produtividade do ClickUp por periodo (aba ClickUp). Rota que o front ja' chamava
   // e que nao existia: a chamada caia no payload de "home" e a tela mostrava zero.
   // Quem nao ve o ClickUp inteiro so' consegue puxar a propria linha.
+  if (view === "review-queue") {
+    // Os clientes vem junto porque a decisao e' escolher um deles - buscar em duas
+    // chamadas so' faria a tela piscar.
+    const [fila, clientes] = await Promise.all([
+      ops.from("review_queue").select("*").order("dias_esperando", { ascending: false }).limit(400),
+      ops.from("clients").select("id,display_name,lifecycle").order("display_name"),
+    ]);
+    if (fila.error) return respond({ error: "query_failed", detail: fila.error.message }, 500);
+    return respond({ fila: fila.data ?? [], clients: clientes.data ?? [] });
+  }
+
   if (view === "clickup-range") {
     if (isLocked || !canView("clickup")) return respond({ error: "forbidden" }, 403);
     const isDay = (raw: string | null) => Boolean(raw && /^\d{4}-\d{2}-\d{2}$/.test(raw));
@@ -306,6 +337,76 @@ Deno.serve(async (req) => {
     const { data, error } = await ops.rpc("clickup_range_report", { p_since: since, p_until: until, p_people: people.length ? people : null });
     if (error) return respond({ error: "query_failed", detail: error.message }, 500);
     return respond({ ...(data ?? {}), scoped: !isFull, generated_at: new Date().toISOString() });
+  }
+
+  // ---- Desempenho OP (aba nova): visao por colaborador - tasks concluidas, diario de
+  // ajustes/tasklog, tempo de entrega de criativo/trafego (novo x ajuste), tempo de
+  // resposta do CS no WhatsApp e heatmap de atividade estilo GitHub. Fica atras da
+  // permissao "opsperf" em agency_ops.dashboard_view_permissions (MGMT/AI por padrao -
+  // e' dado sensivel de performance individual, diferente de "team" que e' so' quadro).
+  if (view === "opsperf") {
+    if (isLocked || !canView("opsperf")) return respond({ error: "forbidden" }, 403);
+    const isDay = (raw: string | null) => Boolean(raw && /^\d{4}-\d{2}-\d{2}$/.test(raw));
+    const untilParam = url.searchParams.get("until");
+    const sinceParam = url.searchParams.get("since");
+    const until = isDay(untilParam) ? untilParam! : opsDay();
+    const since = isDay(sinceParam) ? sinceParam! : opsDay(new Date(Date.now() - 89 * 86400000));
+    const heatmapSince = opsDay(new Date(Date.now() - 371 * 86400000));
+
+    const [factsRes, activityRes, workloadRes, unmappedRes, csRes, rosterRes] = await Promise.all([
+      ops.from("op_perf_task_facts").select("person,role,completed,is_adjustment,hours_to_close,on_time,date_created").gte("date_created", `${since}T00:00:00`).limit(6000),
+      ops.from("op_perf_daily_activity").select("*").gte("activity_date", heatmapSince).limit(8000),
+      ops.from("op_perf_current_workload").select("*"),
+      ops.from("op_perf_unmapped_collaborators").select("*"),
+      ops.from("op_perf_cs_response_times").select("cs_person,response_minutes,client_msg_at").gte("client_msg_at", `${since}T00:00:00`).limit(6000),
+      ops.from("team_roster").select("person,role").eq("is_former", false),
+    ]);
+    if (factsRes.error) return respond({ error: "query_failed", detail: factsRes.error.message }, 500);
+
+    const facts = value<any[]>(factsRes, []);
+    const activity = value<any[]>(activityRes, []);
+    const workload = value<any[]>(workloadRes, []);
+    const unmapped = value<any[]>(unmappedRes, []);
+    const csTimes = value<any[]>(csRes, []).filter((row: any) => typeof row.response_minutes === "number" && row.response_minutes >= 0 && row.response_minutes < 60 * 24 * 3);
+    const roster = value<any[]>(rosterRes, []);
+    const workloadByPerson = new Map(workload.map((row: any) => [row.person, row]));
+
+    const byPerson = new Map<string, any>();
+    for (const r of roster) {
+      const w = workloadByPerson.get(r.person);
+      byPerson.set(r.person, { person: r.person, role: r.role, tasksCompleted: 0, tasksOpen: w?.open_tasks ?? 0, overdueTasks: w?.overdue_tasks ?? 0, onTime: 0, onTimeTotal: 0, novoHours: [] as number[], ajusteHours: [] as number[], csResponseMinutes: [] as number[] });
+    }
+    for (const f of facts) {
+      const bucket = byPerson.get(f.person);
+      if (!bucket) continue;
+      if (f.completed) {
+        bucket.tasksCompleted += 1;
+        if (typeof f.hours_to_close === "number" && f.hours_to_close >= 0) (f.is_adjustment ? bucket.ajusteHours : bucket.novoHours).push(f.hours_to_close);
+      }
+      if (f.on_time !== null && f.on_time !== undefined) { bucket.onTimeTotal += 1; if (f.on_time) bucket.onTime += 1; }
+    }
+    for (const c of csTimes) {
+      const bucket = byPerson.get(c.cs_person);
+      if (bucket) bucket.csResponseMinutes.push(c.response_minutes);
+    }
+    const avg = (arr: number[]) => arr.length ? Number((arr.reduce((sum, v) => sum + v, 0) / arr.length).toFixed(1)) : null;
+    const people = [...byPerson.values()].map((b: any) => ({
+      person: b.person, role: b.role,
+      tasks_completed: b.tasksCompleted, tasks_open: b.tasksOpen, overdue_tasks: b.overdueTasks,
+      on_time_rate: b.onTimeTotal ? Number((100 * b.onTime / b.onTimeTotal).toFixed(1)) : null,
+      avg_hours_novo: avg(b.novoHours), avg_hours_ajuste: avg(b.ajusteHours),
+      creatives_novo: b.novoHours.length, creatives_ajuste: b.ajusteHours.length,
+      avg_cs_response_minutes: avg(b.csResponseMinutes), cs_replies: b.csResponseMinutes.length,
+    })).sort((a, b) => b.tasks_completed - a.tasks_completed);
+
+    const heatmap: Record<string, Record<string, number>> = {};
+    for (const row of activity) {
+      if (!row.person) continue;
+      heatmap[row.person] = heatmap[row.person] ?? {};
+      heatmap[row.person][row.activity_date] = (heatmap[row.person][row.activity_date] ?? 0) + Number(row.events ?? 0);
+    }
+
+    return respond({ period: { since, until, heatmap_since: heatmapSince }, people, heatmap, unmapped_collaborators: unmapped, generated_at: new Date().toISOString() });
   }
 
   if (view === "client") {
