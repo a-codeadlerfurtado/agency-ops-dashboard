@@ -33,17 +33,22 @@ function slotLabel(slotKey: string) {
 
 export default function WeekendBalanceAlert() {
   const [session, setSession] = useState<Session | null>(null);
+  const [eligible, setEligible] = useState<boolean | null>(null);
   const [bundle, setBundle] = useState<AlertBundle | null>(null);
   const [acking, setAcking] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => {
+      setSession(next);
+      setEligible(null);
+      if (!next) setBundle(null);
+    });
     return () => subscription.unsubscribe();
   }, []);
 
   const load = useCallback(async () => {
-    if (!session?.access_token) { setBundle(null); return; }
+    if (!session?.access_token) { setBundle(null); setEligible(null); return; }
     try {
       const response = await fetch(API_URL, {
         headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },
@@ -51,7 +56,9 @@ export default function WeekendBalanceAlert() {
       });
       if (!response.ok) return;
       const body = await response.json();
-      if (!body?.eligible || !body?.slot_key || !Array.isArray(body?.alerts) || !body.alerts.length) {
+      const canReceive = Boolean(body?.eligible);
+      setEligible(canReceive);
+      if (!canReceive || !body?.slot_key || !Array.isArray(body?.alerts) || !body.alerts.length) {
         setBundle(null);
         return;
       }
@@ -61,12 +68,12 @@ export default function WeekendBalanceAlert() {
     }
   }, [session?.access_token]);
 
+  useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    load();
-    if (!session?.access_token) return;
+    if (!session?.access_token || eligible !== true) return;
     const timer = window.setInterval(load, 15_000);
     return () => window.clearInterval(timer);
-  }, [load, session?.access_token]);
+  }, [eligible, load, session?.access_token]);
 
   const sorted = useMemo(() => [...(bundle?.alerts || [])].sort((a, b) => Number(a.min_balance) - Number(b.min_balance) || a.client_name.localeCompare(b.client_name, "pt-BR")), [bundle]);
 
