@@ -57,6 +57,11 @@ async function authenticate(req: Request, res: Response, next: NextFunction) {
     return;
   }
 
+  if (identity.userId !== "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476") {
+    res.status(403).json({ ok: false, error: "ai_beta" });
+    return;
+  }
+
   (req as AuthedRequest).identity = identity;
   (req as AuthedRequest).accessToken = accessToken;
   next();
