@@ -1,6 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
+const VALIDATION_VERSION = "grounding-v2";
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), {
   status: s,
   headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
@@ -50,6 +51,59 @@ function evidenciaEstaNaMensagem(evidencia: unknown, excerpt: unknown): boolean 
   return presentes / tokens.length >= 0.78;
 }
 
+const STOPWORDS = new Set([
+  "para", "pela", "pelo", "pelos", "pelas", "com", "sem", "sobre", "entre", "mais", "menos", "uma", "umas", "uns", "dos", "das", "que", "isso", "essa", "esse", "esta", "este", "aqui", "ali", "como", "quando", "onde", "depois", "antes", "tambem", "mencionada", "mencionado",
+]);
+const VERBOS_OPERACIONAIS = new Set([
+  "atualizar", "ajustar", "corrigir", "alterar", "trocar", "inserir", "adicionar", "remover", "retirar", "enviar", "mandar", "responder", "retornar", "solicitar", "pedir", "dar", "fazer", "criar", "subir", "publicar", "pausar", "ativar", "desativar", "agendar", "marcar", "confirmar", "verificar", "revisar", "validar", "acompanhar", "cobrar", "avisar", "informar",
+]);
+const METADADOS_GENERICOS = new Set(["cliente", "grupo", "conversa", "pedido", "mensagem", "task", "tarefa", "operacional"]);
+
+function tokensSignificativos(v: unknown): string[] {
+  return [...new Set(normalizarTexto(v).split(" ").filter((t) => t.length >= 4 && !STOPWORDS.has(t)))];
+}
+
+function tokenSuportado(token: string, excerptTokens: string[]): boolean {
+  if (VERBOS_OPERACIONAIS.has(token) || METADADOS_GENERICOS.has(token)) return true;
+  if (excerptTokens.includes(token)) return true;
+  if (token.length >= 5) {
+    const stem = token.slice(0, 5);
+    return excerptTokens.some((x) => x.length >= 5 && x.slice(0, 5) === stem);
+  }
+  return false;
+}
+
+function groundingConteudo(titulo: unknown, descricao: unknown, excerpt: unknown) {
+  const excerptTokens = tokensSignificativos(excerpt);
+  const titleTokens = tokensSignificativos(titulo);
+  const descriptionTokens = tokensSignificativos(descricao);
+  const titleUnsupported = titleTokens.filter((t) => !tokenSuportado(t, excerptTokens));
+  const descUnsupported = descriptionTokens.filter((t) => !tokenSuportado(t, excerptTokens));
+  const total = Math.max(1, titleTokens.length + descriptionTokens.length);
+  const supported = total - titleUnsupported.length - descUnsupported.length;
+  const score = Math.max(0, Math.min(1, supported / total));
+  return { score, titleUnsupported, descUnsupported };
+}
+
+function tarefaInternaDoSistema(titulo: unknown, descricao: unknown): boolean {
+  const t = normalizarTexto(`${titulo ?? ""} ${descricao ?? ""}`);
+  return /\btriagem\b/.test(t)
+    || /\btitularidade\b/.test(t)
+    || /\bclassificar (?:o )?grupo\b/.test(t)
+    || /\bconfirmar (?:o |a )?(?:grupo|rotulo|cadastro|vinculo)\b/.test(t)
+    || /\bvincular (?:o )?(?:cliente|grupo)\b/.test(t)
+    || /\bassociar (?:o )?(?:cliente|grupo)\b/.test(t)
+    || /\breconciliar (?:o )?(?:cliente|grupo|cadastro)\b/.test(t)
+    || /\bmapear (?:o )?grupo\b/.test(t)
+    || /\bidentificar (?:de quem|titular|cliente do grupo)\b/.test(t);
+}
+
+async function sha256(v: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(String(v ?? ""));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 const SISTEMA = [
   "Voce e o motor operacional de uma agencia de trafego pago imobiliario.",
   "Recebe as mensagens de UMA conversa de grupo e um DOSSIE do cliente.",
@@ -62,17 +116,21 @@ const SISTEMA = [
   "   relatorio meramente informativo, status historico ou 'vou verificar' isolado.",
   "3. O DOSSIE serve apenas para enriquecer uma acao que JA ESTA explicita nas MENSAGENS.",
   "   Nunca crie uma acao nova usando apenas o dossie, tasks_abertas, datas antigas, resumo ou contexto lateral.",
-  "4. Se o pedido mexe em verba, compare com budget_mensal_brl. Se envolve lead/CRM, cite o CRM pelo nome somente se houver no dossie.",
-  "5. Se o assunto ja aparece em tasks_abertas, nao proponha de novo como nova pendencia:",
+  "4. O TITULO e a DESCRICAO nao podem introduzir assunto, objeto, motivo ou qualificacao que nao esteja escrito nas MENSAGENS.",
+  "   Use o dossie somente para metadados como responsavel quando houver correspondencia clara; nunca para completar o assunto da task.",
+  "5. Exemplo proibido: mensagem 'poderia dar um retorno?' -> titulo 'dar retorno sobre pagamento'.",
+  "   'pagamento' nao esta na mensagem, portanto o titulo correto deve ser apenas 'dar retorno'.",
+  "6. Nunca gere task humana para manutencao interna do sistema: triagem de grupo, titularidade, vinculo de cliente, rotulo, cadastro, reconciliacao ou classificacao.",
+  "7. Se o assunto ja aparece em tasks_abertas, nao proponha de novo como nova pendencia:",
   "   devolva a task somente como registro de duplicidade e marque duplicata_provavel=true.",
-  "6. area: uma de Gestor de trafego | CS | Designer | Editor de video | Gerente operacional | Comercial.",
-  "7. prioridade: Urgente | Alta | Media | Baixa. Campanha de imovel vendido que segue no ar e Urgente.",
-  "8. evidencia deve ser um TRECHO LITERAL copiado das MENSAGENS recebidas neste evento.",
-  "   Nao use texto do dossie como evidencia e nao acrescente palavras ao trecho citado.",
-  "9. Nunca invente fatos, acoes, responsaveis, prazos ou necessidades.",
-  "10. responsavel_sugerido deve conter no maximo UMA pessoa. So escolha quando o dossie indicar claramente o responsavel;",
+  "8. area: uma de Gestor de trafego | CS | Designer | Editor de video | Gerente operacional | Comercial.",
+  "9. prioridade: Urgente | Alta | Media | Baixa. Campanha de imovel vendido que segue no ar e Urgente.",
+  "10. evidencia deve ser um TRECHO LITERAL copiado das MENSAGENS recebidas neste evento.",
+  "    Nao use texto do dossie como evidencia e nao acrescente palavras ao trecho citado.",
+  "11. Nunca invente fatos, acoes, responsaveis, prazos ou necessidades.",
+  "12. responsavel_sugerido deve conter no maximo UMA pessoa. So escolha quando o dossie indicar claramente o responsavel;",
   "    se houver varias pessoas possiveis, deixe vazio.",
-  "11. Se nao houver uma acao explicitamente pedida ou assumida nas MENSAGENS, responda {\"tasks\":[]}.",
+  "13. Se nao houver uma acao explicitamente pedida ou assumida nas MENSAGENS, responda {\"tasks\":[]}.",
   "",
   '{"tasks":[{"titulo":"","descricao":"","area":"","responsavel_sugerido":"",',
   '"prioridade":"","prazo_dias":0,"evidencia":"","duplicata_provavel":false,"motivo":""}]}',
@@ -136,7 +194,7 @@ async function chamarBackend(endpoint: string, readSecret: string, dossie: unkno
 Deno.serve(async (req) => {
   const url = new URL(req.url);
   if (url.searchParams.get("health") === "1") {
-    return json({ ok: true, service: "agency-ops-task-engine", modo_padrao: "SHADOW", version: 5 });
+    return json({ ok: true, service: "agency-ops-task-engine", modo_padrao: "SHADOW", version: 6, validation_version: VALIDATION_VERSION });
   }
 
   const cronSecret = await segredo("TASK_ENGINE_CRON_SECRET");
@@ -170,9 +228,9 @@ Deno.serve(async (req) => {
     .select("*").in("status", ["PENDING", "ERROR"]).lte("available_at", agora)
     .order("urgency", { ascending: true }).order("id", { ascending: true }).limit(limite);
   if (erroFila) return json({ ok: false, error: erroFila.message }, 500);
-  if (!eventos?.length) return json({ ok: true, processados: 0, modo, provider, modelo });
+  if (!eventos?.length) return json({ ok: true, processados: 0, modo, provider, modelo, validation_version: VALIDATION_VERSION });
 
-  const resumo = { processados: 0, ignorados: 0, propostas: 0, duplicadas: 0, descartadas: 0, enviadas: 0, erros: 0 };
+  const resumo = { processados: 0, ignorados: 0, propostas: 0, duplicadas: 0, descartadas: 0, revisao_sistema: 0, enviadas: 0, erros: 0 };
 
   for (const ev of eventos) {
     await ops.from("task_generation_events")
@@ -193,25 +251,66 @@ Deno.serve(async (req) => {
         ? await chamarOpenAI(chave, modelo, dossie ?? {}, ev.excerpt || "")
         : await chamarBackend(endpoint!, readSecret!, dossie ?? {}, ev.excerpt || "");
       const propostas: any[] = Array.isArray(saida?.tasks) ? saida.tasks : [];
+      const sourceHash = await sha256(ev.excerpt || "");
 
       for (const t of propostas) {
         if (!t?.titulo) continue;
         const titulo = String(t.titulo).slice(0, 250);
-        const grounded = evidenciaEstaNaMensagem(t.evidencia, ev.excerpt);
-        const { data: dup } = await ops.rpc("find_duplicate_task", { p_client_id: ev.client_id, p_titulo: titulo });
+        const descricao = t.descricao == null ? null : String(t.descricao).slice(0, 4000);
+        const evidenceGrounded = evidenciaEstaNaMensagem(t.evidencia, ev.excerpt);
+        const internalSystemTask = tarefaInternaDoSistema(titulo, descricao);
+        const grounding = groundingConteudo(titulo, descricao, ev.excerpt);
+        const unsupported = [...grounding.titleUnsupported, ...grounding.descUnsupported];
+        const contentGrounded = unsupported.length === 0;
+        const grounded = evidenceGrounded && contentGrounded && !internalSystemTask;
+        const groundingReason = internalSystemTask
+          ? "internal_system_task"
+          : !evidenceGrounded
+            ? "evidence_not_in_current_event"
+            : !contentGrounded
+              ? `unsupported_context:${unsupported.slice(0, 8).join(",")}`
+              : "accepted";
+
+        const { data: dup } = grounded
+          ? await ops.rpc("find_duplicate_task", { p_client_id: ev.client_id, p_titulo: titulo })
+          : { data: null } as any;
         const achou = Array.isArray(dup) ? dup[0] : dup;
         const duplicataIA = t.duplicata_provavel === true;
-        const duplicada = Boolean(achou) || duplicataIA;
+        const duplicada = grounded && (Boolean(achou) || duplicataIA);
         const descartada = !grounded;
         const { data: norm } = await ops.rpc("normalize_task_subject", { p_nome: titulo });
+        const tituloNorm = String(norm || titulo.toLowerCase());
+
+        if (internalSystemTask) {
+          await ops.from("system_review_events").upsert({
+            source_event_id: ev.id,
+            client_id: ev.client_id,
+            chat_id: ev.chat_id,
+            proposed_title: titulo,
+            proposed_title_norm: tituloNorm,
+            proposed_description: descricao,
+            reason: "internal_system_task",
+            validation_version: VALIDATION_VERSION,
+            source_excerpt_hash: sourceHash,
+            payload: {
+              message_id: ev.message_id,
+              signals: ev.signals,
+              ai_evidence: t.evidencia ?? null,
+              ai_reason: t.motivo ?? null,
+              provider,
+              model: modelo,
+            },
+          }, { onConflict: "source_event_id,reason,proposed_title_norm", ignoreDuplicates: true });
+          resumo.revisao_sistema++;
+        }
 
         const linha: Record<string, unknown> = {
           event_id: ev.id,
           client_id: ev.client_id,
           chat_id: ev.chat_id,
           titulo,
-          titulo_norm: norm || titulo.toLowerCase(),
-          descricao: t.descricao ?? null,
+          titulo_norm: tituloNorm,
+          descricao,
           area: t.area ?? null,
           responsavel_sugerido: t.responsavel_sugerido ?? null,
           prioridade: t.prioridade ?? null,
@@ -221,14 +320,22 @@ Deno.serve(async (req) => {
           urgencia: ev.urgency,
           sinais: ev.signals,
           contexto: dossie ?? null,
+          grounding_score: Number(grounding.score.toFixed(4)),
+          grounding_reason: groundingReason,
+          source_excerpt_hash: sourceHash,
+          validation_version: VALIDATION_VERSION,
           evidencia: {
             trecho: t.evidencia ?? null,
             motivo: t.motivo ?? null,
             message_id: ev.message_id,
             provider,
             duplicata_provavel_ia: duplicataIA,
-            grounded_in_current_event: grounded,
-            discard_reason: descartada ? "evidence_not_in_current_event" : null,
+            grounded_in_current_event: evidenceGrounded,
+            content_grounded_in_current_event: contentGrounded,
+            unsupported_terms: unsupported,
+            internal_system_task: internalSystemTask,
+            discard_reason: descartada ? groundingReason : null,
+            validation_version: VALIDATION_VERSION,
           },
           modelo,
           modo,
@@ -249,7 +356,7 @@ Deno.serve(async (req) => {
             const r = await fetch(`https://api.clickup.com/api/v2/list/${lista}/task`, {
               method: "POST",
               headers: { Authorization: tokenCu, "content-type": "application/json" },
-              body: JSON.stringify({ name: titulo, description: String(t.descricao ?? ""), priority: prio[String(t.prioridade)] ?? 3 }),
+              body: JSON.stringify({ name: titulo, description: descricao || "", priority: prio[String(t.prioridade)] ?? 3 }),
             });
             const jr = await r.json().catch(() => ({}));
             await ops.from("generated_tasks").update(
@@ -273,5 +380,5 @@ Deno.serve(async (req) => {
     }
   }
 
-  return json({ ok: true, modo, provider, modelo, ...resumo });
+  return json({ ok: true, modo, provider, modelo, validation_version: VALIDATION_VERSION, ...resumo });
 });
