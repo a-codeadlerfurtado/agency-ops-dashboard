@@ -30,6 +30,22 @@ function normalizarTexto(v: unknown): string {
     .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 }
 
+function areaEhTrafego(area: unknown): boolean {
+  const a = normalizarTexto(area);
+  return a === "gestor de trafego" || a === "trafego pago" || a === "gt";
+}
+
+async function resolverGtDoCliente(clientId: unknown): Promise<any> {
+  if (!clientId) return { ok: false, reason: "missing_client_id" };
+  const { data, error } = await ops.rpc("resolve_gt_clickup_assignee", { p_client_id: clientId });
+  if (error) return { ok: false, reason: "assignment_rpc_error", detail: error.message };
+  const assigneeId = Number(data?.clickup_user_id);
+  if (!data?.ok || !Number.isFinite(assigneeId)) {
+    return { ...(data ?? {}), ok: false, reason: data?.reason ?? "invalid_clickup_user_id" };
+  }
+  return { ...data, ok: true, clickup_user_id: String(data.clickup_user_id) };
+}
+
 function relatorioSomenteInformativo(ev: any): boolean {
   const sinais = Array.isArray(ev?.signals) ? ev.signals.map((s: unknown) => String(s)) : [];
   if (sinais.length !== 1 || sinais[0] !== "RELATORIO") return false;
@@ -194,7 +210,7 @@ async function chamarBackend(endpoint: string, readSecret: string, dossie: unkno
 Deno.serve(async (req) => {
   const url = new URL(req.url);
   if (url.searchParams.get("health") === "1") {
-    return json({ ok: true, service: "agency-ops-task-engine", modo_padrao: "SHADOW", version: 6, validation_version: VALIDATION_VERSION });
+    return json({ ok: true, service: "agency-ops-task-engine", modo_padrao: "SHADOW", version: 7, validation_version: VALIDATION_VERSION, gt_routing: "clients.gt_owner+team_identity_map" });
   }
 
   const cronSecret = await segredo("TASK_ENGINE_CRON_SECRET");
@@ -230,7 +246,7 @@ Deno.serve(async (req) => {
   if (erroFila) return json({ ok: false, error: erroFila.message }, 500);
   if (!eventos?.length) return json({ ok: true, processados: 0, modo, provider, modelo, validation_version: VALIDATION_VERSION });
 
-  const resumo = { processados: 0, ignorados: 0, propostas: 0, duplicadas: 0, descartadas: 0, revisao_sistema: 0, enviadas: 0, erros: 0 };
+  const resumo = { processados: 0, ignorados: 0, propostas: 0, duplicadas: 0, descartadas: 0, revisao_sistema: 0, bloqueadas_atribuicao: 0, enviadas: 0, erros: 0 };
 
   for (const ev of eventos) {
     await ops.from("task_generation_events")
@@ -257,6 +273,11 @@ Deno.serve(async (req) => {
         if (!t?.titulo) continue;
         const titulo = String(t.titulo).slice(0, 250);
         const descricao = t.descricao == null ? null : String(t.descricao).slice(0, 4000);
+        const isTrafficTask = areaEhTrafego(t.area);
+        const gtRoute = isTrafficTask ? await resolverGtDoCliente(ev.client_id) : null;
+        const gtAssigneeId = Number(gtRoute?.clickup_user_id);
+        const gtRouteOk = !isTrafficTask || (gtRoute?.ok === true && Number.isFinite(gtAssigneeId));
+
         const evidenceGrounded = evidenciaEstaNaMensagem(t.evidencia, ev.excerpt);
         const internalSystemTask = tarefaInternaDoSistema(titulo, descricao);
         const grounding = groundingConteudo(titulo, descricao, ev.excerpt);
@@ -312,7 +333,10 @@ Deno.serve(async (req) => {
           titulo_norm: tituloNorm,
           descricao,
           area: t.area ?? null,
-          responsavel_sugerido: t.responsavel_sugerido ?? null,
+          responsavel_sugerido: isTrafficTask ? (gtRoute?.gt_owner ?? null) : (t.responsavel_sugerido ?? null),
+          resolved_assignee_person: isTrafficTask ? (gtRoute?.gt_owner ?? null) : null,
+          resolved_clickup_user_id: isTrafficTask && gtRouteOk ? String(gtRoute.clickup_user_id) : null,
+          assignment_source: isTrafficTask ? "clients.gt_owner+team_identity_map" : null,
           prioridade: t.prioridade ?? null,
           prazo_sugerido: Number.isFinite(Number(t.prazo_dias))
             ? new Date(Date.now() + Number(t.prazo_dias) * 86400000).toISOString().slice(0, 10)
@@ -336,6 +360,15 @@ Deno.serve(async (req) => {
             internal_system_task: internalSystemTask,
             discard_reason: descartada ? groundingReason : null,
             validation_version: VALIDATION_VERSION,
+            traffic_assignment: isTrafficTask ? {
+              ok: gtRouteOk,
+              source: "clients.gt_owner+team_identity_map",
+              client_id: ev.client_id ?? null,
+              client_name: gtRoute?.client_name ?? null,
+              gt_owner: gtRoute?.gt_owner ?? null,
+              clickup_user_id: gtRouteOk ? String(gtRoute.clickup_user_id) : null,
+              reason: gtRoute?.reason ?? null,
+            } : null,
           },
           modelo,
           modo,
@@ -346,6 +379,16 @@ Deno.serve(async (req) => {
         const { data: gravada } = await ops.from("generated_tasks").insert(linha).select("id").maybeSingle();
         if (descartada) { resumo.descartadas++; continue; }
         if (duplicada) { resumo.duplicadas++; continue; }
+
+        if (modo === "LIVE" && isTrafficTask && !gtRouteOk) {
+          await ops.from("generated_tasks").update({
+            status: "ERRO",
+            erro: `gt_assignment_unresolved:${String(gtRoute?.reason ?? "unknown")}`.slice(0, 500),
+          }).eq("id", gravada?.id);
+          resumo.bloqueadas_atribuicao++;
+          continue;
+        }
+
         resumo.propostas++;
 
         if (modo === "LIVE") {
@@ -353,10 +396,17 @@ Deno.serve(async (req) => {
           const lista = await segredo("TASK_ENGINE_CLICKUP_LIST");
           if (tokenCu && lista) {
             const prio: Record<string, number> = { Urgente: 1, Alta: 2, Media: 3, "Média": 3, Baixa: 4 };
+            const clickupBody: Record<string, unknown> = {
+              name: titulo,
+              description: descricao || "",
+              priority: prio[String(t.prioridade)] ?? 3,
+            };
+            if (isTrafficTask) clickupBody.assignees = [gtAssigneeId];
+
             const r = await fetch(`https://api.clickup.com/api/v2/list/${lista}/task`, {
               method: "POST",
               headers: { Authorization: tokenCu, "content-type": "application/json" },
-              body: JSON.stringify({ name: titulo, description: descricao || "", priority: prio[String(t.prioridade)] ?? 3 }),
+              body: JSON.stringify(clickupBody),
             });
             const jr = await r.json().catch(() => ({}));
             await ops.from("generated_tasks").update(
