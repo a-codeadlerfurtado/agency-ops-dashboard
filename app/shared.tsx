@@ -212,7 +212,7 @@ export async function api(view: string, token: string, params: Record<string, st
       if (clientResponse.ok) {
         const extra = await clientResponse.json();
         if (Array.isArray(extra?.clients)) {
-          const currentById = new Map((json.clients || []).map((client: Row) => [String(client.client_id), client]));
+          const currentById = new Map<string, Row>((json.clients || []).map((client: Row) => [String(client.client_id), client] as [string, Row]));
           json.clients = extra.clients.map((client: Row) => ({ ...client, ...(currentById.get(String(client.client_id)) || {}) }));
         }
       }
