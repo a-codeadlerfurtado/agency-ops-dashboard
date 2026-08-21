@@ -398,7 +398,7 @@ export function DiaryCenter({ clients: fallbackClients, profile, token, reload }
         </div>
 
         <div style={{ overflowX: "auto", paddingBottom: 4, marginTop: 14 }}>
-          <div style={{ minWidth: Math.max(690, taskCalendarWeeks.length * 13) }}>
+          <div style={{ width: Math.max(690, taskCalendarWeeks.length * 13), minWidth: Math.max(690, taskCalendarWeeks.length * 13) }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(12,minmax(0,1fr))", gap: 4, marginBottom: 6, color: "#8aa3c0", fontSize: 11 }}>
               {TASKLOG_MONTHS.map((month) => <span key={month}>{month}</span>)}
             </div>
