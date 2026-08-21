@@ -17,7 +17,13 @@ type AlertRow = {
   checked_at: string;
   low_accounts?: Array<{ account_key?: string; available_balance?: number | string }>;
 };
-type AlertBundle = { slot_key: string; alerts: AlertRow[] };
+type AlertBundle = {
+  slot_key: string;
+  run_key: string;
+  rule_key: "DAILY_CRITICAL_30" | "FRIDAY_WEEKEND_100" | string;
+  threshold: number;
+  alerts: AlertRow[];
+};
 
 function money(value: unknown) {
   return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(Number(value || 0));
@@ -28,7 +34,7 @@ function time(value: unknown) {
 }
 function slotLabel(slotKey: string) {
   const hhmm = slotKey.match(/-(\d{2})(\d{2})$/);
-  return hhmm ? `${hhmm[1]}:${hhmm[2]}` : "sexta-feira";
+  return hhmm ? `${hhmm[1]}:${hhmm[2]}` : "agora";
 }
 
 export default function WeekendBalanceAlert() {
@@ -62,7 +68,13 @@ export default function WeekendBalanceAlert() {
         setBundle(null);
         return;
       }
-      setBundle({ slot_key: String(body.slot_key), alerts: body.alerts });
+      setBundle({
+        slot_key: String(body.slot_key),
+        run_key: String(body.run_key || body.slot_key),
+        rule_key: String(body.rule_key || "FRIDAY_WEEKEND_100"),
+        threshold: Number(body.threshold || 100),
+        alerts: body.alerts,
+      });
     } catch {
       // O aviso é complementar: falha de rede não derruba o dashboard.
     }
@@ -84,7 +96,7 @@ export default function WeekendBalanceAlert() {
       const response = await fetch(API_URL, {
         method: "POST",
         headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY, "content-type": "application/json" },
-        body: JSON.stringify({ slot_key: bundle.slot_key }),
+        body: JSON.stringify({ run_key: bundle.run_key, slot_key: bundle.slot_key }),
       });
       if (!response.ok) return;
       setBundle(null);
@@ -96,28 +108,38 @@ export default function WeekendBalanceAlert() {
 
   if (!bundle || !sorted.length) return null;
 
+  const friday = bundle.rule_key === "FRIDAY_WEEKEND_100";
+  const thresholdText = money(bundle.threshold);
+  const eyebrow = friday
+    ? `SEXTA-FEIRA · ${slotLabel(bundle.slot_key)} · SOMENTE SUA CARTEIRA`
+    : `ALERTA DE SALDO · ${slotLabel(bundle.slot_key)} · SOMENTE SUA CARTEIRA`;
+  const title = friday ? "Saldo baixo para o fim de semana" : "Saldo chegando ao fim";
+  const description = friday
+    ? <>Você tem <strong>{sorted.length} cliente{sorted.length === 1 ? "" : "s"}</strong> com campanha ativa e menos de <strong>{thresholdText}</strong> de saldo. A lista mostra somente quem ainda continua nessa situação.</>
+    : <>Você tem <strong>{sorted.length} cliente{sorted.length === 1 ? "" : "s"}</strong> com campanha ativa e saldo abaixo de <strong>{thresholdText}</strong>. Confira a recarga antes que a campanha pare.</>;
+
   return <div className="wba-backdrop" role="alertdialog" aria-modal="true" aria-labelledby="wba-title" aria-describedby="wba-desc">
     <style>{styles}</style>
     <section className="wba-card">
       <div className="wba-warning" aria-hidden="true">⚠</div>
       <div className="wba-heading">
-        <span>SEXTA-FEIRA · {slotLabel(bundle.slot_key)} · SOMENTE SUA CARTEIRA</span>
-        <h2 id="wba-title">Saldo baixo para o fim de semana</h2>
-        <p id="wba-desc">Você tem <strong>{sorted.length} cliente{sorted.length === 1 ? "" : "s"}</strong> com campanha ativa e menos de <strong>R$ 100,00</strong> de saldo. Confira agora para evitar campanha parada durante o fim de semana.</p>
+        <span>{eyebrow}</span>
+        <h2 id="wba-title">{title}</h2>
+        <p id="wba-desc">{description}</p>
       </div>
 
       <div className="wba-list">
         {sorted.map((alert) => <article key={alert.id}>
           <div className="wba-client">
             <b>{alert.client_name}</b>
-            <small>Saldo consultado às {time(alert.checked_at)}{(alert.low_accounts?.length || 0) > 1 ? ` · ${alert.low_accounts!.length} contas abaixo de R$ 100` : ""}</small>
+            <small>Saldo consultado às {time(alert.checked_at)}{(alert.low_accounts?.length || 0) > 1 ? ` · ${alert.low_accounts!.length} contas abaixo de ${thresholdText}` : ""}</small>
           </div>
           <strong className={Number(alert.min_balance) <= 0 ? "zero" : ""}>{money(alert.min_balance)}</strong>
         </article>)}
       </div>
 
       <div className="wba-footer">
-        <div><b>Antes de encerrar a sexta:</b><span>confira a recarga dos clientes acima.</span></div>
+        <div><b>{friday ? "Antes de encerrar a sexta:" : "Atenção ao saldo:"}</b><span>{friday ? "quem for recarregado sai automaticamente do próximo aviso." : "o próximo aviso usa novamente o saldo mais recente disponível."}</span></div>
         <div className="wba-actions">
           <button className="secondary" disabled={acking} onClick={() => acknowledge(true)}>Abrir Central de Tráfego</button>
           <button disabled={acking} onClick={() => acknowledge(false)}>{acking ? "Registrando…" : "Ciente — vou resolver"}</button>
