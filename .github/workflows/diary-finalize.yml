@@ -1,0 +1,52 @@
+name: Finalize structured Diary
+
+on:
+  push:
+    branches: [chatgpt/diary-43-44-final-20260821]
+    paths: [.github/workflows/diary-finalize.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/diary-43-44-final-20260821
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Connect structured Diary only
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('app/page.tsx')
+          s=p.read_text()
+          old='import { PortfolioCenter } from "./views/portfolio";'
+          new=old+'\nimport { DiaryCenter as StructuredDiaryCenter } from "./views/diary";'
+          if 'StructuredDiaryCenter' not in s:
+              if s.count(old)!=1: raise SystemExit(f'import anchor={s.count(old)}')
+              s=s.replace(old,new,1)
+          old_render='{view === "diary" && canSee("diary") && <DiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />}'
+          new_render='{view === "diary" && canSee("diary") && <StructuredDiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />}'
+          if old_render in s:
+              s=s.replace(old_render,new_render,1)
+          elif new_render not in s:
+              raise SystemExit('Diary render anchor missing')
+          p.write_text(s)
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Commit validated product change and remove one-shot workflow
+        run: |
+          rm .github/workflows/diary-finalize.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/page.tsx .github/workflows/diary-finalize.yml
+          git commit -m "Connect structured Diary after validated build"
+          git push origin HEAD:chatgpt/diary-43-44-final-20260821
