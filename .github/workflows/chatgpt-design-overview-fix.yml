@@ -1,0 +1,56 @@
+name: ChatGPT designer overview fix
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/chatgpt-design-overview-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Restrict designer overview
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('app/page.tsx')
+          s = p.read_text()
+
+          old_kpi = '{view === "overview" && <section className="grid kpis">'
+          new_kpi = '{view === "overview" && !isDesignRestricted && <section className="grid kpis">'
+          if old_kpi not in s:
+              raise SystemExit('missing overview KPI anchor')
+          s = s.replace(old_kpi, new_kpi, 1)
+
+          old_overview = '{view === "overview" && <>{isGtPortfolio && <GtPortfolioOverview'
+          new_overview = '{view === "overview" && isDesignRestricted && <><DesignFocusMetrics focus={data?.operations?.design_focus || {}} loading={!data} /><DesignFocusCenter focus={data?.operations?.design_focus || {}} /></>}\n      {view === "overview" && !isDesignRestricted && <>{isGtPortfolio && <GtPortfolioOverview'
+          if old_overview not in s:
+              raise SystemExit('missing general overview anchor')
+          s = s.replace(old_overview, new_overview, 1)
+          p.write_text(s)
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Commit validated fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/page.tsx
+          git commit -m "Hide operational overview from designer profiles"
+          git push origin HEAD:main
