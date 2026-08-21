@@ -1,0 +1,38 @@
+name: Contextual Tab Help
+
+on:
+  push:
+    branches:
+      - chatgpt/contextual-tab-help-20260821
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Apply contextual help patch
+        run: node scripts/apply-contextual-tab-help.mjs
+      - name: Install dependencies
+        run: npm ci
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Remove one-shot files and commit result
+        run: |
+          rm -f scripts/apply-contextual-tab-help.mjs .github/workflows/contextual-tab-help.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/page.tsx app/ia/page.tsx app/tab-help.tsx scripts/apply-contextual-tab-help.mjs .github/workflows/contextual-tab-help.yml
+          git commit -m "feat: add contextual help to every dashboard tab"
+          git push
