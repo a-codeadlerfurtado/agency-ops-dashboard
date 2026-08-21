@@ -28,27 +28,6 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const rawSignOut = supabase.auth.signOut.bind(supabase.auth);
 supabase.auth.signOut = ((options?: Parameters<typeof rawSignOut>[0]) => rawSignOut(options ?? { scope: "local" })) as typeof supabase.auth.signOut;
 
-// Identificador persistente por navegador/perfil. Nao e fingerprint e nao tenta
-// identificar hardware: serve somente para diferenciar dois PCs/navegadores usando a
-// mesma conta. O ID permanece local; nao e enviado como header global porque headers
-// customizados quebram CORS em Edge Functions que ainda nao os declaram.
-const DEVICE_ID_KEY = "agency-ops-device-id";
-export function deviceId() {
-  if (typeof window === "undefined") return "server";
-  try {
-    let value = window.localStorage.getItem(DEVICE_ID_KEY);
-    if (!value) {
-      value = typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `dev-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-      window.localStorage.setItem(DEVICE_ID_KEY, value);
-    }
-    return value;
-  } catch {
-    return "browser-no-storage";
-  }
-}
-
 export type Row = Record<string, any>;
 export type TeamMember = {
   person: string;
