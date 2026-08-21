@@ -21,6 +21,7 @@ function palette(value: unknown): string[] {
 export function CreativeCenter({ token }: { token: string }) {
   const [data, setData] = useState<Row | null>(null);
   const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<"clients" | "rules">("clients");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -41,6 +42,23 @@ export function CreativeCenter({ token }: { token: string }) {
     return clients.filter((client) => !needle || String(client.display_name || "").toLocaleLowerCase("pt-BR").includes(needle));
   }, [clients, query]);
   const selected = clients.find((client) => client.client_id === selectedId) || filtered[0] || null;
+  const ruleGroups = useMemo(() => {
+    const grouped = new Map<string, Row>();
+    for (const client of clients) for (const rule of (client.rules || [])) {
+      const description = text(rule.rule_text || rule.description || rule.content || rule.title || rule.rule_kind || rule.kind || "Diretriz").trim();
+      const kind = text(rule.rule_kind || rule.kind || rule.title || "Diretriz");
+      const key = `${kind}|${description}`.toLocaleLowerCase("pt-BR");
+      const current = grouped.get(key) || { key, title: text(rule.title || rule.rule_kind || rule.kind || "Diretriz"), description, kind, status: rule.status, clients: [] as Row[] };
+      if (!(current.clients as Row[]).some((item) => item.client_id === client.client_id)) (current.clients as Row[]).push({ client_id: client.client_id, display_name: client.display_name });
+      grouped.set(key, current);
+    }
+    return [...grouped.values()].sort((a, b) => text(a.title).localeCompare(text(b.title), "pt-BR"));
+  }, [clients]);
+  const filteredRules = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase("pt-BR");
+    if (!needle) return ruleGroups;
+    return ruleGroups.filter((rule) => [rule.title, rule.description, rule.kind, ...(rule.clients || []).map((client: Row) => client.display_name)].join(" ").toLocaleLowerCase("pt-BR").includes(needle));
+  }, [ruleGroups, query]);
   const summary = data?.summary || {};
 
   return <section className="workspace">
@@ -59,14 +77,15 @@ export function CreativeCenter({ token }: { token: string }) {
     {error && <div className="error-box">{error}</div>}
     {loading && <div className="empty">Carregando diretrizes criativas…</div>}
 
-    {!loading && <div className="grid" style={{ gridTemplateColumns: "minmax(260px,.75fr) minmax(0,1.7fr)", gap: 16, alignItems: "start" }}>
+    {!loading && <div className="filter-tabs" style={{ marginBottom: 12 }}><button type="button" className={mode === "clients" ? "active" : ""} onClick={() => { setMode("clients"); setQuery(""); }}>Por Clientes</button><button type="button" className={mode === "rules" ? "active" : ""} onClick={() => { setMode("rules"); setQuery(""); }}>Por Regras</button></div>}
+
+    {!loading && mode === "clients" && <div className="grid" style={{ gridTemplateColumns: "minmax(260px,.75fr) minmax(0,1.7fr)", gap: 16, alignItems: "start" }}>
       <section className="card section">
         <div className="section-title">Clientes</div>
         <input className="control" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente…" style={{ width: "100%", marginBottom: 10 }} />
         <div style={{ display: "grid", gap: 6, maxHeight: 620, overflow: "auto" }}>
           {filtered.map((client) => <button key={client.client_id} type="button" className={selected?.client_id === client.client_id ? "primary" : "btn"} onClick={() => setSelectedId(client.client_id)} style={{ textAlign: "left", justifyContent: "space-between" }}>
             <span>{text(client.display_name)}</span>
-            {client.health?.needs_attention ? <span>!</span> : null}
           </button>)}
           {!filtered.length && <div className="empty">Nenhum cliente encontrado.</div>}
         </div>
@@ -101,5 +120,12 @@ export function CreativeCenter({ token }: { token: string }) {
         </>}
       </section>
     </div>}
+
+    {!loading && mode === "rules" && <section className="card section">
+      <div className="workspace-head" style={{ marginBottom: 12 }}><div><div className="section-title">Regras consolidadas</div><p>Consulte uma diretriz independentemente do cliente e veja imediatamente a quais clientes ela se aplica.</p></div><span className="counter">{filteredRules.length} regras</span></div>
+      <input className="control" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar regra, categoria ou cliente…" style={{ width: "100%", marginBottom: 10 }} />
+      {filteredRules.map((rule) => <div className="productivity-row" key={text(rule.key)} style={{ alignItems: "flex-start" }}><div style={{ minWidth: 0 }}><b>{text(rule.title || rule.kind || "Diretriz")}</b><small>{text(rule.description)}</small><small style={{ display: "block", marginTop: 5 }}>Aplica-se a: {(rule.clients || []).map((client: Row) => text(client.display_name)).join(" · ") || "Nenhum cliente vinculado"}</small></div><strong>{labelStatus(rule.status)}</strong></div>)}
+      {!filteredRules.length && <div className="empty">Nenhuma regra encontrada.</div>}
+    </section>}
   </section>;
 }
