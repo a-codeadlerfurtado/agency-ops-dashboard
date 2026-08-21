@@ -90,6 +90,7 @@ export default function OnboardingAssignmentBridge() {
 
   const first = items[0];
   const toastVisible = Boolean(first && hiddenToastId !== String(first.id));
+  const onOnboardingPage = typeof window !== "undefined" && window.location.pathname === "/onboarding";
 
   const cards = useMemo(() => items.map((item) => {
     const options: Row[] = Array.isArray(item.metadata?.gt_options) ? item.metadata.gt_options : [];
@@ -113,7 +114,7 @@ export default function OnboardingAssignmentBridge() {
 
   return <>
     {panelTarget && createPortal(<div style={{ display: "grid", gap: 9, marginBottom: 10 }}><div style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".12em", color: "#6ea9df" }}>ONBOARDING · AÇÃO NECESSÁRIA</div>{cards}{error && <div style={{ color: "#fca5a5", fontSize: 11 }}>{error}</div>}</div>, panelTarget)}
-    {toastVisible && window.location.pathname !== "/onboarding" && <aside style={{ position: "fixed", zIndex: 10050, right: 22, top: 92, width: "min(520px, calc(100vw - 44px))", border: "1px solid #244767", background: "rgba(4,17,29,.98)", color: "#eff7ff", borderRadius: 14, padding: 14, boxShadow: "0 22px 70px rgba(0,0,0,.48)" }}>
+    {toastVisible && !onOnboardingPage && <aside style={{ position: "fixed", zIndex: 10050, right: 22, top: 92, width: "min(520px, calc(100vw - 44px))", border: "1px solid #244767", background: "rgba(4,17,29,.98)", color: "#eff7ff", borderRadius: 14, padding: 14, boxShadow: "0 22px 70px rgba(0,0,0,.48)" }}>
       <button aria-label="Fechar por agora" onClick={() => setHiddenToastId(String(first.id))} style={{ position: "absolute", right: 10, top: 8, border: 0, background: "transparent", color: "#8ba8c3", fontSize: 18, cursor: "pointer" }}>×</button>
       <div style={{ color: "#65aef2", fontSize: 10, fontWeight: 800, letterSpacing: ".12em", marginBottom: 6 }}>ONBOARDING · SELECIONE O GT</div>
       <b style={{ display: "block", fontSize: 14, paddingRight: 24 }}>{String(first.client_display_name || first.title)}</b>
