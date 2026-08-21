@@ -20,7 +20,7 @@ const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
 const SYNTHETIC_NAME = /^[A-Za-z]+-\d{9,}-[a-z0-9]{4,8}$/;
 // Abas do dashboard. A chave fixa do gestor (acesso legado, fora do quadro) recebe
 // todas; quem entra por login recebe o que agency_ops.dashboard_view_permissions disser.
-const ALL_VIEWS = ["overview","focus","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts"];
+const ALL_VIEWS = ["overview","focus","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health"];
 // Dia de operacao no fuso de Brasilia: task fechada as 22h e' de hoje, nao de amanha.
 const opsDay = (date = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 

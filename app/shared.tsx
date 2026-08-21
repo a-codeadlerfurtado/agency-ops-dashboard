@@ -69,7 +69,7 @@ export type HomeData = {
   generated_at: string;
 };
 
-export type View = "overview" | "focus" | "clients" | "onboarding" | "campaigns" | "contracts" | "preclients" | "conversations" | "team" | "diary" | "clickup" | "evidence" | "audit" | "alerts";
+export type View = "overview" | "focus" | "clients" | "health" | "onboarding" | "campaigns" | "contracts" | "preclients" | "conversations" | "team" | "diary" | "clickup" | "evidence" | "audit" | "alerts";
 
 export const pt: Record<string,string> = { ATTENTION:"Atenção",FOLLOW_UP:"Acompanhamento",UNDETERMINED:"Indeterminado",DATA_INCOMPLETE:"Dados incompletos",OK:"OK",ACTIVE:"Ativo",ONBOARDING:"Onboarding",CHURNED:"Churned",COMPLETE:"Completa",PARTIAL:"Parcial",INCOMPLETE:"Incompleta",SUCCESS:"Sucesso",ERROR:"Erro",RUNNING:"Em execução",OPEN:"Aberto",COMPLETED:"Concluído",ABORTED:"Encerrado",CRITICAL:"Crítico",HIGH:"Alto",MEDIUM:"Médio",LOW:"Baixo",CONNECTED:"Conectado",CONECTADO:"Conectado" };
 
