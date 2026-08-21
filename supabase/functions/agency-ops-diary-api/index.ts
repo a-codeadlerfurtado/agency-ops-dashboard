@@ -16,8 +16,8 @@ async function sha256(value: string) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 function errorStatus(message: string) {
-  if (message.includes("forbidden")) return 403;
-  if (message.includes("unauthorized") || message.includes("profile_required")) return 401;
+  if (message.includes("forbidden") || message.includes("profile_required")) return 403;
+  if (message.includes("unauthorized")) return 401;
   if (message.includes("not_found")) return 404;
   if (message.includes("required") || message.includes("invalid") || message.includes("client_")) return 400;
   return 500;
@@ -37,20 +37,20 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   const view = url.searchParams.get("view") ?? "data";
 
+  // O ator nunca vem do body/querystring. Login: UUID extraido do JWT verificado.
+  // Chave legada: resolve exclusivamente o UUID previamente cadastrado como admin do Diario.
   let actorUserId: string | null = null;
   let viaLogin = false;
   const authHeader = req.headers.get("Authorization") ?? "";
   if (authHeader.startsWith("Bearer ")) {
     const authClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
-    const { data } = await authClient.auth.getUser();
-    if (data?.user?.id) {
+    const { data, error } = await authClient.auth.getUser();
+    if (!error && data?.user?.id) {
       actorUserId = data.user.id;
       viaLogin = true;
     }
   }
 
-  // Compatibilidade com a chave administrativa legada. A chave nunca define o autor;
-  // ela apenas resolve o usuario previamente cadastrado como administrador do Diario.
   if (!actorUserId) {
     const suppliedKey = req.headers.get("x-dashboard-key") ?? "";
     if (suppliedKey.length >= 40) {
@@ -67,12 +67,20 @@ Deno.serve(async (req: Request) => {
   const { data: adminRow } = await ops.from("diary_admin_users").select("user_id").eq("user_id", actorUserId).maybeSingle();
   const isDiaryAdmin = Boolean(adminRow?.user_id);
 
+  // Um JWT valido sozinho nao basta: colaborador comum precisa estar ativo, aprovado
+  // e possuir a aba Diario nas permissoes atuais. Adler continua identificado pelo UUID
+  // administrativo estavel de diary_admin_users.
   if (viaLogin && !isDiaryAdmin) {
     const [{ data: pref }, { data: approvals }] = await Promise.all([
-      ops.from("user_preferences").select("collaborator_person").eq("user_key", actorUserId).maybeSingle(),
+      ops.from("user_preferences").select("collaborator_person,name").eq("user_key", actorUserId).maybeSingle(),
       ops.from("access_requests").select("kind,status").eq("user_key", actorUserId).eq("kind", "SIGNUP").eq("status", "APPROVED"),
     ]);
-    if (!pref?.collaborator_person || !(approvals ?? []).length) return reply({ error: "forbidden" }, 403);
+    const person = pref?.collaborator_person ?? pref?.name ?? null;
+    if (!person || !(approvals ?? []).length) return reply({ error: "forbidden" }, 403);
+    const { data: roster } = await ops.from("team_roster").select("person,role").eq("person", person).eq("is_former", false).maybeSingle();
+    if (!roster) return reply({ error: "forbidden" }, 403);
+    const { data: allowedViews, error: viewsError } = await ops.rpc("dashboard_allowed_views", { p_person: roster.person, p_role: roster.role });
+    if (viewsError || !Array.isArray(allowedViews) || !allowedViews.includes("diary")) return reply({ error: "forbidden" }, 403);
   }
 
   if (req.method === "GET") {
