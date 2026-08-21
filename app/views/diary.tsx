@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Chip, SUPABASE_ANON_KEY, SUPABASE_URL, formatDate, text } from "../shared";
+import { SUPABASE_ANON_KEY, SUPABASE_URL, formatDate, text } from "../shared";
 import type { Row } from "../shared";
 
 const DIARY_API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-diary-api`;
