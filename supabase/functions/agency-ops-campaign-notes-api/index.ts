@@ -70,11 +70,12 @@ Deno.serve(async (req) => {
     const note = clean(body?.note);
     if (!note) return reply({ error: "note_required" }, 400);
     if (note.length > 4000) return reply({ error: "note_too_long", max: 4000 }, 400);
+    const storedAccount = clean(campaign.account_key) || clean(campaign.meta_ad_account_id) || accountKey || null;
     const { data: inserted, error: insertError } = await ops.from("campaign_notes").insert({
       client_id: client.client_id,
       campaign_id: String(campaign.campaign_id),
       campaign_name: campaign.campaign_name ?? campaignName,
-      account_key: campaign.account_key ?? campaign.meta_ad_account_id ?? accountKey || null,
+      account_key: storedAccount,
       note,
       author_user_key: userKey,
       author_person: person,
