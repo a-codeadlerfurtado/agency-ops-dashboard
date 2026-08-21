@@ -80,6 +80,7 @@ export default function Dashboard() {
   const [commandOpen, setCommandOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [workItemId, setWorkItemId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<Row | null>(null);
   const [toastLeaving, setToastLeaving] = useState(false);
@@ -139,7 +140,7 @@ export default function Dashboard() {
   const viewsKey = viewsFrescas && !viewsStale ? viewsFrescas.join(",") : viewsCache;
   const allowedViews = useMemo(() => new Set<string>(viewsKey ? viewsKey.split(",") : ["overview", "focus"]), [viewsKey]);
   const navItems = useMemo(() => ([
-    ["overview", "Visão geral"], ["focus", "Foco do dia"], ["clients", "Clientes"], ["health", "Saúde"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"], ["opsperf", "Desempenho OP"],
+    ["overview", "Visão geral"], ["focus", "Foco do dia"], ["work", "Central de Trabalho"], ["clients", "Clientes"], ["health", "Saúde"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"], ["opsperf", "Desempenho OP"],
   ] as [View, string][]).filter(([key]) => allowedViews.has(key)), [allowedViews]);
   // Aba aberta que deixou de ser permitida volta para a primeira disponivel.
   useEffect(() => {
@@ -340,6 +341,7 @@ export default function Dashboard() {
       </section>
 
       {view === "focus" && <FocusCenter clients={actionClients} allClients={allClients} operations={data?.operations || {}} alerts={data?.alerts || []} openClient={openClient} />}
+      {view === "work" && canSee("work") && <WorkCenter token={session.access_token} clients={allClients} profile={data?.profile || {}} focusId={workItemId} clearFocus={() => setWorkItemId(null)} />}
       {view === "clients" && canSee("clients") && (isDesignRestricted
         ? <ClientPortfolio restricted clients={clients} total={allClients.length} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} lifecycleFilter={lifecycleFilter} setLifecycleFilter={setLifecycleFilter} openClient={openClient} />
         : <><PortfolioCenter portfolio={data?.portfolio || null} openClient={openClient} />
@@ -357,7 +359,7 @@ export default function Dashboard() {
       {view === "evidence" && canSee("evidence") && <EvidenceCenter clients={allClients} operations={data?.operations || {}} openClient={openClient} />}
       {view === "audit" && canSee("audit") && <AuditCenter runs={data?.audit_runs || []} issues={data?.audit_issues || []} />}
       {view === "contracts" && contractsAllowed && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando contratos…</div>}><ContractsCenter token={session.access_token} /></Suspense>}
-      {view === "alerts" && canSee("alerts") && <AlertCenter alerts={data?.alerts || []} clients={allClients} openClient={openClient} />}
+      {view === "alerts" && canSee("alerts") && <AlertCenter alerts={data?.alerts || []} clients={allClients} profile={data?.profile || {}} token={session.access_token} canEscalate={canSee("work")} openClient={openClient} openWork={(id) => { setWorkItemId(id); setView("work"); }} />}
 
       {view === "overview" && <>{isGtPortfolio && <GtPortfolioOverview profile={data?.profile || {}} clients={activeClients} campaigns={filteredCampaigns} alerts={data?.alerts || []} commitments={data?.commitments || []} conversations={data?.conversations || []} openClient={openClient} setView={setView} />}
       <SmartSearch question={opsQuestion} setQuestion={setOpsQuestion} clients={allClients} conversations={data?.conversations || []} commitments={data?.commitments || []} openClient={openClient} />
@@ -434,9 +436,9 @@ export default function Dashboard() {
       {selected && <ClientDrawer detail={selected} loading={detailLoading} close={() => setSelected(null)} contractsAllowed={contractsAllowed} token={session.access_token} />}
       {commandOpen && <GlobalCommand clients={allClients} tasks={data?.clickup?.recent_completed || []} preclients={data?.preclients || []} close={() => setCommandOpen(false)} openClient={openClient} />}
       {profileOpen && <ProfileMenu preferences={data?.preferences || {}} profile={data?.profile || {}} email={session.user.email || ""} settings={() => { setProfileOpen(false); setSettingsOpen(true); }} close={() => setProfileOpen(false)} signOut={() => supabase.auth.signOut()} requestAccess={requestAccess} token={session.access_token} clients={allClients} />}
-      {notificationsOpen && <NotificationCenter items={data?.notifications || []} close={() => setNotificationsOpen(false)} refresh={load} openClient={openClient} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
+      {notificationsOpen && <NotificationCenter items={data?.notifications || []} close={() => setNotificationsOpen(false)} refresh={load} openClient={openClient} openWork={(id) => { setNotificationsOpen(false); setWorkItemId(id); setView("work"); }} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
       {settingsOpen && <SettingsModal preferences={data?.preferences || {}} close={() => setSettingsOpen(false)} refresh={load} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
-      {toast && <button className={`toast${toastLeaving ? " leaving" : ""}`} onClick={() => { if (toast.client_id) openClient(toast.client_id); setToast(null); }}><Chip value={toast.level}/><span><b>{text(toast.title)}</b><small>{text(toast.actor ? `${toast.actor}: ${toast.description}` : toast.description)}</small>{(toast.gestor || toast.carteira) && <small className="toast-meta">{text(toast.carteira ? `Carteira ${toast.carteira}` : (toast.gestor ? `Gestor: ${toast.gestor}` : ""))}</small>}</span><i onClick={(event) => { event.stopPropagation(); setToast(null); }}>×</i></button>}
+      {toast && <button className={`toast${toastLeaving ? " leaving" : ""}`} onClick={() => { const workId = toast.metadata?.work_item_id; if (workId) { setWorkItemId(String(workId)); setView("work"); } else if (toast.client_id) openClient(toast.client_id); setToast(null); }}><Chip value={toast.level}/><span><b>{text(toast.title)}</b><small>{text(toast.actor ? `${toast.actor}: ${toast.description}` : toast.description)}</small>{(toast.gestor || toast.carteira) && <small className="toast-meta">{text(toast.carteira ? `Carteira ${toast.carteira}` : (toast.gestor ? `Gestor: ${toast.gestor}` : ""))}</small>}</span><i onClick={(event) => { event.stopPropagation(); setToast(null); }}>×</i></button>}
       {win && data?.preferences?.win_celebration_enabled !== false && <button className="win-pulse" onClick={() => { if (win.client_id) openClient(win.client_id); setWin(null); }}><small>NOVO CLIENTE</small><strong>{text(win.description)}</strong><span>Acabou de entrar para a operação</span></button>}
     </main>
       {session?.access_token && <AIAskWidget token={session.access_token} />}
@@ -453,15 +455,76 @@ function GtPortfolioOverview({ profile, clients, campaigns, alerts, commitments,
   const stale = campaigns.filter((campaign) => campaign.is_stale);
   const priorities = [...clients].sort((a, b) => (priorityRank[a.priority] ?? 9) - (priorityRank[b.priority] ?? 9)).slice(0, 6);
   return <section className="gt-home" aria-label="Minha carteira hoje">
-    <div className="gt-home-head"><div><span className="eyebrow">Minha carteira hoje</span><h2>{text(profile.person || "Gestor")}</h2><p>{profile.carteira ? `Carteira ${text(profile.carteira)} · ` : ""}{clients.length} clientes ativos e em onboarding. Todos os dados abaixo já estão limitados à sua carteira.</p></div><span className="gt-scope-lock">Escopo protegido</span></div>
+    <div className="gt-home-head"><div><span className="eyebrow">Minha carteira hoje</span><h2>{text(profile.person || "Gestor")}</h2><p>{profile.carteira ? `Carteira ${text(profile.carteira)} · ` : ""}{clients.length} clientes ativos e em onboarding. Todos os dados abaixo estão limitados à sua carteira.</p></div><span className="gt-scope-lock">Escopo protegido</span></div>
     <div className="gt-action-grid">
       <button onClick={() => setView("focus")}><strong>{action.length}</strong><span>ações e acompanhamentos</span><small>Abrir Foco do dia</small></button>
-      <button onClick={() => setView("alerts")}><strong>{critical.length}</strong><span>alertas críticos ou altos</span><small>Revisar alertas</small></button>
+      <button onClick={() => setView("alerts")}><strong>{critical.length}</strong><span>alertas críticos ou altos</span><small>Revisar e encaminhar</small></button>
       <button onClick={() => setView("campaigns")}><strong>{stale.length}</strong><span>contas com mídia desatualizada</span><small>Abrir campanhas</small></button>
       <button onClick={() => setView("conversations")}><strong>{waiting.length}</strong><span>conversas aguardando agência</span><small>Ver conversas</small></button>
-      <button onClick={() => setView("focus")}><strong>{overdue.length}</strong><span>compromissos vencidos</span><small>Resolver pendências</small></button>
+      <button onClick={() => setView("work")}><strong>{overdue.length}</strong><span>compromissos vencidos</span><small>Abrir Central de Trabalho</small></button>
     </div>
     <div className="gt-priority-list"><div className="section-head"><div><div className="section-title">Prioridades da carteira</div><div className="subtitle">Ordenadas pelo que exige ação primeiro</div></div><button className="btn" onClick={() => setView("clients")}>Ver carteira completa</button></div>{priorities.map((client) => <button key={client.client_id} onClick={() => openClient(String(client.client_id))}><span><b>{text(client.display_name)}</b><small>{text(client.next_step || client.current_subject || "Sem próxima ação registrada")}</small></span><Chip value={client.priority} /></button>)}{!priorities.length && <div className="empty">Nenhuma prioridade pendente na sua carteira.</div>}</div>
+  </section>;
+}
+
+function WorkCenter({ token, clients, profile, focusId, clearFocus }: { token: string; clients: Row[]; profile: Row; focusId: string | null; clearFocus: () => void }) {
+  const [payload, setPayload] = useState<Row>({ items: [], summary: {} });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [filter, setFilter] = useState("OPEN");
+  const [expanded, setExpanded] = useState<string | null>(focusId);
+  const [resolution, setResolution] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState("");
+  const [formOpen, setFormOpen] = useState(false);
+  const [form, setForm] = useState<Row>({ client_id: "", type: "GENERAL", priority: "MEDIUM", target_role: "CS", title: "", description: "", due_at: "" });
+
+  const loadWork = useCallback(async () => {
+    setLoading(true); setError("");
+    try { setPayload(await api("work", token)); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Falha ao carregar demandas."); }
+    finally { setLoading(false); }
+  }, [token]);
+
+  useEffect(() => { loadWork(); }, [loadWork]);
+  useEffect(() => {
+    if (!focusId) return;
+    setExpanded(focusId); setFilter("ALL");
+    window.setTimeout(() => document.getElementById(`work-${focusId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 120);
+    clearFocus();
+  }, [focusId, clearFocus]);
+
+  const items: Row[] = payload.items || [];
+  const visible = items.filter((item) => filter === "ALL" || (filter === "OPEN" ? !["COMPLETED", "DISMISSED"].includes(item.status) : item.status === filter));
+  const selectedClient = clients.find((client) => String(client.client_id) === String(form.client_id));
+  const personForRole = (role: string) => role === "CS" ? selectedClient?.cs_owner : role === "DESIGN" ? selectedClient?.designer_owner : role === "GT" ? selectedClient?.gt_owner : role === "MGMT" ? "Adler Furtado" : null;
+
+  async function createItem(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy("create"); setError("");
+    try {
+      await apiPost("work-item-create", token, { ...form, client_id: form.client_id || null, target_person: personForRole(String(form.target_role)), due_at: form.due_at ? new Date(form.due_at).toISOString() : null, create_clickup: form.type === "CLICKUP" });
+      setForm({ client_id: "", type: "GENERAL", priority: "MEDIUM", target_role: "CS", title: "", description: "", due_at: "" });
+      setFormOpen(false); await loadWork();
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Falha ao criar demanda."); }
+    finally { setBusy(""); }
+  }
+
+  async function updateItem(item: Row, status: string) {
+    const note = (resolution[String(item.id)] || "").trim();
+    if (status === "COMPLETED" && !note) { setError("Descreva o que foi feito antes de concluir."); setExpanded(String(item.id)); return; }
+    setBusy(String(item.id)); setError("");
+    try { await apiPost("work-item-update", token, { id: item.id, status, resolution: note || undefined, snoozed_until: status === "SNOOZED" ? new Date(Date.now() + 86400000).toISOString() : undefined }); await loadWork(); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Falha ao atualizar demanda."); }
+    finally { setBusy(""); }
+  }
+
+  const summary = payload.summary || {};
+  return <section className="workspace work-center">
+    <div className="workspace-head"><div><span className="eyebrow">Execução rastreável</span><h2>Central de Trabalho</h2><p>Receba, abra, execute e conclua demandas. Cada mudança fica registrada no banco e retorna uma notificação para quem solicitou.</p></div><button className="primary work-new" onClick={() => setFormOpen((open) => !open)}>{formOpen ? "Cancelar" : "+ Nova demanda"}</button></div>
+    <div className="grid work-kpis"><Metric label="Em aberto" value={formatNumber(summary.open, 0)} tone="blue" hint="aguardando ação" /><Metric label="Críticas" value={formatNumber(summary.critical, 0)} tone="red" hint="prioridade máxima" /><Metric label="Atrasadas" value={formatNumber(summary.overdue, 0)} tone="yellow" hint="prazo vencido" /><Metric label="Concluídas 30d" value={formatNumber(summary.completed_30d, 0)} tone="green" hint="com evidência" /></div>
+    {formOpen && <form className="card work-form" onSubmit={createItem}><div className="section-title">Criar solicitação</div><div className="work-form-grid"><label>Cliente<select className="control" value={form.client_id} onChange={(event) => setForm((current: Row) => ({ ...current, client_id: event.target.value }))}><option value="">Demanda geral</option>{clients.map((client) => <option key={client.client_id} value={client.client_id}>{client.display_name}</option>)}</select></label><label>Tipo<select className="control" value={form.type} onChange={(event) => setForm((current: Row) => ({ ...current, type: event.target.value }))}><option value="GENERAL">Geral</option><option value="ESCALATION">Escalonamento</option><option value="CREATIVE_REQUEST">Solicitação para designer</option><option value="TECHNICAL">Problema técnico</option><option value="CLIENT_FOLLOWUP">Acompanhamento do cliente</option><option value="CLICKUP">Criar também no ClickUp</option></select></label><label>Responsável<select className="control" value={form.target_role} onChange={(event) => setForm((current: Row) => ({ ...current, target_role: event.target.value }))}><option value="CS">CS</option><option value="DESIGN">Designer</option><option value="GT">Gestor de Tráfego</option><option value="MGMT">Operações</option></select></label><label>Prioridade<select className="control" value={form.priority} onChange={(event) => setForm((current: Row) => ({ ...current, priority: event.target.value }))}><option value="CRITICAL">Crítica</option><option value="HIGH">Alta</option><option value="MEDIUM">Média</option><option value="LOW">Baixa</option></select></label><label>Prazo<input className="control" type="datetime-local" value={form.due_at} onChange={(event) => setForm((current: Row) => ({ ...current, due_at: event.target.value }))} /></label></div><label>Título<input className="control" required value={form.title} onChange={(event) => setForm((current: Row) => ({ ...current, title: event.target.value }))} placeholder="O que precisa ser feito" /></label><label>Contexto<textarea className="control" value={form.description} onChange={(event) => setForm((current: Row) => ({ ...current, description: event.target.value }))} placeholder="Explique o problema, a evidência e o resultado esperado" /></label><div className="work-form-footer"><span>{personForRole(String(form.target_role)) ? `Notificação para ${personForRole(String(form.target_role))}` : `Notificação para o perfil ${text(form.target_role)}`}</span><button className="primary" disabled={busy === "create"}>{busy === "create" ? "Criando…" : "Criar e notificar"}</button></div></form>}
+    {error && <div className="error-box">{error}</div>}
+    <div className="filter-tabs work-filters">{[["OPEN", "Em aberto"], ["IN_PROGRESS", "Em andamento"], ["WAITING", "Aguardando"], ["SNOOZED", "Adiados"], ["COMPLETED", "Concluídos"], ["ALL", "Todos"]].map(([key, label]) => <button key={key} className={filter === key ? "active" : ""} onClick={() => setFilter(key)}>{label}</button>)}</div>
+    <div className="work-list">{visible.map((item) => { const open = expanded === String(item.id); const client = item.clients || {}; return <article id={`work-${item.id}`} className={`card work-item${open ? " expanded" : ""}`} key={item.id}><button className="work-item-main" onClick={() => setExpanded(open ? null : String(item.id))}><Chip value={item.priority} /><span><b>{text(item.title)}</b><small>{text(client.display_name || "Demanda geral")} · de {text(item.created_by_person)} para {text(item.target_person || item.target_role)}</small></span><Chip value={item.status} /></button>{open && <div className="work-item-detail"><p>{text(item.description || "Sem descrição adicional.")}</p><div className="work-meta"><span>Criada em {formatDate(item.created_at)}</span><span>Prazo: {item.due_at ? formatDate(item.due_at) : "sem prazo"}</span>{item.completed_by && <span>Concluída por {text(item.completed_by)}</span>}</div>{item.metadata?.clickup_url && <a className="work-clickup" href={item.metadata.clickup_url} target="_blank" rel="noreferrer">Abrir tarefa no ClickUp ↗</a>}{!["COMPLETED", "DISMISSED"].includes(item.status) && <><textarea className="control" value={resolution[String(item.id)] || ""} onChange={(event) => setResolution((current) => ({ ...current, [String(item.id)]: event.target.value }))} placeholder="Registre o que foi feito, a decisão ou o motivo…" /><div className="work-actions"><button disabled={busy === String(item.id)} onClick={() => updateItem(item, "IN_PROGRESS")}>Iniciar</button><button disabled={busy === String(item.id)} onClick={() => updateItem(item, "WAITING")}>Aguardando</button><button disabled={busy === String(item.id)} onClick={() => updateItem(item, "SNOOZED")}>Adiar 1 dia</button><button className="success" disabled={busy === String(item.id)} onClick={() => updateItem(item, "COMPLETED")}>Concluir</button><button className="muted" disabled={busy === String(item.id)} onClick={() => updateItem(item, "DISMISSED")}>Descartar</button></div></>}{item.resolution && <div className="work-resolution"><b>Conclusão</b><p>{text(item.resolution)}</p></div>}</div>}</article>; })}{!loading && !visible.length && <div className="card empty">Nenhuma demanda nesse filtro.</div>}{loading && <div className="card empty">Carregando demandas…</div>}</div>
   </section>;
 }
 
@@ -1229,9 +1292,48 @@ function MediaCenter({ media, clients, openClient }: { media: Row; clients: Row[
   return <section className="workspace"><div className="workspace-head"><div><h2>Central de Anúncios</h2><p>Diagnóstico operacional sem substituir o gerenciador de anúncios.</p></div><Chip value={media.is_stale ? "DESATUALIZADO" : "ATUALIZADO"} /></div><div className="grid media-grid standalone"><Metric label="Investimento" value={formatMoney(media.spend)} tone="blue" hint={`${formatNumber(media.accounts)} contas`} /><Metric label="Leads" value={formatNumber(media.leads)} tone="green" hint="última referência" /><Metric label="CPL" value={media.cpl == null ? "—" : formatMoney(media.cpl)} tone="yellow" hint="investimento ÷ leads" /><Metric label="CTR" value={media.ctr == null ? "—" : `${formatNumber(media.ctr)}%`} hint="cliques ÷ impressões" /></div><div className={`diagnosis ${media.is_stale ? "warn" : ""}`}><b>Diagnóstico automático</b><p>{diagnosis}</p><small>Referência: {text(media.latest_date)} · atualiza quando uma nova carga entrar</small></div>{mediaClients.length > 0 && <section className="card section"><div className="section-title">Clientes com contexto de mídia</div><div className="client-pills">{mediaClients.map((client) => <button key={client.client_id} onClick={() => openClient(client.client_id)}>{text(client.display_name)} <Chip value={client.priority} /></button>)}</div></section>}</section>;
 }
 
-function AlertCenter({ alerts, clients, openClient }: { alerts: Row[]; clients: Row[]; openClient: (id: string) => void }) {
+function AlertCenter({ alerts, clients, profile, token, canEscalate, openClient, openWork }: { alerts: Row[]; clients: Row[]; profile: Row; token: string; canEscalate: boolean; openClient: (id: string) => void; openWork: (id: string) => void }) {
   const clientById = new Map(clients.map((client) => [client.client_id, client]));
-  return <section className="workspace"><div className="workspace-head"><div><h2>Central de alertas</h2><p>Sinais agrupados para investigação; ações corretivas seguem no ClickUp.</p></div><span className="counter">{alerts.length} abertos</span></div><section className="card alert-list">{alerts.map((alert) => { const client = clientById.get(alert.client_id); return <button key={alert.id} onClick={() => client && openClient(client.client_id)} disabled={!client}><Chip value={alert.severity} /><div><strong>{text(alert.title)}</strong><p>{text(alert.description)}</p><small>{client ? text(client.display_name) : "Alerta geral"} · aberto em {formatDate(alert.first_detected_at)}</small></div><span className="arrow">→</span></button>; })}{!alerts.length && <div className="empty">Nenhum alerta aberto.</div>}</section></section>;
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [busy, setBusy] = useState("");
+  const [message, setMessage] = useState<Record<string, Row>>({});
+  const [snooze, setSnooze] = useState<Record<string, string>>({});
+
+  async function act(alert: Row, action: "CS" | "DESIGN" | "OPS" | "CLICKUP" | "ANALYZED" | "SNOOZE" | "FALSE") {
+    const client = clientById.get(alert.client_id);
+    const target = action === "CS" ? { role: "CS", person: client?.cs_owner, type: "ESCALATION" }
+      : action === "DESIGN" ? { role: "DESIGN", person: client?.designer_owner, type: "CREATIVE_REQUEST" }
+      : action === "OPS" ? { role: "MGMT", person: "Adler Furtado", type: "TECHNICAL" }
+      : action === "CLICKUP" ? { role: profile.role || "GT", person: profile.person, type: "CLICKUP" }
+      : { role: profile.role || "GT", person: profile.person, type: "GENERAL" };
+    const titlePrefix = action === "CS" ? "Cliente/atendimento" : action === "DESIGN" ? "Solicitação criativa" : action === "OPS" ? "Problema técnico" : action === "CLICKUP" ? "Ação no ClickUp" : action === "FALSE" ? "Falso alerta" : action === "SNOOZE" ? "Alerta adiado" : "Alerta analisado";
+    setBusy(`${alert.id}:${action}`); setMessage((current) => ({ ...current, [String(alert.id)]: {} }));
+    try {
+      const due = action === "SNOOZE" ? (snooze[String(alert.id)] ? new Date(`${snooze[String(alert.id)]}T12:00:00`).toISOString() : new Date(Date.now() + 86400000).toISOString()) : null;
+      const created = await apiPost("work-item-create", token, {
+        client_id: alert.client_id || null,
+        type: target.type,
+        priority: ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(alert.severity) ? alert.severity : "MEDIUM",
+        title: `${titlePrefix}: ${text(alert.title)}`,
+        description: `${text(alert.description)}\n\nOrigem: alerta ${text(alert.id)}`,
+        source: "operational_alert",
+        source_id: String(alert.id),
+        target_role: target.role,
+        target_person: target.person || null,
+        due_at: due,
+        create_clickup: action === "CLICKUP",
+        metadata: { alert_id: alert.id, alert_type: alert.alert_type || null, original_severity: alert.severity },
+      });
+      if (["ANALYZED", "SNOOZE", "FALSE"].includes(action)) {
+        await apiPost("work-item-update", token, { id: created.item.id, status: action === "ANALYZED" ? "COMPLETED" : action === "FALSE" ? "DISMISSED" : "SNOOZED", resolution: action === "ANALYZED" ? "Alerta analisado no dashboard." : action === "FALSE" ? "Marcado como falso alerta." : "Adiado para nova análise.", snoozed_until: due });
+      }
+      setMessage((current) => ({ ...current, [String(alert.id)]: { ok: true, id: created.item.id, clickup: created.clickup, text: action === "CLICKUP" ? "Tarefa criada no ClickUp e vinculada ao dashboard." : action === "ANALYZED" ? "Análise registrada no banco." : action === "FALSE" ? "Falso alerta registrado." : action === "SNOOZE" ? "Alerta adiado e registrado." : `Encaminhado para ${target.person || target.role}.` } }));
+    } catch (caught) {
+      setMessage((current) => ({ ...current, [String(alert.id)]: { error: true, text: caught instanceof Error ? caught.message : "Não foi possível registrar a ação." } }));
+    } finally { setBusy(""); }
+  }
+
+  return <section className="workspace"><div className="workspace-head"><div><h2>Central de alertas</h2><p>Investigue, encaminhe ao responsável ou transforme o sinal em tarefa rastreável.</p></div><span className="counter">{alerts.length} abertos</span></div><section className="card alert-list actionable">{alerts.map((alert) => { const client = clientById.get(alert.client_id); const open = expanded === String(alert.id); const feedback = message[String(alert.id)]; return <article className={open ? "open" : ""} key={alert.id}><button className="alert-main" onClick={() => setExpanded(open ? null : String(alert.id))}><Chip value={alert.severity} /><div><strong>{text(alert.title)}</strong><p>{text(alert.description)}</p><small>{client ? text(client.display_name) : "Alerta geral"} · aberto em {formatDate(alert.first_detected_at)}</small></div><span className="arrow">{open ? "−" : "+"}</span></button>{open && <div className="alert-actions-panel">{client && <button className="link-btn" onClick={() => openClient(client.client_id)}>Abrir cliente</button>}{canEscalate && <><div className="alert-quick-actions"><button disabled={Boolean(busy)} onClick={() => act(alert, "CS")}>Encaminhar para CS</button><button disabled={Boolean(busy)} onClick={() => act(alert, "DESIGN")}>Solicitar ao designer</button><button disabled={Boolean(busy)} onClick={() => act(alert, "OPS")}>Problema técnico · Operações</button><button disabled={Boolean(busy)} onClick={() => act(alert, "CLICKUP")}>Criar tarefa no ClickUp</button><button disabled={Boolean(busy)} onClick={() => act(alert, "ANALYZED")}>Registrar como analisado</button><button className="muted" disabled={Boolean(busy)} onClick={() => act(alert, "FALSE")}>Marcar falso alerta</button></div><div className="alert-snooze"><input className="control" type="date" value={snooze[String(alert.id)] || ""} onChange={(event) => setSnooze((current) => ({ ...current, [String(alert.id)]: event.target.value }))} /><button disabled={Boolean(busy)} onClick={() => act(alert, "SNOOZE")}>Adiar até esta data</button></div></>}{feedback?.text && <div className={`alert-feedback${feedback.error ? " error" : " success"}`}><span>{feedback.text}</span>{feedback.ok && feedback.id && <button onClick={() => openWork(String(feedback.id))}>Abrir demanda</button>}{feedback.clickup?.url && <a href={feedback.clickup.url} target="_blank" rel="noreferrer">Abrir ClickUp ↗</a>}</div>}</div>}</article>; })}{!alerts.length && <div className="empty">Nenhum alerta aberto.</div>}</section></section>;
 }
 
 function Health({ name, status, tone }: { name: string; status: string; tone: string }) {
@@ -1327,7 +1429,7 @@ function ProfileMenu({preferences,profile,email,settings,close,signOut,requestAc
     <NoteBox token={token} clients={clients} /><button onClick={settings}>Meu perfil</button><button onClick={settings}>Configurações</button><button onClick={settings}>Preferências</button><button onClick={close}>Notificações</button><button className="muted" onClick={() => signOut()}>Sair</button></div>;
 }
 
-function NotificationCenter({items,close,refresh,openClient,token,pendingRequests,canDecide,decide}:{items:Row[];close:()=>void;refresh:()=>Promise<void>;openClient:(id:string)=>void;token:string;pendingRequests:Row[];canDecide:boolean;decide:(id:string,decision:"APPROVED"|"DENIED")=>Promise<void>}) {
+function NotificationCenter({items,close,refresh,openClient,openWork,token,pendingRequests,canDecide,decide}:{items:Row[];close:()=>void;refresh:()=>Promise<void>;openClient:(id:string)=>void;openWork:(id:string)=>void;token:string;pendingRequests:Row[];canDecide:boolean;decide:(id:string,decision:"APPROVED"|"DENIED")=>Promise<void>}) {
   const dialogRef = useDialogFocus(close);
   const [deciding,setDeciding]=useState<string|null>(null);
   async function read(id?:string){await apiPost("notifications-read",token,id?{id}:{});await refresh();}
@@ -1341,7 +1443,7 @@ function NotificationCenter({items,close,refresh,openClient,token,pendingRequest
     const requestId=item.metadata?.access_request_id?String(item.metadata.access_request_id):null;
     if(canDecide&&requestId&&pendingIds.has(requestId)) return <div className={`notification-action${item.read_at?"":" unread"}`} key={item.id}><Chip value={item.level}/><span><b>{text(item.title)}</b><small>{text(item.description)} · {formatDate(item.occurred_at)}</small></span><span className="access-request-actions"><button disabled={deciding===requestId} onClick={()=>act(requestId,"APPROVED")}>Aprovar</button><button className="muted" disabled={deciding===requestId} onClick={()=>act(requestId,"DENIED")}>Recusar</button></span></div>;
     const conclusao=taskCompletion(item);
-    return <button className={item.read_at?"":"unread"} key={item.id} onClick={()=>{read(item.id);if(item.client_id)openClient(item.client_id);}}><Chip value={item.level}/><span><b>{item.title}</b>{conclusao
+    return <button className={item.read_at?"":"unread"} key={item.id} onClick={()=>{read(item.id);const workId=item.metadata?.work_item_id;if(workId)openWork(String(workId));else if(item.client_id)openClient(item.client_id);}}><Chip value={item.level}/><span><b>{item.title}</b>{conclusao
       ? <><small>{text(conclusao.tarefa)}</small><small className="notification-owner">Concluída por: {conclusao.concluidaPor || "não identificado"}</small><small className="notification-owner">Responsável: {text(conclusao.responsavel)}</small><small>{formatDate(item.occurred_at)}</small></>
       : <small>{text(item.actor ? `${item.actor}: ${item.description}` : item.description)} · {formatDate(item.occurred_at)}</small>}{(item.gestor || item.carteira) && <small className="notification-owner">{text(item.carteira ? `Carteira ${item.carteira}` : (item.gestor ? `Gestor: ${item.gestor}` : ""))}</small>}</span></button>;
   })}{!items.length&&<div className="empty">Nenhuma notificação.</div>}</div></div>;
