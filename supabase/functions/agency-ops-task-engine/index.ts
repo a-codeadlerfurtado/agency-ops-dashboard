@@ -1,8 +1,8 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const ENGINE_VERSION = 8;
-const VALIDATION_VERSION = "grounding-routing-v3";
+const ENGINE_VERSION = 9;
+const VALIDATION_VERSION = "grounding-routing-v3.1";
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), {
   status: s,
   headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
@@ -171,7 +171,9 @@ function tipoCentral(t: any): string {
 }
 
 function tokensDaIntencao(v: unknown): string[] {
-  return tokensSignificativos(v).filter((t) => !TOKENS_ACAO_GENERICOS.has(t));
+  return [...new Set(tokensSignificativos(v)
+    .filter((t) => !TOKENS_ACAO_GENERICOS.has(t))
+    .map((t) => t.length > 4 && t.endsWith("s") ? t.slice(0, -1) : t))];
 }
 
 function jaccard(a: string[], b: string[]): number {
@@ -277,7 +279,7 @@ function descricaoRastreavel(params: {
 async function encontrarDuplicataCentral(ev: any, atual: any): Promise<any | null> {
   if (!ev?.client_id) return null;
   const { data } = await ops.from("work_items")
-    .select("id,title,description,status,metadata,created_at")
+    .select("id,title,status,metadata,created_at")
     .eq("client_id", ev.client_id)
     .in("status", ["OPEN", "IN_PROGRESS", "WAITING", "SNOOZED"])
     .order("created_at", { ascending: false })
@@ -285,7 +287,7 @@ async function encontrarDuplicataCentral(ev: any, atual: any): Promise<any | nul
   for (const row of data ?? []) {
     const rowType = String(row?.metadata?.central_type ?? "ACOMPANHAR");
     if (rowType !== atual.tipoCentral) continue;
-    const candidato = { destino: "CENTRAL", tipoCentral: rowType, titulo: row.title, descricao: row.description };
+    const candidato = { destino: "CENTRAL", tipoCentral: rowType, titulo: row.title, descricao: "" };
     if (duplicataIntraEvento(candidato, atual)) return row;
   }
   return null;
@@ -372,15 +374,16 @@ const SISTEMA = [
   "4. O TITULO e a DESCRICAO nao podem introduzir assunto, objeto, motivo ou qualificacao que nao esteja escrito nas MENSAGENS.",
   "5. Exemplo proibido: mensagem 'poderia dar um retorno?' -> titulo 'dar retorno sobre pagamento'. Se pagamento nao esta na mensagem, o titulo correto e apenas 'dar retorno'.",
   "6. Nunca gere acao humana para manutencao interna do sistema: triagem de grupo, titularidade, vinculo de cliente, rotulo, cadastro, reconciliacao ou classificacao.",
-  "7. Se o assunto ja aparece em tasks_abertas, marque duplicata_provavel=true. Para CENTRAL, tambem evite repetir a mesma intencao de comunicacao dentro do mesmo evento.",
-  "8. area: uma de Gestor de trafego | CS | Designer | Editor de video | IA/Automacao | Gerente operacional | Comercial.",
-  "9. prioridade: Urgente | Alta | Media | Baixa. Campanha de imovel vendido que segue no ar e Urgente.",
-  "10. evidencia deve ser um TRECHO LITERAL copiado das MENSAGENS recebidas neste evento. Nao use texto do dossie como evidencia e nao acrescente palavras ao trecho citado.",
-  "11. Nunca invente fatos, acoes, responsaveis, prazos ou necessidades.",
-  "12. responsavel_sugerido deve conter no maximo UMA pessoa. So escolha quando o dossie ou a propria mensagem indicar claramente o responsavel; se houver varias pessoas possiveis, deixe vazio.",
-  "13. destino deve ser CLICKUP, CENTRAL ou IGNORAR.",
-  "14. Se destino=CENTRAL, tipo_demanda deve ser RESPONDER | COBRAR | SOLICITAR | AVISAR | CONFIRMAR | AGENDAR | APROVAR_ENCAMINHAR | ACOMPANHAR.",
-  "15. Se nao houver uma acao explicitamente pedida ou assumida nas MENSAGENS, responda {\"tasks\":[]}.",
+  "7. Se destino=CLICKUP e a mesma execucao ja aparece em tasks_abertas, marque duplicata_provavel=true. Uma task tecnica aberta no ClickUp NAO elimina uma acao CENTRAL de responder, avisar, cobrar ou acompanhar o cliente sobre aquele assunto.",
+  "8. Para CENTRAL, evite repetir a mesma intencao de comunicacao dentro do mesmo evento; 'dar retorno' e 'trazer retorno' sobre a mesma intencao sao uma unica demanda.",
+  "9. area: uma de Gestor de trafego | CS | Designer | Editor de video | IA/Automacao | Gerente operacional | Comercial.",
+  "10. prioridade: Urgente | Alta | Media | Baixa. Campanha de imovel vendido que segue no ar e Urgente.",
+  "11. evidencia deve ser um TRECHO LITERAL copiado das MENSAGENS recebidas neste evento. Nao use texto do dossie como evidencia e nao acrescente palavras ao trecho citado.",
+  "12. Nunca invente fatos, acoes, responsaveis, prazos ou necessidades.",
+  "13. responsavel_sugerido deve conter no maximo UMA pessoa. So escolha quando o dossie ou a propria mensagem indicar claramente o responsavel; se houver varias pessoas possiveis, deixe vazio.",
+  "14. destino deve ser CLICKUP, CENTRAL ou IGNORAR.",
+  "15. Se destino=CENTRAL, tipo_demanda deve ser RESPONDER | COBRAR | SOLICITAR | AVISAR | CONFIRMAR | AGENDAR | APROVAR_ENCAMINHAR | ACOMPANHAR.",
+  "16. Se nao houver uma acao explicitamente pedida ou assumida nas MENSAGENS, responda {\"tasks\":[]}.",
   "",
   '{"tasks":[{"titulo":"","descricao":"","area":"","responsavel_sugerido":"",',
   '"prioridade":"","prazo_dias":0,"evidencia":"","duplicata_provavel":false,"motivo":"",',
@@ -571,7 +574,7 @@ Deno.serve(async (req) => {
           centralDup = await encontrarDuplicataCentral(ev, atual);
         }
 
-        const duplicataIA = t.duplicata_provavel === true;
+        const duplicataIA = destino === "CLICKUP" && t.duplicata_provavel === true;
         const duplicada = grounded && (intraDup || Boolean(achou) || Boolean(centralDup) || duplicataIA);
         const descartada = !grounded;
         if (grounded && !duplicada) intencoesAceitas.push(atual);
