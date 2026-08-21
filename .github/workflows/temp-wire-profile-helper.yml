@@ -32,3 +32,5 @@ jobs:
           git add app/page.tsx
           git commit -m "fix: wire profile helper into dashboard load"
           git push origin HEAD:chatgpt/wire-profile-helper-20260821
+
+# trigger 2
