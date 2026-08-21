@@ -22,6 +22,12 @@ function errorStatus(message: string) {
   if (message.includes("required") || message.includes("invalid") || message.includes("client_")) return 400;
   return 500;
 }
+function validDate(value: unknown) {
+  const date = String(value ?? "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+  const parsed = new Date(`${date}T12:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -67,31 +73,34 @@ Deno.serve(async (req: Request) => {
   const { data: adminRow } = await ops.from("diary_admin_users").select("user_id").eq("user_id", actorUserId).maybeSingle();
   const isDiaryAdmin = Boolean(adminRow?.user_id);
 
+  // Identidade operacional sempre deriva da sessao autenticada.
+  const { data: pref } = await ops.from("user_preferences")
+    .select("collaborator_person,name")
+    .eq("user_key", actorUserId)
+    .maybeSingle();
+  const actorPerson = pref?.collaborator_person ?? pref?.name ?? null;
+  const { data: roster } = actorPerson
+    ? await ops.from("team_roster").select("person,role").eq("person", actorPerson).eq("is_former", false).maybeSingle()
+    : { data: null } as any;
+  const actorRole = String(roster?.role ?? "").toUpperCase() || null;
+
   // Um JWT valido sozinho nao basta: colaborador comum precisa estar ativo, aprovado
   // e possuir a aba Diario nas permissoes atuais. Adler continua identificado pelo UUID
   // administrativo estavel de diary_admin_users.
   if (viaLogin && !isDiaryAdmin) {
-    const [{ data: pref }, { data: approvals }] = await Promise.all([
-      ops.from("user_preferences").select("collaborator_person,name").eq("user_key", actorUserId).maybeSingle(),
-      ops.from("access_requests").select("kind,status").eq("user_key", actorUserId).eq("kind", "SIGNUP").eq("status", "APPROVED"),
-    ]);
-    const person = pref?.collaborator_person ?? pref?.name ?? null;
-    if (!person || !(approvals ?? []).length) return reply({ error: "forbidden" }, 403);
-    const { data: roster } = await ops.from("team_roster").select("person,role").eq("person", person).eq("is_former", false).maybeSingle();
-    if (!roster) return reply({ error: "forbidden" }, 403);
+    const { data: approvals } = await ops.from("access_requests")
+      .select("kind,status")
+      .eq("user_key", actorUserId)
+      .eq("kind", "SIGNUP")
+      .eq("status", "APPROVED");
+    if (!actorPerson || !(approvals ?? []).length || !roster) return reply({ error: "forbidden" }, 403);
     const { data: allowedViews, error: viewsError } = await ops.rpc("dashboard_allowed_views", { p_person: roster.person, p_role: roster.role });
     if (viewsError || !Array.isArray(allowedViews) || !allowedViews.includes("diary")) return reply({ error: "forbidden" }, 403);
   }
 
   if (req.method === "GET") {
     if (view === "self-performance") {
-      // Nao aceitamos nome de colaborador na URL: a pessoa vem exclusivamente da sessao autenticada.
-      const { data: pref } = await ops.from("user_preferences")
-        .select("collaborator_person,name")
-        .eq("user_key", actorUserId)
-        .maybeSingle();
-      const person = pref?.collaborator_person ?? pref?.name ?? null;
-      if (!person) return reply({ error: "profile_required" }, 403);
+      if (!actorPerson) return reply({ error: "profile_required" }, 403);
 
       const currentYear = Number(new Intl.DateTimeFormat("en-US", {
         timeZone: "America/Sao_Paulo",
@@ -100,7 +109,7 @@ Deno.serve(async (req: Request) => {
       const sinceYear = currentYear - 1;
       const { data: rows, error } = await ops.from("op_perf_daily_activity")
         .select("activity_date,source,events")
-        .eq("person", person)
+        .eq("person", actorPerson)
         .gte("activity_date", `${sinceYear}-01-01`)
         .lte("activity_date", `${currentYear}-12-31`)
         .order("activity_date", { ascending: true });
@@ -121,7 +130,7 @@ Deno.serve(async (req: Request) => {
       }
 
       return reply({
-        person,
+        person: actorPerson,
         activity,
         by_source: bySource,
         years: [...years].sort((a, b) => b - a),
@@ -140,7 +149,33 @@ Deno.serve(async (req: Request) => {
     }
     const { data, error } = await ops.rpc("diary_get", { p_actor: actorUserId, p_scope: scope, p_filters: filters });
     if (error) return reply({ error: "diary_query_failed", detail: error.message }, errorStatus(error.message));
-    return reply(data ?? { adjustments: [], task_log: [], counts: { adjustments: 0, tasks: 0 } });
+
+    let dailyReports: any[] = [];
+    if (actorRole === "DESIGN" || isDiaryAdmin) {
+      if (!(scope === "all" && filters.author_user_id === "UNKNOWN")) {
+        let reportsQuery = ops.from("designer_daily_reports")
+          .select("id,author_user_id,author_name,report_date,report_text,created_at,updated_at")
+          .order("report_date", { ascending: false })
+          .order("updated_at", { ascending: false });
+        if (scope === "mine") reportsQuery = reportsQuery.eq("author_user_id", actorUserId);
+        else if (filters.author_user_id) reportsQuery = reportsQuery.eq("author_user_id", filters.author_user_id);
+        if (filters.since) reportsQuery = reportsQuery.gte("report_date", filters.since);
+        if (filters.until) reportsQuery = reportsQuery.lte("report_date", filters.until);
+        const { data: reportRows, error: reportError } = await reportsQuery.limit(250);
+        if (reportError) return reply({ error: "daily_report_query_failed", detail: reportError.message }, 500);
+        dailyReports = reportRows ?? [];
+      }
+    }
+
+    const base = data && typeof data === "object"
+      ? data as Record<string, any>
+      : { adjustments: [], task_log: [], counts: { adjustments: 0, tasks: 0 } };
+    return reply({
+      ...base,
+      daily_reports: dailyReports,
+      counts: { ...(base.counts ?? {}), reports: dailyReports.length },
+      actor_role: actorRole,
+    });
   }
 
   const body = await req.json().catch(() => ({}));
@@ -162,6 +197,26 @@ Deno.serve(async (req: Request) => {
     const { data, error } = await ops.rpc("diary_create_tasklog", { p_actor: actorUserId, p_payload: body });
     if (error) return reply({ error: "tasklog_create_failed", detail: error.message }, errorStatus(error.message));
     return reply({ ok: true, entry: data });
+  }
+  if (view === "daily-report-save") {
+    if (actorRole !== "DESIGN" || !actorPerson) return reply({ error: "forbidden_designer_only" }, 403);
+    const reportDate = String(body.report_date ?? "").trim();
+    const reportText = String(body.report_text ?? "").trim();
+    if (!validDate(reportDate)) return reply({ error: "invalid_report_date" }, 400);
+    if (!reportText) return reply({ error: "report_text_required" }, 400);
+    if (reportText.length > 20000) return reply({ error: "report_text_too_long", max: 20000 }, 400);
+
+    const { data: report, error } = await ops.from("designer_daily_reports").upsert({
+      author_user_id: actorUserId,
+      author_name: actorPerson,
+      report_date: reportDate,
+      report_text: reportText,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "author_user_id,report_date" })
+      .select("id,author_user_id,author_name,report_date,report_text,created_at,updated_at")
+      .maybeSingle();
+    if (error) return reply({ error: "daily_report_save_failed", detail: error.message }, 500);
+    return reply({ ok: true, report });
   }
   return reply({ error: "unknown_action" }, 404);
 });
