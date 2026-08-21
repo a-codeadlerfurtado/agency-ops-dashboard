@@ -84,6 +84,51 @@ Deno.serve(async (req: Request) => {
   }
 
   if (req.method === "GET") {
+    if (view === "self-performance") {
+      // Nao aceitamos nome de colaborador na URL: a pessoa vem exclusivamente da sessao autenticada.
+      const { data: pref } = await ops.from("user_preferences")
+        .select("collaborator_person,name")
+        .eq("user_key", actorUserId)
+        .maybeSingle();
+      const person = pref?.collaborator_person ?? pref?.name ?? null;
+      if (!person) return reply({ error: "profile_required" }, 403);
+
+      const currentYear = Number(new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Sao_Paulo",
+        year: "numeric",
+      }).format(new Date()));
+      const sinceYear = currentYear - 1;
+      const { data: rows, error } = await ops.from("op_perf_daily_activity")
+        .select("activity_date,source,events")
+        .eq("person", person)
+        .gte("activity_date", `${sinceYear}-01-01`)
+        .lte("activity_date", `${currentYear}-12-31`)
+        .order("activity_date", { ascending: true });
+      if (error) return reply({ error: "performance_query_failed", detail: error.message }, 500);
+
+      const activity: Record<string, number> = {};
+      const bySource: Record<string, number> = {};
+      const years = new Set<number>([currentYear]);
+      for (const row of rows ?? []) {
+        const day = String(row.activity_date ?? "").slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+        const events = Number(row.events ?? 0);
+        activity[day] = (activity[day] ?? 0) + events;
+        const source = String(row.source ?? "other");
+        bySource[source] = (bySource[source] ?? 0) + events;
+        const year = Number(day.slice(0, 4));
+        if (Number.isFinite(year)) years.add(year);
+      }
+
+      return reply({
+        person,
+        activity,
+        by_source: bySource,
+        years: [...years].sort((a, b) => b - a),
+        generated_at: new Date().toISOString(),
+      });
+    }
+
     if (view !== "data") return reply({ error: "unknown_view" }, 404);
     const scope = url.searchParams.get("scope") === "all" ? "all" : "mine";
     if (scope === "all" && !isDiaryAdmin) return reply({ error: "forbidden" }, 403);
