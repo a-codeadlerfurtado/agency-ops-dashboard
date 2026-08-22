@@ -2,6 +2,7 @@ import type { Viewport } from "next";
 import "./globals.css";
 import "./mobile.css";
 import "./dashboard-enhancements.css";
+import "./onboarding-legacy.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
