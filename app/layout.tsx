@@ -9,6 +9,7 @@ import CampaignNotesBridge from "./campaign-notes-bridge";
 import OnboardingNavBridge from "./onboarding-nav-bridge";
 import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OnboardingRoleRouter from "./onboarding-role-router";
+import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
@@ -39,6 +40,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       </head>
       <body>
         {children}
+        <AIHeadRouter />
         <CampaignsNavBridge />
         <CampaignNotesBridge />
         <OnboardingNavBridge />
