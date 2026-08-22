@@ -112,6 +112,7 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
 
   if (!env.AI) return json({ ok: false, error: "workers_ai_not_configured" }, 503);
 
+  const totalStarted = Date.now();
   const preparedResponse = await edgeCall(request, "prepare-chat", body);
   const prepared = await preparedResponse.json().catch(() => null) as any;
   if (!preparedResponse.ok || !prepared?.ok) {
@@ -129,14 +130,17 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
   const started = Date.now();
   let result: any;
   try {
+    const answerBudget = Math.max(600, Math.min(1600, Number(prepared.answer_budget || 1000)));
     result = await env.AI.run(AI_MODEL, {
       messages,
-      max_tokens: 2200,
+      max_tokens: answerBudget,
+      temperature: 0.2,
     });
   } catch (error) {
     return json({ ok: false, error: "workers_ai_failed", detail: error instanceof Error ? error.message : String(error) }, 502);
   }
 
+  const modelLatency = Date.now() - started;
   const answer = aiText(result);
   if (!answer) return json({ ok: false, error: "empty_ai_answer" }, 502);
 
@@ -147,9 +151,14 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
     answer,
     original_message: String(body.message || ""),
     model: AI_MODEL,
-    latency_ms: Date.now() - started,
+    latency_ms: modelLatency,
     input_tokens: Number(usage.prompt_tokens || usage.input_tokens || 0) || null,
     output_tokens: Number(usage.completion_tokens || usage.output_tokens || 0) || null,
+    context_sources: prepared.context_sources || [],
+    context_client: prepared.context_client || null,
+    context_bytes: prepared.context_bytes || null,
+    prepare_ms: prepared.prepare_ms || null,
+    intents: prepared.intents || [],
   });
   const completed = await completionResponse.json().catch(() => null) as any;
   if (!completionResponse.ok || !completed?.ok) {
@@ -163,6 +172,14 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
     conversation: completed.conversation,
     source: "workers_ai",
     provider_error: null,
+    context_sources: prepared.context_sources || [],
+    context_client: prepared.context_client || null,
+    timing: {
+      prepare_ms: Number(prepared.prepare_ms || 0) || null,
+      model_ms: modelLatency,
+      total_ms: Date.now() - totalStarted,
+      context_bytes: Number(prepared.context_bytes || 0) || null,
+    },
   });
 }
 
