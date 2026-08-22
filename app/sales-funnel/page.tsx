@@ -154,7 +154,7 @@ export default function SalesFunnelPage() {
     sales_agency: sum.sales_agency + Number(row.sales_agency || 0), sales_third_party: sum.sales_third_party + Number(row.sales_third_party || 0),
   }), { leads: 0, conversations: 0, visits_scheduled: 0, visits_completed: 0, proposals: 0, documents: 0, sales: 0, sales_agency: 0, sales_third_party: 0 }), [filteredClients]);
 
-  const commercialRanking = useMemo(() => {
+  const commercialRanking = useMemo<Row[]>(() => {
     const map = new Map<string, Row>();
     for (const row of reports) {
       if (clientFilter !== "ALL" && String(row.client_id) !== clientFilter) continue;
@@ -162,13 +162,13 @@ export default function SalesFunnelPage() {
       const item = map.get(key) || { reporter: key, clients: new Set<string>(), reports: 0, leads: 0, calls: 0, answered: 0, conversations: 0, visits_scheduled: 0, visits_completed: 0, proposals: 0 };
       item.clients.add(text(row.client_name)); item.reports += 1; item.leads += Number(row.leads_received || 0); item.calls += Number(row.calls_made || 0); item.answered += Number(row.calls_answered || 0); item.conversations += Number(row.conversations || 0); item.visits_scheduled += Number(row.visits_scheduled || 0); item.visits_completed += Number(row.visits_completed || 0); item.proposals += Number(row.proposals || 0); map.set(key, item);
     }
-    return [...map.values()].map((row) => ({ ...row, clients: [...row.clients].join(", ") })).sort((a, b) => b.visits_completed - a.visits_completed || b.proposals - a.proposals || b.visits_scheduled - a.visits_scheduled || b.leads - a.leads);
+    return [...map.values()].map((row): Row => ({ ...row, clients: [...(row.clients as Set<string>)].join(", ") })).sort((a: Row, b: Row) => b.visits_completed - a.visits_completed || b.proposals - a.proposals || b.visits_scheduled - a.visits_scheduled || b.leads - a.leads);
   }, [reports, clientFilter]);
 
   const champions = useMemo(() => filteredClients.filter((row) => row.sales > 0).sort((a, b) => b.sales - a.sales || b.sales_agency - a.sales_agency).slice(0, 10), [filteredClients]);
-  const recentEvidence = useMemo(() => [...evidence.map((row) => ({ ...row, kind: stageLabel(row.stage) })), ...sales.map((row) => ({ ...row, kind: row.attribution === "THIRD_PARTY" ? "Venda por terceiro" : "Venda" }))]
-    .filter((row) => clientFilter === "ALL" || String(row.client_id) === clientFilter)
-    .sort((a, b) => new Date(String(b.event_at)).getTime() - new Date(String(a.event_at)).getTime()).slice(0, 50), [evidence, sales, clientFilter]);
+  const recentEvidence = useMemo<Row[]>(() => ([...evidence.map((row) => ({ ...row, kind: stageLabel(row.stage) })), ...sales.map((row) => ({ ...row, kind: row.attribution === "THIRD_PARTY" ? "Venda por terceiro" : "Venda" }))] as Row[])
+    .filter((row: Row) => clientFilter === "ALL" || String(row.client_id) === clientFilter)
+    .sort((a: Row, b: Row) => new Date(String(b.event_at)).getTime() - new Date(String(a.event_at)).getTime()).slice(0, 50), [evidence, sales, clientFilter]);
 
   if (!authReady || !session) return <main className="funnel-loading">Carregando…</main>;
 
