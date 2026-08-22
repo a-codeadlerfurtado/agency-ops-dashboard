@@ -13,6 +13,7 @@ import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
 import LearningShortcut from "./learning-shortcut";
 import SalesFunnelShortcut from "./sales-funnel-shortcut";
+import FridayReportShortcut from "./friday-report-shortcut";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
 
 export const viewport: Viewport = {
@@ -46,6 +47,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <WeekendBalanceAlert />
         <OpsQuestionWidget />
         <OpsQuestionBrand />
+        <FridayReportShortcut />
         <SalesFunnelShortcut />
         <LearningShortcut />
       </body>
