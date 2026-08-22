@@ -9,13 +9,12 @@ import CampaignNotesBridge from "./campaign-notes-bridge";
 import OnboardingNavBridge from "./onboarding-nav-bridge";
 import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OnboardingRoleRouter from "./onboarding-role-router";
+import CommercialNavigationBridge from "./commercial-navigation-bridge";
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
 import LearningShortcut from "./learning-shortcut";
-import SalesFunnelShortcut from "./sales-funnel-shortcut";
-import FridayReportShortcut from "./friday-report-shortcut";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
 
 export const viewport: Viewport = {
@@ -46,13 +45,12 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OnboardingNavBridge />
         <OnboardingAssignmentBridge />
         <OnboardingRoleRouter />
+        <CommercialNavigationBridge />
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
         <WeekendBalanceAlert />
         <OpsQuestionWidget />
         <OpsQuestionBrand />
-        <FridayReportShortcut />
-        <SalesFunnelShortcut />
         <LearningShortcut />
       </body>
     </html>
