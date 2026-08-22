@@ -209,9 +209,9 @@ export default function DailyGreeting() {
         {hasOpeningAudio && (
           <div style={{ border: "1px solid rgba(82,172,225,.18)", background: "rgba(15,51,73,.42)", borderRadius: 12, padding: "11px 13px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div style={{ display: "grid", gap: 2 }}>
-              <b style={{ color: "#ccecff", fontSize: 11.5 }}>Abertura de segunda-feira</b>
+              <b style={{ color: "#ccecff", fontSize: 11.5 }}>Abertura com voz + trilha</b>
               <span style={{ color: "#718fa3", fontSize: 10 }}>
-                {audioLoading ? "Carregando áudio completo…" : audioPlaying ? "Áudio em reprodução · 10s" : audioBlocked ? "Reprodução automática bloqueada ou indisponível." : "Áudio de abertura carregado · 10s"}
+                {audioLoading ? "Carregando áudio completo…" : audioPlaying ? "Áudio em reprodução · ~12s" : audioBlocked ? "Reprodução automática bloqueada ou indisponível." : "Áudio de abertura carregado · ~12s"}
               </span>
             </div>
             {!audioLoading && audioBlocked && (
