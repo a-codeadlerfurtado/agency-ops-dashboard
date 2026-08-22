@@ -21,6 +21,7 @@ export default function DailyGreeting() {
   const [greeting, setGreeting] = useState<Greeting | null>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [audioPlaying, setAudioPlaying] = useState(false);
+  const [audioLoading, setAudioLoading] = useState(false);
   const claimedUser = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -59,40 +60,92 @@ export default function DailyGreeting() {
   }, []);
 
   useEffect(() => {
-    if (!greeting?.is_monday || !greeting.audio_url) return;
-    const audio = new Audio(greeting.audio_url);
-    audio.preload = "auto";
-    audio.volume = 0.9;
-    audioRef.current = audio;
+    if (!greeting?.audio_url) return;
 
-    const onPlay = () => { setAudioPlaying(true); setAudioBlocked(false); };
-    const onPause = () => setAudioPlaying(false);
-    const onEnded = () => setAudioPlaying(false);
-    audio.addEventListener("play", onPlay);
-    audio.addEventListener("pause", onPause);
-    audio.addEventListener("ended", onEnded);
+    let disposed = false;
+    let objectUrl: string | null = null;
+    let audio: HTMLAudioElement | null = null;
+    setAudioLoading(true);
+    setAudioBlocked(false);
 
-    audio.play().catch(() => setAudioBlocked(true));
+    const prepareAndPlay = async () => {
+      try {
+        // O arquivo é baixado por inteiro antes de iniciar. Isso evita áudio picotado
+        // por streaming/range/cache intermediário no Worker/Cloudflare.
+        const response = await fetch(greeting.audio_url as string, {
+          cache: "reload",
+          credentials: "same-origin",
+        });
+        if (!response.ok) throw new Error(`audio_http_${response.status}`);
+        const blob = await response.blob();
+        if (disposed) return;
+
+        objectUrl = URL.createObjectURL(blob);
+        audio = new Audio();
+        audio.preload = "auto";
+        audio.volume = 0.9;
+        audio.src = objectUrl;
+        audioRef.current = audio;
+
+        const onPlay = () => { setAudioPlaying(true); setAudioBlocked(false); };
+        const onPause = () => setAudioPlaying(false);
+        const onEnded = () => setAudioPlaying(false);
+        audio.addEventListener("play", onPlay);
+        audio.addEventListener("pause", onPause);
+        audio.addEventListener("ended", onEnded);
+
+        await new Promise<void>((resolve, reject) => {
+          if (!audio) return reject(new Error("audio_not_created"));
+          const ready = () => { cleanup(); resolve(); };
+          const failed = () => { cleanup(); reject(new Error("audio_decode_failed")); };
+          const cleanup = () => {
+            audio?.removeEventListener("canplaythrough", ready);
+            audio?.removeEventListener("error", failed);
+          };
+          audio.addEventListener("canplaythrough", ready, { once: true });
+          audio.addEventListener("error", failed, { once: true });
+          audio.load();
+          if (audio.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) ready();
+        });
+
+        if (disposed || !audio) return;
+        setAudioLoading(false);
+        audio.currentTime = 0;
+        await audio.play();
+      } catch {
+        if (!disposed) {
+          setAudioLoading(false);
+          setAudioBlocked(true);
+        }
+      }
+    };
+
+    prepareAndPlay();
 
     return () => {
-      audio.pause();
-      audio.removeEventListener("play", onPlay);
-      audio.removeEventListener("pause", onPause);
-      audio.removeEventListener("ended", onEnded);
+      disposed = true;
+      setAudioLoading(false);
+      audio?.pause();
       if (audioRef.current === audio) audioRef.current = null;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [greeting?.date, greeting?.is_monday, greeting?.audio_url]);
+  }, [greeting?.date, greeting?.audio_url]);
 
   if (!greeting) return null;
 
   const monday = greeting.is_monday;
+  const hasOpeningAudio = Boolean(greeting.audio_url);
   const close = () => {
     audioRef.current?.pause();
     setGreeting(null);
   };
   const playOpening = async () => {
     try {
-      await audioRef.current?.play();
+      if (!audioRef.current) return setAudioBlocked(true);
+      if (audioRef.current.ended || audioRef.current.currentTime >= audioRef.current.duration - 0.1) {
+        audioRef.current.currentTime = 0;
+      }
+      await audioRef.current.play();
       setAudioBlocked(false);
     } catch {
       setAudioBlocked(true);
@@ -153,13 +206,15 @@ export default function DailyGreeting() {
           </p>
         </div>
 
-        {monday && (
+        {hasOpeningAudio && (
           <div style={{ border: "1px solid rgba(82,172,225,.18)", background: "rgba(15,51,73,.42)", borderRadius: 12, padding: "11px 13px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div style={{ display: "grid", gap: 2 }}>
               <b style={{ color: "#ccecff", fontSize: 11.5 }}>Abertura de segunda-feira</b>
-              <span style={{ color: "#718fa3", fontSize: 10 }}>{audioPlaying ? "Áudio em reprodução · 10s" : audioBlocked ? "O navegador bloqueou a reprodução automática." : "Áudio de abertura carregado · 10s"}</span>
+              <span style={{ color: "#718fa3", fontSize: 10 }}>
+                {audioLoading ? "Carregando áudio completo…" : audioPlaying ? "Áudio em reprodução · 10s" : audioBlocked ? "Reprodução automática bloqueada ou indisponível." : "Áudio de abertura carregado · 10s"}
+              </span>
             </div>
-            {audioBlocked && (
+            {!audioLoading && audioBlocked && (
               <button
                 type="button"
                 onClick={playOpening}
