@@ -26,7 +26,8 @@ function ensureCanonicalOnboardingOrder() {
   const funnel = workspace?.querySelector<HTMLElement>(".funnel");
   if (!funnel) return;
 
-  const stages = Array.from(funnel.querySelectorAll<HTMLElement>(":scope > .stage"));
+  // Placeholder e' controlado por este bridge; nunca entra na leitura das etapas reais.
+  const stages = Array.from(funnel.querySelectorAll<HTMLElement>(":scope > .stage:not(.onboarding-form-placeholder)"));
   if (!stages.length) return;
 
   let hasForm = false;
