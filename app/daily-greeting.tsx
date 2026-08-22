@@ -3,30 +3,20 @@
 import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
-import { GREETING_AUDIO_V5_00 } from "./greeting-audio-v5/part-00";
-import { GREETING_AUDIO_V5_01 } from "./greeting-audio-v5/part-01";
-import { GREETING_AUDIO_V5_02 } from "./greeting-audio-v5/part-02";
-import { GREETING_AUDIO_V5_03 } from "./greeting-audio-v5/part-03";
-import { GREETING_AUDIO_V5_04 } from "./greeting-audio-v5/part-04";
-import { GREETING_AUDIO_V5_05 } from "./greeting-audio-v5/part-05";
-import { GREETING_AUDIO_V5_06 } from "./greeting-audio-v5/part-06";
-import { GREETING_AUDIO_V5_07 } from "./greeting-audio-v5/part-07";
-import { GREETING_AUDIO_V5_08 } from "./greeting-audio-v5/part-08";
-import { GREETING_AUDIO_V5_09 } from "./greeting-audio-v5/part-09";
+import { GREETING_AUDIO_V6_00 } from "./greeting-audio-v6/part-00";
+import { GREETING_AUDIO_V6_01 } from "./greeting-audio-v6/part-01";
+import { GREETING_AUDIO_V6_02 } from "./greeting-audio-v6/part-02";
+import { GREETING_AUDIO_V6_03 } from "./greeting-audio-v6/part-03";
 
 const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-daily-greeting-api`;
-const FULL_GREETING_SECONDS = 22.77;
+const FULL_GREETING_SECONDS = 22.824;
+// Os arquivos foram gravados nesta ordem física: 00=chunk0, 03=chunk1, 02=chunk2, 01=chunk3.
+// Manter esta ordem para reconstruir exatamente o MP3 validado.
 const FULL_GREETING_B64 = [
-  GREETING_AUDIO_V5_00,
-  GREETING_AUDIO_V5_01,
-  GREETING_AUDIO_V5_02,
-  GREETING_AUDIO_V5_03,
-  GREETING_AUDIO_V5_04,
-  GREETING_AUDIO_V5_05,
-  GREETING_AUDIO_V5_06,
-  GREETING_AUDIO_V5_07,
-  GREETING_AUDIO_V5_08,
-  GREETING_AUDIO_V5_09,
+  GREETING_AUDIO_V6_00,
+  GREETING_AUDIO_V6_03,
+  GREETING_AUDIO_V6_02,
+  GREETING_AUDIO_V6_01,
 ].join("");
 
 type Greeting = {
@@ -43,7 +33,7 @@ function buildAudioUrl() {
   const binary = atob(FULL_GREETING_B64);
   const bytes = new Uint8Array(binary.length);
   for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  const blob = new Blob([bytes], { type: "audio/ogg; codecs=opus" });
+  const blob = new Blob([bytes], { type: "audio/mpeg" });
   return URL.createObjectURL(blob);
 }
 
@@ -208,7 +198,7 @@ export default function DailyGreeting() {
 
     if (audio.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) void tryAutoPlay();
     fallbackTimer = setTimeout(() => {
-      if (!disposed && !audioPlaying && audio.paused && !audioFinished) {
+      if (!disposed && audio.paused && !audio.ended) {
         setAudioLoading(false);
         setAudioBlocked(true);
       }
