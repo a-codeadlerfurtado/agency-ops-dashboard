@@ -3,6 +3,7 @@ import "./globals.css";
 import "./mobile.css";
 import "./dashboard-enhancements.css";
 import "./onboarding-legacy.css";
+import "./motion-system.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -18,6 +19,7 @@ import WeekendBalanceAlert from "./weekend-balance-alert";
 import LeadQualityAlert from "./lead-quality-alert";
 import LearningShortcut from "./learning-shortcut";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
+import MotionSystem from "./motion-system";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -41,6 +43,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       </head>
       <body>
         {children}
+        <MotionSystem />
         <AIHeadRouter />
         <CampaignsNavBridge />
         <CampaignNotesBridge />
