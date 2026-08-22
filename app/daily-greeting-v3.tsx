@@ -5,8 +5,6 @@ import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
 
 const GREETING_API = `${SUPABASE_URL}/functions/v1/agency-ops-daily-greeting-api`;
-const AUDIO_URL = "/api/greeting-audio?v=20260822-cinematic-armed-v7";
-const FALLBACK_DURATION = 22.824;
 
 type Greeting = {
   show: boolean;
@@ -17,6 +15,12 @@ type Greeting = {
 };
 
 type OpeningPhase = "standby" | "boot" | "core" | "greet" | "finalize" | "ready";
+
+type ProgressDetail = {
+  progress?: number;
+  currentTime?: number;
+  duration?: number;
+};
 
 function CinematicCore({ speaking, finished, progress, phase }: { speaking: boolean; finished: boolean; progress: number; phase: OpeningPhase }) {
   const ringProgress = Math.max(2, Math.round(progress * 100));
@@ -70,87 +74,49 @@ export default function DailyGreetingV3() {
   const [finished, setFinished] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
-
   const claimedUser = useRef<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const armedRef = useRef(false);
-  const progressTimerRef = useRef<number | null>(null);
-  const endingNaturallyRef = useRef(false);
-
-  const stopProgressTimer = () => {
-    if (progressTimerRef.current !== null) {
-      window.clearInterval(progressTimerRef.current);
-      progressTimerRef.current = null;
-    }
-  };
-
-  const markEnded = () => {
-    stopProgressTimer();
-    setPlaying(false);
-    if (endingNaturallyRef.current) {
-      setProgress(1);
-      setFinished(true);
-    }
-  };
-
-  const beginProgress = (audio: HTMLAudioElement) => {
-    endingNaturallyRef.current = true;
-    setLoading(false);
-    setError(null);
-    setFinished(false);
-    setProgress(0);
-    setPlaying(true);
-    stopProgressTimer();
-    progressTimerRef.current = window.setInterval(() => {
-      const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : FALLBACK_DURATION;
-      setProgress(Math.min(1, Math.max(0, audio.currentTime) / duration));
-    }, 100);
-  };
 
   useEffect(() => {
-    const audio = new Audio(AUDIO_URL);
-    audio.preload = "auto";
-    audio.playsInline = true;
-    audio.loop = true;
-    audio.muted = true;
-    audio.volume = 1;
-    audioRef.current = audio;
-
-    const primeAudio = () => {
-      if (armedRef.current && !audio.paused) return;
-      try {
-        audio.loop = true;
-        audio.muted = true;
-        audio.volume = 1;
-        if (audio.ended || audio.currentTime > FALLBACK_DURATION - 1) audio.currentTime = 0;
-        const promise = audio.play();
-        if (promise) {
-          void promise.then(() => { armedRef.current = true; }).catch(() => { armedRef.current = false; });
-        } else {
-          armedRef.current = true;
-        }
-      } catch {
-        armedRef.current = false;
-      }
+    const onStart = () => {
+      setLoading(false);
+      setReady(true);
+      setError(null);
+      setFinished(false);
+      setProgress(0);
+      setPlaying(true);
+    };
+    const onProgress = (event: Event) => {
+      const detail = (event as CustomEvent<ProgressDetail>).detail || {};
+      const next = Math.min(1, Math.max(0, Number(detail.progress || 0)));
+      setLoading(false);
+      setReady(true);
+      setProgress(next);
+      if (next < 1) setPlaying(true);
+    };
+    const onEnded = () => {
+      setLoading(false);
+      setReady(true);
+      setPlaying(false);
+      setProgress(1);
+      setFinished(true);
+      setError(null);
+    };
+    const onError = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail || {};
+      setLoading(false);
+      setPlaying(false);
+      setError(detail.message || "Falha ao iniciar a voz automaticamente.");
     };
 
-    audio.onloadedmetadata = () => setReady(true);
-    audio.oncanplay = () => setReady(true);
-    document.addEventListener("pointerdown", primeAudio, true);
-    document.addEventListener("keydown", primeAudio, true);
-    document.addEventListener("touchstart", primeAudio, { capture: true, passive: true });
-
+    window.addEventListener("opsq:greeting-audio-start", onStart);
+    window.addEventListener("opsq:greeting-audio-progress", onProgress);
+    window.addEventListener("opsq:greeting-audio-ended", onEnded);
+    window.addEventListener("opsq:greeting-audio-error", onError);
     return () => {
-      document.removeEventListener("pointerdown", primeAudio, true);
-      document.removeEventListener("keydown", primeAudio, true);
-      document.removeEventListener("touchstart", primeAudio, true);
-      stopProgressTimer();
-      audio.pause();
-      audio.onended = null;
-      audio.onloadedmetadata = null;
-      audio.oncanplay = null;
-      audio.src = "";
-      audioRef.current = null;
+      window.removeEventListener("opsq:greeting-audio-start", onStart);
+      window.removeEventListener("opsq:greeting-audio-progress", onProgress);
+      window.removeEventListener("opsq:greeting-audio-ended", onEnded);
+      window.removeEventListener("opsq:greeting-audio-error", onError);
     };
   }, []);
 
@@ -167,29 +133,30 @@ export default function DailyGreetingV3() {
           cache: "no-store",
         });
         const body = await response.json().catch(() => null);
-        if (!cancelled && response.ok && body?.ok && body?.show) setGreeting(body as Greeting);
+        if (!cancelled && response.ok && body?.ok && body?.show) {
+          setProgress(0);
+          setFinished(false);
+          setPlaying(false);
+          setError(null);
+          setLoading(Boolean(body.is_monday));
+          setReady(!body.is_monday);
+          setGreeting(body as Greeting);
+        }
       } catch {}
     }
 
-    supabase.auth.getSession().then(({ data }) => claim(data.session));
+    supabase.auth.getSession().then(({ data }) => void claim(data.session));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session) {
         claimedUser.current = null;
-        armedRef.current = false;
-        endingNaturallyRef.current = false;
-        stopProgressTimer();
-        const audio = audioRef.current;
-        if (audio) {
-          audio.pause();
-          audio.loop = true;
-          audio.muted = true;
-          try { audio.currentTime = 0; } catch {}
-        }
         setGreeting(null);
+        setLoading(false);
+        setReady(false);
         setPlaying(false);
         setFinished(false);
         setProgress(0);
         setError(null);
+        return;
       }
       void claim(session);
     });
@@ -199,43 +166,6 @@ export default function DailyGreetingV3() {
       subscription.unsubscribe();
     };
   }, []);
-
-  const startPlayback = async (fromClick: boolean) => {
-    const audio = audioRef.current;
-    if (!audio || playing || loading) return;
-    setLoading(true);
-    setError(null);
-    endingNaturallyRef.current = false;
-
-    try {
-      audio.loop = false;
-      audio.muted = false;
-      audio.volume = 1;
-      try { audio.currentTime = 0; } catch {}
-      audio.onended = markEnded;
-
-      if (audio.paused) {
-        const promise = audio.play();
-        if (promise) await promise;
-      }
-
-      armedRef.current = true;
-      setReady(true);
-      beginProgress(audio);
-    } catch (value) {
-      setLoading(false);
-      setPlaying(false);
-      setError(fromClick
-        ? (value instanceof Error ? value.message : "Não foi possível iniciar a voz.")
-        : "Voz pronta. Clique em Ativar voz se o navegador tiver bloqueado o som.");
-    }
-  };
-
-  useEffect(() => {
-    if (!greeting?.is_monday) return;
-    void startPlayback(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [greeting?.date, greeting?.is_monday]);
 
   if (!greeting) return null;
 
@@ -247,17 +177,13 @@ export default function DailyGreetingV3() {
 
   const close = () => {
     if (!canEnter) return;
-    endingNaturallyRef.current = false;
-    stopProgressTimer();
-    const audio = audioRef.current;
-    if (audio) audio.pause();
     setGreeting(null);
   };
 
   const status = finished
     ? "TRANSMISSÃO CONCLUÍDA"
     : loading
-      ? "PREPARANDO VOICE CORE"
+      ? "CONECTANDO VOICE CORE"
       : playing
         ? phase === "boot" ? "INICIALIZANDO SISTEMA" : phase === "core" ? "VOICE CORE ONLINE" : phase === "greet" ? "TRANSMISSÃO ATIVA" : "FINALIZANDO SEQUÊNCIA"
         : error
@@ -289,8 +215,8 @@ export default function DailyGreetingV3() {
         .opsq-core-shell{position:relative;width:166px;height:166px;border-radius:50%;z-index:4;background:rgba(2,13,21,.7);box-shadow:0 0 34px rgba(50,161,211,.14),inset 0 0 34px rgba(46,137,181,.09);animation:opsqCoreBreathe 3.2s ease-in-out infinite}.opsq-intelligence-mesh{position:absolute;inset:0;width:100%;height:100%}.opsq-mesh-nodes circle{transform-box:fill-box;transform-origin:center;animation:opsqNode 1.9s ease-in-out infinite}.opsq-core-scan{position:absolute;z-index:5;left:20%;right:20%;top:50%;height:1px;background:linear-gradient(90deg,transparent,#71d6ff,transparent);box-shadow:0 0 8px rgba(92,210,255,.35)}.opsq-core-eye{position:absolute;z-index:6;left:50%;top:50%;width:50px;height:9px;transform:translate(-50%,-50%);display:flex;gap:7px;justify-content:center;opacity:.15}.opsq-core-eye span{width:17px;height:2px;background:linear-gradient(90deg,transparent,#89e5ff,transparent);box-shadow:0 0 10px rgba(102,218,255,.8)}
         .opsq-pulse{position:absolute;left:50%;top:50%;width:175px;height:175px;border:1px solid rgba(91,203,246,.35);border-radius:50%;transform:translate(-50%,-50%);opacity:0}.is-speaking .opsq-pulse{animation:opsqPulse 2.15s ease-out infinite}.is-speaking .pulse-b{animation-delay:.7s}.is-speaking .pulse-c{animation-delay:1.4s}.phase-core .opsq-core-eye,.phase-greet .opsq-core-eye{opacity:.9}.is-finished .opsq-core-shell{box-shadow:0 0 36px rgba(70,190,139,.14),inset 0 0 30px rgba(50,152,115,.08)}
         .opsq-core-caption{position:absolute;top:50%;transform:translateY(-50%);display:grid;gap:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.opsq-core-caption.left{right:calc(100% - 12px);text-align:right}.opsq-core-caption.right{left:calc(100% - 12px)}.opsq-core-caption small{font-size:7px;letter-spacing:.18em;color:#456e83}.opsq-core-caption strong{font-size:9px;letter-spacing:.13em;color:#7fc8e9}
-        .opsq-opening-foot{display:grid;gap:13px}.opsq-transmission{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.opsq-transmission-label{display:grid;gap:2px;min-width:145px}.opsq-transmission-label b{font-size:9px;letter-spacing:.14em;color:#77c9ef}.opsq-transmission-label span{font-size:8px;letter-spacing:.08em;color:#4e7285}.opsq-transmission-track{height:2px;background:rgba(95,158,190,.12);overflow:hidden}.opsq-transmission-track>i{display:block;height:100%;background:linear-gradient(90deg,#2184bd,#6bd8ff);box-shadow:0 0 12px rgba(75,196,246,.35);transition:width .1s linear}.opsq-transmission-percent{font-size:9px;color:#699bb3}.opsq-action-row{height:45px;display:flex;justify-content:flex-end;align-items:center}.opsq-play-btn,.opsq-enter-btn{border-radius:10px;padding:10px 16px;font-size:11px;font-weight:850;cursor:pointer}.opsq-play-btn{border:1px solid rgba(94,187,242,.45);background:#0b314a;color:#e8f7ff}.opsq-enter-btn{border:1px solid rgba(93,190,145,.55);background:linear-gradient(180deg,#176144,#124b36);color:#f0fff7;min-width:190px}.opsq-wait-state{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:8px;letter-spacing:.11em;color:#476a7c}.opsq-status-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:#4aa9d4;box-shadow:0 0 9px rgba(67,181,228,.7);margin-right:7px}.phase-ready .opsq-status-dot{background:#63c998}
-        @media(max-width:700px){.opsq-opening-shell{min-height:620px;padding:22px 19px}.opsq-cinematic-core{width:270px;height:285px}.opsq-core-shell{width:150px;height:150px}.opsq-progress-orbit{width:208px;height:208px}.opsq-orbit-a{width:226px;height:226px}.opsq-orbit-b{width:245px;height:184px}.opsq-orbit-c{width:174px;height:250px}.opsq-core-caption{display:none}.opsq-opening-head span{display:none}.opsq-stage-copy h1{font-size:40px}.opsq-transmission{grid-template-columns:1fr auto}.opsq-transmission-label{grid-column:1/-1}.opsq-action-row{justify-content:stretch}.opsq-play-btn,.opsq-enter-btn{width:100%}}
+        .opsq-opening-foot{display:grid;gap:13px}.opsq-transmission{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.opsq-transmission-label{display:grid;gap:2px;min-width:145px}.opsq-transmission-label b{font-size:9px;letter-spacing:.14em;color:#77c9ef}.opsq-transmission-label span{font-size:8px;letter-spacing:.08em;color:#4e7285}.opsq-transmission-track{height:2px;background:rgba(95,158,190,.12);overflow:hidden}.opsq-transmission-track>i{display:block;height:100%;background:linear-gradient(90deg,#2184bd,#6bd8ff);box-shadow:0 0 12px rgba(75,196,246,.35);transition:width .1s linear}.opsq-transmission-percent{font-size:9px;color:#699bb3}.opsq-action-row{height:45px;display:flex;justify-content:flex-end;align-items:center}.opsq-enter-btn{border:1px solid rgba(93,190,145,.55);background:linear-gradient(180deg,#176144,#124b36);color:#f0fff7;min-width:190px;border-radius:10px;padding:10px 16px;font-size:11px;font-weight:850;cursor:pointer}.opsq-wait-state{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:8px;letter-spacing:.11em;color:#476a7c}.opsq-status-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:#4aa9d4;box-shadow:0 0 9px rgba(67,181,228,.7);margin-right:7px}.phase-ready .opsq-status-dot{background:#63c998}
+        @media(max-width:700px){.opsq-opening-shell{min-height:620px;padding:22px 19px}.opsq-cinematic-core{width:270px;height:285px}.opsq-core-shell{width:150px;height:150px}.opsq-progress-orbit{width:208px;height:208px}.opsq-orbit-a{width:226px;height:226px}.opsq-orbit-b{width:245px;height:184px}.opsq-orbit-c{width:174px;height:250px}.opsq-core-caption{display:none}.opsq-opening-head span{display:none}.opsq-stage-copy h1{font-size:40px}.opsq-transmission{grid-template-columns:1fr auto}.opsq-transmission-label{grid-column:1/-1}.opsq-action-row{justify-content:stretch}.opsq-enter-btn{width:100%}}
       `}</style>
 
       <section role="dialog" aria-modal="true" aria-label="Abertura do OpsQuestion" className="opsq-opening-shell">
@@ -312,7 +238,7 @@ export default function DailyGreetingV3() {
             ) : phase === "core" ? (
               <div className="opsq-system-copy"><span>INTELLIGENCE MESH</span><strong>VOICE CORE ONLINE</strong></div>
             ) : (
-              <div className="opsq-system-copy"><span>OPSQUESTION</span><strong>{playing ? "INITIALIZING" : ready ? "AWAITING TRANSMISSION" : "BOOT SEQUENCE"}</strong></div>
+              <div className="opsq-system-copy"><span>OPSQUESTION</span><strong>{playing ? "INITIALIZING" : "BOOT SEQUENCE"}</strong></div>
             )}
           </div>
         </main>
@@ -322,7 +248,7 @@ export default function DailyGreetingV3() {
             <div className="opsq-transmission">
               <div className="opsq-transmission-label">
                 <b><span className="opsq-status-dot" />{status}</b>
-                <span>{finished ? "OPERAÇÃO ONLINE" : playing ? "VOICE TRANSMISSION IN PROGRESS" : error ? "INTERAÇÃO NECESSÁRIA" : "OPSQUESTION AUDIO ENGINE"}</span>
+                <span>{finished ? "OPERAÇÃO ONLINE" : playing ? "VOICE TRANSMISSION IN PROGRESS" : error ? "FALHA NA INICIALIZAÇÃO AUTOMÁTICA" : "OPSQUESTION AUDIO ENGINE"}</span>
               </div>
               <div className="opsq-transmission-track"><i style={{ width: `${Math.round(progress * 100)}%` }} /></div>
               <div className="opsq-transmission-percent">{String(Math.round(progress * 100)).padStart(2, "0")}%</div>
@@ -330,12 +256,10 @@ export default function DailyGreetingV3() {
           )}
 
           <div className="opsq-action-row">
-            {!finished && !loading && !playing && needsAudio ? (
-              <button className="opsq-play-btn" onClick={() => void startPlayback(true)} autoFocus>▶ Ativar voz</button>
-            ) : canEnter ? (
+            {canEnter ? (
               <button className="opsq-enter-btn" onClick={close} autoFocus>Entrar no dashboard →</button>
             ) : (
-              <span className="opsq-wait-state">SEQUÊNCIA EM EXECUÇÃO · ACESSO LIBERADO AO FINAL</span>
+              <span className="opsq-wait-state">SEQUÊNCIA AUTOMÁTICA EM EXECUÇÃO · NENHUMA AÇÃO NECESSÁRIA</span>
             )}
           </div>
         </footer>
