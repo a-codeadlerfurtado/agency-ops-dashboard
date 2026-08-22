@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { AI_API_BASE, BrandMark, supabase } from "../shared";
+import { AI_API_BASE, BrandMark, authenticatedFetch, supabase } from "../shared";
 import { TabHelp } from "../tab-help";
 import "./ai.css";
 
@@ -26,6 +26,13 @@ type Message = {
   model?: string | null;
   source?: string | null;
   latency_ms?: number | null;
+  metadata?: {
+    context_sources?: string[];
+    context_client?: { client_id?: string; display_name?: string } | null;
+    prepare_ms?: number | null;
+    context_bytes?: number | null;
+    intents?: string[];
+  } | null;
   created_at: string;
 };
 
@@ -40,18 +47,15 @@ type Client = {
 
 type Profile = { userId: string; person: string | null; role: string | null; accessLevel: string };
 
-async function callAI(session: Session, path: string, body: Record<string, unknown> = {}) {
-  const response = await fetch(`${AI_API_BASE}${path}`, {
+async function callAI(_session: Session, path: string, body: Record<string, unknown> = {}) {
+  const response = await authenticatedFetch(`${AI_API_BASE}${path}`, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${session.access_token}`,
-      "content-type": "application/json",
-    },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
     cache: "no-store",
   });
   const result = await response.json().catch(() => null);
-  if (!response.ok || !result?.ok) throw new Error(result?.error || `Falha HTTP ${response.status}`);
+  if (!response.ok || !result?.ok) throw new Error(result?.detail || result?.error || `Falha HTTP ${response.status}`);
   return result;
 }
 
@@ -71,6 +75,36 @@ function timeLabel(value: string) {
 
 function initials(value: string | null | undefined) {
   return String(value || "IA").split(/\s+/).filter(Boolean).map((part) => part[0]).slice(0, 2).join("").toUpperCase();
+}
+
+function sourceLabel(source: string) {
+  const labels: Record<string, string> = {
+    dashboard_client_overview: "Clientes",
+    client_daily_summary: "Resumo diário",
+    client_timeline: "Timeline",
+    campaign_client_latest: "Campanhas",
+    meta_campaign_insights: "Meta Ads",
+    campaign_notes: "Notas de campanha",
+    client_health_board: "Saúde",
+    operational_alerts: "Alertas",
+    work_items: "Central de Trabalho",
+    clickup_tasks: "ClickUp",
+    client_won_events: "Vendas",
+    weekly_commercial_reports: "Comercial",
+    onboarding_sla_board: "Onboarding",
+    gt_onboarding_worklist: "Integração GT",
+    client_finance_controls: "Financeiro",
+    client_contract_status: "Contratos",
+    client_service_overview: "Serviços IA",
+    ai_source_registry: "Agentes / n8n",
+    whatsapp_messages: "WhatsApp",
+    ops_notes: "Notas operacionais",
+    form_responses: "Formulários",
+    notion_briefing_pages: "Briefings",
+    creative_client_rules: "Regras criativas",
+    client_raw_material_uploads: "Materiais",
+  };
+  return labels[source] || source.replaceAll("_", " ");
 }
 
 export default function AIWorkspace() {
@@ -98,13 +132,10 @@ export default function AIWorkspace() {
   }, []);
 
   const loadSidebar = useCallback(async (activeSession: Session) => {
-    const [list, clientList] = await Promise.all([
-      callAI(activeSession, "/conversations/list"),
-      callAI(activeSession, "/clients"),
-    ]);
-    setConversations(list.conversations || []);
-    setClients(clientList.clients || []);
-    setProfile(clientList.profile || list.profile || null);
+    const bootstrap = await callAI(activeSession, "/bootstrap");
+    setConversations(bootstrap.conversations || []);
+    setClients(bootstrap.clients || []);
+    setProfile(bootstrap.profile || null);
   }, []);
 
   useEffect(() => {
@@ -152,8 +183,6 @@ export default function AIWorkspace() {
   }
 
   function newConversation() {
-    // Volta para o contexto Geral. Sem isso a proxima conversa nasce
-    // amarrada ao cliente que estava selecionado na conversa anterior.
     setDraftClientId("");
     setSelectedId(null);
     setMessages([]);
@@ -276,7 +305,7 @@ export default function AIWorkspace() {
       <section className="ai-main">
         <header className="ai-topbar">
           <div className="ai-topbar-left"><button className="ai-icon-button" onClick={() => setSidebarOpen((value) => !value)} aria-label="Alternar histórico">☰</button><div><b>{selected?.title || "Nova conversa"}</b><small>{selected?.model || "IA da agência"}</small></div></div>
-          <div className="ai-context-select"><label>Contexto</label><select value={(selected ? selected.client_id : draftClientId) || ""} onChange={(event) => changeClient(event.target.value)} disabled={sending}><option value="">Geral / sem cliente</option>{clients.map((client) => <option value={client.client_id} key={client.client_id}>{client.display_name} · {client.lifecycle}</option>)}</select></div>
+          <div className="ai-context-select"><label>Contexto</label><select value={(selected ? selected.client_id : draftClientId) || ""} onChange={(event) => changeClient(event.target.value)} disabled={sending}><option value="">Geral / detecta cliente pela pergunta</option>{clients.map((client) => <option value={client.client_id} key={client.client_id}>{client.display_name} · {client.lifecycle}</option>)}</select></div>
           <a className="ai-back" href="/">Central de Operações ↗</a>
         </header>
 
@@ -285,19 +314,23 @@ export default function AIWorkspace() {
             <div className="ai-welcome">
               <div className="ai-welcome-mark">✦</div>
               <h1>Como posso ajudar na operação?</h1>
-              <p>A conversa fica salva no seu perfil. Selecione um cliente para carregar contexto operacional automaticamente ou use o modo geral.</p>
+              <p>A IA consulta o banco conforme a pergunta. Você pode selecionar um cliente ou simplesmente citar o nome dele na mensagem.</p>
               {selectedClient && <div className="ai-context-card"><span>Contexto ativo</span><b>{selectedClient.display_name}</b><small>{selectedClient.lifecycle}{selectedClient.gt_owner ? ` · GT ${selectedClient.gt_owner}` : ""}{selectedClient.cs_owner ? ` · CS ${selectedClient.cs_owner}` : ""}</small></div>}
               <div className="ai-suggestions">
-                {["Quem precisa de atenção hoje?", "Analise o cliente selecionado e liste as próximas ações.", "Quais clientes estão travados no onboarding?", "Resuma os principais riscos operacionais de hoje."].map((suggestion) => <button key={suggestion} onClick={() => { setComposer(suggestion); composerRef.current?.focus(); }}>{suggestion}</button>)}
+                {["Quem precisa de atenção hoje?", "Quantas vendas temos e de quais clientes?", "Quais demandas estão atrasadas no ClickUp?", "Quais clientes estão travados no onboarding?"].map((suggestion) => <button key={suggestion} onClick={() => { setComposer(suggestion); composerRef.current?.focus(); }}>{suggestion}</button>)}
               </div>
             </div>
           ) : (
             <div className="ai-thread">
-              {messages.map((message) => <article key={message.id} className={`ai-message ai-message-${message.role}`}>
-                <div className="ai-message-avatar">{message.role === "user" ? initials(profile?.person) : "✦"}</div>
-                <div className="ai-message-body"><div className="ai-message-meta"><b>{message.role === "user" ? "Você" : "IA"}</b>{message.model && <span>{message.model}</span>}</div><div className="ai-message-content">{message.content}</div>{message.role === "assistant" && (message.source || message.latency_ms) && <small className="ai-message-source">{message.source ? `Fonte: ${message.source}` : ""}{message.latency_ms ? ` · ${(message.latency_ms / 1000).toFixed(1)}s` : ""}</small>}</div>
-              </article>)}
-              {sending && <article className="ai-message ai-message-assistant"><div className="ai-message-avatar">✦</div><div className="ai-message-body"><div className="ai-message-meta"><b>IA</b></div><div className="ai-thinking"><i /><i /><i /></div></div></article>}
+              {messages.map((message) => {
+                const sources = message.metadata?.context_sources || [];
+                const prepareMs = Number(message.metadata?.prepare_ms || 0);
+                return <article key={message.id} className={`ai-message ai-message-${message.role}`}>
+                  <div className="ai-message-avatar">{message.role === "user" ? initials(profile?.person) : "✦"}</div>
+                  <div className="ai-message-body"><div className="ai-message-meta"><b>{message.role === "user" ? "Você" : "IA"}</b>{message.model && <span>{message.model}</span>}</div><div className="ai-message-content">{message.content}</div>{message.role === "assistant" && (sources.length || message.latency_ms || prepareMs) && <small className="ai-message-source">{sources.length ? `Banco: ${sources.slice(0, 5).map(sourceLabel).join(" · ")}${sources.length > 5 ? ` +${sources.length - 5}` : ""}` : ""}{prepareMs ? ` · consulta ${(prepareMs / 1000).toFixed(1)}s` : ""}{message.latency_ms ? ` · IA ${(message.latency_ms / 1000).toFixed(1)}s` : ""}</small>}</div>
+                </article>;
+              })}
+              {sending && <article className="ai-message ai-message-assistant"><div className="ai-message-avatar">✦</div><div className="ai-message-body"><div className="ai-message-meta"><b>IA</b><span>consultando banco…</span></div><div className="ai-thinking"><i /><i /><i /></div></div></article>}
               <div ref={endRef} />
             </div>
           )}
@@ -307,10 +340,10 @@ export default function AIWorkspace() {
 
         <footer className="ai-composer-wrap">
           <div className="ai-composer">
-            <textarea ref={composerRef} value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(); } }} placeholder={selectedClient ? `Pergunte sobre ${selectedClient.display_name}…` : "Mensagem para a IA da agência…"} rows={1} disabled={sending} />
-            <div className="ai-composer-tools"><button className="ai-attach" disabled title="Anexos serão habilitados na próxima etapa">＋</button><span>{selectedClient ? selectedClient.display_name : "Contexto geral"}</span><button className="ai-send" onClick={sendMessage} disabled={sending || !composer.trim()} aria-label="Enviar">↑</button></div>
+            <textarea ref={composerRef} value={composer} onChange={(event) => setComposer(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(); } }} placeholder={selectedClient ? `Pergunte sobre ${selectedClient.display_name}…` : "Pergunte usando os dados da operação…"} rows={1} disabled={sending} />
+            <div className="ai-composer-tools"><button className="ai-attach" disabled title="Anexos serão habilitados na próxima etapa">＋</button><span>{selectedClient ? selectedClient.display_name : "Contexto automático"}</span><button className="ai-send" onClick={sendMessage} disabled={sending || !composer.trim()} aria-label="Enviar">↑</button></div>
           </div>
-          <small className="ai-disclaimer">A IA pode cometer erros. Dados operacionais importantes devem ser confirmados nas fontes conectadas.</small>
+          <small className="ai-disclaimer">A resposta informa quais fontes do banco foram consultadas. Confirme decisões críticas na fonte original.</small>
         </footer>
       </section>
     </main>
