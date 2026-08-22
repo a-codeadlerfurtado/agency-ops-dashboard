@@ -10,32 +10,6 @@ export default function OnboardingRoleRouter() {
   useEffect(() => {
     if (window.location.pathname !== "/onboarding") return;
     let active = true;
-    let timer = 0;
-    let observer: MutationObserver | null = null;
-
-    const clearButton = () => {
-      document.getElementById("ob-focus-switch")?.remove();
-      document.getElementById("ob-focus-switch-style")?.remove();
-    };
-
-    const addFocusButton = () => {
-      if (!active || document.getElementById("ob-focus-switch")) return;
-      const actions = document.querySelector(".ob-actions");
-      if (!actions) return;
-      const button = document.createElement("button");
-      button.id = "ob-focus-switch";
-      button.type = "button";
-      button.textContent = "← Minha etapa";
-      button.title = "Voltar para a sua responsabilidade principal no onboarding";
-      button.onclick = () => window.location.assign("/onboarding-focus");
-      actions.insertBefore(button, actions.firstChild);
-      if (!document.getElementById("ob-focus-switch-style")) {
-        const style = document.createElement("style");
-        style.id = "ob-focus-switch-style";
-        style.textContent = "#ob-focus-switch{border-color:rgba(109,215,163,.32)!important;color:#8ae4b3!important;background:rgba(19,67,51,.2)!important;font-weight:800!important}";
-        document.head.appendChild(style);
-      }
-    };
 
     const route = async () => {
       const { data } = await supabase.auth.getSession();
@@ -49,28 +23,35 @@ export default function OnboardingRoleRouter() {
         if (!response.ok || !active) return;
         const body = await response.json().catch(() => ({}));
         const person = String(body?.profile?.person || "");
-        if (!FOCUSED.has(person)) return;
+        const role = String(body?.profile?.role || "");
         const params = new URLSearchParams(window.location.search);
-        if (params.get("view") !== "all") {
-          window.location.replace("/onboarding-focus");
+        const wantsAll = params.get("view") === "all";
+
+        // Adler nunca deve cair na tela operacional do GT. A entrada dele é a
+        // visão completa: todos os clientes, todas as reuniões e todas as etapas.
+        if (person === "Adler Furtado") {
+          window.location.replace("/onboarding-overview");
           return;
         }
-        addFocusButton();
-        observer = new MutationObserver(addFocusButton);
-        observer.observe(document.body, { childList: true, subtree: true });
-        timer = window.setInterval(addFocusButton, 1000);
+
+        // Joel e Gustavo entram primeiro na própria responsabilidade, mas podem
+        // alternar para a visão geral completa para acompanhar e cobrar a equipe.
+        if (FOCUSED.has(person)) {
+          window.location.replace(wantsAll ? "/onboarding-overview" : "/onboarding-focus");
+          return;
+        }
+
+        // Outros CS com acesso ao onboarding e pedido explícito de visão geral
+        // também podem abrir o consolidado. GT continua na tela de integração.
+        if (role === "CS" && wantsAll) window.location.replace("/onboarding-overview");
       } catch {
-        // Se a identificação falhar, preserva a tela normal do onboarding.
+        // Se a identificação falhar, preserva a tela atual em vez de arriscar
+        // mandar um usuário para uma visão fora do seu escopo.
       }
     };
 
     route();
-    return () => {
-      active = false;
-      if (timer) window.clearInterval(timer);
-      observer?.disconnect();
-      clearButton();
-    };
+    return () => { active = false; };
   }, []);
 
   return null;
