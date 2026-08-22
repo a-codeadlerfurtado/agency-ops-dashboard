@@ -1,6 +1,7 @@
 import type { Viewport } from "next";
 import "./globals.css";
 import "./mobile.css";
+import "./dashboard-enhancements.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -10,6 +11,7 @@ import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
 import LearningShortcut from "./learning-shortcut";
+import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -38,6 +40,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OnboardingNavBridge />
         <OnboardingAssignmentBridge />
         <IntegrationHealthBar />
+        <DashboardEnhancementsGate />
         <WeekendBalanceAlert />
         <OpsQuestionWidget />
         <OpsQuestionBrand />

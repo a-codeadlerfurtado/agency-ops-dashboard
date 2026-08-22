@@ -1,11 +1,8 @@
 "use client";
 
-// Aba "Saúde" — o quadro que hoje vive no Notion, dentro da Central.
-//
-// O Notion mostra satisfação, risco de churn, sentimento e sinais por cliente.
-// Aqui isso aparece ao lado do score interno da própria operação, que o Notion
-// não tem. Onde as duas leituras discordam, a linha marca a divergência em vez
-// de escolher uma — quem atende decide com as duas à vista.
+// Aba "Saúde" — cruza a leitura interna da operação com a análise externa.
+// A regra desta tela é simples: nenhuma nota pode aparecer sem explicar o porquê
+// e, quando houver evidência suficiente, qual é a próxima ação recomendada.
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Chip, Metric, SUPABASE_ANON_KEY, SUPABASE_URL, formatNumber, text } from "../shared";
@@ -48,8 +45,6 @@ type Resumo = {
 
 const num = (v: unknown) => (v === null || v === undefined || v === "" ? null : Number(v));
 
-// Faixas iguais às do Notion, para quem migrar de uma tela para a outra não ter
-// que reaprender o significado das cores.
 function faixaRisco(v: number | null) {
   if (v === null) return { cor: "#64748b", rotulo: "sem dado" };
   if (v >= 70) return { cor: "#ef4444", rotulo: "crítico" };
@@ -69,11 +64,32 @@ const SENTIMENTO: Record<string, string> = {
 };
 
 function Barra({ valor, cor }: { valor: number | null; cor: string }) {
-  return (
-    <div style={{ height: 5, borderRadius: 999, background: "rgba(148,163,184,.18)", overflow: "hidden", minWidth: 54 }}>
-      <div style={{ width: `${Math.max(0, Math.min(100, valor ?? 0))}%`, height: "100%", background: cor }} />
-    </div>
-  );
+  return <div style={{ height: 5, borderRadius: 999, background: "rgba(148,163,184,.18)", overflow: "hidden", minWidth: 54 }}><div style={{ width: `${Math.max(0, Math.min(100, valor ?? 0))}%`, height: "100%", background: cor }} /></div>;
+}
+
+function motivos(l: Linha) {
+  const itens: string[] = [];
+  const risco = num(l.external_risk_avg);
+  const satisfacao = num(l.external_satisfaction_avg);
+  if (risco != null && risco >= 70) itens.push(`risco de churn crítico (${formatNumber(risco, 0)})`);
+  else if (risco != null && risco >= 50) itens.push(`risco de churn alto (${formatNumber(risco, 0)})`);
+  if (satisfacao != null && satisfacao < 30) itens.push(`satisfação crítica (${formatNumber(satisfacao, 0)})`);
+  else if (satisfacao != null && satisfacao < 50) itens.push(`satisfação baixa (${formatNumber(satisfacao, 0)})`);
+  if (["Negativo", "Crítico"].includes(String(l.sentimento))) itens.push(`sentimento ${String(l.sentimento).toLowerCase()}`);
+  if (l.sinais_alerta) itens.push(text(l.sinais_alerta));
+  if (l.reclamacoes) itens.push(`reclamações: ${text(l.reclamacoes)}`);
+  if (l.crosscheck_status === "CONFLICT") itens.push("fontes interna e externa discordam");
+  else if (l.crosscheck_status === "PARTIAL") itens.push("fontes conferem apenas parcialmente");
+  if (!itens.length && l.sinais_positivos) itens.push(text(l.sinais_positivos));
+  if (!itens.length && l.external_summary) itens.push(text(l.external_summary));
+  if (!itens.length) itens.push("sem evidência suficiente para explicar a nota externa");
+  return itens;
+}
+
+function resumoMotivos(l: Linha) {
+  const lista = motivos(l);
+  const primeiro = lista[0] || "sem explicação disponível";
+  return primeiro.length > 115 ? `${primeiro.slice(0, 112)}…` : primeiro;
 }
 
 export function HealthCenter({ token }: { token: string }) {
@@ -87,24 +103,15 @@ export function HealthCenter({ token }: { token: string }) {
   const [aberto, setAberto] = useState<string | null>(null);
 
   const carregar = useCallback(async () => {
-    setCarregando(true);
-    setErro("");
+    setCarregando(true); setErro("");
     try {
-      const resposta = await fetch(HEALTH_URL, {
-        headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY },
-        cache: "no-store",
-      });
+      const resposta = await fetch(HEALTH_URL, { headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY }, cache: "no-store" });
       if (resposta.status === 403) throw new Error("Seu perfil não tem acesso a esta aba.");
       if (!resposta.ok) throw new Error(`Falha ao carregar (HTTP ${resposta.status})`);
       const corpo = await resposta.json();
-      setLinhas(corpo.clients || []);
-      setResumo(corpo.resumo || null);
-      setPerfil(corpo.profile || null);
-    } catch (caught) {
-      setErro(caught instanceof Error ? caught.message : "Falha ao carregar a saúde dos clientes");
-    } finally {
-      setCarregando(false);
-    }
+      setLinhas(corpo.clients || []); setResumo(corpo.resumo || null); setPerfil(corpo.profile || null);
+    } catch (caught) { setErro(caught instanceof Error ? caught.message : "Falha ao carregar a saúde dos clientes"); }
+    finally { setCarregando(false); }
   }, [token]);
 
   useEffect(() => { carregar(); }, [carregar]);
@@ -112,8 +119,8 @@ export function HealthCenter({ token }: { token: string }) {
   const visiveis = useMemo(() => {
     const agulha = busca.trim().toLocaleLowerCase("pt-BR");
     return linhas
-      .filter((l) => (l.lifecycle === "ACTIVE" || l.lifecycle === "ONBOARDING"))
-      .filter((l) => !agulha || [l.display_name, l.cs_owner, l.gt_owner].join(" ").toLocaleLowerCase("pt-BR").includes(agulha))
+      .filter((l) => l.lifecycle === "ACTIVE" || l.lifecycle === "ONBOARDING")
+      .filter((l) => !agulha || [l.display_name, l.cs_owner, l.gt_owner, l.sinais_alerta, l.reclamacoes, l.external_recommended_action].join(" ").toLocaleLowerCase("pt-BR").includes(agulha))
       .filter((l) => {
         if (filtro === "risco") return (num(l.external_risk_avg) ?? 0) >= 50;
         if (filtro === "insatisfeitos") return (num(l.external_satisfaction_avg) ?? 100) < 50;
@@ -122,118 +129,44 @@ export function HealthCenter({ token }: { token: string }) {
       });
   }, [linhas, busca, filtro]);
 
-  return (
-    <section className="workspace">
-      <div className="workspace-head">
-        <div>
-          <h2>Saúde dos clientes</h2>
-          <p>Satisfação e risco de churn ao lado do score interno da operação. Onde as duas leituras discordam, a linha avisa.</p>
-        </div>
-        <span className="counter">
-          {visiveis.length} de {resumo?.ativos ?? 0} ativos{perfil?.carteira ? ` · carteira ${perfil.carteira}` : ""}
-        </span>
-      </div>
+  return <section className="workspace">
+    <div className="workspace-head"><div><h2>Saúde dos clientes</h2><p>A nota agora vem acompanhada do motivo e da próxima ação. Quando as fontes discordam, a divergência continua explícita.</p></div><span className="counter">{visiveis.length} de {resumo?.ativos ?? 0} ativos{perfil?.carteira ? ` · carteira ${perfil.carteira}` : ""}</span></div>
 
-      <div className="grid clickup-kpis">
-        <Metric label="Risco alto" value={formatNumber(resumo?.risco_alto ?? 0, 0)} tone="red" hint="churn ≥ 50" loading={carregando} />
-        <Metric label="Insatisfeitos" value={formatNumber(resumo?.insatisfeitos ?? 0, 0)} tone="yellow" hint="satisfação < 50" loading={carregando} />
-        <Metric label="Sentimento negativo" value={formatNumber(resumo?.sentimento_negativo ?? 0, 0)} tone="yellow" hint="negativo ou crítico" loading={carregando} />
-        <Metric label="Divergências" value={formatNumber(resumo?.divergentes ?? 0, 0)} tone="red" hint="fontes discordam" loading={carregando} />
-        <Metric label="Satisfação média" value={resumo?.satisfacao_media != null ? formatNumber(resumo.satisfacao_media, 1) : "—"} tone="blue" hint="clientes ativos" loading={carregando} />
-        <Metric label="Risco médio" value={resumo?.risco_medio != null ? formatNumber(resumo.risco_medio, 1) : "—"} tone="blue" hint="clientes ativos" loading={carregando} />
-      </div>
+    <div className="grid clickup-kpis">
+      <Metric label="Risco alto" value={formatNumber(resumo?.risco_alto ?? 0, 0)} tone="red" hint="churn ≥ 50" loading={carregando} />
+      <Metric label="Insatisfeitos" value={formatNumber(resumo?.insatisfeitos ?? 0, 0)} tone="yellow" hint="satisfação < 50" loading={carregando} />
+      <Metric label="Sentimento negativo" value={formatNumber(resumo?.sentimento_negativo ?? 0, 0)} tone="yellow" hint="negativo ou crítico" loading={carregando} />
+      <Metric label="Divergências" value={formatNumber(resumo?.divergentes ?? 0, 0)} tone="red" hint="fontes discordam" loading={carregando} />
+      <Metric label="Satisfação média" value={resumo?.satisfacao_media != null ? formatNumber(resumo.satisfacao_media, 1) : "—"} tone="blue" hint="clientes ativos" loading={carregando} />
+      <Metric label="Risco médio" value={resumo?.risco_medio != null ? formatNumber(resumo.risco_medio, 1) : "—"} tone="blue" hint="clientes ativos" loading={carregando} />
+    </div>
 
-      <section className="card section">
-        <div className="section-head">
-          <div className="client-pills">
-            {([["todos", "Todos"], ["risco", "Risco alto"], ["insatisfeitos", "Insatisfeitos"], ["divergentes", "Divergentes"]] as const).map(([chave, rotulo]) => (
-              <button key={chave} className={filtro === chave ? "active" : ""} onClick={() => setFiltro(chave)}>{rotulo}</button>
-            ))}
-          </div>
-          <input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar cliente, CS ou GT" style={{ maxWidth: 260 }} />
-        </div>
+    <section className="card section">
+      <div className="section-head"><div className="client-pills">{([["todos", "Todos"], ["risco", "Risco alto"], ["insatisfeitos", "Insatisfeitos"], ["divergentes", "Divergentes"]] as const).map(([chave, rotulo]) => <button key={chave} className={filtro === chave ? "active" : ""} onClick={() => setFiltro(chave)}>{rotulo}</button>)}</div><input value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Buscar cliente, responsável ou sinal" style={{ maxWidth: 280 }} /></div>
+      {erro && <div className="error-box">{erro}</div>}
+      {carregando && !linhas.length && <div className="empty compact">Carregando…</div>}
+      {!carregando && !visiveis.length && !erro && <div className="empty compact">Nenhum cliente neste filtro.</div>}
 
-        {erro && <div className="error-box">{erro}</div>}
-        {carregando && !linhas.length && <div className="empty compact">Carregando…</div>}
-        {!carregando && !visiveis.length && !erro && <div className="empty compact">Nenhum cliente neste filtro.</div>}
-
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Cliente</th><th>Satisfação</th><th>Risco de churn</th>
-                <th>Sentimento</th><th>Interno</th><th>Responsável</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {visiveis.map((l) => {
-                const satisf = num(l.external_satisfaction_avg);
-                const risco = num(l.external_risk_avg);
-                const interno = num(l.internal_score);
-                const fs = faixaSatisfacao(satisf);
-                const fr = faixaRisco(risco);
-                const divergente = l.crosscheck_status === "CONFLICT" || l.crosscheck_status === "PARTIAL";
-                const expandido = aberto === l.client_id;
-                return (
-                  <Fragment key={l.client_id}>
-                    <tr onClick={() => setAberto(expandido ? null : l.client_id)} style={{ cursor: "pointer" }}>
-                      <td>
-                        <b>{text(l.display_name)}</b>
-                        <div className="small">
-                          {l.lifecycle === "ONBOARDING" ? "Onboarding" : "Ativo"}
-                          {divergente && <> · <span style={{ color: "#ef4444", fontWeight: 700 }}>
-                            {l.crosscheck_status === "CONFLICT" ? "fontes discordam" : "confere em parte"}
-                          </span></>}
-                        </div>
-                      </td>
-                      <td>
-                        <div style={{ color: fs.cor, fontWeight: 700 }}>{satisf != null ? formatNumber(satisf, 0) : "—"}</div>
-                        <Barra valor={satisf} cor={fs.cor} />
-                        <div className="small">{fs.rotulo}</div>
-                      </td>
-                      <td>
-                        <div style={{ color: fr.cor, fontWeight: 700 }}>{risco != null ? formatNumber(risco, 0) : "—"}</div>
-                        <Barra valor={risco} cor={fr.cor} />
-                        <div className="small">{fr.rotulo}</div>
-                      </td>
-                      <td>
-                        {l.sentimento
-                          ? <span style={{ color: SENTIMENTO[l.sentimento] || "#94a3b8", fontWeight: 700, fontSize: 12 }}>{l.sentimento}</span>
-                          : <span className="small">—</span>}
-                        {!!l.analises && <div className="small">{l.analises} análise(s)</div>}
-                      </td>
-                      <td>
-                        {interno != null ? <><b>{formatNumber(interno, 0)}</b> <Chip value={l.internal_band} /></> : <span className="small">—</span>}
-                      </td>
-                      <td>
-                        <div className="small">CS {text(l.cs_owner)}</div>
-                        <div className="small">GT {text(l.gt_owner)}</div>
-                      </td>
-                      <td style={{ color: "#94a3b8" }}>{expandido ? "▲" : "▼"}</td>
-                    </tr>
-                    {expandido && (
-                      <tr>
-                        <td colSpan={7} style={{ background: "rgba(148,163,184,.05)" }}>
-                          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12, padding: "4px 2px" }}>
-                            <div><div className="section-title">Sinais de alerta</div><p className="small">{text(l.sinais_alerta)}</p></div>
-                            <div><div className="section-title">Sinais positivos</div><p className="small">{text(l.sinais_positivos)}</p></div>
-                            <div><div className="section-title">Principais reclamações</div><p className="small">{text(l.reclamacoes)}</p></div>
-                            <div>
-                              <div className="section-title">Ação recomendada</div>
-                              <p className="small">{text(l.external_recommended_action || l.external_summary)}</p>
-                              {l.responsavel_acao && <p className="small">Responsável: <b>{l.responsavel_acao}</b></p>}
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    )}
-                  </Fragment>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <div className="table-wrap"><table><thead><tr><th>Cliente</th><th>Por que está assim</th><th>Satisfação</th><th>Risco de churn</th><th>Sentimento</th><th>Interno</th><th>Próxima ação</th><th></th></tr></thead><tbody>{visiveis.map((l) => {
+        const satisf = num(l.external_satisfaction_avg); const risco = num(l.external_risk_avg); const interno = num(l.internal_score);
+        const fs = faixaSatisfacao(satisf); const fr = faixaRisco(risco); const divergente = l.crosscheck_status === "CONFLICT" || l.crosscheck_status === "PARTIAL"; const expandido = aberto === l.client_id;
+        return <Fragment key={l.client_id}><tr onClick={() => setAberto(expandido ? null : l.client_id)} style={{ cursor: "pointer" }}>
+          <td><b>{text(l.display_name)}</b><div className="small">{l.lifecycle === "ONBOARDING" ? "Onboarding" : "Ativo"}{divergente && <> · <span style={{ color: "#ef4444", fontWeight: 700 }}>{l.crosscheck_status === "CONFLICT" ? "fontes discordam" : "confere em parte"}</span></>}</div></td>
+          <td style={{ minWidth: 240 }}><div style={{ fontSize: 11, lineHeight: 1.4 }}>{resumoMotivos(l)}</div><div className="small">Clique para ver todas as evidências</div></td>
+          <td><div style={{ color: fs.cor, fontWeight: 700 }}>{satisf != null ? formatNumber(satisf, 0) : "—"}</div><Barra valor={satisf} cor={fs.cor}/><div className="small">{fs.rotulo}</div></td>
+          <td><div style={{ color: fr.cor, fontWeight: 700 }}>{risco != null ? formatNumber(risco, 0) : "—"}</div><Barra valor={risco} cor={fr.cor}/><div className="small">{fr.rotulo}</div></td>
+          <td>{l.sentimento ? <span style={{ color: SENTIMENTO[l.sentimento] || "#94a3b8", fontWeight: 700, fontSize: 12 }}>{l.sentimento}</span> : <span className="small">—</span>}{!!l.analises && <div className="small">{l.analises} análise(s)</div>}</td>
+          <td>{interno != null ? <><b>{formatNumber(interno, 0)}</b> <Chip value={l.internal_band}/></> : <span className="small">—</span>}</td>
+          <td style={{ minWidth: 220 }}><b style={{ fontSize: 11 }}>{text(l.external_recommended_action || "Sem ação recomendada pela fonte")}</b><div className="small">{l.responsavel_acao ? `Responsável: ${l.responsavel_acao}` : `CS ${text(l.cs_owner)} · GT ${text(l.gt_owner)}`}</div></td>
+          <td style={{ color: "#94a3b8" }}>{expandido ? "▲" : "▼"}</td>
+        </tr>{expandido && <tr><td colSpan={8} style={{ background: "rgba(148,163,184,.05)" }}><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12, padding: "5px 2px" }}>
+          <div style={{ gridColumn: "1 / -1", padding: 12, border: "1px solid rgba(148,163,184,.15)", borderRadius: 10 }}><div className="section-title">Por que este cliente está nesta situação</div>{motivos(l).map((motivo, index) => <p className="small" key={index} style={{ margin: "7px 0 0" }}>• {motivo}</p>)}</div>
+          <div><div className="section-title">Sinais de alerta</div><p className="small">{text(l.sinais_alerta)}</p></div>
+          <div><div className="section-title">Sinais positivos</div><p className="small">{text(l.sinais_positivos)}</p></div>
+          <div><div className="section-title">Principais reclamações</div><p className="small">{text(l.reclamacoes)}</p></div>
+          <div><div className="section-title">Próxima ação recomendada</div><p className="small"><b>{text(l.external_recommended_action || l.external_summary)}</b></p>{l.responsavel_acao && <p className="small">Responsável: <b>{l.responsavel_acao}</b></p>}</div>
+        </div></td></tr>}</Fragment>;
+      })}</tbody></table></div>
     </section>
-  );
+  </section>;
 }
