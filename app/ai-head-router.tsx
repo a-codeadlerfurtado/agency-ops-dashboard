@@ -21,7 +21,7 @@ export default function AIHeadRouter() {
         });
         if (!response.ok || !active) return;
         const body = await response.json().catch(() => ({}));
-        if (body?.profile?.role === "AI") window.location.replace("/ai-head");
+        if (body?.profile?.person === "Gabriel Castro" && body?.profile?.role === "AI") window.location.replace("/ai-head");
       } catch {
         // Em falha de identificação, preserva a rota atual.
       }
