@@ -86,6 +86,14 @@ Deno.serve(async (req: Request) => {
   if (error) return respond({ error: "query_failed", detail: error.message }, 500);
 
   const history = rows ?? [];
-  const pending = history.filter((row: any) => row.ack_required !== false && !row.acknowledged_at).sort((a: any, b: any) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
+  const now = Date.now();
+  const pending = history.filter((row: any) => {
+    if (row.ack_required === false || row.acknowledged_at) return false;
+    const nextPresentAt = row.metadata?.next_present_at;
+    if (!nextPresentAt) return true;
+    const next = new Date(String(nextPresentAt)).getTime();
+    return Number.isNaN(next) || next <= now;
+  }).sort((a: any, b: any) => new Date(a.occurred_at).getTime() - new Date(b.occurred_at).getTime());
+
   return respond({ ok: true, profile: { person, role: roster.role }, pending, history, generated_at: new Date().toISOString() });
 });
