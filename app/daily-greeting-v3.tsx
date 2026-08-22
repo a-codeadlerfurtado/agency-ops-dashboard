@@ -5,7 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
 
 const GREETING_API = `${SUPABASE_URL}/functions/v1/agency-ops-daily-greeting-api`;
-const AUDIO_URL = "/api/greeting-audio?v=20260822-mp3-v6-http-range";
+const AUDIO_URL = "/api/greeting-audio?v=20260822-cinematic-armed-v7";
 const FALLBACK_DURATION = 22.824;
 
 type Greeting = {
@@ -16,37 +16,48 @@ type Greeting = {
   first_name: string;
 };
 
-type AudioContextCtor = typeof AudioContext;
+type OpeningPhase = "standby" | "boot" | "core" | "greet" | "finalize" | "ready";
 
-function getAudioContextCtor(): AudioContextCtor | null {
-  const w = window as typeof window & { webkitAudioContext?: AudioContextCtor };
-  return window.AudioContext || w.webkitAudioContext || null;
-}
-
-function SpeakingOrb({ speaking, finished }: { speaking: boolean; finished: boolean }) {
+function CinematicCore({ speaking, finished, progress, phase }: { speaking: boolean; finished: boolean; progress: number; phase: OpeningPhase }) {
+  const ringProgress = Math.max(2, Math.round(progress * 100));
+  const nodes = [[50,16],[72,24],[84,45],[78,69],[58,82],[34,78],[18,58],[22,34],[50,35],[65,47],[60,65],[40,66],[34,47],[50,52]];
   return (
-    <div className={`opsq3-orb ${speaking ? "speaking" : ""} ${finished ? "finished" : ""}`} aria-hidden="true">
-      <i className="wave w1" /><i className="wave w2" /><i className="wave w3" />
-      <div className="core">
-        <svg viewBox="0 0 100 100">
+    <div className={`opsq-cinematic-core ${speaking ? "is-speaking" : ""} ${finished ? "is-finished" : ""} phase-${phase}`} aria-hidden="true">
+      <div className="opsq-core-aura" />
+      <div className="opsq-progress-orbit" style={{ background: `conic-gradient(from -90deg, rgba(92,207,255,.96) 0 ${ringProgress}%, rgba(42,109,146,.12) ${ringProgress}% 100%)` }} />
+      <div className="opsq-orbit opsq-orbit-a"><i /><i /><i /></div>
+      <div className="opsq-orbit opsq-orbit-b"><i /><i /></div>
+      <div className="opsq-orbit opsq-orbit-c"><i /><i /><i /><i /></div>
+      <span className="opsq-pulse pulse-a" /><span className="opsq-pulse pulse-b" /><span className="opsq-pulse pulse-c" />
+      <div className="opsq-core-shell">
+        <div className="opsq-core-scan" />
+        <svg viewBox="0 0 100 100" className="opsq-intelligence-mesh">
           <defs>
-            <radialGradient id="opsq3sphere" cx="38%" cy="34%" r="68%">
-              <stop offset="0%" stopColor="#225d86" />
-              <stop offset="52%" stopColor="#0a304a" />
-              <stop offset="100%" stopColor="#020b12" />
+            <radialGradient id="opsqCoreSphere" cx="43%" cy="38%" r="68%">
+              <stop offset="0%" stopColor="#22658f" stopOpacity=".72" />
+              <stop offset="42%" stopColor="#0b3450" stopOpacity=".86" />
+              <stop offset="100%" stopColor="#020b12" stopOpacity="1" />
             </radialGradient>
+            <filter id="opsqNodeGlow"><feGaussianBlur stdDeviation="1.1" result="b" /><feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
           </defs>
-          <circle cx="50" cy="50" r="46" fill="url(#opsq3sphere)" stroke="#235b7d" strokeWidth="1" />
-          <g fill="none" stroke="#7ec4e8" strokeWidth=".72" opacity=".72">
-            <path d="M19 39 L31 30 L40 37 L52 23 L65 33 L78 29" />
-            <path d="M15 54 L30 49 L40 58 L52 49 L64 55 L82 46" />
-            <path d="M22 69 L34 61 L47 70 L58 60 L73 67" />
-            <path d="M31 30 L30 49 L34 61 M40 37 L40 58 L47 70 M52 23 L52 49 L58 60 M65 33 L64 55 L73 67" />
+          <circle cx="50" cy="50" r="46" fill="url(#opsqCoreSphere)" stroke="rgba(92,190,235,.38)" strokeWidth=".7" />
+          <g className="opsq-mesh-lines" fill="none" stroke="#70c8ee" strokeWidth=".55" opacity=".62">
+            <path d="M50 16 L72 24 L84 45 L78 69 L58 82 L34 78 L18 58 L22 34 Z" />
+            <path d="M22 34 L50 35 L72 24 M84 45 L65 47 L50 35 L34 47 L18 58" />
+            <path d="M78 69 L60 65 L65 47 L50 52 L40 66 L34 78" />
+            <path d="M34 47 L50 52 L50 35 M40 66 L50 52 L60 65 M50 16 L50 35 M58 82 L60 65" />
           </g>
-          <g fill="#a9dcf5">{[[19,39],[31,30],[40,37],[52,23],[65,33],[78,29],[15,54],[30,49],[40,58],[52,49],[64,55],[82,46],[22,69],[34,61],[47,70],[58,60],[73,67]].map(([x,y], i) => <circle key={i} cx={x} cy={y} r={i % 4 === 0 ? 1.35 : .8} />)}</g>
+          <g className="opsq-mesh-secondary" fill="none" stroke="#33789d" strokeWidth=".32" opacity=".36">
+            <ellipse cx="50" cy="50" rx="30" ry="43" /><ellipse cx="50" cy="50" rx="43" ry="23" /><path d="M13 50 H87 M50 13 V87" />
+          </g>
+          <g className="opsq-mesh-nodes" fill="#b9eaff" filter="url(#opsqNodeGlow)">
+            {nodes.map(([cx,cy], index) => <circle key={index} cx={cx} cy={cy} r={index < 8 ? 1.15 : .82} style={{ animationDelay: `${index * 71}ms` }} />)}
+          </g>
         </svg>
+        <div className="opsq-core-eye"><span /><span /></div>
       </div>
-      <div className="bars">{Array.from({ length: 13 }, (_, i) => <span key={i} style={{ animationDelay: `${i * 47}ms` }} />)}</div>
+      <div className="opsq-core-caption left"><small>VOICE CORE</small><strong>{speaking ? "ACTIVE" : finished ? "STABLE" : "STANDBY"}</strong></div>
+      <div className="opsq-core-caption right"><small>SEQUENCE</small><strong>{String(Math.round(progress * 100)).padStart(2, "0")}%</strong></div>
     </div>
   );
 }
@@ -54,18 +65,17 @@ function SpeakingOrb({ speaking, finished }: { speaking: boolean; finished: bool
 export default function DailyGreetingV3() {
   const [greeting, setGreeting] = useState<Greeting | null>(null);
   const [loading, setLoading] = useState(false);
+  const [ready, setReady] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [finished, setFinished] = useState(false);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   const claimedUser = useRef<string | null>(null);
-  const ctxRef = useRef<AudioContext | null>(null);
-  const sourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const htmlAudioRef = useRef<HTMLAudioElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const armedRef = useRef(false);
   const progressTimerRef = useRef<number | null>(null);
   const endingNaturallyRef = useRef(false);
-  const playGenerationRef = useRef(0);
 
   const stopProgressTimer = () => {
     if (progressTimerRef.current !== null) {
@@ -83,56 +93,69 @@ export default function DailyGreetingV3() {
     }
   };
 
-  const beginProgress = (duration: number, currentTime: () => number) => {
+  const beginProgress = (audio: HTMLAudioElement) => {
     endingNaturallyRef.current = true;
+    setLoading(false);
     setError(null);
     setFinished(false);
     setProgress(0);
     setPlaying(true);
-    setLoading(false);
     stopProgressTimer();
     progressTimerRef.current = window.setInterval(() => {
-      setProgress(Math.min(1, Math.max(0, currentTime()) / Math.max(.1, duration || FALLBACK_DURATION)));
+      const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : FALLBACK_DURATION;
+      setProgress(Math.min(1, Math.max(0, audio.currentTime) / duration));
     }, 100);
   };
 
   useEffect(() => {
-    const primeAudio = () => {
-      try {
-        const Ctor = getAudioContextCtor();
-        if (!Ctor) return;
-        let ctx = ctxRef.current;
-        if (!ctx || ctx.state === "closed") {
-          ctx = new Ctor();
-          ctxRef.current = ctx;
-        }
-        if (ctx.state !== "running") void ctx.resume().catch(() => undefined);
-      } catch {}
-    };
-
-    document.addEventListener("pointerdown", primeAudio, true);
-    document.addEventListener("keydown", primeAudio, true);
-    document.addEventListener("touchstart", primeAudio, { capture: true, passive: true });
-
     const audio = new Audio(AUDIO_URL);
     audio.preload = "auto";
     audio.playsInline = true;
+    audio.loop = true;
+    audio.muted = true;
     audio.volume = 1;
-    htmlAudioRef.current = audio;
+    audioRef.current = audio;
+
+    const primeAudio = () => {
+      if (armedRef.current && !audio.paused) return;
+      try {
+        audio.loop = true;
+        audio.muted = true;
+        audio.volume = 1;
+        if (audio.ended || audio.currentTime > FALLBACK_DURATION - 1) audio.currentTime = 0;
+        const promise = audio.play();
+        if (promise) {
+          void promise.then(() => { armedRef.current = true; }).catch(() => { armedRef.current = false; });
+        } else {
+          armedRef.current = true;
+        }
+      } catch {
+        armedRef.current = false;
+      }
+    };
+
+    audio.onloadedmetadata = () => setReady(true);
+    audio.oncanplay = () => setReady(true);
+    document.addEventListener("pointerdown", primeAudio, true);
+    document.addEventListener("keydown", primeAudio, true);
+    document.addEventListener("touchstart", primeAudio, { capture: true, passive: true });
 
     return () => {
       document.removeEventListener("pointerdown", primeAudio, true);
       document.removeEventListener("keydown", primeAudio, true);
       document.removeEventListener("touchstart", primeAudio, true);
+      stopProgressTimer();
       audio.pause();
+      audio.onended = null;
+      audio.onloadedmetadata = null;
+      audio.oncanplay = null;
       audio.src = "";
-      htmlAudioRef.current = null;
+      audioRef.current = null;
     };
   }, []);
 
   useEffect(() => {
     let cancelled = false;
-
     async function claim(session: Session | null) {
       if (!session?.user?.id || claimedUser.current === session.user.id) return;
       claimedUser.current = session.user.id;
@@ -152,21 +175,23 @@ export default function DailyGreetingV3() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session) {
         claimedUser.current = null;
-        playGenerationRef.current += 1;
+        armedRef.current = false;
         endingNaturallyRef.current = false;
-        try { sourceRef.current?.stop(); } catch {}
-        sourceRef.current = null;
-        const audio = htmlAudioRef.current;
+        stopProgressTimer();
+        const audio = audioRef.current;
         if (audio) {
           audio.pause();
+          audio.loop = true;
+          audio.muted = true;
           try { audio.currentTime = 0; } catch {}
         }
         setGreeting(null);
         setPlaying(false);
         setFinished(false);
         setProgress(0);
+        setError(null);
       }
-      claim(session);
+      void claim(session);
     });
 
     return () => {
@@ -175,100 +200,34 @@ export default function DailyGreetingV3() {
     };
   }, []);
 
-  const playWithWebAudio = async (ctx: AudioContext, generation: number) => {
-    if (ctx.state !== "running") await ctx.resume();
-    if (ctx.state !== "running") throw new Error("Saída de áudio bloqueada pelo navegador.");
-
-    const response = await fetch(AUDIO_URL, { cache: "no-store" });
-    if (!response.ok) throw new Error(`Áudio HTTP ${response.status}`);
-    const bytes = await response.arrayBuffer();
-    const decoded = await ctx.decodeAudioData(bytes.slice(0));
-    if (generation !== playGenerationRef.current) return;
-
-    try { sourceRef.current?.stop(); } catch {}
-    const source = ctx.createBufferSource();
-    const gain = ctx.createGain();
-    gain.gain.value = 1;
-    source.buffer = decoded;
-    source.connect(gain);
-    gain.connect(ctx.destination);
-    sourceRef.current = source;
-    const startedAt = ctx.currentTime;
-    source.onended = markEnded;
-    source.start(0);
-    beginProgress(decoded.duration || FALLBACK_DURATION, () => Math.max(0, ctx.currentTime - startedAt));
-  };
-
-  const playWithHtmlAudio = async () => {
-    const audio = htmlAudioRef.current;
-    if (!audio) throw new Error("Player HTML indisponível.");
-    audio.pause();
-    audio.muted = false;
-    audio.volume = 1;
-    try { audio.currentTime = 0; } catch {}
-    audio.onended = markEnded;
-    const playPromise = audio.play();
-    await playPromise;
-    beginProgress(Number.isFinite(audio.duration) ? audio.duration : FALLBACK_DURATION, () => audio.currentTime);
-  };
-
   const startPlayback = async (fromClick: boolean) => {
-    if (playing || loading) return;
-    const generation = ++playGenerationRef.current;
+    const audio = audioRef.current;
+    if (!audio || playing || loading) return;
     setLoading(true);
     setError(null);
     endingNaturallyRef.current = false;
 
-    if (fromClick) {
-      let clickCtx: AudioContext | null = null;
-      try {
-        const Ctor = getAudioContextCtor();
-        clickCtx = ctxRef.current;
-        if (Ctor && (!clickCtx || clickCtx.state === "closed")) {
-          clickCtx = new Ctor();
-          ctxRef.current = clickCtx;
-        }
-        if (clickCtx && clickCtx.state !== "running") void clickCtx.resume().catch(() => undefined);
-
-        // CRÍTICO: audio.play() é chamado no mesmo call stack do clique.
-        await playWithHtmlAudio();
-        return;
-      } catch (htmlError) {
-        try {
-          if (clickCtx) {
-            if (clickCtx.state !== "running") await clickCtx.resume();
-            if (clickCtx.state === "running") {
-              await playWithWebAudio(clickCtx, generation);
-              return;
-            }
-          }
-        } catch (webError) {
-          setLoading(false);
-          setPlaying(false);
-          const first = htmlError instanceof Error ? htmlError.message : "HTML Audio falhou";
-          const second = webError instanceof Error ? webError.message : "Web Audio falhou";
-          setError(`${first} · ${second}`);
-          return;
-        }
-        setLoading(false);
-        setPlaying(false);
-        setError(htmlError instanceof Error ? htmlError.message : "Não foi possível iniciar a voz.");
-        return;
-      }
-    }
-
     try {
-      const ctx = ctxRef.current;
-      if (ctx && ctx.state === "running") {
-        await playWithWebAudio(ctx, generation);
-        return;
+      audio.loop = false;
+      audio.muted = false;
+      audio.volume = 1;
+      try { audio.currentTime = 0; } catch {}
+      audio.onended = markEnded;
+
+      if (audio.paused) {
+        const promise = audio.play();
+        if (promise) await promise;
       }
-      setLoading(false);
-      setError("Áudio pronto. Clique em tocar para liberar a voz.");
-    } catch (errorValue) {
+
+      armedRef.current = true;
+      setReady(true);
+      beginProgress(audio);
+    } catch (value) {
       setLoading(false);
       setPlaying(false);
-      setError(errorValue instanceof Error ? errorValue.message : "Não foi possível iniciar a voz.");
+      setError(fromClick
+        ? (value instanceof Error ? value.message : "Não foi possível iniciar a voz.")
+        : "Voz pronta. Clique em Ativar voz se o navegador tiver bloqueado o som.");
     }
   };
 
@@ -278,60 +237,108 @@ export default function DailyGreetingV3() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [greeting?.date, greeting?.is_monday]);
 
-  useEffect(() => () => {
-    playGenerationRef.current += 1;
-    stopProgressTimer();
-    endingNaturallyRef.current = false;
-    try { sourceRef.current?.stop(); } catch {}
-    sourceRef.current = null;
-    const ctx = ctxRef.current;
-    ctxRef.current = null;
-    if (ctx && ctx.state !== "closed") void ctx.close().catch(() => undefined);
-    const audio = htmlAudioRef.current;
-    if (audio) {
-      audio.pause();
-      audio.onended = null;
-    }
-  }, []);
-
   if (!greeting) return null;
 
   const needsAudio = greeting.is_monday;
   const canEnter = !needsAudio || finished;
+  const phase: OpeningPhase = finished ? "ready" : !playing ? "standby" : progress < .13 ? "boot" : progress < .36 ? "core" : progress < .78 ? "greet" : "finalize";
+  const showGreeting = phase === "greet" || phase === "finalize" || phase === "ready";
+  const showReady = phase === "finalize" || phase === "ready";
+
   const close = () => {
     if (!canEnter) return;
-    playGenerationRef.current += 1;
     endingNaturallyRef.current = false;
-    const audio = htmlAudioRef.current;
+    stopProgressTimer();
+    const audio = audioRef.current;
     if (audio) audio.pause();
-    try { sourceRef.current?.stop(); } catch {}
     setGreeting(null);
   };
 
   const status = finished
-    ? "Abertura concluída. Acesso liberado."
+    ? "TRANSMISSÃO CONCLUÍDA"
     : loading
-      ? "Carregando MP3 da voz…"
+      ? "PREPARANDO VOICE CORE"
       : playing
-        ? "OpsQuestion falando · áudio MP3"
+        ? phase === "boot" ? "INICIALIZANDO SISTEMA" : phase === "core" ? "VOICE CORE ONLINE" : phase === "greet" ? "TRANSMISSÃO ATIVA" : "FINALIZANDO SEQUÊNCIA"
         : error
           ? error
-          : "Áudio pronto.";
+          : ready ? "VOICE CORE PRONTO" : "PREPARANDO SISTEMA";
 
   return (
-    <div className="opsq-opening" style={{ position:"fixed", inset:0, zIndex:30000, background:"radial-gradient(circle at 50% 35%,rgba(22,91,132,.20),rgba(1,8,14,.93) 48%,rgba(1,6,11,.98) 100%)", backdropFilter:"blur(9px)", display:"grid", placeItems:"center", padding:18 }}>
+    <div className={`opsq-opening phase-${phase}`}>
       <style>{`
-        @keyframes orbTalk3{0%,100%{transform:scale(1)}50%{transform:scale(1.065);filter:brightness(1.2)}}
-        @keyframes waveOut3{0%{transform:translate(-50%,-50%) scale(.72);opacity:.72}100%{transform:translate(-50%,-50%) scale(1.55);opacity:0}}
-        @keyframes barTalk3{0%,100%{transform:scaleY(.25);opacity:.35}50%{transform:scaleY(1);opacity:1}}
-        .opsq3-orb{position:relative;width:210px;height:180px;margin:auto;display:grid;place-items:center}.opsq3-orb .core{position:relative;z-index:3;width:112px;height:112px;border-radius:50%;box-shadow:0 0 38px rgba(55,151,205,.2)}.opsq3-orb svg{width:100%;height:100%}.opsq3-orb.speaking .core{animation:orbTalk3 .68s ease-in-out infinite}.opsq3-orb .wave{position:absolute;left:50%;top:47%;width:126px;height:126px;border:1px solid rgba(89,192,241,.52);border-radius:50%;transform:translate(-50%,-50%) scale(.75);opacity:0}.opsq3-orb.speaking .wave{animation:waveOut3 1.5s ease-out infinite}.opsq3-orb.speaking .w2{animation-delay:.42s}.opsq3-orb.speaking .w3{animation-delay:.84s}.opsq3-orb .bars{position:absolute;bottom:1px;left:50%;transform:translateX(-50%);height:34px;display:flex;align-items:center;gap:4px}.opsq3-orb .bars span{width:3px;height:27px;border-radius:99px;background:linear-gradient(#86d2fa,#327ca8);transform:scaleY(.2);opacity:.28}.opsq3-orb.speaking .bars span{animation:barTalk3 .48s ease-in-out infinite}.opsq3-orb.finished .bars span{background:linear-gradient(#83e0ba,#34795e);opacity:.45}
+        @keyframes opsqGridDrift{from{transform:translateY(0)}to{transform:translateY(44px)}}
+        @keyframes opsqScan{0%{transform:translateY(-25vh);opacity:0}12%{opacity:.5}88%{opacity:.2}100%{transform:translateY(115vh);opacity:0}}
+        @keyframes opsqCoreBreathe{0%,100%{transform:scale(1);filter:brightness(1)}50%{transform:scale(1.035);filter:brightness(1.18)}}
+        @keyframes opsqOrbitA{to{transform:rotate(360deg)}}
+        @keyframes opsqOrbitB{to{transform:rotate(-360deg)}}
+        @keyframes opsqNode{0%,100%{opacity:.28;transform:scale(.75)}50%{opacity:1;transform:scale(1.5)}}
+        @keyframes opsqPulse{0%{transform:translate(-50%,-50%) scale(.62);opacity:.58}100%{transform:translate(-50%,-50%) scale(1.72);opacity:0}}
+        @keyframes opsqAppear{from{opacity:0;transform:translateY(14px);filter:blur(5px)}to{opacity:1;transform:none;filter:blur(0)}}
+        @keyframes opsqBorderWake{0%,100%{box-shadow:0 0 18px rgba(67,183,239,.04),0 35px 120px rgba(0,0,0,.72)}50%{box-shadow:0 0 42px rgba(67,183,239,.10),0 35px 120px rgba(0,0,0,.72)}}
+        .opsq-opening{position:fixed;inset:0;z-index:30000;display:grid;place-items:center;padding:20px;overflow:hidden;color:#eefaff;background:radial-gradient(circle at 50% 38%,rgba(18,78,112,.24),transparent 34%),radial-gradient(circle at 50% 88%,rgba(20,77,99,.08),transparent 36%),#01080e}
+        .opsq-opening:before{content:"";position:absolute;inset:-80px;background-image:linear-gradient(rgba(57,132,168,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(57,132,168,.03) 1px,transparent 1px);background-size:44px 44px;mask-image:radial-gradient(circle at center,#000 12%,transparent 78%);animation:opsqGridDrift 7s linear infinite;pointer-events:none}
+        .opsq-opening:after{content:"";position:absolute;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(97,206,255,.35),transparent);box-shadow:0 0 24px rgba(83,194,245,.18);animation:opsqScan 7s linear infinite;pointer-events:none}
+        .opsq-opening-shell{position:relative;width:min(820px,100%);min-height:650px;border:1px solid rgba(74,177,225,.24);border-radius:24px;background:linear-gradient(180deg,rgba(4,22,34,.96),rgba(2,12,20,.99));padding:25px 34px 28px;display:grid;grid-template-rows:auto 1fr auto;overflow:hidden;animation:opsqBorderWake 3.6s ease-in-out infinite;isolation:isolate}
+        .opsq-opening-shell:before{content:"";position:absolute;inset:0;z-index:-1;background:radial-gradient(circle at 50% 42%,rgba(36,139,188,.11),transparent 34%)}
+        .opsq-corner{position:absolute;width:38px;height:38px;border-color:rgba(93,200,249,.52);opacity:.7}.opsq-corner.tl{left:14px;top:14px;border-left:1px solid;border-top:1px solid}.opsq-corner.tr{right:14px;top:14px;border-right:1px solid;border-top:1px solid}.opsq-corner.bl{left:14px;bottom:14px;border-left:1px solid;border-bottom:1px solid}.opsq-corner.br{right:14px;bottom:14px;border-right:1px solid;border-bottom:1px solid}
+        .opsq-opening-head{display:flex;justify-content:space-between;align-items:center;gap:14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.opsq-opening-head b{color:#78d0fb;font-size:10.5px;letter-spacing:.16em}.opsq-opening-head span{color:#52798f;font-size:9px;letter-spacing:.13em}
+        .opsq-opening-stage{display:grid;align-content:center;justify-items:center;padding:6px 0 2px}.opsq-stage-copy{height:122px;text-align:center;display:grid;align-content:start;justify-items:center;margin-top:-6px}.opsq-stage-kicker{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#5faed3;font-size:9px;font-weight:800;letter-spacing:.24em;margin-bottom:9px}.opsq-stage-copy h1{margin:0;font-family:Inter Tight,Inter,sans-serif;font-size:clamp(38px,6vw,59px);line-height:1;letter-spacing:-.045em}.opsq-stage-copy p{margin:13px 0 0;color:#9fbaca;font-size:14px;line-height:1.55;max-width:610px}.opsq-greeting-copy,.opsq-system-copy{animation:opsqAppear .65s ease both}.opsq-system-copy{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#77c9ef;font-size:14px;letter-spacing:.13em}.opsq-system-copy strong{display:block;color:#dff7ff;font-family:Inter Tight,Inter,sans-serif;font-size:30px;letter-spacing:-.025em;margin-top:7px}
+        .opsq-cinematic-core{position:relative;width:310px;height:310px;display:grid;place-items:center;margin:2px auto 5px}.opsq-core-aura{position:absolute;width:205px;height:205px;border-radius:50%;background:radial-gradient(circle,rgba(62,178,229,.14),rgba(20,82,112,.055) 52%,transparent 72%);filter:blur(4px)}.opsq-progress-orbit{position:absolute;width:230px;height:230px;border-radius:50%;padding:1px;opacity:.82;mask:radial-gradient(farthest-side,transparent calc(100% - 1px),#000 0)}
+        .opsq-orbit{position:absolute;border-radius:50%;border:1px solid rgba(74,175,218,.17)}.opsq-orbit i{position:absolute;width:4px;height:4px;border-radius:50%;background:#78d7ff;box-shadow:0 0 10px rgba(86,207,255,.8)}.opsq-orbit-a{width:252px;height:252px;border-style:dashed;animation:opsqOrbitA 16s linear infinite}.opsq-orbit-a i:nth-child(1){left:11%;top:18%}.opsq-orbit-a i:nth-child(2){right:8%;top:55%}.opsq-orbit-a i:nth-child(3){left:46%;bottom:-2px}.opsq-orbit-b{width:278px;height:202px;transform:rotate(-18deg);animation:opsqOrbitB 21s linear infinite}.opsq-orbit-b i:nth-child(1){left:8%;top:43%}.opsq-orbit-b i:nth-child(2){right:10%;top:28%}.opsq-orbit-c{width:192px;height:286px;transform:rotate(26deg);border-color:rgba(62,147,186,.12);animation:opsqOrbitA 25s linear infinite}.opsq-orbit-c i:nth-child(1){left:49%;top:-3px}.opsq-orbit-c i:nth-child(2){right:4%;top:38%}.opsq-orbit-c i:nth-child(3){left:5%;bottom:28%}.opsq-orbit-c i:nth-child(4){left:54%;bottom:-2px}
+        .opsq-core-shell{position:relative;width:166px;height:166px;border-radius:50%;z-index:4;background:rgba(2,13,21,.7);box-shadow:0 0 34px rgba(50,161,211,.14),inset 0 0 34px rgba(46,137,181,.09);animation:opsqCoreBreathe 3.2s ease-in-out infinite}.opsq-intelligence-mesh{position:absolute;inset:0;width:100%;height:100%}.opsq-mesh-nodes circle{transform-box:fill-box;transform-origin:center;animation:opsqNode 1.9s ease-in-out infinite}.opsq-core-scan{position:absolute;z-index:5;left:20%;right:20%;top:50%;height:1px;background:linear-gradient(90deg,transparent,#71d6ff,transparent);box-shadow:0 0 8px rgba(92,210,255,.35)}.opsq-core-eye{position:absolute;z-index:6;left:50%;top:50%;width:50px;height:9px;transform:translate(-50%,-50%);display:flex;gap:7px;justify-content:center;opacity:.15}.opsq-core-eye span{width:17px;height:2px;background:linear-gradient(90deg,transparent,#89e5ff,transparent);box-shadow:0 0 10px rgba(102,218,255,.8)}
+        .opsq-pulse{position:absolute;left:50%;top:50%;width:175px;height:175px;border:1px solid rgba(91,203,246,.35);border-radius:50%;transform:translate(-50%,-50%);opacity:0}.is-speaking .opsq-pulse{animation:opsqPulse 2.15s ease-out infinite}.is-speaking .pulse-b{animation-delay:.7s}.is-speaking .pulse-c{animation-delay:1.4s}.phase-core .opsq-core-eye,.phase-greet .opsq-core-eye{opacity:.9}.is-finished .opsq-core-shell{box-shadow:0 0 36px rgba(70,190,139,.14),inset 0 0 30px rgba(50,152,115,.08)}
+        .opsq-core-caption{position:absolute;top:50%;transform:translateY(-50%);display:grid;gap:3px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.opsq-core-caption.left{right:calc(100% - 12px);text-align:right}.opsq-core-caption.right{left:calc(100% - 12px)}.opsq-core-caption small{font-size:7px;letter-spacing:.18em;color:#456e83}.opsq-core-caption strong{font-size:9px;letter-spacing:.13em;color:#7fc8e9}
+        .opsq-opening-foot{display:grid;gap:13px}.opsq-transmission{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.opsq-transmission-label{display:grid;gap:2px;min-width:145px}.opsq-transmission-label b{font-size:9px;letter-spacing:.14em;color:#77c9ef}.opsq-transmission-label span{font-size:8px;letter-spacing:.08em;color:#4e7285}.opsq-transmission-track{height:2px;background:rgba(95,158,190,.12);overflow:hidden}.opsq-transmission-track>i{display:block;height:100%;background:linear-gradient(90deg,#2184bd,#6bd8ff);box-shadow:0 0 12px rgba(75,196,246,.35);transition:width .1s linear}.opsq-transmission-percent{font-size:9px;color:#699bb3}.opsq-action-row{height:45px;display:flex;justify-content:flex-end;align-items:center}.opsq-play-btn,.opsq-enter-btn{border-radius:10px;padding:10px 16px;font-size:11px;font-weight:850;cursor:pointer}.opsq-play-btn{border:1px solid rgba(94,187,242,.45);background:#0b314a;color:#e8f7ff}.opsq-enter-btn{border:1px solid rgba(93,190,145,.55);background:linear-gradient(180deg,#176144,#124b36);color:#f0fff7;min-width:190px}.opsq-wait-state{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:8px;letter-spacing:.11em;color:#476a7c}.opsq-status-dot{display:inline-block;width:5px;height:5px;border-radius:50%;background:#4aa9d4;box-shadow:0 0 9px rgba(67,181,228,.7);margin-right:7px}.phase-ready .opsq-status-dot{background:#63c998}
+        @media(max-width:700px){.opsq-opening-shell{min-height:620px;padding:22px 19px}.opsq-cinematic-core{width:270px;height:285px}.opsq-core-shell{width:150px;height:150px}.opsq-progress-orbit{width:208px;height:208px}.opsq-orbit-a{width:226px;height:226px}.opsq-orbit-b{width:245px;height:184px}.opsq-orbit-c{width:174px;height:250px}.opsq-core-caption{display:none}.opsq-opening-head span{display:none}.opsq-stage-copy h1{font-size:40px}.opsq-transmission{grid-template-columns:1fr auto}.opsq-transmission-label{grid-column:1/-1}.opsq-action-row{justify-content:stretch}.opsq-play-btn,.opsq-enter-btn{width:100%}}
       `}</style>
-      <section role="dialog" aria-modal="true" aria-label="Bom dia do OpsQuestion" style={{ width:"min(640px,100%)", border:"1px solid rgba(79,190,255,.48)", background:"linear-gradient(180deg,rgba(6,25,39,.99),rgba(3,14,24,.99))", borderRadius:20, boxShadow:"0 30px 110px rgba(0,0,0,.72)", color:"#eef8ff", padding:"24px 28px", display:"grid", gap:14 }}>
-        <div style={{ display:"flex", justifyContent:"space-between", gap:12 }}><b style={{ color:"#72bff0", fontSize:10.5, letterSpacing:".14em" }}>OPSQUESTION · INÍCIO DE SEMANA</b><b style={{ color:"#557a92", fontSize:9.5, letterSpacing:".08em" }}>SISTEMA OPERACIONAL</b></div>
-        <SpeakingOrb speaking={playing} finished={finished} />
-        <div style={{ textAlign:"center" }}><h1 style={{ margin:0, fontFamily:"Inter Tight,Inter,sans-serif", fontSize:"clamp(30px,6vw,46px)", letterSpacing:"-.035em" }}>Bom dia, {greeting.first_name}.</h1><p style={{ color:"#adc4d4", fontSize:14.5, lineHeight:1.6 }}>Nova semana operacional iniciada. Organização, execução e bons resultados por aí.</p></div>
-        {needsAudio && <div style={{ border:"1px solid rgba(82,172,225,.18)", background:"rgba(15,51,73,.42)", borderRadius:12, padding:"11px 13px", display:"grid", gap:9 }}><div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}><div><b style={{ display:"block", color:"#ccecff", fontSize:11.5 }}>Abertura do OpsQuestion</b><span style={{ color:finished?"#78cda7":error?"#e7a19b":"#718fa3", fontSize:10 }}>{status}</span></div>{!finished && !playing && <button onClick={() => void startPlayback(true)} disabled={loading} autoFocus style={{ border:"1px solid rgba(94,187,242,.45)", background:"#0b314a", color:"#e8f7ff", borderRadius:9, padding:"8px 12px", cursor:loading?"wait":"pointer", fontWeight:850 }}>{loading?"Carregando…":"▶ Tocar abertura"}</button>}</div><div style={{ height:4, borderRadius:999, overflow:"hidden", background:"rgba(120,163,190,.14)" }}><div style={{ width:`${Math.round(progress*100)}%`, height:"100%", background:finished?"#4aa77d":"#55baf2", transition:"width .12s linear" }} /></div></div>}
-        <div style={{ display:"flex", justifyContent:"flex-end" }}><button onClick={close} disabled={!canEnter} style={{ border:canEnter?"1px solid rgba(93,190,145,.52)":"1px solid rgba(112,135,151,.24)", background:canEnter?"#15503a":"#15212a", color:canEnter?"#f0fff7":"#667984", borderRadius:11, padding:"11px 18px", cursor:canEnter?"pointer":"not-allowed", fontWeight:900, minWidth:225 }}>{canEnter?"Entrar no dashboard":playing?"Aguarde o áudio terminar…":"Ouça a abertura para continuar"}</button></div>
+
+      <section role="dialog" aria-modal="true" aria-label="Abertura do OpsQuestion" className="opsq-opening-shell">
+        <i className="opsq-corner tl" /><i className="opsq-corner tr" /><i className="opsq-corner bl" /><i className="opsq-corner br" />
+        <header className="opsq-opening-head">
+          <b>OPSQUESTION // MONDAY INITIALIZATION</b>
+          <span>SESSION // {greeting.first_name.toUpperCase()} · OPS CORE</span>
+        </header>
+
+        <main className="opsq-opening-stage">
+          <CinematicCore speaking={playing} finished={finished} progress={progress} phase={phase} />
+          <div className="opsq-stage-copy">
+            {showGreeting ? (
+              <div className="opsq-greeting-copy">
+                <div className="opsq-stage-kicker">{showReady ? "OPERATION LAYER // READY" : "VOICE TRANSMISSION // ACTIVE"}</div>
+                <h1>Bom dia, {greeting.first_name}.</h1>
+                <p>Nova semana operacional iniciada. Organização, execução e bons resultados por aí.</p>
+              </div>
+            ) : phase === "core" ? (
+              <div className="opsq-system-copy"><span>INTELLIGENCE MESH</span><strong>VOICE CORE ONLINE</strong></div>
+            ) : (
+              <div className="opsq-system-copy"><span>OPSQUESTION</span><strong>{playing ? "INITIALIZING" : ready ? "AWAITING TRANSMISSION" : "BOOT SEQUENCE"}</strong></div>
+            )}
+          </div>
+        </main>
+
+        <footer className="opsq-opening-foot">
+          {needsAudio && (
+            <div className="opsq-transmission">
+              <div className="opsq-transmission-label">
+                <b><span className="opsq-status-dot" />{status}</b>
+                <span>{finished ? "OPERAÇÃO ONLINE" : playing ? "VOICE TRANSMISSION IN PROGRESS" : error ? "INTERAÇÃO NECESSÁRIA" : "OPSQUESTION AUDIO ENGINE"}</span>
+              </div>
+              <div className="opsq-transmission-track"><i style={{ width: `${Math.round(progress * 100)}%` }} /></div>
+              <div className="opsq-transmission-percent">{String(Math.round(progress * 100)).padStart(2, "0")}%</div>
+            </div>
+          )}
+
+          <div className="opsq-action-row">
+            {!finished && !loading && !playing && needsAudio ? (
+              <button className="opsq-play-btn" onClick={() => void startPlayback(true)} autoFocus>▶ Ativar voz</button>
+            ) : canEnter ? (
+              <button className="opsq-enter-btn" onClick={close} autoFocus>Entrar no dashboard →</button>
+            ) : (
+              <span className="opsq-wait-state">SEQUÊNCIA EM EXECUÇÃO · ACESSO LIBERADO AO FINAL</span>
+            )}
+          </div>
+        </footer>
       </section>
     </div>
   );
