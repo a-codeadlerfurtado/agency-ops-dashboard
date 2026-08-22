@@ -9,6 +9,7 @@ import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
+import LearningShortcut from "./learning-shortcut";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -40,6 +41,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <WeekendBalanceAlert />
         <OpsQuestionWidget />
         <OpsQuestionBrand />
+        <LearningShortcut />
       </body>
     </html>
   );
