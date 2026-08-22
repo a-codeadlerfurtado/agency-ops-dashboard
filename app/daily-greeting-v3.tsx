@@ -102,6 +102,45 @@ export default function DailyGreetingV3() {
     }
   };
 
+  // Chrome/Edge exigem que o AudioContext seja liberado dentro de um gesto real.
+  // Este componente já está montado na tela de login, então capturamos o clique/Enter
+  // antes da autenticação e mantemos o mesmo contexto vivo para a abertura pós-login.
+  useEffect(() => {
+    const unlockAudio = () => {
+      try {
+        let ctx = ctxRef.current;
+        if (!ctx || ctx.state === "closed") {
+          const Ctor = getAudioContextCtor();
+          ctx = new Ctor();
+          ctxRef.current = ctx;
+        }
+
+        const warmDestination = () => {
+          if (!ctx || ctx.state !== "running") return;
+          try {
+            const silent = ctx.createBufferSource();
+            silent.buffer = ctx.createBuffer(1, 1, 22050);
+            silent.connect(ctx.destination);
+            silent.start(0);
+          } catch {}
+        };
+
+        if (ctx.state === "running") warmDestination();
+        else void ctx.resume().then(warmDestination).catch(() => undefined);
+      } catch {}
+    };
+
+    document.addEventListener("pointerdown", unlockAudio, true);
+    document.addEventListener("keydown", unlockAudio, true);
+    document.addEventListener("touchstart", unlockAudio, { capture: true, passive: true });
+
+    return () => {
+      document.removeEventListener("pointerdown", unlockAudio, true);
+      document.removeEventListener("keydown", unlockAudio, true);
+      document.removeEventListener("touchstart", unlockAudio, true);
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -143,11 +182,12 @@ export default function DailyGreetingV3() {
       try {
         const bytes = decodeBundledAudio();
         const Ctor = getAudioContextCtor();
-        const ctx = new Ctor();
+        const existingCtx = ctxRef.current;
+        const ctx = existingCtx && existingCtx.state !== "closed" ? existingCtx : new Ctor();
         ctxRef.current = ctx;
         const decoded = await ctx.decodeAudioData(bytes.slice(0));
         if (cancelled) {
-          await ctx.close().catch(() => undefined);
+          if (ctx.state !== "closed") await ctx.close().catch(() => undefined);
           return;
         }
         bufferRef.current = decoded;
@@ -158,7 +198,7 @@ export default function DailyGreetingV3() {
           await ctx.resume();
           if (ctx.state === "running") void startPlayback(ctx, decoded, false);
         } catch {
-          // Se autoplay for bloqueado, o clique no botão desbloqueia o AudioContext.
+          // Fallback manual permanece disponível se a política do navegador ainda bloquear.
         }
       } catch (e) {
         if (!cancelled) {
