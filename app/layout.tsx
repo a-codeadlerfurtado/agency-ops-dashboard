@@ -20,7 +20,7 @@ import LeadQualityAlert from "./lead-quality-alert";
 import LearningShortcut from "./learning-shortcut";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
 import MotionSystem from "./motion-system";
-import DailyGreeting from "./daily-greeting-v2";
+import DailyGreeting from "./daily-greeting-v3";
 
 export const viewport: Viewport = {
   width: "device-width",
