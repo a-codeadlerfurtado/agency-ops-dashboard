@@ -20,6 +20,7 @@ import LeadQualityAlert from "./lead-quality-alert";
 import LearningShortcut from "./learning-shortcut";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
 import MotionSystem from "./motion-system";
+import GreetingAudioBridge from "./greeting-audio-bridge";
 import DailyGreeting from "./daily-greeting-v3";
 
 export const viewport: Viewport = {
@@ -43,6 +44,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         />
       </head>
       <body>
+        <GreetingAudioBridge />
         {children}
         <MotionSystem />
         <AIHeadRouter />
