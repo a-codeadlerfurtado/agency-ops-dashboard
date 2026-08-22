@@ -8,6 +8,7 @@ import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
 import OnboardingNavBridge from "./onboarding-nav-bridge";
 import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
+import OnboardingRequiredAlerts from "./onboarding-required-alerts";
 import OnboardingRoleRouter from "./onboarding-role-router";
 import CommercialNavigationBridge from "./commercial-navigation-bridge";
 import AIHeadRouter from "./ai-head-router";
@@ -45,6 +46,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <CampaignNotesBridge />
         <OnboardingNavBridge />
         <OnboardingAssignmentBridge />
+        <OnboardingRequiredAlerts />
         <OnboardingRoleRouter />
         <CommercialNavigationBridge />
         <IntegrationHealthBar />
