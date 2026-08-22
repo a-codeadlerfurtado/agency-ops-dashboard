@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-const AUDIO_URL = "/api/greeting-audio?v=20260822-force-audible-v8";
+const AUDIO_URL = "/api/greeting-audio?v=20260822-force-audible-v9";
 const SILENT_VOLUME = 0.001;
 
 export default function GreetingAudioBridge() {
@@ -14,36 +14,36 @@ export default function GreetingAudioBridge() {
     audio.muted = false;
     audio.volume = SILENT_VOLUME;
 
-    let armed = false;
     let openingActive = false;
     let disposed = false;
 
-    const armFromGesture = () => {
-      if (disposed || openingActive) return;
+    const playFromGesture = () => {
+      if (disposed) return;
       try {
+        const opening = Boolean(document.querySelector(".opsq-opening"));
         audio.muted = false;
-        audio.volume = SILENT_VOLUME;
-        audio.loop = true;
-        if (audio.ended) audio.currentTime = 0;
 
-        if (!audio.paused) {
-          armed = true;
+        if (opening) {
+          // Caminho garantido: se o usuário interagir enquanto a abertura está
+          // visível, o play audível acontece dentro do próprio gesto.
+          openingActive = true;
+          audio.loop = false;
+          audio.volume = 1;
+          try { audio.currentTime = 0; } catch {}
+          const result = audio.play();
+          if (result) void result.catch(() => undefined);
           return;
         }
 
+        // No login, autorizamos o MESMO elemento como áudio audível, porém em
+        // volume quase zero. Depois não precisamos pedir uma nova permissão.
+        audio.loop = true;
+        audio.volume = SILENT_VOLUME;
+        if (audio.ended) audio.currentTime = 0;
+        if (!audio.paused) return;
         const result = audio.play();
-        if (result) {
-          void result.then(() => {
-            if (!disposed) armed = true;
-          }).catch(() => {
-            armed = false;
-          });
-        } else {
-          armed = true;
-        }
-      } catch {
-        armed = false;
-      }
+        if (result) void result.catch(() => undefined);
+      } catch {}
     };
 
     const syncOpening = () => {
@@ -53,13 +53,15 @@ export default function GreetingAudioBridge() {
       if (opening && !openingActive) {
         openingActive = true;
         try {
-          // O elemento já foi autorizado por um gesto real do usuário no login.
-          // Não chamamos play() aqui: apenas voltamos para 0s e elevamos o volume
-          // do MESMO fluxo de mídia que já está reproduzindo.
           audio.loop = false;
           audio.muted = false;
-          audio.currentTime = 0;
           audio.volume = 1;
+          try { audio.currentTime = 0; } catch {}
+
+          // Se o login já autorizou o player, ele continua tocando ao elevar o
+          // volume. Se não autorizou, o botão/clique da abertura usa o caminho
+          // acima e chama play() dentro de um gesto real.
+          if (audio.paused) return;
         } catch {}
         return;
       }
@@ -73,13 +75,12 @@ export default function GreetingAudioBridge() {
           audio.muted = false;
           audio.volume = SILENT_VOLUME;
         } catch {}
-        armed = false;
       }
     };
 
-    document.addEventListener("pointerdown", armFromGesture, true);
-    document.addEventListener("keydown", armFromGesture, true);
-    document.addEventListener("touchstart", armFromGesture, { capture: true, passive: true });
+    document.addEventListener("pointerdown", playFromGesture, true);
+    document.addEventListener("keydown", playFromGesture, true);
+    document.addEventListener("touchstart", playFromGesture, { capture: true, passive: true });
 
     const observer = new MutationObserver(syncOpening);
     observer.observe(document.documentElement, { childList: true, subtree: true });
@@ -90,14 +91,13 @@ export default function GreetingAudioBridge() {
       disposed = true;
       observer.disconnect();
       window.clearInterval(poll);
-      document.removeEventListener("pointerdown", armFromGesture, true);
-      document.removeEventListener("keydown", armFromGesture, true);
-      document.removeEventListener("touchstart", armFromGesture, true);
+      document.removeEventListener("pointerdown", playFromGesture, true);
+      document.removeEventListener("keydown", playFromGesture, true);
+      document.removeEventListener("touchstart", playFromGesture, true);
       try {
         audio.pause();
         audio.src = "";
       } catch {}
-      void armed;
     };
   }, []);
 
