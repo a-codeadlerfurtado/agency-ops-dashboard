@@ -8,9 +8,9 @@ const CORS = {
   "access-control-max-age": "86400",
 };
 
-const AUDIO_VERSION = "20260822e";
-const AUDIO_PARTS = Array.from({ length: 11 }, (_, index) =>
-  `/audio/opsquestion-monday-mix-v2/part-${String(index).padStart(2, "0")}.bin?v=${AUDIO_VERSION}`
+const AUDIO_VERSION = "20260822g";
+const AUDIO_PARTS = Array.from({ length: 9 }, (_, index) =>
+  `/audio/opsquestion-monday-mix-web/part-${String(index).padStart(2, "0")}.bin?v=${AUDIO_VERSION}`
 );
 
 const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
@@ -125,7 +125,7 @@ Deno.serve(async (req: Request) => {
       role,
       audio_url: null,
       audio_parts: AUDIO_PARTS,
-      audio_duration_seconds: 12.56,
+      audio_duration_seconds: 12.64,
       test_mode: "ADLER_EVERY_LOGIN",
       login_at: loginAt,
     });
@@ -162,6 +162,6 @@ Deno.serve(async (req: Request) => {
     role,
     audio_url: null,
     audio_parts: forceAudio ? AUDIO_PARTS : null,
-    audio_duration_seconds: forceAudio ? 12.56 : null,
+    audio_duration_seconds: forceAudio ? 12.64 : null,
   });
 });
