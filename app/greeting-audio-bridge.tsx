@@ -2,8 +2,8 @@
 
 import { useEffect } from "react";
 
-const AUDIO_URL = "/api/greeting-audio?v=20260822-force-audible-v9";
-const SILENT_VOLUME = 0.001;
+const AUDIO_URL = "/api/greeting-audio?v=20260822-login-gesture-persistent-v10";
+const ARMED_GAIN = 0.00001;
 
 export default function GreetingAudioBridge() {
   useEffect(() => {
@@ -12,37 +12,78 @@ export default function GreetingAudioBridge() {
     audio.playsInline = true;
     audio.loop = true;
     audio.muted = false;
-    audio.volume = SILENT_VOLUME;
+    audio.volume = 1;
+    audio.load();
 
+    let ctx: AudioContext | null = null;
+    let source: MediaElementAudioSourceNode | null = null;
+    let gain: GainNode | null = null;
+    let primed = false;
     let openingActive = false;
     let disposed = false;
 
-    const playFromGesture = () => {
-      if (disposed) return;
+    const ensureGraph = () => {
+      if (ctx && source && gain) return { ctx, gain };
+      const AudioCtx = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      if (!AudioCtx) throw new Error("AudioContext indisponível");
+      ctx = new AudioCtx();
+      source = ctx.createMediaElementSource(audio);
+      gain = ctx.createGain();
+      gain.gain.value = ARMED_GAIN;
+      source.connect(gain);
+      gain.connect(ctx.destination);
+      return { ctx, gain };
+    };
+
+    const isLoginGesture = (event: Event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (!target) return false;
+      if (target.closest(".auth-submit")) return true;
+      if (event instanceof KeyboardEvent && event.key === "Enter" && target.closest(".auth-card form")) return true;
+      return false;
+    };
+
+    const primeFromLoginGesture = (event: Event) => {
+      if (disposed || openingActive || !isLoginGesture(event)) return;
       try {
-        const opening = Boolean(document.querySelector(".opsq-opening"));
-        audio.muted = false;
+        const graph = ensureGraph();
+        graph.gain.gain.cancelScheduledValues(graph.ctx.currentTime);
+        graph.gain.gain.setValueAtTime(ARMED_GAIN, graph.ctx.currentTime);
 
-        if (opening) {
-          // Caminho garantido: se o usuário interagir enquanto a abertura está
-          // visível, o play audível acontece dentro do próprio gesto.
-          openingActive = true;
-          audio.loop = false;
-          audio.volume = 1;
-          try { audio.currentTime = 0; } catch {}
-          const result = audio.play();
-          if (result) void result.catch(() => undefined);
-          return;
-        }
-
-        // No login, autorizamos o MESMO elemento como áudio audível, porém em
-        // volume quase zero. Depois não precisamos pedir uma nova permissão.
         audio.loop = true;
-        audio.volume = SILENT_VOLUME;
-        if (audio.ended) audio.currentTime = 0;
-        if (!audio.paused) return;
-        const result = audio.play();
-        if (result) void result.catch(() => undefined);
+        audio.muted = false;
+        audio.volume = 1;
+        try { audio.currentTime = 0; } catch {}
+
+        // As duas chamadas abaixo acontecem no MESMO call stack do clique/Enter
+        // usado para autenticar. Depois da autenticação não pedimos autoplay de novo.
+        if (graph.ctx.state !== "running") void graph.ctx.resume().catch(() => undefined);
+        const playPromise = audio.play();
+        primed = true;
+        if (playPromise) {
+          void playPromise.catch(() => {
+            primed = false;
+          });
+        }
+      } catch {
+        primed = false;
+      }
+    };
+
+    const releaseOpeningAudio = () => {
+      if (disposed || !openingActive) return;
+      try {
+        const graph = ensureGraph();
+        audio.loop = false;
+        audio.muted = false;
+        audio.volume = 1;
+        try { audio.currentTime = 0; } catch {}
+        graph.gain.gain.cancelScheduledValues(graph.ctx.currentTime);
+        graph.gain.gain.setValueAtTime(1, graph.ctx.currentTime);
+
+        // Se o play() já foi autorizado no login, apenas aumentar o ganho é suficiente.
+        // Não existe uma segunda solicitação de autoplay após a autenticação.
+        if (graph.ctx.state !== "running") void graph.ctx.resume().catch(() => undefined);
       } catch {}
     };
 
@@ -52,17 +93,7 @@ export default function GreetingAudioBridge() {
 
       if (opening && !openingActive) {
         openingActive = true;
-        try {
-          audio.loop = false;
-          audio.muted = false;
-          audio.volume = 1;
-          try { audio.currentTime = 0; } catch {}
-
-          // Se o login já autorizou o player, ele continua tocando ao elevar o
-          // volume. Se não autorizou, o botão/clique da abertura usa o caminho
-          // acima e chama play() dentro de um gesto real.
-          if (audio.paused) return;
-        } catch {}
+        releaseOpeningAudio();
         return;
       }
 
@@ -70,34 +101,48 @@ export default function GreetingAudioBridge() {
         openingActive = false;
         try {
           audio.pause();
-          audio.currentTime = 0;
           audio.loop = true;
           audio.muted = false;
-          audio.volume = SILENT_VOLUME;
+          audio.volume = 1;
+          audio.currentTime = 0;
+          if (ctx && gain) gain.gain.setValueAtTime(ARMED_GAIN, ctx.currentTime);
         } catch {}
+        primed = false;
       }
     };
 
-    document.addEventListener("pointerdown", playFromGesture, true);
-    document.addEventListener("keydown", playFromGesture, true);
-    document.addEventListener("touchstart", playFromGesture, { capture: true, passive: true });
+    const recoverAfterLoad = () => {
+      if (!openingActive) return;
+      releaseOpeningAudio();
+      // O play original foi solicitado durante o gesto de login. Em navegadores
+      // que só resolvem a Promise depois do buffer chegar, mantemos o mesmo pedido vivo.
+      if (primed && audio.paused) {
+        const playPromise = audio.play();
+        if (playPromise) void playPromise.catch(() => undefined);
+      }
+    };
+
+    document.addEventListener("pointerdown", primeFromLoginGesture, true);
+    document.addEventListener("keydown", primeFromLoginGesture, true);
+    audio.addEventListener("loadedmetadata", recoverAfterLoad);
+    audio.addEventListener("canplay", recoverAfterLoad);
 
     const observer = new MutationObserver(syncOpening);
     observer.observe(document.documentElement, { childList: true, subtree: true });
-    const poll = window.setInterval(syncOpening, 120);
+    const poll = window.setInterval(syncOpening, 80);
     syncOpening();
 
     return () => {
       disposed = true;
       observer.disconnect();
       window.clearInterval(poll);
-      document.removeEventListener("pointerdown", playFromGesture, true);
-      document.removeEventListener("keydown", playFromGesture, true);
-      document.removeEventListener("touchstart", playFromGesture, true);
-      try {
-        audio.pause();
-        audio.src = "";
-      } catch {}
+      document.removeEventListener("pointerdown", primeFromLoginGesture, true);
+      document.removeEventListener("keydown", primeFromLoginGesture, true);
+      audio.removeEventListener("loadedmetadata", recoverAfterLoad);
+      audio.removeEventListener("canplay", recoverAfterLoad);
+      try { audio.pause(); } catch {}
+      try { if (ctx && ctx.state !== "closed") void ctx.close(); } catch {}
+      audio.src = "";
     };
   }, []);
 
