@@ -2,8 +2,12 @@
 
 import { useEffect } from "react";
 
-const AUDIO_URL = "/api/greeting-audio?v=20260822-login-gesture-persistent-v10";
+const AUDIO_URL = "/api/greeting-audio?v=20260822-login-gesture-single-stream-v11";
 const ARMED_GAIN = 0.00001;
+
+function emit(name: string, detail?: Record<string, unknown>) {
+  window.dispatchEvent(new CustomEvent(name, { detail }));
+}
 
 export default function GreetingAudioBridge() {
   useEffect(() => {
@@ -20,6 +24,7 @@ export default function GreetingAudioBridge() {
     let gain: GainNode | null = null;
     let primed = false;
     let openingActive = false;
+    let announcedStart = false;
     let disposed = false;
 
     const ensureGraph = () => {
@@ -39,8 +44,7 @@ export default function GreetingAudioBridge() {
       const target = event.target instanceof Element ? event.target : null;
       if (!target) return false;
       if (target.closest(".auth-submit")) return true;
-      if (event instanceof KeyboardEvent && event.key === "Enter" && target.closest(".auth-card form")) return true;
-      return false;
+      return event instanceof KeyboardEvent && event.key === "Enter" && Boolean(target.closest(".auth-card form"));
     };
 
     const primeFromLoginGesture = (event: Event) => {
@@ -49,25 +53,34 @@ export default function GreetingAudioBridge() {
         const graph = ensureGraph();
         graph.gain.gain.cancelScheduledValues(graph.ctx.currentTime);
         graph.gain.gain.setValueAtTime(ARMED_GAIN, graph.ctx.currentTime);
-
         audio.loop = true;
         audio.muted = false;
         audio.volume = 1;
         try { audio.currentTime = 0; } catch {}
 
-        // As duas chamadas abaixo acontecem no MESMO call stack do clique/Enter
-        // usado para autenticar. Depois da autenticação não pedimos autoplay de novo.
+        // Autorização real: acontece dentro do clique/Enter usado para fazer login.
+        // Esse MESMO elemento continua vivo após o Supabase autenticar.
         if (graph.ctx.state !== "running") void graph.ctx.resume().catch(() => undefined);
         const playPromise = audio.play();
         primed = true;
         if (playPromise) {
-          void playPromise.catch(() => {
+          void playPromise.catch((error) => {
             primed = false;
+            emit("opsq:greeting-audio-error", { message: error instanceof Error ? error.message : "Falha ao autorizar áudio no login" });
           });
         }
-      } catch {
+      } catch (error) {
         primed = false;
+        emit("opsq:greeting-audio-error", { message: error instanceof Error ? error.message : "Falha ao preparar áudio" });
       }
+    };
+
+    const announceStart = () => {
+      if (announcedStart) return;
+      announcedStart = true;
+      emit("opsq:greeting-audio-start", {
+        duration: Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 22.824,
+      });
     };
 
     const releaseOpeningAudio = () => {
@@ -80,11 +93,11 @@ export default function GreetingAudioBridge() {
         try { audio.currentTime = 0; } catch {}
         graph.gain.gain.cancelScheduledValues(graph.ctx.currentTime);
         graph.gain.gain.setValueAtTime(1, graph.ctx.currentTime);
-
-        // Se o play() já foi autorizado no login, apenas aumentar o ganho é suficiente.
-        // Não existe uma segunda solicitação de autoplay após a autenticação.
         if (graph.ctx.state !== "running") void graph.ctx.resume().catch(() => undefined);
-      } catch {}
+        announceStart();
+      } catch (error) {
+        emit("opsq:greeting-audio-error", { message: error instanceof Error ? error.message : "Falha ao liberar áudio" });
+      }
     };
 
     const syncOpening = () => {
@@ -93,12 +106,14 @@ export default function GreetingAudioBridge() {
 
       if (opening && !openingActive) {
         openingActive = true;
+        announcedStart = false;
         releaseOpeningAudio();
         return;
       }
 
       if (!opening && openingActive) {
         openingActive = false;
+        announcedStart = false;
         try {
           audio.pause();
           audio.loop = true;
@@ -114,22 +129,37 @@ export default function GreetingAudioBridge() {
     const recoverAfterLoad = () => {
       if (!openingActive) return;
       releaseOpeningAudio();
-      // O play original foi solicitado durante o gesto de login. Em navegadores
-      // que só resolvem a Promise depois do buffer chegar, mantemos o mesmo pedido vivo.
       if (primed && audio.paused) {
         const playPromise = audio.play();
-        if (playPromise) void playPromise.catch(() => undefined);
+        if (playPromise) {
+          void playPromise.then(announceStart).catch((error) => {
+            emit("opsq:greeting-audio-error", { message: error instanceof Error ? error.message : "Falha ao continuar áudio" });
+          });
+        }
       }
+    };
+
+    const onEnded = () => {
+      if (!openingActive) return;
+      emit("opsq:greeting-audio-progress", { progress: 1, currentTime: audio.duration || 22.824, duration: audio.duration || 22.824 });
+      emit("opsq:greeting-audio-ended");
     };
 
     document.addEventListener("pointerdown", primeFromLoginGesture, true);
     document.addEventListener("keydown", primeFromLoginGesture, true);
     audio.addEventListener("loadedmetadata", recoverAfterLoad);
     audio.addEventListener("canplay", recoverAfterLoad);
+    audio.addEventListener("ended", onEnded);
 
     const observer = new MutationObserver(syncOpening);
     observer.observe(document.documentElement, { childList: true, subtree: true });
-    const poll = window.setInterval(syncOpening, 80);
+    const poll = window.setInterval(() => {
+      syncOpening();
+      if (!openingActive) return;
+      const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 22.824;
+      const progress = Math.min(1, Math.max(0, audio.currentTime) / duration);
+      emit("opsq:greeting-audio-progress", { progress, currentTime: audio.currentTime, duration });
+    }, 80);
     syncOpening();
 
     return () => {
@@ -140,6 +170,7 @@ export default function GreetingAudioBridge() {
       document.removeEventListener("keydown", primeFromLoginGesture, true);
       audio.removeEventListener("loadedmetadata", recoverAfterLoad);
       audio.removeEventListener("canplay", recoverAfterLoad);
+      audio.removeEventListener("ended", onEnded);
       try { audio.pause(); } catch {}
       try { if (ctx && ctx.state !== "closed") void ctx.close(); } catch {}
       audio.src = "";
