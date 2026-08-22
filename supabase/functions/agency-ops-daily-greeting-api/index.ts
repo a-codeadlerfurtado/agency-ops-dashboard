@@ -74,7 +74,7 @@ Deno.serve(async (req: Request) => {
   const adlerTest = person === "Adler Furtado";
   const forceAudio = normalMonday || adlerTest;
   const loginAt = String(user.last_sign_in_at || user.updated_at || "");
-  const audioUrl = "/audio/opsquestion-monday-10s.mp3?v=20260822c";
+  const audioUrl = "/audio/opsquestion-monday-mix-v1.mp3?v=20260822d";
 
   if (adlerTest) {
     const { data: existing, error: existingError } = await ops.from("daily_user_greetings")
