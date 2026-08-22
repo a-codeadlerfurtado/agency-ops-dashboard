@@ -96,8 +96,6 @@ export default function DailyGreetingV3() {
     }, 100);
   };
 
-  // A ativação de áudio acontece no gesto real do usuário ANTES da autenticação.
-  // O contexto permanece vivo e é reutilizado quando a saudação chega do backend.
   useEffect(() => {
     const primeAudio = () => {
       try {
@@ -209,7 +207,8 @@ export default function DailyGreetingV3() {
     audio.volume = 1;
     try { audio.currentTime = 0; } catch {}
     audio.onended = markEnded;
-    await audio.play();
+    const playPromise = audio.play();
+    await playPromise;
     beginProgress(Number.isFinite(audio.duration) ? audio.duration : FALLBACK_DURATION, () => audio.currentTime);
   };
 
@@ -220,46 +219,56 @@ export default function DailyGreetingV3() {
     setError(null);
     endingNaturallyRef.current = false;
 
-    try {
-      let ctx = ctxRef.current;
-      const Ctor = getAudioContextCtor();
+    if (fromClick) {
+      let clickCtx: AudioContext | null = null;
+      try {
+        const Ctor = getAudioContextCtor();
+        clickCtx = ctxRef.current;
+        if (Ctor && (!clickCtx || clickCtx.state === "closed")) {
+          clickCtx = new Ctor();
+          ctxRef.current = clickCtx;
+        }
+        if (clickCtx && clickCtx.state !== "running") void clickCtx.resume().catch(() => undefined);
 
-      if (fromClick && Ctor && (!ctx || ctx.state === "closed" || ctx.state !== "running")) {
-        if (ctx && ctx.state !== "closed") await ctx.close().catch(() => undefined);
-        ctx = new Ctor();
-        ctxRef.current = ctx;
-        await ctx.resume();
+        // CRÍTICO: audio.play() é chamado no mesmo call stack do clique.
+        await playWithHtmlAudio();
+        return;
+      } catch (htmlError) {
+        try {
+          if (clickCtx) {
+            if (clickCtx.state !== "running") await clickCtx.resume();
+            if (clickCtx.state === "running") {
+              await playWithWebAudio(clickCtx, generation);
+              return;
+            }
+          }
+        } catch (webError) {
+          setLoading(false);
+          setPlaying(false);
+          const first = htmlError instanceof Error ? htmlError.message : "HTML Audio falhou";
+          const second = webError instanceof Error ? webError.message : "Web Audio falhou";
+          setError(`${first} · ${second}`);
+          return;
+        }
+        setLoading(false);
+        setPlaying(false);
+        setError(htmlError instanceof Error ? htmlError.message : "Não foi possível iniciar a voz.");
+        return;
       }
+    }
 
+    try {
+      const ctx = ctxRef.current;
       if (ctx && ctx.state === "running") {
         await playWithWebAudio(ctx, generation);
         return;
       }
-
-      if (fromClick) {
-        await playWithHtmlAudio();
-        return;
-      }
-
       setLoading(false);
       setError("Áudio pronto. Clique em tocar para liberar a voz.");
-    } catch (webAudioError) {
-      if (fromClick) {
-        try {
-          await playWithHtmlAudio();
-          return;
-        } catch (htmlError) {
-          setLoading(false);
-          setPlaying(false);
-          const first = webAudioError instanceof Error ? webAudioError.message : "Web Audio falhou";
-          const second = htmlError instanceof Error ? htmlError.message : "HTML Audio falhou";
-          setError(`${first} · ${second}`);
-          return;
-        }
-      }
+    } catch (errorValue) {
       setLoading(false);
       setPlaying(false);
-      setError(webAudioError instanceof Error ? webAudioError.message : "Não foi possível iniciar a voz.");
+      setError(errorValue instanceof Error ? errorValue.message : "Não foi possível iniciar a voz.");
     }
   };
 
