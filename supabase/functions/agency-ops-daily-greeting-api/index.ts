@@ -74,6 +74,7 @@ Deno.serve(async (req: Request) => {
   const adlerTest = person === "Adler Furtado";
   const forceAudio = normalMonday || adlerTest;
   const loginAt = String(user.last_sign_in_at || user.updated_at || "");
+  const audioUrl = "/audio/opsquestion-monday-10s.mp3?v=20260822c";
 
   if (adlerTest) {
     const { data: existing, error: existingError } = await ops.from("daily_user_greetings")
@@ -117,7 +118,7 @@ Deno.serve(async (req: Request) => {
       person,
       first_name: firstName,
       role,
-      audio_url: "/audio/opsquestion-monday-10s.mp3",
+      audio_url: audioUrl,
       test_mode: "ADLER_EVERY_LOGIN",
       login_at: loginAt,
     });
@@ -152,6 +153,6 @@ Deno.serve(async (req: Request) => {
     person,
     first_name: firstName,
     role,
-    audio_url: forceAudio ? "/audio/opsquestion-monday-10s.mp3" : null,
+    audio_url: forceAudio ? audioUrl : null,
   });
 });
