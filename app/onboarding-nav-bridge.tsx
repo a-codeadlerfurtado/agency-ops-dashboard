@@ -82,7 +82,9 @@ export default function OnboardingNavBridge() {
       const target = event.target instanceof Element ? event.target.closest("button") : null;
       if (!target) return;
       const label = normalize(target.textContent || "");
-      if (label !== "onboarding") return;
+      // O item do menu pode conter badge (ex.: "Onboarding 9").
+      // Antes o match exato falhava e mantinha o usuário no funil embutido antigo.
+      if (!label.startsWith("onboarding")) return;
       const nav = target.closest("nav, .view-nav, .side-nav, .sidenav, .sidebar");
       if (!nav) return;
       event.preventDefault();
