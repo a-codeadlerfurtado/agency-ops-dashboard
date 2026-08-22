@@ -8,10 +8,8 @@ const CORS = {
   "access-control-max-age": "86400",
 };
 
-const AUDIO_VERSION = "20260822g";
-const AUDIO_PARTS = Array.from({ length: 9 }, (_, index) =>
-  `/audio/opsquestion-monday-mix-web/part-${String(index).padStart(2, "0")}.bin?v=${AUDIO_VERSION}`
-);
+const AUDIO_VERSION = "20260822-full-v5-22s";
+const AUDIO_DURATION_SECONDS = 22.77;
 
 const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -100,6 +98,7 @@ Deno.serve(async (req: Request) => {
       test_mode: "ADLER_EVERY_LOGIN",
       adler_test_login_at: loginAt,
       audio_version: AUDIO_VERSION,
+      audio_duration_seconds: AUDIO_DURATION_SECONDS,
     };
 
     const { error: writeError } = await ops.from("daily_user_greetings").upsert({
@@ -123,9 +122,8 @@ Deno.serve(async (req: Request) => {
       person,
       first_name: firstName,
       role,
-      audio_url: null,
-      audio_parts: AUDIO_PARTS,
-      audio_duration_seconds: 12.64,
+      audio_duration_seconds: AUDIO_DURATION_SECONDS,
+      audio_version: AUDIO_VERSION,
       test_mode: "ADLER_EVERY_LOGIN",
       login_at: loginAt,
     });
@@ -139,7 +137,12 @@ Deno.serve(async (req: Request) => {
       role,
       is_monday: normalMonday,
       audio_expected: normalMonday,
-      metadata: { timezone: "America/Sao_Paulo", source: "dashboard_first_daily_access", audio_version: forceAudio ? AUDIO_VERSION : null },
+      metadata: {
+        timezone: "America/Sao_Paulo",
+        source: "dashboard_first_daily_access",
+        audio_version: forceAudio ? AUDIO_VERSION : null,
+        audio_duration_seconds: forceAudio ? AUDIO_DURATION_SECONDS : null,
+      },
     })
     .select("user_key,greeting_date,shown_at,is_monday")
     .maybeSingle();
@@ -160,8 +163,7 @@ Deno.serve(async (req: Request) => {
     person,
     first_name: firstName,
     role,
-    audio_url: null,
-    audio_parts: forceAudio ? AUDIO_PARTS : null,
-    audio_duration_seconds: forceAudio ? 12.64 : null,
+    audio_duration_seconds: forceAudio ? AUDIO_DURATION_SECONDS : null,
+    audio_version: forceAudio ? AUDIO_VERSION : null,
   });
 });
