@@ -1,28 +1,12 @@
 "use client";
 
 import { useEffect } from "react";
-import { GREETING_AUDIO_V6_00 } from "./greeting-audio-v6/part-00";
-import { GREETING_AUDIO_V6_01 } from "./greeting-audio-v6/part-01";
-import { GREETING_AUDIO_V6_02 } from "./greeting-audio-v6/part-02";
-import { GREETING_AUDIO_V6_03 } from "./greeting-audio-v6/part-03";
 
+const AUDIO_URL = "/audio/opsquestion-greeting-full-v6.mp3?v=20260822-webaudio-static-v15";
 const FALLBACK_DURATION = 22.824;
-const FULL_GREETING_B64 = [
-  GREETING_AUDIO_V6_00,
-  GREETING_AUDIO_V6_03,
-  GREETING_AUDIO_V6_02,
-  GREETING_AUDIO_V6_01,
-].join("").replace(/\s+/g, "");
 
 function emit(name: string, detail?: Record<string, unknown>) {
   window.dispatchEvent(new CustomEvent(name, { detail }));
-}
-
-function base64ToArrayBuffer(value: string) {
-  const binary = window.atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes.buffer;
 }
 
 export default function GreetingAudioBridge() {
@@ -42,6 +26,8 @@ export default function GreetingAudioBridge() {
     let openingActive = false;
     let unlocked = ctx.state === "running";
     let unlockPromise: Promise<void> | null = null;
+    let keeperOscillator: OscillatorNode | null = null;
+    let keeperGain: GainNode | null = null;
     let source: AudioBufferSourceNode | null = null;
     let startedAt = 0;
     let duration = FALLBACK_DURATION;
@@ -49,26 +35,30 @@ export default function GreetingAudioBridge() {
     let playbackStarted = false;
 
     const loadDecodedBuffer = async () => {
-      if (!FULL_GREETING_B64) throw new Error("Áudio embutido vazio");
-      let bytes: ArrayBuffer;
-      try {
-        bytes = base64ToArrayBuffer(FULL_GREETING_B64);
-      } catch (error) {
-        throw new Error(error instanceof Error ? `Falha ao ler áudio embutido: ${error.message}` : "Falha ao ler áudio embutido");
-      }
-      if (!bytes.byteLength) throw new Error("Áudio embutido vazio");
+      const response = await fetch(AUDIO_URL, {
+        cache: "force-cache",
+        credentials: "same-origin",
+      });
+      if (!response.ok) throw new Error(`Falha ao carregar MP3 (${response.status})`);
+
+      const bytes = await response.arrayBuffer();
+      if (!bytes.byteLength) throw new Error("MP3 vazio");
+
       const decoded = await ctx.decodeAudioData(bytes.slice(0));
-      if (!decoded.duration || !Number.isFinite(decoded.duration)) throw new Error("Áudio embutido inválido");
+      if (!decoded.duration || !Number.isFinite(decoded.duration)) throw new Error("MP3 inválido");
       duration = decoded.duration;
       return decoded;
     };
 
-    // O buffer é preparado assim que a tela de login monta. Não existe mais
-    // chamada HTTP para /api/greeting-audio, portanto um 500 do Worker não pode
-    // bloquear a abertura.
+    // Pré-carrega e decodifica o arquivo binário real ainda na tela de login.
+    // Não usa <audio>, Blob URL, atob(), chunks base64 nem rota dinâmica.
     const bufferPromise = loadDecodedBuffer();
     void bufferPromise.catch((error) => {
-      if (!disposed) emit("opsq:greeting-audio-error", { message: error instanceof Error ? error.message : "Falha ao preparar áudio" });
+      if (!disposed) {
+        emit("opsq:greeting-audio-error", {
+          message: error instanceof Error ? error.message : "Falha ao preparar o MP3",
+        });
+      }
     });
 
     const isLoginGesture = (event: Event) => {
@@ -79,28 +69,59 @@ export default function GreetingAudioBridge() {
       return event instanceof KeyboardEvent && event.key === "Enter" && Boolean(target.closest(".auth-card form"));
     };
 
+    const startKeeper = () => {
+      if (keeperOscillator) return;
+      try {
+        keeperOscillator = ctx.createOscillator();
+        keeperGain = ctx.createGain();
+        keeperGain.gain.value = 0;
+        keeperOscillator.connect(keeperGain).connect(ctx.destination);
+        keeperOscillator.start();
+      } catch {
+        keeperOscillator = null;
+        keeperGain = null;
+      }
+    };
+
+    const stopKeeper = () => {
+      if (keeperOscillator) {
+        try { keeperOscillator.stop(); } catch {}
+        try { keeperOscillator.disconnect(); } catch {}
+      }
+      if (keeperGain) {
+        try { keeperGain.disconnect(); } catch {}
+      }
+      keeperOscillator = null;
+      keeperGain = null;
+    };
+
     const unlockFromLoginGesture = (event: Event) => {
       if (disposed || !isLoginGesture(event)) return;
+      if (unlockPromise) return;
+
       try {
-        if (!unlockPromise) {
-          unlockPromise = (ctx.state === "running" ? Promise.resolve() : ctx.resume())
-            .then(() => {
-              unlocked = true;
-              const oscillator = ctx.createOscillator();
-              const silentGain = ctx.createGain();
-              silentGain.gain.value = 0;
-              oscillator.connect(silentGain).connect(ctx.destination);
-              oscillator.start();
-              oscillator.stop(ctx.currentTime + 0.02);
-            })
-            .catch((error) => {
-              unlocked = false;
-              emit("opsq:greeting-audio-error", { message: error instanceof Error ? error.message : "Falha ao liberar áudio no login" });
+        unlockPromise = (ctx.state === "running" ? Promise.resolve() : ctx.resume())
+          .then(() => {
+            unlocked = ctx.state === "running";
+            if (!unlocked) throw new Error("AudioContext não entrou em execução");
+
+            // Mantém o contexto efetivamente ativo até a abertura aparecer.
+            // O oscilador é inaudível (gain=0) e é encerrado assim que a voz começa.
+            startKeeper();
+          })
+          .catch((error) => {
+            unlocked = false;
+            unlockPromise = null;
+            emit("opsq:greeting-audio-error", {
+              message: error instanceof Error ? error.message : "Falha ao liberar áudio no login",
             });
-        }
+          });
       } catch (error) {
         unlocked = false;
-        emit("opsq:greeting-audio-error", { message: error instanceof Error ? error.message : "Falha ao liberar áudio no login" });
+        unlockPromise = null;
+        emit("opsq:greeting-audio-error", {
+          message: error instanceof Error ? error.message : "Falha ao liberar áudio no login",
+        });
       }
     };
 
@@ -123,20 +144,34 @@ export default function GreetingAudioBridge() {
 
     const startOpeningPlayback = async () => {
       if (disposed || !openingActive || playbackStarted) return;
+
       try {
         if (unlockPromise) await unlockPromise;
         if (!unlocked && ctx.state === "running") unlocked = true;
-        if (!unlocked) throw new Error("Áudio não foi liberado pelo gesto de login");
+        if (!unlocked) throw new Error("Áudio não foi liberado pelo clique de login");
 
         const buffer = await bufferPromise;
         if (disposed || !openingActive || playbackStarted) return;
+
+        if (ctx.state !== "running") {
+          // O contexto foi previamente autorizado pelo clique do login. Esse resume
+          // apenas recupera uma suspensão automática do navegador, sem novo gesto.
+          await ctx.resume();
+        }
+        if (ctx.state !== "running") throw new Error("AudioContext suspenso");
+
+        stopKeeper();
 
         const nextSource = ctx.createBufferSource();
         nextSource.buffer = buffer;
         nextSource.connect(master);
         nextSource.onended = () => {
           if (disposed || !openingActive || source !== nextSource) return;
-          emit("opsq:greeting-audio-progress", { progress: 1, currentTime: duration, duration });
+          emit("opsq:greeting-audio-progress", {
+            progress: 1,
+            currentTime: duration,
+            duration,
+          });
           emit("opsq:greeting-audio-ended");
           playbackStarted = false;
         };
@@ -148,13 +183,16 @@ export default function GreetingAudioBridge() {
         announceStart();
       } catch (error) {
         playbackStarted = false;
-        emit("opsq:greeting-audio-error", { message: error instanceof Error ? error.message : "Falha ao iniciar áudio automático" });
+        emit("opsq:greeting-audio-error", {
+          message: error instanceof Error ? error.message : "Falha ao iniciar áudio automático",
+        });
       }
     };
 
     const syncOpening = () => {
       if (disposed) return;
       const opening = Boolean(document.querySelector(".opsq-opening"));
+
       if (opening && !openingActive) {
         openingActive = true;
         announcedStart = false;
@@ -162,9 +200,11 @@ export default function GreetingAudioBridge() {
         void startOpeningPlayback();
         return;
       }
+
       if (!opening && openingActive) {
         openingActive = false;
         stopPlayback();
+        stopKeeper();
       }
     };
 
@@ -178,13 +218,19 @@ export default function GreetingAudioBridge() {
     const poll = window.setInterval(() => {
       syncOpening();
       if (!openingActive) return;
+
       if (!playbackStarted) {
         void startOpeningPlayback();
         return;
       }
+
       const elapsed = Math.max(0, ctx.currentTime - startedAt);
       const progress = Math.min(1, elapsed / Math.max(duration, 0.001));
-      emit("opsq:greeting-audio-progress", { progress, currentTime: elapsed, duration });
+      emit("opsq:greeting-audio-progress", {
+        progress,
+        currentTime: elapsed,
+        duration,
+      });
     }, 80);
 
     syncOpening();
@@ -197,6 +243,7 @@ export default function GreetingAudioBridge() {
       document.removeEventListener("keydown", unlockFromLoginGesture, true);
       document.removeEventListener("submit", unlockFromLoginGesture, true);
       stopPlayback();
+      stopKeeper();
       try { master.disconnect(); } catch {}
       try { if (ctx.state !== "closed") void ctx.close(); } catch {}
     };
