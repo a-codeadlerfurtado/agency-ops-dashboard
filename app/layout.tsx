@@ -10,7 +10,7 @@ import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
-import DashboardEnhancements from "./dashboard-enhancements";
+import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -39,7 +39,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OnboardingNavBridge />
         <OnboardingAssignmentBridge />
         <IntegrationHealthBar />
-        <DashboardEnhancements />
+        <DashboardEnhancementsGate />
         <WeekendBalanceAlert />
         <OpsQuestionWidget />
         <OpsQuestionBrand />
