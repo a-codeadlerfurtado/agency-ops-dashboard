@@ -8,6 +8,11 @@ const CORS = {
   "access-control-max-age": "86400",
 };
 
+const AUDIO_VERSION = "20260822e";
+const AUDIO_PARTS = Array.from({ length: 11 }, (_, index) =>
+  `/audio/opsquestion-monday-mix-v2/part-${String(index).padStart(2, "0")}.bin?v=${AUDIO_VERSION}`
+);
+
 const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
@@ -74,7 +79,6 @@ Deno.serve(async (req: Request) => {
   const adlerTest = person === "Adler Furtado";
   const forceAudio = normalMonday || adlerTest;
   const loginAt = String(user.last_sign_in_at || user.updated_at || "");
-  const audioUrl = "/audio/opsquestion-monday-mix-v1.mp3?v=20260822d";
 
   if (adlerTest) {
     const { data: existing, error: existingError } = await ops.from("daily_user_greetings")
@@ -95,6 +99,7 @@ Deno.serve(async (req: Request) => {
       source: "dashboard_first_daily_access",
       test_mode: "ADLER_EVERY_LOGIN",
       adler_test_login_at: loginAt,
+      audio_version: AUDIO_VERSION,
     };
 
     const { error: writeError } = await ops.from("daily_user_greetings").upsert({
@@ -118,7 +123,9 @@ Deno.serve(async (req: Request) => {
       person,
       first_name: firstName,
       role,
-      audio_url: audioUrl,
+      audio_url: null,
+      audio_parts: AUDIO_PARTS,
+      audio_duration_seconds: 12.56,
       test_mode: "ADLER_EVERY_LOGIN",
       login_at: loginAt,
     });
@@ -132,7 +139,7 @@ Deno.serve(async (req: Request) => {
       role,
       is_monday: normalMonday,
       audio_expected: normalMonday,
-      metadata: { timezone: "America/Sao_Paulo", source: "dashboard_first_daily_access" },
+      metadata: { timezone: "America/Sao_Paulo", source: "dashboard_first_daily_access", audio_version: forceAudio ? AUDIO_VERSION : null },
     })
     .select("user_key,greeting_date,shown_at,is_monday")
     .maybeSingle();
@@ -153,6 +160,8 @@ Deno.serve(async (req: Request) => {
     person,
     first_name: firstName,
     role,
-    audio_url: forceAudio ? audioUrl : null,
+    audio_url: null,
+    audio_parts: forceAudio ? AUDIO_PARTS : null,
+    audio_duration_seconds: forceAudio ? 12.56 : null,
   });
 });
