@@ -86,7 +86,7 @@ export default function OnboardingOverviewPage() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  const [viewMode, setViewMode] = useState<ViewMode>("client");
+  const [viewMode, setViewMode] = useState<ViewMode>("panorama");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => { setSession(data.session); setReady(true); if (!data.session) window.location.replace("/"); });
