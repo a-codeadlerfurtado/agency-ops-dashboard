@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-const AUDIO_URL = "/api/greeting-audio?v=20260822-login-gesture-single-stream-v11";
+const AUDIO_URL = "/api/greeting-audio?v=20260822-login-gesture-single-stream-v12";
 const ARMED_GAIN = 0.00001;
 
 function emit(name: string, detail?: Record<string, unknown>) {
@@ -43,6 +43,7 @@ export default function GreetingAudioBridge() {
     const isLoginGesture = (event: Event) => {
       const target = event.target instanceof Element ? event.target : null;
       if (!target) return false;
+      if (event.type === "submit" && target.matches(".auth-card form")) return true;
       if (target.closest(".auth-submit")) return true;
       return event instanceof KeyboardEvent && event.key === "Enter" && Boolean(target.closest(".auth-card form"));
     };
@@ -58,8 +59,7 @@ export default function GreetingAudioBridge() {
         audio.volume = 1;
         try { audio.currentTime = 0; } catch {}
 
-        // Autorização real: acontece dentro do clique/Enter usado para fazer login.
-        // Esse MESMO elemento continua vivo após o Supabase autenticar.
+        // O play e o resume acontecem ainda dentro do gesto real de autenticação.
         if (graph.ctx.state !== "running") void graph.ctx.resume().catch(() => undefined);
         const playPromise = audio.play();
         primed = true;
@@ -76,7 +76,7 @@ export default function GreetingAudioBridge() {
     };
 
     const announceStart = () => {
-      if (announcedStart) return;
+      if (announcedStart || !openingActive) return;
       announcedStart = true;
       emit("opsq:greeting-audio-start", {
         duration: Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 22.824,
@@ -94,7 +94,7 @@ export default function GreetingAudioBridge() {
         graph.gain.gain.cancelScheduledValues(graph.ctx.currentTime);
         graph.gain.gain.setValueAtTime(1, graph.ctx.currentTime);
         if (graph.ctx.state !== "running") void graph.ctx.resume().catch(() => undefined);
-        announceStart();
+        if (!audio.paused) announceStart();
       } catch (error) {
         emit("opsq:greeting-audio-error", { message: error instanceof Error ? error.message : "Falha ao liberar áudio" });
       }
@@ -139,6 +139,10 @@ export default function GreetingAudioBridge() {
       }
     };
 
+    const onPlaying = () => {
+      if (openingActive) announceStart();
+    };
+
     const onEnded = () => {
       if (!openingActive) return;
       emit("opsq:greeting-audio-progress", { progress: 1, currentTime: audio.duration || 22.824, duration: audio.duration || 22.824 });
@@ -147,15 +151,17 @@ export default function GreetingAudioBridge() {
 
     document.addEventListener("pointerdown", primeFromLoginGesture, true);
     document.addEventListener("keydown", primeFromLoginGesture, true);
+    document.addEventListener("submit", primeFromLoginGesture, true);
     audio.addEventListener("loadedmetadata", recoverAfterLoad);
     audio.addEventListener("canplay", recoverAfterLoad);
+    audio.addEventListener("playing", onPlaying);
     audio.addEventListener("ended", onEnded);
 
     const observer = new MutationObserver(syncOpening);
     observer.observe(document.documentElement, { childList: true, subtree: true });
     const poll = window.setInterval(() => {
       syncOpening();
-      if (!openingActive) return;
+      if (!openingActive || audio.paused) return;
       const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : 22.824;
       const progress = Math.min(1, Math.max(0, audio.currentTime) / duration);
       emit("opsq:greeting-audio-progress", { progress, currentTime: audio.currentTime, duration });
@@ -168,8 +174,10 @@ export default function GreetingAudioBridge() {
       window.clearInterval(poll);
       document.removeEventListener("pointerdown", primeFromLoginGesture, true);
       document.removeEventListener("keydown", primeFromLoginGesture, true);
+      document.removeEventListener("submit", primeFromLoginGesture, true);
       audio.removeEventListener("loadedmetadata", recoverAfterLoad);
       audio.removeEventListener("canplay", recoverAfterLoad);
+      audio.removeEventListener("playing", onPlaying);
       audio.removeEventListener("ended", onEnded);
       try { audio.pause(); } catch {}
       try { if (ctx && ctx.state !== "closed") void ctx.close(); } catch {}
