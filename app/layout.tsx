@@ -14,6 +14,7 @@ import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
+import LeadQualityAlert from "./lead-quality-alert";
 import LearningShortcut from "./learning-shortcut";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
 
@@ -49,6 +50,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
         <WeekendBalanceAlert />
+        <LeadQualityAlert />
         <OpsQuestionWidget />
         <OpsQuestionBrand />
         <LearningShortcut />
