@@ -1,16 +1,28 @@
 "use client";
 
 import { useEffect } from "react";
+import { GREETING_AUDIO_V6_00 } from "./greeting-audio-v6/part-00";
+import { GREETING_AUDIO_V6_01 } from "./greeting-audio-v6/part-01";
+import { GREETING_AUDIO_V6_02 } from "./greeting-audio-v6/part-02";
+import { GREETING_AUDIO_V6_03 } from "./greeting-audio-v6/part-03";
 
-const AUDIO_URL = "/api/greeting-audio?v=20260822-predecoded-webaudio-v13";
 const FALLBACK_DURATION = 22.824;
+const FULL_GREETING_B64 = [
+  GREETING_AUDIO_V6_00,
+  GREETING_AUDIO_V6_03,
+  GREETING_AUDIO_V6_02,
+  GREETING_AUDIO_V6_01,
+].join("").replace(/\s+/g, "");
 
 function emit(name: string, detail?: Record<string, unknown>) {
   window.dispatchEvent(new CustomEvent(name, { detail }));
 }
 
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+function base64ToArrayBuffer(value: string) {
+  const binary = window.atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes.buffer;
 }
 
 export default function GreetingAudioBridge() {
@@ -37,32 +49,23 @@ export default function GreetingAudioBridge() {
     let playbackStarted = false;
 
     const loadDecodedBuffer = async () => {
-      let lastError: unknown = null;
-
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        try {
-          const response = await fetch(`${AUDIO_URL}&attempt=${attempt}`, {
-            cache: "no-store",
-            credentials: "same-origin",
-          });
-          if (!response.ok) throw new Error(`Falha ao carregar áudio (${response.status})`);
-          const bytes = await response.arrayBuffer();
-          if (!bytes.byteLength) throw new Error("Arquivo de áudio vazio");
-          const decoded = await ctx.decodeAudioData(bytes.slice(0));
-          if (!decoded.duration || !Number.isFinite(decoded.duration)) throw new Error("Áudio inválido");
-          duration = decoded.duration;
-          return decoded;
-        } catch (error) {
-          lastError = error;
-          if (attempt < 2) await sleep(250 * (attempt + 1));
-        }
+      if (!FULL_GREETING_B64) throw new Error("Áudio embutido vazio");
+      let bytes: ArrayBuffer;
+      try {
+        bytes = base64ToArrayBuffer(FULL_GREETING_B64);
+      } catch (error) {
+        throw new Error(error instanceof Error ? `Falha ao ler áudio embutido: ${error.message}` : "Falha ao ler áudio embutido");
       }
-
-      throw lastError instanceof Error ? lastError : new Error("Não foi possível decodificar o áudio");
+      if (!bytes.byteLength) throw new Error("Áudio embutido vazio");
+      const decoded = await ctx.decodeAudioData(bytes.slice(0));
+      if (!decoded.duration || !Number.isFinite(decoded.duration)) throw new Error("Áudio embutido inválido");
+      duration = decoded.duration;
+      return decoded;
     };
 
-    // Começa a baixar e decodificar assim que a tela de login monta. Isso não toca
-    // nada e não depende de permissão de autoplay; apenas deixa o buffer pronto.
+    // O buffer é preparado assim que a tela de login monta. Não existe mais
+    // chamada HTTP para /api/greeting-audio, portanto um 500 do Worker não pode
+    // bloquear a abertura.
     const bufferPromise = loadDecodedBuffer();
     void bufferPromise.catch((error) => {
       if (!disposed) emit("opsq:greeting-audio-error", { message: error instanceof Error ? error.message : "Falha ao preparar áudio" });
@@ -78,17 +81,11 @@ export default function GreetingAudioBridge() {
 
     const unlockFromLoginGesture = (event: Event) => {
       if (disposed || !isLoginGesture(event)) return;
-
       try {
-        // A permissão é conquistada no próprio gesto usado para entrar. Depois disso,
-        // a abertura só cria um BufferSource em um contexto já liberado.
         if (!unlockPromise) {
           unlockPromise = (ctx.state === "running" ? Promise.resolve() : ctx.resume())
             .then(() => {
               unlocked = true;
-
-              // Pulso silencioso de 20 ms mantém o contexto efetivamente ativado sem
-              // consumir ou adiantar o áudio principal.
               const oscillator = ctx.createOscillator();
               const silentGain = ctx.createGain();
               silentGain.gain.value = 0;
@@ -126,10 +123,7 @@ export default function GreetingAudioBridge() {
 
     const startOpeningPlayback = async () => {
       if (disposed || !openingActive || playbackStarted) return;
-
       try {
-        // O resume foi solicitado dentro do gesto de login. Esperamos essa mesma
-        // Promise concluir; não pedimos uma nova interação ao usuário.
         if (unlockPromise) await unlockPromise;
         if (!unlocked && ctx.state === "running") unlocked = true;
         if (!unlocked) throw new Error("Áudio não foi liberado pelo gesto de login");
@@ -161,7 +155,6 @@ export default function GreetingAudioBridge() {
     const syncOpening = () => {
       if (disposed) return;
       const opening = Boolean(document.querySelector(".opsq-opening"));
-
       if (opening && !openingActive) {
         openingActive = true;
         announcedStart = false;
@@ -169,7 +162,6 @@ export default function GreetingAudioBridge() {
         void startOpeningPlayback();
         return;
       }
-
       if (!opening && openingActive) {
         openingActive = false;
         stopPlayback();
@@ -186,12 +178,10 @@ export default function GreetingAudioBridge() {
     const poll = window.setInterval(() => {
       syncOpening();
       if (!openingActive) return;
-
       if (!playbackStarted) {
         void startOpeningPlayback();
         return;
       }
-
       const elapsed = Math.max(0, ctx.currentTime - startedAt);
       const progress = Math.min(1, elapsed / Math.max(duration, 0.001));
       emit("opsq:greeting-audio-progress", { progress, currentTime: elapsed, duration });
