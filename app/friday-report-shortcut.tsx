@@ -2,17 +2,26 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { supabase } from "./shared";
+import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
+
+const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-friday-report-api`;
 
 export default function FridayReportShortcut() {
   const [session,setSession]=useState<Session|null>(null);
+  const [allowed,setAllowed]=useState(false);
   useEffect(()=>{
     supabase.auth.getSession().then(({data})=>setSession(data.session));
     const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,next)=>setSession(next));
     return()=>subscription.unsubscribe();
   },[]);
+  useEffect(()=>{
+    if(!session?.access_token)return;
+    let active=true;
+    authenticatedFetch(API_URL,{cache:"no-store"}).then((response)=>{if(active)setAllowed(response.ok);}).catch(()=>{if(active)setAllowed(false);});
+    return()=>{active=false;};
+  },[session?.access_token]);
   const friday=useMemo(()=>new Intl.DateTimeFormat("en-US",{timeZone:"America/Sao_Paulo",weekday:"short"}).format(new Date())==="Fri",[]);
-  if(!session||typeof window==="undefined"||window.location.pathname==="/friday-report")return null;
+  if(!session||!allowed||typeof window==="undefined"||window.location.pathname==="/friday-report")return null;
   return <button type="button" className={`friday-report-shortcut ${friday?"is-friday":""}`} onClick={()=>window.location.assign("/friday-report")} title="Abrir relatório comercial semanal para CS">
     <span>▤</span><b>{friday?"Relatório de sexta · disponível":"Relatório de sexta"}</b>
     <style>{`
