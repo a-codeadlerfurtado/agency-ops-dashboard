@@ -70,7 +70,58 @@ Deno.serve(async (req: Request) => {
   const role = String(pref?.role || "").trim();
   const firstName = person.split(/\s+/)[0] || "Equipe";
   const today = saoPauloToday();
-  const isMonday = today.weekday === "Monday";
+  const normalMonday = today.weekday === "Monday";
+  const adlerTest = person === "Adler Furtado";
+  const forceAudio = normalMonday || adlerTest;
+  const loginAt = String(user.last_sign_in_at || user.updated_at || "");
+
+  if (adlerTest) {
+    const { data: existing, error: existingError } = await ops.from("daily_user_greetings")
+      .select("user_key,greeting_date,shown_at,metadata")
+      .eq("user_key", user.id)
+      .eq("greeting_date", today.date)
+      .maybeSingle();
+    if (existingError) return respond({ error: "query_failed", detail: existingError.message }, 500);
+
+    const previousLoginAt = String(existing?.metadata?.adler_test_login_at || "");
+    if (existing && previousLoginAt === loginAt && loginAt) {
+      return respond({ ok: true, show: false, date: today.date, already_shown_for_login: true, test_mode: "ADLER_EVERY_LOGIN" });
+    }
+
+    const metadata = {
+      ...(existing?.metadata || {}),
+      timezone: "America/Sao_Paulo",
+      source: "dashboard_first_daily_access",
+      test_mode: "ADLER_EVERY_LOGIN",
+      adler_test_login_at: loginAt,
+    };
+
+    const { error: writeError } = await ops.from("daily_user_greetings").upsert({
+      user_key: user.id,
+      greeting_date: today.date,
+      person,
+      role,
+      shown_at: new Date().toISOString(),
+      is_monday: true,
+      audio_expected: true,
+      metadata,
+    }, { onConflict: "user_key,greeting_date" });
+    if (writeError) return respond({ error: "claim_failed", detail: writeError.message }, 500);
+
+    return respond({
+      ok: true,
+      show: true,
+      date: today.date,
+      weekday: today.weekday,
+      is_monday: true,
+      person,
+      first_name: firstName,
+      role,
+      audio_url: "/audio/opsquestion-monday-10s.mp3",
+      test_mode: "ADLER_EVERY_LOGIN",
+      login_at: loginAt,
+    });
+  }
 
   const { data: inserted, error: insertError } = await ops.from("daily_user_greetings")
     .insert({
@@ -78,8 +129,8 @@ Deno.serve(async (req: Request) => {
       greeting_date: today.date,
       person,
       role,
-      is_monday: isMonday,
-      audio_expected: isMonday,
+      is_monday: normalMonday,
+      audio_expected: normalMonday,
       metadata: { timezone: "America/Sao_Paulo", source: "dashboard_first_daily_access" },
     })
     .select("user_key,greeting_date,shown_at,is_monday")
@@ -97,10 +148,10 @@ Deno.serve(async (req: Request) => {
     show: Boolean(inserted),
     date: today.date,
     weekday: today.weekday,
-    is_monday: isMonday,
+    is_monday: normalMonday,
     person,
     first_name: firstName,
     role,
-    audio_url: isMonday ? "/audio/opsquestion-monday-10s.mp3" : null,
+    audio_url: forceAudio ? "/audio/opsquestion-monday-10s.mp3" : null,
   });
 });
