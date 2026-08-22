@@ -13,39 +13,48 @@ export default function LearningShortcut() {
     return () => subscription.unsubscribe();
   }, []);
 
-  if (!session || typeof window === "undefined" || window.location.pathname === "/learning") return null;
+  useEffect(() => {
+    if (!session || typeof window === "undefined" || window.location.pathname !== "/campaigns") return;
 
-  return (
-    <>
-      <style>{`@media(max-width:820px){.learning-shortcut{left:10px!important;bottom:calc(72px + env(safe-area-inset-bottom,0px))!important;padding:10px!important}.learning-shortcut .learning-shortcut-label{display:none}}`}</style>
-      <button
-        type="button"
-        onClick={() => window.location.assign("/learning")}
-        title="Abrir histórico de decisões e biblioteca de experimentos"
-        style={{
-          position: "fixed",
-          left: "calc(var(--sidenav-width,224px) + 18px)",
-          bottom: 18,
-          zIndex: 10030,
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          border: "1px solid rgba(62,146,220,.28)",
-          background: "rgba(9,18,31,.94)",
-          color: "#eaf2fb",
-          borderRadius: 999,
-          padding: "9px 13px",
-          boxShadow: "0 14px 38px rgba(0,0,0,.28)",
-          backdropFilter: "blur(14px)",
-          cursor: "pointer",
-          fontSize: 11.5,
-          fontWeight: 750,
-        }}
-        className="learning-shortcut"
-      >
-        <span style={{ color: "#72b4f0", fontSize: 15 }}>◈</span>
-        <span className="learning-shortcut-label">Memória de tráfego</span>
-      </button>
-    </>
-  );
+    let frame = 0;
+    const apply = () => {
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        const actions = document.querySelector<HTMLElement>(".tc-top-actions");
+        if (!actions || actions.querySelector("[data-traffic-memory-button]")) return;
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.dataset.trafficMemoryButton = "true";
+        button.className = "tc-memory-button";
+        button.title = "Abrir histórico de decisões e biblioteca de experimentos de tráfego";
+        button.innerHTML = '<span aria-hidden="true">◈</span><b>Memória de tráfego</b>';
+        button.addEventListener("click", () => window.location.assign("/learning"));
+        actions.insertBefore(button, actions.firstChild);
+      });
+    };
+
+    const style = document.createElement("style");
+    style.id = "traffic-memory-button-style";
+    style.textContent = `
+      .tc-memory-button{display:inline-flex!important;align-items:center!important;gap:7px!important;border:1px solid rgba(79,156,224,.30)!important;background:rgba(20,49,76,.42)!important;color:#dceeff!important}
+      .tc-memory-button span{color:#72b4f0;font-size:14px}
+      .tc-memory-button b{font:inherit;font-weight:760}
+      .tc-memory-button:hover{border-color:rgba(92,173,242,.5)!important;background:rgba(25,65,99,.58)!important}
+    `;
+    if (!document.getElementById(style.id)) document.head.appendChild(style);
+
+    apply();
+    const observer = new MutationObserver(apply);
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    return () => {
+      observer.disconnect();
+      window.cancelAnimationFrame(frame);
+      document.querySelectorAll("[data-traffic-memory-button]").forEach((node) => node.remove());
+      document.getElementById("traffic-memory-button-style")?.remove();
+    };
+  }, [session]);
+
+  return null;
 }
