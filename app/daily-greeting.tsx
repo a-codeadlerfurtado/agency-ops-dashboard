@@ -15,6 +15,8 @@ type Greeting = {
   first_name: string;
   role?: string;
   audio_url?: string | null;
+  audio_parts?: string[] | null;
+  audio_duration_seconds?: number | null;
 };
 
 export default function DailyGreeting() {
@@ -24,6 +26,13 @@ export default function DailyGreeting() {
   const [audioLoading, setAudioLoading] = useState(false);
   const claimedUser = useRef<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const audioSources = greeting?.audio_parts?.length
+    ? greeting.audio_parts
+    : greeting?.audio_url
+      ? [greeting.audio_url]
+      : [];
+  const audioSourceKey = audioSources.join("|");
 
   useEffect(() => {
     let cancelled = false;
@@ -60,7 +69,7 @@ export default function DailyGreeting() {
   }, []);
 
   useEffect(() => {
-    if (!greeting?.audio_url) return;
+    if (!audioSources.length) return;
 
     let disposed = false;
     let objectUrl: string | null = null;
@@ -70,16 +79,28 @@ export default function DailyGreeting() {
 
     const prepareAndPlay = async () => {
       try {
-        // O arquivo é baixado por inteiro antes de iniciar. Isso evita áudio picotado
-        // por streaming/range/cache intermediário no Worker/Cloudflare.
-        const response = await fetch(greeting.audio_url as string, {
-          cache: "reload",
-          credentials: "same-origin",
-        });
-        if (!response.ok) throw new Error(`audio_http_${response.status}`);
-        const blob = await response.blob();
+        // O mix é armazenado em pequenos blocos estáticos. Baixamos TODOS primeiro,
+        // recompomos byte a byte e só depois entregamos o MP3 completo ao navegador.
+        // Isso evita truncamento no deploy e elimina playback por streaming parcial.
+        const buffers = await Promise.all(audioSources.map(async (source) => {
+          const response = await fetch(source, {
+            cache: "reload",
+            credentials: "same-origin",
+          });
+          if (!response.ok) throw new Error(`audio_http_${response.status}`);
+          return response.arrayBuffer();
+        }));
         if (disposed) return;
 
+        const totalBytes = buffers.reduce((total, buffer) => total + buffer.byteLength, 0);
+        const merged = new Uint8Array(totalBytes);
+        let offset = 0;
+        for (const buffer of buffers) {
+          merged.set(new Uint8Array(buffer), offset);
+          offset += buffer.byteLength;
+        }
+
+        const blob = new Blob([merged], { type: "audio/mpeg" });
         objectUrl = URL.createObjectURL(blob);
         audio = new Audio();
         audio.preload = "auto";
@@ -124,17 +145,17 @@ export default function DailyGreeting() {
 
     return () => {
       disposed = true;
-      setAudioLoading(false);
       audio?.pause();
       if (audioRef.current === audio) audioRef.current = null;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [greeting?.date, greeting?.audio_url]);
+  }, [audioSourceKey]);
 
   if (!greeting) return null;
 
   const monday = greeting.is_monday;
-  const hasOpeningAudio = Boolean(greeting.audio_url);
+  const hasOpeningAudio = audioSources.length > 0;
+  const audioSeconds = Math.round(greeting.audio_duration_seconds || 12);
   const close = () => {
     audioRef.current?.pause();
     setGreeting(null);
@@ -211,7 +232,7 @@ export default function DailyGreeting() {
             <div style={{ display: "grid", gap: 2 }}>
               <b style={{ color: "#ccecff", fontSize: 11.5 }}>Abertura com voz + trilha</b>
               <span style={{ color: "#718fa3", fontSize: 10 }}>
-                {audioLoading ? "Carregando áudio completo…" : audioPlaying ? "Áudio em reprodução · ~12s" : audioBlocked ? "Reprodução automática bloqueada ou indisponível." : "Áudio de abertura carregado · ~12s"}
+                {audioLoading ? "Carregando áudio completo…" : audioPlaying ? `Áudio em reprodução · ~${audioSeconds}s` : audioBlocked ? "Reprodução automática bloqueada ou indisponível." : `Áudio de abertura carregado · ~${audioSeconds}s`}
               </span>
             </div>
             {!audioLoading && audioBlocked && (
