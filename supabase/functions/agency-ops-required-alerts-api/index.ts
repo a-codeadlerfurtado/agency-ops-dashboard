@@ -42,18 +42,40 @@ Deno.serve(async (req: Request) => {
   if (req.method === "POST") {
     const body = await req.json().catch(() => ({}));
     const id = String(body.id ?? "");
+    const action = String(body.action ?? "ACK").toUpperCase();
+    const scheduledDate = body.scheduled_date ? String(body.scheduled_date) : null;
+    const scheduledTime = body.scheduled_time ? String(body.scheduled_time) : null;
+    const meetUrl = body.meet_url ? String(body.meet_url).trim() : null;
     if (!id) return respond({ error: "missing_fields", required: ["id"] }, 400);
-    const { data: alert, error: alertError } = await ops.from("onboarding_required_alerts").select("id,target_person,acknowledged_at").eq("id", id).maybeSingle();
+    if (!["ACK", "MEETING_SCHEDULED"].includes(action)) return respond({ error: "invalid_action" }, 400);
+
+    const { data: alert, error: alertError } = await ops.from("onboarding_required_alerts")
+      .select("id,target_person,alert_type,acknowledged_at,metadata").eq("id", id).maybeSingle();
     if (alertError) return respond({ error: "query_failed", detail: alertError.message }, 500);
     if (!alert || alert.target_person !== person) return respond({ error: "not_found_or_forbidden" }, 404);
-    if (!alert.acknowledged_at) {
-      const { error } = await ops.from("onboarding_required_alerts").update({
-        acknowledged_at: new Date().toISOString(),
-        acknowledged_by_user_key: user.id,
-      }).eq("id", id).eq("target_person", person).is("acknowledged_at", null);
-      if (error) return respond({ error: "query_failed", detail: error.message }, 500);
+
+    if (action === "MEETING_SCHEDULED") {
+      if (alert.alert_type !== "ONBOARDING_MEETING_HANDOFF" || alert.metadata?.action_type !== "SCHEDULE_MEETING") return respond({ error: "meeting_action_not_allowed" }, 400);
+      if (!scheduledDate || !/^\d{4}-\d{2}-\d{2}$/.test(scheduledDate)) return respond({ error: "invalid_scheduled_date" }, 400);
+      if (!scheduledTime || !/^([01]\d|2[0-3]):[0-5]\d$/.test(scheduledTime)) return respond({ error: "invalid_scheduled_time" }, 400);
+      if (meetUrl && !/^https:\/\/meet\.google\.com\/[A-Za-z0-9-]+(?:[/?#].*)?$/.test(meetUrl)) return respond({ error: "invalid_google_meet_url" }, 400);
     }
-    return respond({ ok: true, id });
+
+    const { data, error } = await ops.rpc("resolve_onboarding_required_alert", {
+      p_alert_id: id,
+      p_person: person,
+      p_user_key: user.id,
+      p_action: action,
+      p_scheduled_date: scheduledDate,
+      p_scheduled_time: scheduledTime,
+      p_meet_url: meetUrl,
+    });
+    if (error) {
+      const detail = String(error.message ?? "");
+      const status = detail.includes("NOT_FOUND_OR_FORBIDDEN") ? 404 : detail.includes("INVALID_") || detail.includes("DOES_NOT_SUPPORT") || detail.includes("STAGE_NOT_FOUND") ? 400 : 500;
+      return respond({ error: "action_failed", detail }, status);
+    }
+    return respond(data ?? { ok: true, id, action });
   }
 
   const { data: rows, error } = await ops.from("onboarding_required_alerts")
