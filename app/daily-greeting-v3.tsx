@@ -81,7 +81,7 @@ function SpeakingOrb({ speaking, finished }: { speaking: boolean; finished: bool
 export default function DailyGreetingV3() {
   const [greeting, setGreeting] = useState<Greeting | null>(null);
   const [loading, setLoading] = useState(false);
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState(true);
   const [playing, setPlaying] = useState(false);
   const [finished, setFinished] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -89,10 +89,10 @@ export default function DailyGreetingV3() {
 
   const claimedUser = useRef<string | null>(null);
   const ctxRef = useRef<AudioContext | null>(null);
-  const bufferRef = useRef<AudioBuffer | null>(null);
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
   const progressTimerRef = useRef<number | null>(null);
   const startedAtRef = useRef(0);
+  const durationRef = useRef(22.77);
   const endingNaturallyRef = useRef(false);
 
   const stopProgressTimer = () => {
@@ -101,45 +101,6 @@ export default function DailyGreetingV3() {
       progressTimerRef.current = null;
     }
   };
-
-  // Chrome/Edge exigem que o AudioContext seja liberado dentro de um gesto real.
-  // Este componente já está montado na tela de login, então capturamos o clique/Enter
-  // antes da autenticação e mantemos o mesmo contexto vivo para a abertura pós-login.
-  useEffect(() => {
-    const unlockAudio = () => {
-      try {
-        let ctx = ctxRef.current;
-        if (!ctx || ctx.state === "closed") {
-          const Ctor = getAudioContextCtor();
-          ctx = new Ctor();
-          ctxRef.current = ctx;
-        }
-
-        const warmDestination = () => {
-          if (!ctx || ctx.state !== "running") return;
-          try {
-            const silent = ctx.createBufferSource();
-            silent.buffer = ctx.createBuffer(1, 1, 22050);
-            silent.connect(ctx.destination);
-            silent.start(0);
-          } catch {}
-        };
-
-        if (ctx.state === "running") warmDestination();
-        else void ctx.resume().then(warmDestination).catch(() => undefined);
-      } catch {}
-    };
-
-    document.addEventListener("pointerdown", unlockAudio, true);
-    document.addEventListener("keydown", unlockAudio, true);
-    document.addEventListener("touchstart", unlockAudio, { capture: true, passive: true });
-
-    return () => {
-      document.removeEventListener("pointerdown", unlockAudio, true);
-      document.removeEventListener("keydown", unlockAudio, true);
-      document.removeEventListener("touchstart", unlockAudio, true);
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -172,88 +133,64 @@ export default function DailyGreetingV3() {
   }, []);
 
   useEffect(() => {
-    if (!greeting?.is_monday) return;
-    let cancelled = false;
-
-    async function preload() {
-      setLoading(true);
-      setReady(false);
-      setError(null);
-      try {
-        const bytes = decodeBundledAudio();
-        const Ctor = getAudioContextCtor();
-        const existingCtx = ctxRef.current;
-        const ctx = existingCtx && existingCtx.state !== "closed" ? existingCtx : new Ctor();
-        ctxRef.current = ctx;
-        const decoded = await ctx.decodeAudioData(bytes.slice(0));
-        if (cancelled) {
-          if (ctx.state !== "closed") await ctx.close().catch(() => undefined);
-          return;
-        }
-        bufferRef.current = decoded;
-        setReady(true);
-        setLoading(false);
-
-        try {
-          await ctx.resume();
-          if (ctx.state === "running") void startPlayback(ctx, decoded, false);
-        } catch {
-          // Fallback manual permanece disponível se a política do navegador ainda bloquear.
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setLoading(false);
-          setReady(false);
-          setError(e instanceof Error ? e.message : "Falha ao decodificar o áudio");
-        }
-      }
-    }
-
-    void preload();
     return () => {
-      cancelled = true;
       stopProgressTimer();
       endingNaturallyRef.current = false;
       try { sourceRef.current?.stop(); } catch {}
       sourceRef.current = null;
-      bufferRef.current = null;
       const ctx = ctxRef.current;
       ctxRef.current = null;
       if (ctx && ctx.state !== "closed") void ctx.close().catch(() => undefined);
     };
-  }, [greeting?.date, greeting?.is_monday]);
+  }, []);
 
-  const startPlayback = async (ctxArg?: AudioContext, bufferArg?: AudioBuffer, fromClick = true) => {
-    const ctx = ctxArg || ctxRef.current;
-    const buffer = bufferArg || bufferRef.current;
-    if (!ctx || !buffer) {
-      setError("Áudio ainda não está pronto.");
-      return;
-    }
-    if (playing) return;
+  const startPlayback = async () => {
+    if (playing || loading) return;
+
+    setLoading(true);
+    setReady(false);
+    setError(null);
 
     try {
+      try { sourceRef.current?.stop(); } catch {}
+      sourceRef.current = null;
+
+      const oldCtx = ctxRef.current;
+      ctxRef.current = null;
+      if (oldCtx && oldCtx.state !== "closed") await oldCtx.close().catch(() => undefined);
+
+      const Ctor = getAudioContextCtor();
+      if (!Ctor) throw new Error("Web Audio não suportado neste navegador.");
+
+      const ctx = new Ctor();
+      ctxRef.current = ctx;
       await ctx.resume();
-      if (ctx.state !== "running") {
-        if (fromClick) setError("Clique novamente em tocar para liberar o áudio.");
-        return;
-      }
+      if (ctx.state !== "running") throw new Error("O navegador ainda bloqueou a saída de áudio. Clique novamente.");
+
+      const bytes = decodeBundledAudio();
+      const decoded = await ctx.decodeAudioData(bytes.slice(0));
+      durationRef.current = decoded.duration || 22.77;
 
       const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
+      const gain = ctx.createGain();
+      gain.gain.value = 1;
+      source.buffer = decoded;
+      source.connect(gain);
+      gain.connect(ctx.destination);
+
       sourceRef.current = source;
       endingNaturallyRef.current = true;
       startedAtRef.current = ctx.currentTime;
-      setError(null);
       setFinished(false);
       setProgress(0);
       setPlaying(true);
+      setLoading(false);
+      setReady(true);
 
       stopProgressTimer();
       progressTimerRef.current = window.setInterval(() => {
         const elapsed = Math.max(0, ctx.currentTime - startedAtRef.current);
-        setProgress(Math.min(1, elapsed / buffer.duration));
+        setProgress(Math.min(1, elapsed / Math.max(.1, durationRef.current)));
       }, 100);
 
       source.onended = () => {
@@ -265,8 +202,11 @@ export default function DailyGreetingV3() {
           setFinished(true);
         }
       };
+
       source.start(0);
     } catch (e) {
+      setLoading(false);
+      setReady(true);
       setPlaying(false);
       setError(e instanceof Error ? e.message : "Não foi possível iniciar o áudio.");
     }
@@ -286,17 +226,15 @@ export default function DailyGreetingV3() {
   const status = finished
     ? "Abertura concluída. Acesso liberado."
     : loading
-      ? "Decodificando o áudio completo…"
+      ? "Iniciando áudio…"
       : playing
         ? "OpsQuestion falando · áudio completo"
         : error
           ? error
-          : ready
-            ? "Áudio pronto. Clique em tocar para continuar."
-            : "Preparando áudio…";
+          : "Áudio pronto. Clique em tocar para continuar.";
 
   return (
-    <div style={{ position:"fixed", inset:0, zIndex:30000, background:"radial-gradient(circle at 50% 35%,rgba(22,91,132,.20),rgba(1,8,14,.93) 48%,rgba(1,6,11,.98) 100%)", backdropFilter:"blur(9px)", display:"grid", placeItems:"center", padding:18 }}>
+    <div className="opsq-opening" style={{ position:"fixed", inset:0, zIndex:30000, background:"radial-gradient(circle at 50% 35%,rgba(22,91,132,.20),rgba(1,8,14,.93) 48%,rgba(1,6,11,.98) 100%)", backdropFilter:"blur(9px)", display:"grid", placeItems:"center", padding:18 }}>
       <style>{`
         @keyframes orbTalk3{0%,100%{transform:scale(1)}50%{transform:scale(1.065);filter:brightness(1.2)}}
         @keyframes waveOut3{0%{transform:translate(-50%,-50%) scale(.72);opacity:.72}100%{transform:translate(-50%,-50%) scale(1.55);opacity:0}}
@@ -307,7 +245,7 @@ export default function DailyGreetingV3() {
         <div style={{ display:"flex", justifyContent:"space-between", gap:12 }}><b style={{ color:"#72bff0", fontSize:10.5, letterSpacing:".14em" }}>OPSQUESTION · INÍCIO DE SEMANA</b><b style={{ color:"#557a92", fontSize:9.5, letterSpacing:".08em" }}>SISTEMA OPERACIONAL</b></div>
         <SpeakingOrb speaking={playing} finished={finished} />
         <div style={{ textAlign:"center" }}><h1 style={{ margin:0, fontFamily:"Inter Tight,Inter,sans-serif", fontSize:"clamp(30px,6vw,46px)", letterSpacing:"-.035em" }}>Bom dia, {greeting.first_name}.</h1><p style={{ color:"#adc4d4", fontSize:14.5, lineHeight:1.6 }}>Nova semana operacional iniciada. Organização, execução e bons resultados por aí.</p></div>
-        {needsAudio && <div style={{ border:"1px solid rgba(82,172,225,.18)", background:"rgba(15,51,73,.42)", borderRadius:12, padding:"11px 13px", display:"grid", gap:9 }}><div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}><div><b style={{ display:"block", color:"#ccecff", fontSize:11.5 }}>Abertura do OpsQuestion</b><span style={{ color:finished?"#78cda7":error?"#e7a19b":"#718fa3", fontSize:10 }}>{status}</span></div>{!finished && !loading && !playing && <button onClick={() => void startPlayback(undefined, undefined, true)} autoFocus style={{ border:"1px solid rgba(94,187,242,.45)", background:"#0b314a", color:"#e8f7ff", borderRadius:9, padding:"8px 12px", cursor:"pointer", fontWeight:850 }}>▶ Tocar abertura</button>}</div><div style={{ height:4, borderRadius:999, overflow:"hidden", background:"rgba(120,163,190,.14)" }}><div style={{ width:`${Math.round(progress*100)}%`, height:"100%", background:finished?"#4aa77d":"#55baf2", transition:"width .12s linear" }} /></div></div>}
+        {needsAudio && <div style={{ border:"1px solid rgba(82,172,225,.18)", background:"rgba(15,51,73,.42)", borderRadius:12, padding:"11px 13px", display:"grid", gap:9 }}><div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, flexWrap:"wrap" }}><div><b style={{ display:"block", color:"#ccecff", fontSize:11.5 }}>Abertura do OpsQuestion</b><span style={{ color:finished?"#78cda7":error?"#e7a19b":"#718fa3", fontSize:10 }}>{status}</span></div>{!finished && !playing && <button onClick={() => void startPlayback()} disabled={loading} autoFocus style={{ border:"1px solid rgba(94,187,242,.45)", background:"#0b314a", color:"#e8f7ff", borderRadius:9, padding:"8px 12px", cursor:loading?"wait":"pointer", fontWeight:850 }}>{loading?"Iniciando…":"▶ Tocar abertura"}</button>}</div><div style={{ height:4, borderRadius:999, overflow:"hidden", background:"rgba(120,163,190,.14)" }}><div style={{ width:`${Math.round(progress*100)}%`, height:"100%", background:finished?"#4aa77d":"#55baf2", transition:"width .12s linear" }} /></div></div>}
         <div style={{ display:"flex", justifyContent:"flex-end" }}><button onClick={close} disabled={!canEnter} style={{ border:canEnter?"1px solid rgba(93,190,145,.52)":"1px solid rgba(112,135,151,.24)", background:canEnter?"#15503a":"#15212a", color:canEnter?"#f0fff7":"#667984", borderRadius:11, padding:"11px 18px", cursor:canEnter?"pointer":"not-allowed", fontWeight:900, minWidth:225 }}>{canEnter?"Entrar no dashboard":playing?"Aguarde o áudio terminar…":"Ouça a abertura para continuar"}</button></div>
       </section>
     </div>
