@@ -3,9 +3,30 @@
 import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
+import { GREETING_AUDIO_V5_00 } from "./greeting-audio-v5/part-00";
+import { GREETING_AUDIO_V5_01 } from "./greeting-audio-v5/part-01";
+import { GREETING_AUDIO_V5_02 } from "./greeting-audio-v5/part-02";
+import { GREETING_AUDIO_V5_03 } from "./greeting-audio-v5/part-03";
+import { GREETING_AUDIO_V5_04 } from "./greeting-audio-v5/part-04";
+import { GREETING_AUDIO_V5_05 } from "./greeting-audio-v5/part-05";
+import { GREETING_AUDIO_V5_06 } from "./greeting-audio-v5/part-06";
+import { GREETING_AUDIO_V5_07 } from "./greeting-audio-v5/part-07";
+import { GREETING_AUDIO_V5_08 } from "./greeting-audio-v5/part-08";
+import { GREETING_AUDIO_V5_09 } from "./greeting-audio-v5/part-09";
 
 const GREETING_API = `${SUPABASE_URL}/functions/v1/agency-ops-daily-greeting-api`;
-const AUDIO_API = `${SUPABASE_URL}/functions/v1/agency-ops-greeting-audio`;
+const FULL_GREETING_B64 = [
+  GREETING_AUDIO_V5_00,
+  GREETING_AUDIO_V5_01,
+  GREETING_AUDIO_V5_02,
+  GREETING_AUDIO_V5_03,
+  GREETING_AUDIO_V5_04,
+  GREETING_AUDIO_V5_05,
+  GREETING_AUDIO_V5_06,
+  GREETING_AUDIO_V5_07,
+  GREETING_AUDIO_V5_08,
+  GREETING_AUDIO_V5_09,
+].join("");
 
 type Greeting = {
   show: boolean;
@@ -20,6 +41,13 @@ type AudioContextCtor = typeof AudioContext;
 function getAudioContextCtor(): AudioContextCtor {
   const w = window as typeof window & { webkitAudioContext?: AudioContextCtor };
   return window.AudioContext || w.webkitAudioContext!;
+}
+
+function decodeBundledAudio(): ArrayBuffer {
+  const binary = atob(FULL_GREETING_B64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
 }
 
 function SpeakingOrb({ speaking, finished }: { speaking: boolean; finished: boolean }) {
@@ -113,9 +141,7 @@ export default function DailyGreetingV3() {
       setReady(false);
       setError(null);
       try {
-        const response = await authenticatedFetch(AUDIO_API, { method: "GET", cache: "no-store" });
-        if (!response.ok) throw new Error(`Áudio HTTP ${response.status}`);
-        const bytes = await response.arrayBuffer();
+        const bytes = decodeBundledAudio();
         const Ctor = getAudioContextCtor();
         const ctx = new Ctor();
         ctxRef.current = ctx;
@@ -132,13 +158,13 @@ export default function DailyGreetingV3() {
           await ctx.resume();
           if (ctx.state === "running") void startPlayback(ctx, decoded, false);
         } catch {
-          // Autoplay pode ser bloqueado; o botão usa um gesto real do usuário.
+          // Se autoplay for bloqueado, o clique no botão desbloqueia o AudioContext.
         }
       } catch (e) {
         if (!cancelled) {
           setLoading(false);
           setReady(false);
-          setError(e instanceof Error ? e.message : "Falha ao preparar o áudio");
+          setError(e instanceof Error ? e.message : "Falha ao decodificar o áudio");
         }
       }
     }
@@ -147,6 +173,7 @@ export default function DailyGreetingV3() {
     return () => {
       cancelled = true;
       stopProgressTimer();
+      endingNaturallyRef.current = false;
       try { sourceRef.current?.stop(); } catch {}
       sourceRef.current = null;
       bufferRef.current = null;
@@ -168,7 +195,7 @@ export default function DailyGreetingV3() {
     try {
       await ctx.resume();
       if (ctx.state !== "running") {
-        if (fromClick) setError("O navegador ainda bloqueou o áudio. Clique novamente em tocar.");
+        if (fromClick) setError("Clique novamente em tocar para liberar o áudio.");
         return;
       }
 
@@ -219,7 +246,7 @@ export default function DailyGreetingV3() {
   const status = finished
     ? "Abertura concluída. Acesso liberado."
     : loading
-      ? "Baixando e decodificando o áudio…"
+      ? "Decodificando o áudio completo…"
       : playing
         ? "OpsQuestion falando · áudio completo"
         : error
