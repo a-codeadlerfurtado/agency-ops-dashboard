@@ -116,13 +116,13 @@ export default function LeadConferencePage() {
     setError(""); setRange({since:customSince,until:customUntil,label:"Personalizado"});
   }
 
-  const dispatchClient = useMemo(() => new Map((dispatch?.clients || []).map((row:Row) => [String(row.client_id),row])),[dispatch]);
-  const dispatchCampaign = useMemo(() => new Map((dispatch?.campaigns || []).map((row:Row) => [`${row.client_id}:${row.campaign_id}`,row])),[dispatch]);
+  const dispatchClient = useMemo(() => new Map<string,Row>((dispatch?.clients || []).map((row:Row) => [String(row.client_id),row] as [string,Row])),[dispatch]);
+  const dispatchCampaign = useMemo(() => new Map<string,Row>((dispatch?.campaigns || []).map((row:Row) => [`${row.client_id}:${row.campaign_id}`,row] as [string,Row])),[dispatch]);
 
   const rows = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("pt-BR");
     return (meta?.clients || []).map((client:Row) => {
-      const wa = dispatchClient.get(String(client.client_id)) || {};
+      const wa:Row = dispatchClient.get(String(client.client_id)) || {};
       const metaLeads = Number(client.leads || 0);
       const dispatches = Number(wa.dispatches || 0);
       const merged = {
@@ -151,7 +151,7 @@ export default function LeadConferencePage() {
 
   const allMerged = useMemo(() => {
     return (meta?.clients || []).map((client:Row) => {
-      const wa = dispatchClient.get(String(client.client_id)) || {};
+      const wa:Row = dispatchClient.get(String(client.client_id)) || {};
       const metaLeads=Number(client.leads||0), dispatches=Number(wa.dispatches||0);
       const base={...client,meta_leads:metaLeads,dispatches,difference:metaLeads-dispatches};
       return {...base,status:reconciliationStatus(base)};
@@ -173,8 +173,8 @@ export default function LeadConferencePage() {
     const waRows=(dispatch?.campaigns||[]).filter((row:Row)=>String(row.client_id)===id);
     const keys=new Set<string>([...metaRows.map((row:Row)=>String(row.campaign_id)),...waRows.map((row:Row)=>String(row.campaign_id))]);
     return [...keys].map((campaignId) => {
-      const m=metaRows.find((row:Row)=>String(row.campaign_id)===campaignId)||{};
-      const w=dispatchCampaign.get(`${id}:${campaignId}`)||waRows.find((row:Row)=>String(row.campaign_id)===campaignId)||{};
+      const m:Row=metaRows.find((row:Row)=>String(row.campaign_id)===campaignId)||{};
+      const w:Row=dispatchCampaign.get(`${id}:${campaignId}`)||waRows.find((row:Row)=>String(row.campaign_id)===campaignId)||{};
       const metaLeads=Number(m.leads_estimate||0), wa=Number(w.dispatches||0);
       return {
         campaign_id:campaignId,
@@ -193,8 +193,8 @@ export default function LeadConferencePage() {
   }
 
   if (!ready) return <main className="lc-loading">Validando sessão…</main>;
-  const sourceSummary=dispatch?.summary||{};
-  const metaSummary=meta?.summary||{};
+  const sourceSummary:Row=dispatch?.summary||{};
+  const metaSummary:Row=meta?.summary||{};
 
   return <main className="lc-shell"><style>{styles}</style>
     <header className="lc-top">
