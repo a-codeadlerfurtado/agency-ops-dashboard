@@ -188,7 +188,6 @@ export function initials(value: unknown) {
 // que ja foi renovada por outra requisicao concorrente.
 let accessTokenPromise: Promise<string | null> | null = null;
 let refreshSessionPromise: Promise<string | null> | null = null;
-let homeRequest: { token: string; promise: Promise<any> } | null = null;
 
 export class SessionExpiredError extends Error {
   code = "SESSION_EXPIRED";
@@ -301,17 +300,6 @@ async function executeApi(view: string, token: string, params: Record<string, st
 }
 
 export async function api(view: string, token: string, params: Record<string, string> = {}) {
-  // page.tsx, DashboardEnhancementsGate, AdlerSidebar e DashboardEnhancements pedem
-  // home praticamente no mesmo instante. Para o mesmo token todos recebem a mesma
-  // Promise e somente UMA requisicao sai para a Edge Function.
-  if (view === "home" && Object.keys(params).length === 0) {
-    if (homeRequest?.token === token) return homeRequest.promise;
-    const promise = executeApi(view, token, params).finally(() => {
-      if (homeRequest?.promise === promise) homeRequest = null;
-    });
-    homeRequest = { token, promise };
-    return promise;
-  }
   return executeApi(view, token, params);
 }
 
