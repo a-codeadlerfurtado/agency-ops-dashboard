@@ -3,71 +3,34 @@ name: Temporary remove home promise cache
 on:
   push:
     branches: [fix/remove-home-promise-cache]
-  pull_request:
-    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
-  patch:
+  build:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: fix/remove-home-promise-cache
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - name: Remove only home promise cache
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('app/shared.tsx')
-          s = p.read_text()
-          old_decl = 'let homeRequest: { token: string; promise: Promise<any> } | null = null;\n'
-          if old_decl not in s:
-              raise SystemExit('homeRequest declaration not found')
-          s = s.replace(old_decl, '', 1)
-          old_api = '''export async function api(view: string, token: string, params: Record<string, string> = {}) {
-  // page.tsx, DashboardEnhancementsGate, AdlerSidebar e DashboardEnhancements pedem
-  // home praticamente no mesmo instante. Para o mesmo token todos recebem a mesma
-  // Promise e somente UMA requisicao sai para a Edge Function.
-  if (view === "home" && Object.keys(params).length === 0) {
-    if (homeRequest?.token === token) return homeRequest.promise;
-    const promise = executeApi(view, token, params).finally(() => {
-      if (homeRequest?.promise === promise) homeRequest = null;
-    });
-    homeRequest = { token, promise };
-    return promise;
-  }
-  return executeApi(view, token, params);
-}
-'''
-          new_api = '''export async function api(view: string, token: string, params: Record<string, string> = {}) {
-  return executeApi(view, token, params);
-}
-'''
-          if old_api not in s:
-              raise SystemExit('api home coalescing block not found')
-          s = s.replace(old_api, new_api, 1)
-          p.write_text(s)
-          PY
       - name: Verify greeting audio untouched
         run: git diff --exit-code origin/main -- app/greeting-audio-bridge.tsx
       - name: Build production
         run: |
           npm ci
           npm run build
-      - name: Commit patch
+      - name: Mark successful validation
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add app/shared.tsx
-          if git diff --cached --quiet; then
-            echo "Patch already applied"
-          else
-            git commit -m "Remove shared home promise cache"
-            git push origin HEAD:fix/remove-home-promise-cache
-          fi
+          printf '%s\n' "validated $(git rev-parse HEAD)" > .home-cache-build-ok
+          git add .home-cache-build-ok
+          git commit -m "test: mark home cache build successful"
+          git push origin HEAD:fix/remove-home-promise-cache
