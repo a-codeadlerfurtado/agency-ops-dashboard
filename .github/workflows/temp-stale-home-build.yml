@@ -3,6 +3,8 @@ name: Temporary stale home race build
 on:
   push:
     branches: [fix/stale-home-token-race]
+  pull_request:
+    branches: [main]
 
 jobs:
   build:
