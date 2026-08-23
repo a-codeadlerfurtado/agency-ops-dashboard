@@ -1,0 +1,36 @@
+name: Replace greeting audio binary
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  replace-audio:
+    if: contains(github.event.head_commit.message, 'stage full greeting audio')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply exact binary audio
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f public/audio/opsquestion-greeting-full-v6.mp3
+          git apply --binary .opsq/replace-audio.patch
+          test "$(wc -c < public/audio/opsquestion-greeting-full-v6.mp3)" = "548081"
+          echo "e07b03172248498d36c4d8c9de81bbbb87b372fbda5277aa54d1baab428ac1d0  public/audio/opsquestion-greeting-full-v6.mp3" | sha256sum -c -
+      - name: Commit only final MP3
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .opsq
+          rm -f .github/workflows/replace-greeting-audio.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Replace greeting MP3 binary only"
+          git push
