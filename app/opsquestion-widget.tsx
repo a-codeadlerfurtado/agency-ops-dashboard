@@ -1,14 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { createClient, type Session } from "@supabase/supabase-js";
+import type { Session } from "@supabase/supabase-js";
+import { SUPABASE_URL, authenticatedFetch, isSessionExpiredError, supabase } from "./shared";
 
-const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
-const ASK_URL_ADMIN = `${SUPABASE_URL}/functions/v1/agency-ops-ai-ask`;
-const ASK_URL_TEAM = `${SUPABASE_URL}/functions/v1/agency-ops-ai-ask-team`;
-const ADLER_USER_ID = "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const ASK_URL = `${SUPABASE_URL}/functions/v1/agency-ops-ai-ask-team`;
 
 type ChatMessage = {
   role: "user" | "ai";
@@ -26,9 +22,17 @@ export default function OpsQuestionWidget() {
   const endRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
-    return () => subscription.unsubscribe();
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (mounted) setSession(data.session);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => {
+      if (mounted) setSession(next);
+    });
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -37,26 +41,32 @@ export default function OpsQuestionWidget() {
 
   async function send() {
     const q = question.trim();
-    if (!q || asking || !session?.access_token) return;
+    if (!q || asking) return;
+
     setMessages((prev) => [...prev, { role: "user", text: q }]);
     setQuestion("");
     setAsking(true);
+
     try {
-      const askUrl = session.user.id === ADLER_USER_ID ? ASK_URL_ADMIN : ASK_URL_TEAM;
-      const response = await fetch(askUrl, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-          apikey: SUPABASE_ANON_KEY,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({ question: q }),
-        cache: "no-store",
-      });
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 65_000);
+      let response: Response;
+      try {
+        response = await authenticatedFetch(ASK_URL, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ question: q }),
+          cache: "no-store",
+          signal: controller.signal,
+        });
+      } finally {
+        window.clearTimeout(timeout);
+      }
+
       const json = await response.json().catch(() => null);
       if (!response.ok || !json?.ok) {
-        const detail = json?.error || "Não consegui responder agora.";
-        setMessages((prev) => [...prev, { role: "ai", text: detail }]);
+        const detail = json?.error || json?.detail || `OpsQuestion indisponível (${response.status}).`;
+        setMessages((prev) => [...prev, { role: "ai", text: String(detail) }]);
       } else {
         setMessages((prev) => [...prev, {
           role: "ai",
@@ -65,8 +75,23 @@ export default function OpsQuestionWidget() {
           latencyMs: Number(json.latency_ms || 0) || undefined,
         }]);
       }
-    } catch {
-      setMessages((prev) => [...prev, { role: "ai", text: "Falha temporária ao consultar o OpsQuestion. Tente novamente." }]);
+    } catch (error) {
+      if (isSessionExpiredError(error)) {
+        setMessages((prev) => [...prev, {
+          role: "ai",
+          text: "Sua sessão expirou. Entre novamente no dashboard para continuar usando o OpsQuestion.",
+        }]);
+      } else if (error instanceof DOMException && error.name === "AbortError") {
+        setMessages((prev) => [...prev, {
+          role: "ai",
+          text: "O OpsQuestion demorou demais para responder. Tente uma pergunta mais específica.",
+        }]);
+      } else {
+        setMessages((prev) => [...prev, {
+          role: "ai",
+          text: "Falha temporária ao consultar o OpsQuestion. Tente novamente.",
+        }]);
+      }
     } finally {
       setAsking(false);
     }
