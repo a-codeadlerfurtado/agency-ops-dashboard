@@ -13,7 +13,34 @@ type Row = Record<string, any>;
 type Range = { since: string; until: string; label: string };
 type Period = "TODAY" | "YESTERDAY" | "LAST_7D" | "THIS_MONTH" | "CUSTOM";
 type ViewFilter = "ALL" | "LOW" | "ZERO" | "DIVERGENT" | "OK";
-type SortKey = "LEADS_DESC" | "DISPATCH_DESC" | "CPL_ASC" | "SPEND_DESC" | "MATCH_FIRST" | "DIFF_DESC" | "LEADS_ASC" | "NAME_ASC";
+type KpiKey = "LEADS" | "CPL" | "CTR" | "REACH" | "IMPRESSIONS" | "FREQUENCY" | "CLICKS" | "CPC" | "CPM" | "SPEND" | "RESULTS" | "CPR" | "DISPATCHES" | "DIFFERENCE";
+type SortDirection = "DESC" | "ASC";
+
+type KpiDefinition = {
+  key: KpiKey;
+  label: string;
+  short: string;
+  kind: "number" | "money" | "percent" | "decimal" | "signed";
+};
+
+const KPI_DEFS: KpiDefinition[] = [
+  { key: "LEADS", label: "Leads", short: "Leads", kind: "number" },
+  { key: "CPL", label: "CPL", short: "CPL", kind: "money" },
+  { key: "CTR", label: "CTR", short: "CTR", kind: "percent" },
+  { key: "REACH", label: "Alcance", short: "Alcance", kind: "number" },
+  { key: "IMPRESSIONS", label: "Impressões", short: "Impressões", kind: "number" },
+  { key: "FREQUENCY", label: "Frequência", short: "Freq.", kind: "decimal" },
+  { key: "CLICKS", label: "Cliques", short: "Cliques", kind: "number" },
+  { key: "CPC", label: "CPC", short: "CPC", kind: "money" },
+  { key: "CPM", label: "CPM", short: "CPM", kind: "money" },
+  { key: "SPEND", label: "Gasto", short: "Gasto", kind: "money" },
+  { key: "RESULTS", label: "Resultados", short: "Resultados", kind: "number" },
+  { key: "CPR", label: "Custo por resultado", short: "Custo/result.", kind: "money" },
+  { key: "DISPATCHES", label: "Disparos WhatsApp", short: "Disparos", kind: "number" },
+  { key: "DIFFERENCE", label: "Diferença Meta × WPP", short: "Meta − WPP", kind: "signed" },
+];
+
+const META_KPI_KEYS = new Set<KpiKey>(["LEADS","CPL","CTR","REACH","IMPRESSIONS","FREQUENCY","CLICKS","CPC","CPM","SPEND","RESULTS","CPR"]);
 
 function todaySP() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -35,6 +62,7 @@ function number(value: unknown, digits = 0) { return new Intl.NumberFormat("pt-B
 function money(value: unknown, digits = 0) { return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL", minimumFractionDigits: digits, maximumFractionDigits: digits }).format(Number(value || 0)); }
 function dateLabel(day: string) { const [y,m,d] = day.split("-").map(Number); return new Intl.DateTimeFormat("pt-BR").format(new Date(y,m-1,d)); }
 function dateTime(value: unknown) { return value ? new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(new Date(String(value))) : "—"; }
+function finite(value: unknown) { const n = Number(value); return Number.isFinite(n) ? n : null; }
 
 const deliveryLabel: Record<string,string> = {
   ACTIVE_DELIVERY: "Com entrega", NO_META_ACCOUNT: "Sem conta Meta", NO_DELIVERY: "Ativa sem entrega",
@@ -56,9 +84,37 @@ function statusText(status: string) {
 function statusTone(status: string) {
   return ({ OK:"ok", DIVERGENT:"warn", ZERO:"bad", NO_DISPATCH:"bad", NO_META:"muted", PARTIAL:"warn", NO_ACTIVITY:"muted" } as Record<string,string>)[status] || "muted";
 }
-function rowCpl(row: Row) {
-  const leads = Number(row.meta_leads || 0);
-  return leads > 0 ? Number(row.spend || 0) / leads : Number.POSITIVE_INFINITY;
+function kpiDef(key: KpiKey) { return KPI_DEFS.find((item) => item.key === key) || KPI_DEFS[0]; }
+function kpiValue(row: Row, key: KpiKey) {
+  const spend = Number(row.spend || 0);
+  const leads = Number(row.meta_leads ?? row.leads ?? 0);
+  const impressions = Number(row.impressions || 0);
+  const clicks = Number(row.clicks || 0);
+  const results = Number(row.results ?? row.result_count ?? 0);
+  const reach = Number(row.reach || 0);
+  if (key === "LEADS") return leads;
+  if (key === "CPL") return leads > 0 ? spend / leads : null;
+  if (key === "CTR") return finite(row.ctr) ?? (impressions > 0 ? clicks / impressions * 100 : null);
+  if (key === "REACH") return reach;
+  if (key === "IMPRESSIONS") return impressions;
+  if (key === "FREQUENCY") return finite(row.frequency) ?? (reach > 0 ? impressions / reach : null);
+  if (key === "CLICKS") return clicks;
+  if (key === "CPC") return finite(row.cpc) ?? (clicks > 0 ? spend / clicks : null);
+  if (key === "CPM") return finite(row.cpm) ?? (impressions > 0 ? spend / impressions * 1000 : null);
+  if (key === "SPEND") return spend;
+  if (key === "RESULTS") return results;
+  if (key === "CPR") return finite(row.cost_per_result) ?? (results > 0 ? spend / results : null);
+  if (key === "DISPATCHES") return Number(row.dispatches || 0);
+  return Number(row.difference || 0);
+}
+function formatKpi(value: number | null, key: KpiKey) {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const def = kpiDef(key);
+  if (def.kind === "money") return money(value, 2);
+  if (def.kind === "percent") return `${number(value, 2)}%`;
+  if (def.kind === "decimal") return number(value, 2);
+  if (def.kind === "signed") return `${value > 0 ? "+" : ""}${number(value, 0)}`;
+  return number(value, 0);
 }
 
 export default function LeadConferencePage() {
@@ -76,7 +132,10 @@ export default function LeadConferencePage() {
   const [query,setQuery] = useState("");
   const [filter,setFilter] = useState<ViewFilter>("ALL");
   const [gtFilter,setGtFilter] = useState("ALL");
-  const [sortKey,setSortKey] = useState<SortKey>("LEADS_DESC");
+  const [kpi,setKpi] = useState<KpiKey>("LEADS");
+  const [direction,setDirection] = useState<SortDirection>("DESC");
+  const [kpiMin,setKpiMin] = useState("");
+  const [kpiMax,setKpiMax] = useState("");
   const [lowThreshold,setLowThreshold] = useState(3);
   const [expanded,setExpanded] = useState<string|null>(null);
 
@@ -125,56 +184,64 @@ export default function LeadConferencePage() {
 
   const dispatchClient = useMemo(() => new Map<string,Row>((dispatch?.clients || []).map((row:Row) => [String(row.client_id),row] as [string,Row])),[dispatch]);
   const dispatchCampaign = useMemo(() => new Map<string,Row>((dispatch?.campaigns || []).map((row:Row) => [`${row.client_id}:${row.campaign_id}`,row] as [string,Row])),[dispatch]);
+  const metaCampaignByClient = useMemo(() => {
+    const map = new Map<string,Row[]>();
+    for (const row of meta?.campaigns || []) {
+      const id = String(row.client_id || "");
+      if (!id) continue;
+      map.set(id,[...(map.get(id)||[]),row]);
+    }
+    return map;
+  },[meta]);
   const gtOptions = useMemo(() => [...new Set((meta?.clients || []).map((row:Row) => String(row.gt_owner || "").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR")),[meta]);
 
-  const rows = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase("pt-BR");
+  const allMerged = useMemo(() => {
     return (meta?.clients || []).map((client:Row) => {
-      const wa:Row = dispatchClient.get(String(client.client_id)) || {};
-      const metaLeads = Number(client.leads || 0);
-      const dispatches = Number(wa.dispatches || 0);
-      const merged = {
+      const clientId = String(client.client_id);
+      const wa:Row = dispatchClient.get(clientId) || {};
+      const metaLeads=Number(client.leads||0), dispatches=Number(wa.dispatches||0);
+      const campaignRows = metaCampaignByClient.get(clientId) || [];
+      const reach = campaignRows.reduce((sum,row)=>sum+Number(row.reach||0),0);
+      const base={
         ...client,
         meta_leads:metaLeads,
         dispatches,
         difference:metaLeads-dispatches,
+        reach,
+        frequency:reach>0?Number(client.impressions||0)/reach:null,
         campaign_matched:Number(wa.campaign_matched || 0),
         campaign_unmatched:Number(wa.campaign_unmatched || 0),
         routing_conflicts:Number(wa.routing_conflicts || 0),
         dispatch_products:wa.products || [],
       };
-      return {...merged,status:reconciliationStatus(merged)};
-    }).filter((row:Row) => {
+      return {...base,status:reconciliationStatus(base)};
+    });
+  },[meta,dispatchClient,metaCampaignByClient]);
+
+  const rows = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase("pt-BR");
+    const minValue = kpiMin.trim() === "" ? null : Number(kpiMin);
+    const maxValue = kpiMax.trim() === "" ? null : Number(kpiMax);
+    return allMerged.filter((row:Row) => {
       if (needle && ![row.display_name,row.gt_owner,row.configured_account_names].join(" ").toLocaleLowerCase("pt-BR").includes(needle)) return false;
       if (gtFilter !== "ALL" && String(row.gt_owner || "") !== gtFilter) return false;
       if (filter === "LOW" && !(row.meta_leads <= lowThreshold)) return false;
       if (filter === "ZERO" && row.meta_leads !== 0) return false;
       if (filter === "DIVERGENT" && !["DIVERGENT","NO_DISPATCH"].includes(row.status)) return false;
       if (filter === "OK" && row.status !== "OK") return false;
+      const value = kpiValue(row,kpi);
+      if (minValue != null && Number.isFinite(minValue) && (value == null || value < minValue)) return false;
+      if (maxValue != null && Number.isFinite(maxValue) && (value == null || value > maxValue)) return false;
       return true;
     }).sort((a:Row,b:Row) => {
-      if (sortKey === "LEADS_DESC") return b.meta_leads-a.meta_leads || b.dispatches-a.dispatches || String(a.display_name).localeCompare(String(b.display_name),"pt-BR");
-      if (sortKey === "DISPATCH_DESC") return b.dispatches-a.dispatches || b.meta_leads-a.meta_leads || String(a.display_name).localeCompare(String(b.display_name),"pt-BR");
-      if (sortKey === "CPL_ASC") return rowCpl(a)-rowCpl(b) || b.meta_leads-a.meta_leads || String(a.display_name).localeCompare(String(b.display_name),"pt-BR");
-      if (sortKey === "SPEND_DESC") return Number(b.spend||0)-Number(a.spend||0) || b.meta_leads-a.meta_leads;
-      if (sortKey === "MATCH_FIRST") {
-        const rank:Record<string,number> = { OK:0, DIVERGENT:1, NO_DISPATCH:2, PARTIAL:3, ZERO:4, NO_ACTIVITY:5, NO_META:6 };
-        return (rank[a.status]??9)-(rank[b.status]??9) || b.meta_leads-a.meta_leads || String(a.display_name).localeCompare(String(b.display_name),"pt-BR");
-      }
-      if (sortKey === "DIFF_DESC") return Math.abs(Number(b.difference||0))-Math.abs(Number(a.difference||0)) || b.meta_leads-a.meta_leads;
-      if (sortKey === "LEADS_ASC") return a.meta_leads-b.meta_leads || Number(b.spend||0)-Number(a.spend||0) || String(a.display_name).localeCompare(String(b.display_name),"pt-BR");
-      return String(a.display_name).localeCompare(String(b.display_name),"pt-BR");
+      const av=kpiValue(a,kpi), bv=kpiValue(b,kpi);
+      if (av == null && bv == null) return String(a.display_name).localeCompare(String(b.display_name),"pt-BR");
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      const delta=direction === "DESC" ? bv-av : av-bv;
+      return delta || Number(b.meta_leads||0)-Number(a.meta_leads||0) || String(a.display_name).localeCompare(String(b.display_name),"pt-BR");
     });
-  },[meta,dispatchClient,query,filter,gtFilter,sortKey,lowThreshold]);
-
-  const allMerged = useMemo(() => {
-    return (meta?.clients || []).map((client:Row) => {
-      const wa:Row = dispatchClient.get(String(client.client_id)) || {};
-      const metaLeads=Number(client.leads||0), dispatches=Number(wa.dispatches||0);
-      const base={...client,meta_leads:metaLeads,dispatches,difference:metaLeads-dispatches};
-      return {...base,status:reconciliationStatus(base)};
-    });
-  },[meta,dispatchClient]);
+  },[allMerged,query,gtFilter,filter,lowThreshold,kpi,kpiMin,kpiMax,direction]);
 
   const totals = useMemo(() => ({
     clients:allMerged.length,
@@ -193,30 +260,47 @@ export default function LeadConferencePage() {
     return [...keys].map((campaignId) => {
       const m:Row=metaRows.find((row:Row)=>String(row.campaign_id)===campaignId)||{};
       const w:Row=dispatchCampaign.get(`${id}:${campaignId}`)||waRows.find((row:Row)=>String(row.campaign_id)===campaignId)||{};
-      const metaLeads=Number(m.leads_estimate||0), wa=Number(w.dispatches||0);
+      const leads=Number(m.leads_estimate||0), wa=Number(w.dispatches||0), spend=Number(m.spend||0), impressions=Number(m.impressions||0), clicks=Number(m.clicks||0), reach=Number(m.reach||0), results=Number(m.result_count||0);
       return {
         campaign_id:campaignId,
         campaign_name:m.campaign_name||w.campaign_name||campaignId,
         campaign_status:m.campaign_status||null,
-        spend:Number(m.spend||0),
-        leads:metaLeads,
-        cpl:m.cost_per_lead_estimate==null?null:Number(m.cost_per_lead_estimate),
+        spend,
+        meta_leads:leads,
+        leads,
+        cpl:leads>0?spend/leads:null,
+        result_count:results,
+        results,
+        cost_per_result:m.cost_per_result==null?(results>0?spend/results:null):Number(m.cost_per_result),
+        impressions,
+        reach,
+        frequency:m.frequency==null?(reach>0?impressions/reach:null):Number(m.frequency),
+        clicks,
+        ctr:m.ctr==null?(impressions>0?clicks/impressions*100:null):Number(m.ctr),
+        cpc:m.cpc==null?(clicks>0?spend/clicks:null):Number(m.cpc),
+        cpm:m.cpm==null?(impressions>0?spend/impressions*1000:null):Number(m.cpm),
         dispatches:wa,
-        difference:metaLeads-wa,
+        difference:leads-wa,
         products:w.products||[],
         has_delivery:Boolean(m.has_delivery),
       };
     }).filter((row:Row)=>row.spend>0||row.leads>0||row.dispatches>0||row.has_delivery)
-      .sort((a:Row,b:Row)=>b.leads-a.leads||b.dispatches-a.dispatches||b.spend-a.spend);
+      .sort((a:Row,b:Row)=>{
+        const av=kpiValue(a,kpi),bv=kpiValue(b,kpi);
+        if(av==null&&bv==null)return String(a.campaign_name).localeCompare(String(b.campaign_name),"pt-BR");
+        if(av==null)return 1;if(bv==null)return -1;
+        return (direction==="DESC"?bv-av:av-bv)||b.leads-a.leads;
+      });
   }
 
+  const selectedKpi = kpiDef(kpi);
   if (!ready) return <main className="lc-loading">Validando sessão…</main>;
   const sourceSummary:Row=dispatch?.summary||{};
   const metaSummary:Row=meta?.summary||{};
 
   return <main className="lc-shell"><style>{styles}</style>
     <header className="lc-top">
-      <div><span className="lc-kicker">CONFERÊNCIA DIÁRIA · META + DISPAROS DE LEADS</span><h1>Conferência de Leads</h1><p>Veja quantos leads cada cliente recebeu no Meta e confira contra os disparos reais identificados no WhatsApp. Expanda o cliente para conferir campanha por campanha.</p></div>
+      <div><span className="lc-kicker">CONFERÊNCIA DIÁRIA · META + DISPAROS DE LEADS</span><h1>Conferência de Leads</h1><p>Compare Meta × disparos e ordene toda a carteira pelos principais KPIs de mídia. Expanda qualquer cliente para analisar campanha por campanha.</p></div>
       <div className="lc-actions"><span>{loading?"Atualizando…":`Meta ao vivo · ${dateTime(metaSummary.fetched_at)}`}</span><button onClick={load} disabled={loading}>{loading?"Consultando…":"Atualizar agora"}</button></div>
     </header>
 
@@ -224,12 +308,15 @@ export default function LeadConferencePage() {
       <label>Período<select value={period} onChange={(e)=>changePeriod(e.target.value as Period)}><option value="TODAY">Hoje</option><option value="YESTERDAY">Ontem</option><option value="LAST_7D">Últimos 7 dias</option><option value="THIS_MONTH">Este mês</option><option value="CUSTOM">Personalizado</option></select></label>
       {period==="CUSTOM"&&<div className="lc-custom"><input type="date" value={customSince} onChange={(e)=>setCustomSince(e.target.value)}/><span>até</span><input type="date" value={customUntil} onChange={(e)=>setCustomUntil(e.target.value)}/><button onClick={applyCustom}>Aplicar</button></div>}
       <label>GT<select value={gtFilter} onChange={(e)=>setGtFilter(e.target.value)}><option value="ALL">Todos os GTs</option>{gtOptions.map((gt)=><option key={gt} value={gt}>{gt}</option>)}</select></label>
-      <label>Ordenar por<select className="lc-sort" value={sortKey} onChange={(e)=>setSortKey(e.target.value as SortKey)}><option value="LEADS_DESC">Mais leads primeiro</option><option value="DISPATCH_DESC">Mais disparos primeiro</option><option value="CPL_ASC">Menor CPL primeiro</option><option value="SPEND_DESC">Maior gasto primeiro</option><option value="MATCH_FIRST">Meta x WPP batendo primeiro</option><option value="DIFF_DESC">Maior diferença primeiro</option><option value="LEADS_ASC">Poucos leads primeiro</option><option value="NAME_ASC">Nome A–Z</option></select></label>
+      <label>KPI<select className="lc-kpi" value={kpi} onChange={(e)=>{setKpi(e.target.value as KpiKey);setKpiMin("");setKpiMax("");}}><optgroup label="Meta Ads">{KPI_DEFS.filter((item)=>META_KPI_KEYS.has(item.key)).map((item)=><option key={item.key} value={item.key}>{item.label}</option>)}</optgroup><optgroup label="Conferência">{KPI_DEFS.filter((item)=>!META_KPI_KEYS.has(item.key)).map((item)=><option key={item.key} value={item.key}>{item.label}</option>)}</optgroup></select></label>
+      <label>Ordem<select value={direction} onChange={(e)=>setDirection(e.target.value as SortDirection)}><option value="DESC">Maior → menor</option><option value="ASC">Menor → maior</option></select></label>
       <label className="lc-search">Buscar<input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="Cliente ou GT"/></label>
+      <label>Mín. {selectedKpi.short}<input className="lc-range-input" type="number" step="any" value={kpiMin} onChange={(e)=>setKpiMin(e.target.value)} placeholder="—"/></label>
+      <label>Máx. {selectedKpi.short}<input className="lc-range-input" type="number" step="any" value={kpiMax} onChange={(e)=>setKpiMax(e.target.value)} placeholder="—"/></label>
       <label>Poucos leads ≤<input className="lc-threshold" type="number" min="0" max="100" value={lowThreshold} onChange={(e)=>setLowThreshold(Math.max(0,Number(e.target.value||0)))}/></label>
     </section>
 
-    <div className="lc-period">{range.label} · {dateLabel(range.since)}{range.since!==range.until?` → ${dateLabel(range.until)}`:""} · {rows.length} cliente(s) exibido(s)</div>
+    <div className="lc-period">{range.label} · {dateLabel(range.since)}{range.since!==range.until?` → ${dateLabel(range.until)}`:""} · {rows.length} cliente(s) exibido(s) · ordenado por {selectedKpi.label.toLowerCase()} ({direction==="DESC"?"maior primeiro":"menor primeiro"})</div>
     {error&&<div className="lc-error">{error}</div>}
 
     <section className="lc-metrics">
@@ -250,23 +337,26 @@ export default function LeadConferencePage() {
     <div className="lc-filter-tabs">{([['ALL','Todos'],['LOW','Poucos leads'],['ZERO','Zero leads'],['DIVERGENT','Divergências'],['OK','Batendo']] as [ViewFilter,string][]).map(([key,label])=><button key={key} className={filter===key?"active":""} onClick={()=>setFilter(key)}>{label}</button>)}</div>
 
     <section className="lc-table">
-      <div className="lc-head"><span>Cliente</span><span>Meta</span><span>Disparos</span><span>Meta − WPP</span><span>Gasto</span><span>CPL Meta</span><span>Status</span></div>
-      {rows.map((row:Row,index:number)=>{const open=expanded===String(row.client_id);const campaigns=campaignRows(row);const cpl=row.meta_leads>0?Number(row.spend||0)/row.meta_leads:null;return <article className={`lc-client ${open?"open":""}`} key={row.client_id}>
+      <div className="lc-head"><span>Cliente</span><span>Leads</span><span>Disparos</span><span>Meta − WPP</span><span>{selectedKpi.short}</span><span>Status</span></div>
+      {rows.map((row:Row,index:number)=>{const open=expanded===String(row.client_id);const campaigns=campaignRows(row);const value=kpiValue(row,kpi);return <article className={`lc-client ${open?"open":""}`} key={row.client_id}>
         <button className="lc-client-main" onClick={()=>setExpanded(open?null:String(row.client_id))}>
-          <span className="lc-name"><b>{sortKey==="LEADS_DESC"&&index<3?<em className={`lc-rank rank-${index+1}`}>#{index+1}</em>:null}{row.display_name}</b><small>{row.gt_owner||"Sem GT"} · {deliveryLabel[row.delivery_status]||row.delivery_status||"—"}</small></span>
+          <span className="lc-name"><b>{index<3&&direction==="DESC"?<em className={`lc-rank rank-${index+1}`}>#{index+1}</em>:null}{row.display_name}</b><small>{row.gt_owner||"Sem GT"} · {deliveryLabel[row.delivery_status]||row.delivery_status||"—"}</small></span>
           <strong className="blue-text">{number(row.meta_leads)}</strong>
           <strong className="orange-text">{number(row.dispatches)}</strong>
           <strong className={row.difference===0?"ok-text":"warn-text"}>{row.difference>0?"+":""}{number(row.difference)}</strong>
-          <span>{money(row.spend)}</span>
-          <span>{cpl==null?"—":money(cpl,2)}</span>
+          <strong className="lc-kpi-value">{formatKpi(value,kpi)}</strong>
           <span className={`lc-status ${statusTone(row.status)}`}>{statusText(row.status)}</span>
         </button>
         {open&&<div className="lc-detail">
-          <div className="lc-detail-title"><div><b>Campanhas</b><span>{campaigns.length} com movimento no período</span></div><div><small>Disparos conciliados</small><b>{number(row.campaign_matched||0)}</b></div><div><small>Não conciliados</small><b>{number(row.campaign_unmatched||0)}</b></div></div>
-          <div className="lc-campaign-table"><div className="lc-campaign-head"><span>Campanha</span><span>Gasto</span><span>Leads Meta</span><span>CPL</span><span>Disparos</span><span>Diferença</span></div>
-            {campaigns.map((campaign:Row)=><div className="lc-campaign-row" key={campaign.campaign_id}><span><b>{campaign.campaign_name}</b><small>{campaign.campaign_status||"status não informado"}</small></span><span>{money(campaign.spend)}</span><strong className="blue-text">{number(campaign.leads)}</strong><span>{campaign.cpl==null?"—":money(campaign.cpl,2)}</span><strong className="orange-text">{number(campaign.dispatches)}</strong><strong className={campaign.difference===0?"ok-text":"warn-text"}>{campaign.difference>0?"+":""}{number(campaign.difference)}</strong></div>)}
-            {!campaigns.length&&<div className="lc-empty">Nenhuma campanha com movimento neste período.</div>}
+          <div className="lc-detail-title"><div><b>Raio-X Meta do cliente</b><span>{campaigns.length} campanha(s) com movimento no período</span></div><div><small>Disparos conciliados</small><b>{number(row.campaign_matched||0)}</b></div><div><small>Não conciliados</small><b>{number(row.campaign_unmatched||0)}</b></div></div>
+          <div className="lc-kpi-grid">
+            {KPI_DEFS.filter((item)=>META_KPI_KEYS.has(item.key)).map((item)=><div key={item.key} className={item.key===kpi?"selected":""}><small>{item.label}</small><b>{formatKpi(kpiValue(row,item.key),item.key)}</b>{item.key==="REACH"&&<em>soma das campanhas</em>}</div>)}
           </div>
+          <div className="lc-campaign-scroll"><div className="lc-campaign-table">
+            <div className="lc-campaign-head"><span>Campanha</span><span>Gasto</span><span>Leads</span><span>CPL</span><span>Resultados</span><span>Custo/result.</span><span>CTR</span><span>CPC</span><span>CPM</span><span>Cliques</span><span>Impressões</span><span>Alcance</span><span>Freq.</span><span>Disparos</span><span>Diferença</span></div>
+            {campaigns.map((campaign:Row)=><div className="lc-campaign-row" key={campaign.campaign_id}><span><b>{campaign.campaign_name}</b><small>{campaign.campaign_status||"status não informado"}</small></span><span>{money(campaign.spend)}</span><strong className="blue-text">{number(campaign.leads)}</strong><span>{formatKpi(kpiValue(campaign,"CPL"),"CPL")}</span><span>{number(campaign.results)}</span><span>{formatKpi(kpiValue(campaign,"CPR"),"CPR")}</span><span>{formatKpi(kpiValue(campaign,"CTR"),"CTR")}</span><span>{formatKpi(kpiValue(campaign,"CPC"),"CPC")}</span><span>{formatKpi(kpiValue(campaign,"CPM"),"CPM")}</span><span>{number(campaign.clicks)}</span><span>{number(campaign.impressions)}</span><span>{number(campaign.reach)}</span><span>{formatKpi(kpiValue(campaign,"FREQUENCY"),"FREQUENCY")}</span><strong className="orange-text">{number(campaign.dispatches)}</strong><strong className={campaign.difference===0?"ok-text":"warn-text"}>{campaign.difference>0?"+":""}{number(campaign.difference)}</strong></div>)}
+            {!campaigns.length&&<div className="lc-empty">Nenhuma campanha com movimento neste período.</div>}
+          </div></div>
           {row.campaign_unmatched>0&&<div className="lc-unmatched"><b>{row.campaign_unmatched} disparo(s) sem campanha conciliada</b><span>{(row.dispatch_products||[]).slice(0,8).map((p:Row)=>`${p.label} (${p.count})`).join(" · ")||"Produto não identificado"}</span></div>}
           {row.routing_conflicts>0&&<div className="lc-conflict">⚠ {row.routing_conflicts} disparo(s) com conflito de roteamento detectado.</div>}
         </div>}
@@ -275,10 +365,10 @@ export default function LeadConferencePage() {
       {loading&&!meta&&<div className="lc-empty big">Consultando Meta e disparos de leads…</div>}
     </section>
 
-    <footer className="lc-source"><b>Como a conferência conta os dados</b><p><strong>Meta:</strong> ação de lead retornada pela Marketing API, consultada ao vivo no período e no nível de campanha. <strong>WhatsApp:</strong> somente mensagens <code>fromMe=true</code> classificadas pelo parser oficial como disparo de lead — padrão “NOVO LEAD” + nome + telefone. Mensagens comuns da equipe não entram na conta.</p><p>A diferença é sinal de conferência, não acusação automática de perda: disparos sem vínculo forte permanecem como “não conciliados” e dados Meta parciais são marcados.</p></footer>
+    <footer className="lc-source"><b>Como a conferência conta os dados</b><p><strong>Meta:</strong> KPIs retornados pela Marketing API no período. Leads, gasto, impressões, cliques, CTR, CPC, CPM e resultados vêm do consolidado consultado ao vivo; a quebra por campanha usa os dados nativos de cada campanha. <strong>WhatsApp:</strong> somente mensagens <code>fromMe=true</code> classificadas pelo parser oficial como disparo de lead.</p><p><strong>Alcance no consolidado do cliente:</strong> soma do alcance das campanhas retornadas pela Meta; usuários podem aparecer em mais de uma campanha. Ao expandir, o alcance exibido em cada campanha é o valor nativo da Meta.</p></footer>
   </main>;
 }
 
 const styles=`
-.lc-shell{min-height:100vh;background:#050d16;color:#eaf2fb;padding:26px 30px 70px;font-family:Inter,system-ui,sans-serif}.lc-loading{min-height:100vh;display:grid;place-items:center;background:#050d16;color:#a9bfd2;font-family:Inter,system-ui,sans-serif}.lc-top{display:flex;justify-content:space-between;gap:24px;align-items:flex-start}.lc-kicker{font-size:10px;letter-spacing:.14em;font-weight:900;color:#f1874e}.lc-top h1{font:800 clamp(30px,4vw,48px)/1 Inter Tight,Inter,sans-serif;margin:7px 0 8px}.lc-top p{color:#91a8bc;max-width:850px;line-height:1.5;margin:0}.lc-actions{display:flex;align-items:center;gap:10px}.lc-actions span{font-size:11px;color:#86a0b7}.lc-actions button,.lc-custom button{border:1px solid #bb5a27;background:#2a1710;color:#ffd8c2;border-radius:10px;padding:9px 12px;font-weight:800;cursor:pointer}.lc-actions button:hover,.lc-custom button:hover{background:#3a1e12}.lc-controls{margin-top:22px;display:flex;gap:10px;align-items:end;flex-wrap:wrap;background:#091725;border:1px solid #18364f;border-radius:15px;padding:12px}.lc-controls label{display:flex;flex-direction:column;gap:5px;color:#7892aa;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}.lc-controls select,.lc-controls input{height:38px;box-sizing:border-box;border:1px solid #24445f;background:#07131f;color:#e9f4fc;border-radius:9px;padding:0 10px;font:600 12px Inter,system-ui,sans-serif;outline:none}.lc-controls select:focus,.lc-controls input:focus{border-color:#64c9ff;box-shadow:0 0 0 2px rgba(100,201,255,.1)}.lc-search{min-width:220px;flex:1}.lc-sort{min-width:205px}.lc-threshold{width:84px}.lc-custom{display:flex;gap:6px;align-items:center}.lc-custom span{font-size:11px;color:#718aa0}.lc-period{margin:9px 2px 0;color:#7090aa;font-size:11px}.lc-error{margin-top:12px;border:1px solid #783747;background:#28131b;color:#ffd2da;padding:12px 14px;border-radius:12px}.lc-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:18px 0}.lc-metrics article{background:#0a1928;border:1px solid #19384f;border-radius:14px;padding:14px;position:relative;overflow:hidden}.lc-metrics article:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#334d61}.lc-metrics article.blue:before{background:#63caff}.lc-metrics article.orange:before{background:#f26b21}.lc-metrics article.warn:before{background:#f1ba4e}.lc-metrics article.bad:before{background:#ff6677}.lc-metrics small{display:block;color:#7891a7;font-size:9px;letter-spacing:.1em;font-weight:900}.lc-metrics b{display:block;font-size:28px;margin:5px 0 2px}.lc-metrics span{font-size:10px;color:#8ea6b9}.lc-coverage{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;border:1px solid #564525;background:#1b170d;border-radius:12px;padding:10px 12px;color:#f3d590;font-size:11px}.lc-coverage b{color:#ffe1a0}.lc-coverage small{color:#a99469}.lc-filter-tabs{display:flex;gap:6px;margin:16px 0 10px;flex-wrap:wrap}.lc-filter-tabs button{border:1px solid #203c53;background:#091522;color:#8fa8bb;border-radius:999px;padding:7px 11px;font-size:11px;font-weight:800;cursor:pointer}.lc-filter-tabs button.active{border-color:#c05c28;color:#fff;background:linear-gradient(135deg,rgba(242,107,33,.22),rgba(71,184,255,.1))}.lc-table{border:1px solid #18364d;background:#07131f;border-radius:16px;overflow:hidden}.lc-head,.lc-client-main{display:grid;grid-template-columns:minmax(260px,2fr) 80px 90px 95px 105px 105px minmax(150px,.9fr);gap:10px;align-items:center}.lc-head{padding:9px 14px;background:#0c1b2c;color:#6f899f;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.08em}.lc-client{border-top:1px solid #142b3d}.lc-client:first-of-type{border-top:0}.lc-client-main{width:100%;border:0;background:#081622;color:#dceaf4;padding:12px 14px;text-align:left;cursor:pointer}.lc-client-main:hover{background:#0b1c2c}.lc-client.open .lc-client-main{background:linear-gradient(90deg,rgba(242,107,33,.08),rgba(82,188,255,.05))}.lc-client-main>span,.lc-client-main>strong{font-size:12px}.lc-name b,.lc-name small{display:block}.lc-name b{font-size:13px;color:#eef8ff}.lc-name small{margin-top:3px;color:#7590a6;font-size:10px}.lc-rank{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:20px;margin-right:7px;border-radius:7px;background:#142b3d;color:#9fb7c9;font-style:normal;font-size:9px;font-weight:900;vertical-align:1px}.lc-rank.rank-1{background:#473516;color:#ffd66f}.lc-rank.rank-2{background:#29323c;color:#dce7ef}.lc-rank.rank-3{background:#3a271b;color:#e5aa78}.blue-text{color:#7ed3ff!important}.orange-text{color:#ff9b61!important}.ok-text{color:#71d5aa!important}.warn-text{color:#f6c768!important}.lc-status{display:inline-flex;width:max-content;max-width:100%;border-radius:999px;padding:5px 8px;font-size:9px!important;font-weight:900;white-space:nowrap}.lc-status.ok{background:#12352c;color:#78dfb6}.lc-status.warn{background:#3b3018;color:#f2ce73}.lc-status.bad{background:#451c27;color:#ff9bad}.lc-status.muted{background:#182634;color:#879daf}.lc-detail{background:#06101a;border-top:1px solid #233c50;padding:14px 16px 18px}.lc-detail-title{display:flex;gap:18px;align-items:end;margin-bottom:10px}.lc-detail-title>div:first-child{margin-right:auto}.lc-detail-title b,.lc-detail-title span,.lc-detail-title small{display:block}.lc-detail-title>div:first-child b{font-size:14px}.lc-detail-title>div:first-child span{color:#7991a5;font-size:10px;margin-top:2px}.lc-detail-title>div:not(:first-child){text-align:right}.lc-detail-title small{color:#6f899f;font-size:9px;text-transform:uppercase}.lc-detail-title>div:not(:first-child) b{font-size:17px;margin-top:2px}.lc-campaign-table{border:1px solid #153047;border-radius:11px;overflow:hidden}.lc-campaign-head,.lc-campaign-row{display:grid;grid-template-columns:minmax(260px,2fr) 90px 90px 90px 90px 90px;gap:8px;align-items:center}.lc-campaign-head{background:#0b1927;padding:8px 10px;color:#678298;font-size:8px;font-weight:900;text-transform:uppercase}.lc-campaign-row{padding:9px 10px;border-top:1px solid #11283a;color:#bcd0df;font-size:11px}.lc-campaign-row>span:first-child b,.lc-campaign-row>span:first-child small{display:block}.lc-campaign-row>span:first-child b{color:#e1edf5;font-size:11px}.lc-campaign-row>span:first-child small{color:#647f94;font-size:9px;margin-top:2px}.lc-unmatched,.lc-conflict{margin-top:9px;border-radius:9px;padding:9px 10px;font-size:10px}.lc-unmatched{border:1px solid #4d4025;background:#17150d;color:#d6bd7d}.lc-unmatched b,.lc-unmatched span{display:block}.lc-unmatched span{margin-top:3px;color:#9f906c}.lc-conflict{border:1px solid #6d3040;background:#241017;color:#ffacb9}.lc-empty{padding:13px;text-align:center;color:#738da2;font-size:11px}.lc-empty.big{padding:35px}.lc-source{margin-top:16px;border-top:1px solid #193349;padding-top:14px;color:#7891a6;font-size:10px;line-height:1.5}.lc-source b{color:#a8c0d2}.lc-source p{margin:5px 0}.lc-source strong{color:#bcd1df}.lc-source code{color:#8cd7ff;background:#0c1d2b;padding:1px 4px;border-radius:4px}@media(max-width:1100px){.lc-metrics{grid-template-columns:repeat(3,1fr)}.lc-head,.lc-client-main{grid-template-columns:minmax(220px,2fr) 70px 80px 85px 90px minmax(130px,1fr)}.lc-head span:nth-child(6),.lc-client-main>span:nth-child(6){display:none}.lc-campaign-head,.lc-campaign-row{grid-template-columns:minmax(220px,2fr) 80px 80px 80px 80px}.lc-campaign-head span:nth-child(4),.lc-campaign-row>span:nth-child(4){display:none}}@media(max-width:760px){.lc-shell{padding:18px 12px 70px}.lc-top{flex-direction:column}.lc-actions{width:100%;justify-content:space-between}.lc-metrics{grid-template-columns:1fr 1fr}.lc-head{display:none}.lc-client-main{grid-template-columns:1fr 62px 72px;gap:6px}.lc-client-main>*:nth-child(4),.lc-client-main>*:nth-child(5),.lc-client-main>*:nth-child(6){display:none}.lc-status{grid-column:1/-1}.lc-campaign-head{display:none}.lc-campaign-row{grid-template-columns:1fr 65px 65px;gap:5px}.lc-campaign-row>*:nth-child(2),.lc-campaign-row>*:nth-child(4),.lc-campaign-row>*:nth-child(6){display:none}.lc-detail-title{flex-wrap:wrap}.lc-custom{flex-wrap:wrap}.lc-controls label,.lc-search{min-width:min(100%,180px);flex:1}.lc-sort{min-width:180px}}
+.lc-shell{min-height:100vh;background:#050d16;color:#eaf2fb;padding:26px 30px 70px;font-family:Inter,system-ui,sans-serif}.lc-loading{min-height:100vh;display:grid;place-items:center;background:#050d16;color:#a9bfd2;font-family:Inter,system-ui,sans-serif}.lc-top{display:flex;justify-content:space-between;gap:24px;align-items:flex-start}.lc-kicker{font-size:10px;letter-spacing:.14em;font-weight:900;color:#f1874e}.lc-top h1{font:800 clamp(30px,4vw,48px)/1 Inter Tight,Inter,sans-serif;margin:7px 0 8px}.lc-top p{color:#91a8bc;max-width:900px;line-height:1.5;margin:0}.lc-actions{display:flex;align-items:center;gap:10px}.lc-actions span{font-size:11px;color:#86a0b7}.lc-actions button,.lc-custom button{border:1px solid #bb5a27;background:#2a1710;color:#ffd8c2;border-radius:10px;padding:9px 12px;font-weight:800;cursor:pointer}.lc-actions button:hover,.lc-custom button:hover{background:#3a1e12}.lc-controls{margin-top:22px;display:flex;gap:10px;align-items:end;flex-wrap:wrap;background:#091725;border:1px solid #18364f;border-radius:15px;padding:12px}.lc-controls label{display:flex;flex-direction:column;gap:5px;color:#7892aa;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}.lc-controls select,.lc-controls input{height:38px;box-sizing:border-box;border:1px solid #24445f;background:#07131f;color:#e9f4fc;border-radius:9px;padding:0 10px;font:600 12px Inter,system-ui,sans-serif;outline:none}.lc-controls select:focus,.lc-controls input:focus{border-color:#64c9ff;box-shadow:0 0 0 2px rgba(100,201,255,.1)}.lc-search{min-width:210px;flex:1}.lc-kpi{min-width:165px}.lc-threshold,.lc-range-input{width:92px}.lc-custom{display:flex;gap:6px;align-items:center}.lc-custom span{font-size:11px;color:#718aa0}.lc-period{margin:9px 2px 0;color:#7090aa;font-size:11px}.lc-error{margin-top:12px;border:1px solid #783747;background:#28131b;color:#ffd2da;padding:12px 14px;border-radius:12px}.lc-metrics{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:18px 0}.lc-metrics article{background:#0a1928;border:1px solid #19384f;border-radius:14px;padding:14px;position:relative;overflow:hidden}.lc-metrics article:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#334d61}.lc-metrics article.blue:before{background:#63caff}.lc-metrics article.orange:before{background:#f26b21}.lc-metrics article.warn:before{background:#f1ba4e}.lc-metrics article.bad:before{background:#ff6677}.lc-metrics small{display:block;color:#7891a7;font-size:9px;letter-spacing:.1em;font-weight:900}.lc-metrics b{display:block;font-size:28px;margin:5px 0 2px}.lc-metrics span{font-size:10px;color:#8ea6b9}.lc-coverage{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;border:1px solid #564525;background:#1b170d;border-radius:12px;padding:10px 12px;color:#f3d590;font-size:11px}.lc-coverage b{color:#ffe1a0}.lc-coverage small{color:#a99469}.lc-filter-tabs{display:flex;gap:6px;margin:16px 0 10px;flex-wrap:wrap}.lc-filter-tabs button{border:1px solid #203c53;background:#091522;color:#8fa8bb;border-radius:999px;padding:7px 11px;font-size:11px;font-weight:800;cursor:pointer}.lc-filter-tabs button.active{border-color:#c05c28;color:#fff;background:linear-gradient(135deg,rgba(242,107,33,.22),rgba(71,184,255,.1))}.lc-table{border:1px solid #18364d;background:#07131f;border-radius:16px;overflow:hidden}.lc-head,.lc-client-main{display:grid;grid-template-columns:minmax(260px,2fr) 72px 85px 95px minmax(120px,.7fr) minmax(150px,.9fr);gap:10px;align-items:center}.lc-head{padding:9px 14px;background:#0c1b2c;color:#6f899f;font-size:9px;font-weight:900;text-transform:uppercase;letter-spacing:.08em}.lc-client{border-top:1px solid #142b3d}.lc-client:first-of-type{border-top:0}.lc-client-main{width:100%;border:0;background:#081622;color:#dceaf4;padding:12px 14px;text-align:left;cursor:pointer}.lc-client-main:hover{background:#0b1c2c}.lc-client.open .lc-client-main{background:linear-gradient(90deg,rgba(242,107,33,.08),rgba(82,188,255,.05))}.lc-client-main>span,.lc-client-main>strong{font-size:12px}.lc-name b,.lc-name small{display:block}.lc-name b{font-size:13px;color:#eef8ff;display:flex;align-items:center;gap:7px}.lc-name small{margin-top:3px;color:#7590a6;font-size:10px}.lc-rank{font-style:normal;font-size:9px;border:1px solid #32506a;border-radius:6px;padding:2px 4px;color:#a8c0d2}.lc-rank.rank-1{border-color:#d8994a;color:#ffd58c}.lc-rank.rank-2{border-color:#758ca0;color:#cfdae3}.lc-rank.rank-3{border-color:#9a6541;color:#e8b58d}.blue-text{color:#7ed3ff!important}.orange-text{color:#ff9b61!important}.ok-text{color:#71d5aa!important}.warn-text{color:#f6c768!important}.lc-kpi-value{color:#eef8ff;font-size:13px!important}.lc-status{display:inline-flex;width:max-content;max-width:100%;border-radius:999px;padding:5px 8px;font-size:9px!important;font-weight:900;white-space:nowrap}.lc-status.ok{background:#12352c;color:#78dfb6}.lc-status.warn{background:#3b3018;color:#f2ce73}.lc-status.bad{background:#451c27;color:#ff9bad}.lc-status.muted{background:#182634;color:#879daf}.lc-detail{background:#06101a;border-top:1px solid #233c50;padding:14px 16px 18px}.lc-detail-title{display:flex;gap:18px;align-items:end;margin-bottom:10px}.lc-detail-title>div:first-child{margin-right:auto}.lc-detail-title b,.lc-detail-title span,.lc-detail-title small{display:block}.lc-detail-title>div:first-child b{font-size:14px}.lc-detail-title>div:first-child span{color:#7991a5;font-size:10px;margin-top:2px}.lc-detail-title>div:not(:first-child){text-align:right}.lc-detail-title small{color:#6f899f;font-size:9px;text-transform:uppercase}.lc-detail-title>div:not(:first-child) b{font-size:17px;margin-top:2px}.lc-kpi-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;margin-bottom:10px}.lc-kpi-grid div{border:1px solid #163149;background:#081723;border-radius:9px;padding:8px 9px}.lc-kpi-grid div.selected{border-color:#f07a3d;background:linear-gradient(135deg,rgba(242,107,33,.13),rgba(74,188,255,.07))}.lc-kpi-grid small,.lc-kpi-grid b,.lc-kpi-grid em{display:block}.lc-kpi-grid small{font-size:8px;text-transform:uppercase;color:#6f899f;font-weight:900}.lc-kpi-grid b{font-size:13px;margin-top:3px;color:#e7f2f9}.lc-kpi-grid em{font-size:8px;color:#7f91a0;font-style:normal;margin-top:2px}.lc-campaign-scroll{overflow-x:auto;border:1px solid #153047;border-radius:11px}.lc-campaign-table{min-width:1470px}.lc-campaign-head,.lc-campaign-row{display:grid;grid-template-columns:minmax(260px,2fr) 82px 65px 82px 74px 98px 65px 82px 82px 70px 92px 82px 60px 75px 76px;gap:7px;align-items:center}.lc-campaign-head{background:#0b1927;padding:8px 10px;color:#678298;font-size:8px;font-weight:900;text-transform:uppercase;position:sticky;top:0}.lc-campaign-row{padding:9px 10px;border-top:1px solid #11283a;color:#bcd0df;font-size:10px}.lc-campaign-row>span:first-child b,.lc-campaign-row>span:first-child small{display:block}.lc-campaign-row>span:first-child b{color:#e1edf5;font-size:10px}.lc-campaign-row>span:first-child small{color:#647f94;font-size:8px;margin-top:2px}.lc-unmatched,.lc-conflict{margin-top:9px;border-radius:9px;padding:9px 10px;font-size:10px}.lc-unmatched{border:1px solid #4d4025;background:#17150d;color:#d6bd7d}.lc-unmatched b,.lc-unmatched span{display:block}.lc-unmatched span{margin-top:3px;color:#9f906c}.lc-conflict{border:1px solid #6d3040;background:#241017;color:#ffacb9}.lc-empty{padding:13px;text-align:center;color:#738da2;font-size:11px}.lc-empty.big{padding:35px}.lc-source{margin-top:16px;border-top:1px solid #193349;padding-top:14px;color:#7891a6;font-size:10px;line-height:1.5}.lc-source b{color:#a8c0d2}.lc-source p{margin:5px 0}.lc-source strong{color:#bcd1df}.lc-source code{color:#8cd7ff;background:#0c1d2b;padding:1px 4px;border-radius:4px}@media(max-width:1180px){.lc-metrics{grid-template-columns:repeat(3,1fr)}.lc-kpi-grid{grid-template-columns:repeat(4,1fr)}}@media(max-width:760px){.lc-shell{padding:18px 12px 70px}.lc-top{flex-direction:column}.lc-actions{width:100%;justify-content:space-between}.lc-metrics{grid-template-columns:1fr 1fr}.lc-kpi-grid{grid-template-columns:1fr 1fr}.lc-head{display:none}.lc-client-main{grid-template-columns:1fr 62px 72px;gap:6px}.lc-client-main>*:nth-child(4),.lc-client-main>*:nth-child(5){display:none}.lc-status{grid-column:1/-1}.lc-detail-title{flex-wrap:wrap}.lc-custom{flex-wrap:wrap}}
 `;
