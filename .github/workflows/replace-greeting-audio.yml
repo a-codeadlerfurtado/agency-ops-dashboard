@@ -26,8 +26,8 @@ jobs:
           set -euo pipefail
           rm -f public/audio/opsquestion-greeting-full-v6.mp3
           git apply --binary .opsq/replace-audio-complete.patch
-          test "$(wc -c < public/audio/opsquestion-greeting-full-v6.mp3)" = "68812"
-          echo "14bd82e3a0b0e5ce44fd78f71e9bf2a66eb18da5fdf7628d6f06769e6b04b96b  public/audio/opsquestion-greeting-full-v6.mp3" | sha256sum -c -
+          test "$(wc -c < public/audio/opsquestion-greeting-full-v6.mp3)" = "45981"
+          echo "a749d3a2fe4094b19a5c66925ae154170dd9e4aad77b228eb07070dc5598e0b0  public/audio/opsquestion-greeting-full-v6.mp3" | sha256sum -c -
       - name: Commit only final MP3
         shell: bash
         run: |
