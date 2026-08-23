@@ -14,11 +14,35 @@ jobs:
     steps:
       - name: Install ffmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
-      - name: Download audio from live Cloudflare dashboard
+      - name: Check live audio and deployed JavaScript
         run: |
-          URL='https://agency-ops-dashboard.lakassessoriadigital.workers.dev/audio/opsquestion-greeting-full-v6.mp3?v=20260822-webaudio-static-v17&probe=32614183308'
+          BASE='https://agency-ops-dashboard.lakassessoriadigital.workers.dev'
+          URL="$BASE/audio/opsquestion-greeting-full-v6.mp3?v=20260822-webaudio-static-v17&probe=live-js-check"
           curl -fL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$URL" -o /tmp/live.mp3
           echo "LIVE_BYTES=$(wc -c < /tmp/live.mp3)"
           echo "LIVE_SHA256=$(sha256sum /tmp/live.mp3 | awk '{print $1}')"
           echo "LIVE_DURATION=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 /tmp/live.mp3)"
           ffmpeg -v error -i /tmp/live.mp3 -f null -
+
+          curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$BASE/?probe=live-js-check" -o /tmp/index.html
+          mkdir -p /tmp/livejs
+          python3 - <<'PY'
+          import re, pathlib, urllib.parse, urllib.request
+          base='https://agency-ops-dashboard.lakassessoriadigital.workers.dev/'
+          html=pathlib.Path('/tmp/index.html').read_text(errors='ignore')
+          urls=set(re.findall(r'(?:src|href)=["\']([^"\']+\.js(?:\?[^"\']*)?)["\']', html))
+          print('JS_URL_COUNT='+str(len(urls)))
+          for i,u in enumerate(sorted(urls)):
+              full=urllib.parse.urljoin(base,u)
+              try:
+                  req=urllib.request.Request(full, headers={'Cache-Control':'no-cache','Pragma':'no-cache'})
+                  data=urllib.request.urlopen(req, timeout=20).read()
+                  pathlib.Path(f'/tmp/livejs/{i}.js').write_bytes(data)
+                  print('JS_FETCH', full, len(data))
+              except Exception as e:
+                  print('JS_FETCH_ERROR', full, repr(e))
+          PY
+          echo '--- BRIDGE MARKERS IN LIVE JS ---'
+          grep -RaoE 'webaudio-static-v1[0-9]+|opsquestion-greeting-full-v6\.mp3|playbackStarting|playbackCompleted|force-cache|no-store' /tmp/livejs | sort -u || true
+          echo '--- HTML MARKERS ---'
+          grep -aoE 'webaudio-static-v1[0-9]+|opsquestion-greeting-full-v6\.mp3' /tmp/index.html | sort -u || true
