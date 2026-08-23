@@ -20,6 +20,7 @@ import WeekendBalanceAlert from "./weekend-balance-alert";
 import LeadQualityAlert from "./lead-quality-alert";
 import LearningShortcut from "./learning-shortcut";
 import LogoutShortcut from "./logout-shortcut";
+import ProfileMenuDismiss from "./profile-menu-dismiss";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
 import MotionSystem from "./motion-system";
 import GreetingAudioBridge from "./greeting-audio-bridge";
@@ -68,6 +69,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OpsQuestionBrand />
         <LearningShortcut />
         <LogoutShortcut />
+        <ProfileMenuDismiss />
       </body>
     </html>
   );
