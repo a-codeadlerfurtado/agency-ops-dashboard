@@ -1,0 +1,38 @@
+/*
+ * Dark-theme contrast tune.
+ * Keep the dashboard dark while lifting secondary surfaces just enough to
+ * separate cards, navigation and gradients from the page background.
+ * Light theme is intentionally untouched.
+ */
+:root:not([data-theme="light"]) {
+  --panel: #0b1b2f;
+  --panel2: #071625;
+  --line: #1a3a58;
+  --wash: rgba(62, 146, 220, 0.085);
+}
+
+:root:not([data-theme="light"]) .btn {
+  background: #172c49;
+}
+
+:root:not([data-theme="light"]) th {
+  background: #0e1d31;
+}
+
+:root:not([data-theme="light"]) .health-item,
+:root:not([data-theme="light"]) .action-card,
+:root:not([data-theme="light"]) .stage button {
+  background: #0d1c2f;
+}
+
+:root:not([data-theme="light"]) .stage-bar {
+  background: #1a304b;
+}
+
+:root:not([data-theme="light"]) .source-banner,
+:root:not([data-theme="light"]) .side-nav-toggle:hover,
+:root:not([data-theme="light"]) .side-nav-items button:hover,
+:root:not([data-theme="light"]) .side-nav-items a:hover,
+:root:not([data-theme="light"]) tbody tr:hover {
+  background-color: rgba(62, 146, 220, 0.085);
+}
