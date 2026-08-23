@@ -131,9 +131,11 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
   let result: any;
   try {
     const answerBudget = Math.max(600, Math.min(1600, Number(prepared.answer_budget || 1000)));
+    const completionBudget = Math.max(1800, Math.min(3200, answerBudget * 2));
     result = await env.AI.run(AI_MODEL, {
       messages,
-      max_tokens: answerBudget,
+      max_completion_tokens: completionBudget,
+      reasoning_effort: "low",
       temperature: 0.2,
     });
   } catch (error) {
@@ -142,7 +144,16 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
 
   const modelLatency = Date.now() - started;
   const answer = aiText(result);
-  if (!answer) return json({ ok: false, error: "empty_ai_answer" }, 502);
+  if (!answer) {
+    const finishReason = result?.choices?.[0]?.finish_reason ?? null;
+    const usage = result?.usage || result?.result?.usage || {};
+    return json({
+      ok: false,
+      error: "empty_ai_answer",
+      detail: finishReason ? `finish_reason:${finishReason}` : "workers_ai_returned_no_final_text",
+      usage,
+    }, 502);
+  }
 
   const usage = result?.usage || result?.result?.usage || {};
   const completionResponse = await edgeCall(request, "complete-chat", {
