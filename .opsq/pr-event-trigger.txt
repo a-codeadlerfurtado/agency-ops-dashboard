@@ -1,0 +1,1 @@
+trigger PR event for validated greeting binary replacement
