@@ -1,38 +1,110 @@
 /*
- * Dark-theme contrast tune.
- * Keep the dashboard dark while lifting secondary surfaces just enough to
- * separate cards, navigation and gradients from the page background.
- * Light theme is intentionally untouched.
+ * Dark-theme contrast + accent tune.
+ * Keep the dashboard dark, reduce the overall blue cast, and use orange +
+ * light blue only as selective accents. Light theme stays untouched.
  */
 :root:not([data-theme="light"]) {
-  --panel: #0b1b2f;
-  --panel2: #071625;
-  --line: #1a3a58;
-  --wash: rgba(62, 146, 220, 0.085);
+  --bg: #060b10;
+  --panel: #111920;
+  --panel2: #0b1218;
+  --line: #293845;
+  --blue: #69b9ff;
+  --accent: #ff7a2f;
+  --accent-soft: rgba(255, 122, 47, 0.14);
+  --wash: rgba(105, 185, 255, 0.065);
+}
+
+:root:not([data-theme="light"]) body {
+  background:
+    radial-gradient(circle at 11% -8%, rgba(105, 185, 255, 0.14), transparent 30rem),
+    radial-gradient(circle at 92% 2%, rgba(255, 122, 47, 0.11), transparent 27rem),
+    var(--bg);
+}
+
+:root:not([data-theme="light"]) .card {
+  border-color: var(--line);
+}
+
+:root:not([data-theme="light"]) .kpis .metric:nth-child(3n + 1) {
+  box-shadow: inset 0 2px rgba(255, 122, 47, 0.56), var(--shadow);
+}
+
+:root:not([data-theme="light"]) .kpis .metric:nth-child(3n + 2) {
+  box-shadow: inset 0 2px rgba(105, 185, 255, 0.52), var(--shadow);
+}
+
+:root:not([data-theme="light"]) .kpis .metric:nth-child(3n) {
+  box-shadow: inset 0 2px rgba(255, 255, 255, 0.08), var(--shadow);
+}
+
+:root:not([data-theme="light"]) .side-nav-items button.active,
+:root:not([data-theme="light"]) .side-nav-items a.active {
+  background: linear-gradient(90deg, rgba(255, 122, 47, 0.18), rgba(105, 185, 255, 0.07));
+  box-shadow: inset 3px 0 var(--accent);
 }
 
 :root:not([data-theme="light"]) .btn {
-  background: #172c49;
+  background: linear-gradient(135deg, #17232d, #13202a);
+  border-color: #344957;
+}
+
+:root:not([data-theme="light"]) .btn:hover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(255, 122, 47, 0.08);
+}
+
+:root:not([data-theme="light"]) .theme-btn:hover,
+:root:not([data-theme="light"]) .control:focus {
+  border-color: var(--blue);
 }
 
 :root:not([data-theme="light"]) th {
-  background: #0e1d31;
+  background: #111b24;
 }
 
 :root:not([data-theme="light"]) .health-item,
 :root:not([data-theme="light"]) .action-card,
 :root:not([data-theme="light"]) .stage button {
-  background: #0d1c2f;
+  background: #121c24;
 }
 
-:root:not([data-theme="light"]) .stage-bar {
-  background: #1a304b;
+:root:not([data-theme="light"]) .action-card:hover,
+:root:not([data-theme="light"]) .stage button:hover {
+  border-color: var(--accent);
 }
 
-:root:not([data-theme="light"]) .source-banner,
+:root:not([data-theme="light"]) .stage-bar,
+:root:not([data-theme="light"]) .health-rail,
+:root:not([data-theme="light"]) .funnel-row > div {
+  background: #1a2731;
+}
+
+:root:not([data-theme="light"]) .stage-bar i,
+:root:not([data-theme="light"]) .funnel-row i {
+  background: linear-gradient(90deg, var(--accent), var(--blue));
+}
+
+:root:not([data-theme="light"]) .source-banner {
+  border-color: rgba(105, 185, 255, 0.2);
+  background: linear-gradient(90deg, rgba(105, 185, 255, 0.07), rgba(255, 122, 47, 0.055));
+}
+
 :root:not([data-theme="light"]) .side-nav-toggle:hover,
 :root:not([data-theme="light"]) .side-nav-items button:hover,
 :root:not([data-theme="light"]) .side-nav-items a:hover,
 :root:not([data-theme="light"]) tbody tr:hover {
-  background-color: rgba(62, 146, 220, 0.085);
+  background-color: rgba(105, 185, 255, 0.07);
+}
+
+:root:not([data-theme="light"]) .executive-story {
+  background: linear-gradient(
+    145deg,
+    var(--panel),
+    color-mix(in srgb, var(--accent) 7%, var(--panel)) 52%,
+    color-mix(in srgb, var(--blue) 8%, var(--panel))
+  );
+}
+
+:root:not([data-theme="light"]) .logo {
+  background: linear-gradient(135deg, #173b55 0%, #245e86 48%, #b84e18 140%);
 }
