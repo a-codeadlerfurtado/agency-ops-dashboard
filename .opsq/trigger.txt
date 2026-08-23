@@ -1,1 +1,0 @@
-validated 2026-08-22: 45981 bytes; sha256 a749d3a2fe4094b19a5c66925ae154170dd9e4aad77b228eb07070dc5598e0b0; duration 22.831020s; decode OK; max volume -11.2 dB; no silence gaps >=1s
