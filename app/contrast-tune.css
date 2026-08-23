@@ -1,110 +1,155 @@
 /*
  * Dark-theme contrast + accent tune.
- * Keep the dashboard dark, reduce the overall blue cast, and use orange +
- * light blue only as selective accents. Light theme stays untouched.
+ * Neutral graphite base with clearly visible orange + light-blue accents.
+ * Light theme intentionally untouched.
  */
 :root:not([data-theme="light"]) {
-  --bg: #060b10;
-  --panel: #111920;
-  --panel2: #0b1218;
-  --line: #293845;
-  --blue: #69b9ff;
+  --bg: #070a0d;
+  --panel: #14191e;
+  --panel2: #0e1317;
+  --line: #35414b;
+  --blue: #76c6ff;
   --accent: #ff7a2f;
-  --accent-soft: rgba(255, 122, 47, 0.14);
-  --wash: rgba(105, 185, 255, 0.065);
+  --accent-soft: rgba(255, 122, 47, 0.18);
+  --wash: rgba(118, 198, 255, 0.085);
 }
 
 :root:not([data-theme="light"]) body {
   background:
-    radial-gradient(circle at 11% -8%, rgba(105, 185, 255, 0.14), transparent 30rem),
-    radial-gradient(circle at 92% 2%, rgba(255, 122, 47, 0.11), transparent 27rem),
-    var(--bg);
+    radial-gradient(circle at 10% -8%, rgba(118, 198, 255, 0.12), transparent 29rem),
+    radial-gradient(circle at 92% 1%, rgba(255, 122, 47, 0.15), transparent 27rem),
+    var(--bg) !important;
 }
 
 :root:not([data-theme="light"]) .card {
   border-color: var(--line);
+  background-color: var(--panel);
 }
 
-:root:not([data-theme="light"]) .kpis .metric:nth-child(3n + 1) {
-  box-shadow: inset 0 2px rgba(255, 122, 47, 0.56), var(--shadow);
+/* KPI cards: visible alternating orange / light-blue detail */
+:root:not([data-theme="light"]) .kpis .metric:nth-child(odd) {
+  border-top: 2px solid rgba(255, 122, 47, 0.78);
+  background: linear-gradient(155deg, rgba(255, 122, 47, 0.075), transparent 42%), var(--panel);
 }
 
-:root:not([data-theme="light"]) .kpis .metric:nth-child(3n + 2) {
-  box-shadow: inset 0 2px rgba(105, 185, 255, 0.52), var(--shadow);
+:root:not([data-theme="light"]) .kpis .metric:nth-child(even) {
+  border-top: 2px solid rgba(118, 198, 255, 0.74);
+  background: linear-gradient(155deg, rgba(118, 198, 255, 0.07), transparent 42%), var(--panel);
 }
 
-:root:not([data-theme="light"]) .kpis .metric:nth-child(3n) {
-  box-shadow: inset 0 2px rgba(255, 255, 255, 0.08), var(--shadow);
+:root:not([data-theme="light"]) .kpis .metric:nth-child(odd) .value {
+  color: #ff9a61;
+}
+
+:root:not([data-theme="light"]) .kpis .metric:nth-child(even) .value {
+  color: #8fd2ff;
+}
+
+/* Navigation: orange active state, light-blue hover */
+:root:not([data-theme="light"]) .side-nav {
+  background: #0c1115;
+  border-right-color: #35414b;
 }
 
 :root:not([data-theme="light"]) .side-nav-items button.active,
 :root:not([data-theme="light"]) .side-nav-items a.active {
-  background: linear-gradient(90deg, rgba(255, 122, 47, 0.18), rgba(105, 185, 255, 0.07));
-  box-shadow: inset 3px 0 var(--accent);
+  background: linear-gradient(90deg, rgba(255, 122, 47, 0.28), rgba(255, 122, 47, 0.07)) !important;
+  color: #fff3ec;
+  box-shadow: inset 3px 0 #ff7a2f;
 }
 
+:root:not([data-theme="light"]) .side-nav-items button:hover,
+:root:not([data-theme="light"]) .side-nav-items a:hover,
+:root:not([data-theme="light"]) .side-nav-toggle:hover {
+  background: rgba(118, 198, 255, 0.10) !important;
+  color: #bfe5ff;
+}
+
+/* Buttons stay dark, but alternate accent is obvious on interaction */
 :root:not([data-theme="light"]) .btn {
-  background: linear-gradient(135deg, #17232d, #13202a);
-  border-color: #344957;
+  background: linear-gradient(135deg, #1a2127, #141b20);
+  border-color: #43525e;
 }
 
 :root:not([data-theme="light"]) .btn:hover {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px rgba(255, 122, 47, 0.08);
+  border-color: #ff7a2f;
+  box-shadow: 0 0 0 1px rgba(255, 122, 47, 0.16);
 }
 
 :root:not([data-theme="light"]) .theme-btn:hover,
 :root:not([data-theme="light"]) .control:focus {
-  border-color: var(--blue);
+  border-color: #76c6ff;
+  box-shadow: 0 0 0 1px rgba(118, 198, 255, 0.12);
 }
 
+/* Tables and work cards */
 :root:not([data-theme="light"]) th {
-  background: #111b24;
+  background: #151c22;
+}
+
+:root:not([data-theme="light"]) tbody tr:hover {
+  background: rgba(118, 198, 255, 0.075) !important;
 }
 
 :root:not([data-theme="light"]) .health-item,
 :root:not([data-theme="light"]) .action-card,
 :root:not([data-theme="light"]) .stage button {
-  background: #121c24;
+  background: #161d23;
+}
+
+:root:not([data-theme="light"]) .action-card:nth-child(odd),
+:root:not([data-theme="light"]) .stage button:nth-child(odd) {
+  border-left: 2px solid rgba(255, 122, 47, 0.55);
+}
+
+:root:not([data-theme="light"]) .action-card:nth-child(even),
+:root:not([data-theme="light"]) .stage button:nth-child(even) {
+  border-left: 2px solid rgba(118, 198, 255, 0.5);
 }
 
 :root:not([data-theme="light"]) .action-card:hover,
 :root:not([data-theme="light"]) .stage button:hover {
-  border-color: var(--accent);
+  border-color: #ff7a2f;
 }
 
+/* Progress gradients */
 :root:not([data-theme="light"]) .stage-bar,
 :root:not([data-theme="light"]) .health-rail,
 :root:not([data-theme="light"]) .funnel-row > div {
-  background: #1a2731;
+  background: #202a31;
 }
 
 :root:not([data-theme="light"]) .stage-bar i,
 :root:not([data-theme="light"]) .funnel-row i {
-  background: linear-gradient(90deg, var(--accent), var(--blue));
+  background: linear-gradient(90deg, #ff7a2f 0%, #ff9a61 38%, #76c6ff 100%) !important;
 }
 
+/* Executive / source areas get mixed accents instead of blue-only */
 :root:not([data-theme="light"]) .source-banner {
-  border-color: rgba(105, 185, 255, 0.2);
-  background: linear-gradient(90deg, rgba(105, 185, 255, 0.07), rgba(255, 122, 47, 0.055));
-}
-
-:root:not([data-theme="light"]) .side-nav-toggle:hover,
-:root:not([data-theme="light"]) .side-nav-items button:hover,
-:root:not([data-theme="light"]) .side-nav-items a:hover,
-:root:not([data-theme="light"]) tbody tr:hover {
-  background-color: rgba(105, 185, 255, 0.07);
+  border-color: rgba(118, 198, 255, 0.26);
+  background: linear-gradient(90deg, rgba(118, 198, 255, 0.09), rgba(255, 122, 47, 0.08));
 }
 
 :root:not([data-theme="light"]) .executive-story {
   background: linear-gradient(
     145deg,
     var(--panel),
-    color-mix(in srgb, var(--accent) 7%, var(--panel)) 52%,
-    color-mix(in srgb, var(--blue) 8%, var(--panel))
-  );
+    color-mix(in srgb, #ff7a2f 10%, var(--panel)) 52%,
+    color-mix(in srgb, #76c6ff 10%, var(--panel))
+  ) !important;
+}
+
+:root:not([data-theme="light"]) .panel-heading h3,
+:root:not([data-theme="light"]) .section-title {
+  color: #d9efff;
+}
+
+:root:not([data-theme="light"]) .eyebrow,
+:root:not([data-theme="light"]) .brand-name {
+  color: #ff9a61;
 }
 
 :root:not([data-theme="light"]) .logo {
-  background: linear-gradient(135deg, #173b55 0%, #245e86 48%, #b84e18 140%);
+  background: linear-gradient(135deg, #214f70 0%, #327eb0 48%, #ff7a2f 145%) !important;
+  box-shadow: 0 10px 28px rgba(118, 198, 255, 0.16), 0 0 0 1px rgba(255, 122, 47, 0.16);
 }
