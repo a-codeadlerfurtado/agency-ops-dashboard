@@ -1,12 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createClient, type Session } from "@supabase/supabase-js";
+import type { Session } from "@supabase/supabase-js";
+import { SUPABASE_URL, SUPABASE_ANON_KEY, supabase } from "./shared";
 
-const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
 const HEALTH_API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-integration-health`;
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 type Integration = {
   source_key: string;

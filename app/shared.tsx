@@ -195,12 +195,11 @@ export function initials(value: unknown) {
   return String(value || "CO").trim().split(/\s+/).map((part) => part[0]).slice(0,2).join("").toUpperCase();
 }
 
-// Todas as chamadas autenticadas passam por esta camada. O token recebido pelos
-// componentes serve apenas para compatibilidade com as assinaturas antigas; antes de
-// sair para a rede consultamos a sessao atual do Supabase. Assim, uma aba antiga que
-// ficou com um access token em um closure para imediatamente de bater nas APIs depois
-// de logout. Se o access token apenas venceu, fazemos UM refresh compartilhado e
-// repetimos a requisicao uma unica vez.
+// Todas as chamadas autenticadas passam por esta camada. Chamadas que ja possuem
+// o token da sessao usam esse token diretamente; as demais compartilham uma unica
+// leitura de sessao concorrente. Refresh so acontece depois de um 401 real e tambem
+// e compartilhado. Isso evita tempestade de getSession/refresh durante a montagem.
+let accessTokenPromise: Promise<string | null> | null = null;
 let refreshSessionPromise: Promise<string | null> | null = null;
 
 export class SessionExpiredError extends Error {
@@ -213,9 +212,12 @@ export function isSessionExpiredError(error: unknown): error is SessionExpiredEr
 }
 
 async function liveAccessToken(): Promise<string | null> {
-  const { data, error } = await supabase.auth.getSession();
-  if (error) return null;
-  return data.session?.access_token ?? null;
+  if (!accessTokenPromise) {
+    accessTokenPromise = supabase.auth.getSession()
+      .then(({ data, error }) => error ? null : (data.session?.access_token ?? null))
+      .finally(() => { accessTokenPromise = null; });
+  }
+  return accessTokenPromise;
 }
 
 async function refreshAccessToken(): Promise<string | null> {
@@ -236,8 +238,8 @@ function authHeaders(init: RequestInit, token: string) {
   return headers;
 }
 
-export async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  const currentToken = await liveAccessToken();
+export async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}, tokenHint?: string | null): Promise<Response> {
+  const currentToken = tokenHint || await liveAccessToken();
   if (!currentToken) throw new SessionExpiredError();
 
   const request = (token: string) => fetch(input, { ...init, headers: authHeaders(init, token) });
@@ -258,11 +260,11 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
   return response;
 }
 
-export async function api(view: string, _token: string, params: Record<string, string> = {}) {
+export async function api(view: string, token: string, params: Record<string, string> = {}) {
   const url = new URL(API_URL);
   url.searchParams.set("view", view);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  const response = await authenticatedFetch(url, { cache: "no-store" });
+  const response = await authenticatedFetch(url, { cache: "no-store" }, token);
   if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
   const json = await response.json();
 
@@ -271,7 +273,7 @@ export async function api(view: string, _token: string, params: Record<string, s
   // do home por uma rota autenticada específica, sem elevar o perfil inteiro.
   if (view === "home" && json?.profile?.role === "CS") {
     try {
-      const clientResponse = await authenticatedFetch(CS_CLIENTS_API, { cache: "no-store" });
+      const clientResponse = await authenticatedFetch(CS_CLIENTS_API, { cache: "no-store" }, token);
       if (clientResponse.ok) {
         const extra = await clientResponse.json();
         if (Array.isArray(extra?.clients)) {
@@ -296,7 +298,7 @@ export async function api(view: string, _token: string, params: Record<string, s
   return json;
 }
 
-export async function apiPost(view: string, _token: string, body: Row = {}) {
+export async function apiPost(view: string, token: string, body: Row = {}) {
   const endpoint = view === "work-item-create"
     ? WORK_ITEM_CREATE_API
     : `${API_URL}?view=${encodeURIComponent(view)}`;
@@ -304,7 +306,7 @@ export async function apiPost(view: string, _token: string, body: Row = {}) {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
-  });
+  }, token);
   if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
   return response.json();
 }

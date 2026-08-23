@@ -1,12 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createClient, type Session } from "@supabase/supabase-js";
+import type { Session } from "@supabase/supabase-js";
+import { SUPABASE_URL, SUPABASE_ANON_KEY, supabase } from "./shared";
 
-const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
 const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-weekend-balance-api`;
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 type AlertRow={id:string;slot_key:string;client_id:string;client_name:string;min_balance:number|string;checked_at:string;low_accounts?:Array<{account_key?:string;available_balance?:number|string}>};
 type AlertBundle={slot_key:string;run_key:string;rule_key:string;threshold:number;alerts:AlertRow[]};

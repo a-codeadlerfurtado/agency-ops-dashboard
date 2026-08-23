@@ -1,12 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createClient, type Session } from "@supabase/supabase-js";
+import type { Session } from "@supabase/supabase-js";
+import { SUPABASE_URL, SUPABASE_ANON_KEY, supabase } from "../shared";
 
-const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
 const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-campaigns-api`;
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 type Row = Record<string, any>;
 type Payload = { clients: Row[]; campaigns: Row[]; summary: Row; profile?: Row };
