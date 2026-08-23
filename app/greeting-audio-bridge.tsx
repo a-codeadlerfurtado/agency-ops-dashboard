@@ -2,7 +2,15 @@
 
 import { useEffect } from "react";
 
-const AUDIO_URL = "/audio/opsquestion-greeting-full-v6.mp3?v=20260822-webaudio-static-v17";
+const AUDIO_URLS = [
+  "/audio/opsquestion-greeting-full-v6.mp3?v=20260822-webaudio-static-v17",
+  "/audio/opsquestion-greeting-01.mp3?v=20260823-greeting-pool-v1",
+  "/audio/opsquestion-greeting-02.mp3?v=20260823-greeting-pool-v1",
+  "/audio/opsquestion-greeting-03.mp3?v=20260823-greeting-pool-v1",
+  "/audio/opsquestion-greeting-04.mp3?v=20260823-greeting-pool-v1",
+  "/audio/opsquestion-greeting-05.mp3?v=20260823-greeting-pool-v1",
+  "/audio/opsquestion-greeting-06.mp3?v=20260823-greeting-pool-v1",
+] as const;
 const FALLBACK_DURATION = 22.824;
 
 function emit(name: string, detail?: Record<string, unknown>) {
@@ -16,6 +24,12 @@ export default function GreetingAudioBridge() {
       emit("opsq:greeting-audio-error", { message: "AudioContext indisponível neste navegador" });
       return;
     }
+
+    const randomIndex =
+      typeof crypto !== "undefined" && "getRandomValues" in crypto
+        ? crypto.getRandomValues(new Uint32Array(1))[0] % AUDIO_URLS.length
+        : Math.floor(Math.random() * AUDIO_URLS.length);
+    const audioUrl = AUDIO_URLS[randomIndex];
 
     const ctx = new AudioCtx();
     const master = ctx.createGain();
@@ -37,7 +51,7 @@ export default function GreetingAudioBridge() {
     let playbackCompleted = false;
 
     const loadDecodedBuffer = async () => {
-      const response = await fetch(AUDIO_URL, {
+      const response = await fetch(audioUrl, {
         cache: "no-store",
         credentials: "same-origin",
       });
