@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-const AUDIO_URL = "/audio/opsquestion-greeting-full-v6.mp3?v=20260822-webaudio-static-v15";
+const AUDIO_URL = "/audio/opsquestion-greeting-full-v6.mp3?v=20260822-webaudio-static-v16";
 const FALLBACK_DURATION = 22.824;
 
 function emit(name: string, detail?: Record<string, unknown>) {
@@ -33,6 +33,8 @@ export default function GreetingAudioBridge() {
     let duration = FALLBACK_DURATION;
     let announcedStart = false;
     let playbackStarted = false;
+    let playbackStarting = false;
+    let playbackCompleted = false;
 
     const loadDecodedBuffer = async () => {
       const response = await fetch(AUDIO_URL, {
@@ -138,12 +140,17 @@ export default function GreetingAudioBridge() {
       }
       source = null;
       playbackStarted = false;
+      playbackStarting = false;
       announcedStart = false;
       startedAt = 0;
     };
 
     const startOpeningPlayback = async () => {
-      if (disposed || !openingActive || playbackStarted) return;
+      // IMPORTANTE: playbackStarting impede que o poll de 80 ms abra várias
+      // reproduções concorrentes enquanto espera unlock/buffer. playbackCompleted
+      // impede que o áudio recomece depois do onended enquanto a abertura ainda existe.
+      if (disposed || !openingActive || playbackStarted || playbackStarting || playbackCompleted) return;
+      playbackStarting = true;
 
       try {
         if (unlockPromise) await unlockPromise;
@@ -151,7 +158,7 @@ export default function GreetingAudioBridge() {
         if (!unlocked) throw new Error("Áudio não foi liberado pelo clique de login");
 
         const buffer = await bufferPromise;
-        if (disposed || !openingActive || playbackStarted) return;
+        if (disposed || !openingActive || playbackStarted || playbackCompleted) return;
 
         if (ctx.state !== "running") {
           // O contexto foi previamente autorizado pelo clique do login. Esse resume
@@ -167,13 +174,15 @@ export default function GreetingAudioBridge() {
         nextSource.connect(master);
         nextSource.onended = () => {
           if (disposed || !openingActive || source !== nextSource) return;
+          playbackCompleted = true;
+          playbackStarted = false;
+          source = null;
           emit("opsq:greeting-audio-progress", {
             progress: 1,
             currentTime: duration,
             duration,
           });
           emit("opsq:greeting-audio-ended");
-          playbackStarted = false;
         };
 
         source = nextSource;
@@ -186,6 +195,8 @@ export default function GreetingAudioBridge() {
         emit("opsq:greeting-audio-error", {
           message: error instanceof Error ? error.message : "Falha ao iniciar áudio automático",
         });
+      } finally {
+        playbackStarting = false;
       }
     };
 
@@ -197,6 +208,8 @@ export default function GreetingAudioBridge() {
         openingActive = true;
         announcedStart = false;
         playbackStarted = false;
+        playbackStarting = false;
+        playbackCompleted = false;
         void startOpeningPlayback();
         return;
       }
@@ -205,6 +218,7 @@ export default function GreetingAudioBridge() {
         openingActive = false;
         stopPlayback();
         stopKeeper();
+        playbackCompleted = false;
       }
     };
 
@@ -217,12 +231,14 @@ export default function GreetingAudioBridge() {
 
     const poll = window.setInterval(() => {
       syncOpening();
-      if (!openingActive) return;
+      if (!openingActive || playbackCompleted) return;
 
-      if (!playbackStarted) {
+      if (!playbackStarted && !playbackStarting) {
         void startOpeningPlayback();
         return;
       }
+
+      if (!playbackStarted) return;
 
       const elapsed = Math.max(0, ctx.currentTime - startedAt);
       const progress = Math.min(1, elapsed / Math.max(duration, 0.001));
