@@ -3,6 +3,8 @@ name: Temporary remove home promise cache
 on:
   push:
     branches: [fix/remove-home-promise-cache]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -63,5 +65,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add app/shared.tsx
-          git commit -m "Remove shared home promise cache"
-          git push origin HEAD:fix/remove-home-promise-cache
+          if git diff --cached --quiet; then
+            echo "Patch already applied"
+          else
+            git commit -m "Remove shared home promise cache"
+            git push origin HEAD:fix/remove-home-promise-cache
+          fi
