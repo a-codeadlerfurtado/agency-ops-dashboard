@@ -35,47 +35,213 @@ function norm(value: unknown): string {
     .trim();
 }
 
-async function directDbAnswer(ops: any, role: string, person: string, question: string): Promise<{ answer: string; source: string } | null> {
-  const q = norm(question);
+type TeamPerson = { person: string; role: string; clickup_user: string | null };
+type FastAnswer = { answer: string; source: string; intent: string };
+type Period = { start: string; end: string; label: string };
 
-  const asksOnboarding = q.includes("onboarding") && /\b(qual|quais|quem|lista|listar|estao|cliente|clientes|quantos|quantas)\b/.test(q);
+function tokenSet(value: string): Set<string> {
+  return new Set(norm(value).split(" ").filter(Boolean));
+}
+
+function mentionedPerson(question: string, roster: TeamPerson[], roleFilter?: string): TeamPerson | null {
+  const q = norm(question);
+  const qTokens = tokenSet(q);
+  const candidates = roster
+    .filter((row) => !roleFilter || row.role === roleFilter)
+    .map((row) => {
+      const full = norm(row.person);
+      if (q.includes(full)) return { row, score: 1000 + full.length };
+      const parts = full.split(" ").filter((part) => part.length >= 3);
+      const hits = parts.filter((part) => qTokens.has(part));
+      const score = hits.reduce((sum, part) => sum + part.length, 0);
+      return { row, score };
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  if (!candidates.length) return null;
+  if (candidates.length > 1 && candidates[0].score === candidates[1].score) return null;
+  return candidates[0].row;
+}
+
+function saoPauloDateParts(now = new Date()): { year: number; month: number; day: number } {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value || 0);
+  return { year: get("year"), month: get("month"), day: get("day") };
+}
+
+function dayPeriod(offsetDays: number, label: string): Period {
+  const { year, month, day } = saoPauloDateParts();
+  // Brasil não usa horário de verão desde 2019. 00:00 em São Paulo = 03:00 UTC.
+  const startMs = Date.UTC(year, month - 1, day + offsetDays, 3, 0, 0, 0);
+  return {
+    start: new Date(startMs).toISOString(),
+    end: new Date(startMs + 86_400_000).toISOString(),
+    label,
+  };
+}
+
+function weekPeriod(): Period {
+  const { year, month, day } = saoPauloDateParts();
+  const localDate = new Date(Date.UTC(year, month - 1, day));
+  const daysSinceMonday = (localDate.getUTCDay() + 6) % 7;
+  const startMs = Date.UTC(year, month - 1, day - daysSinceMonday, 3, 0, 0, 0);
+  return { start: new Date(startMs).toISOString(), end: new Date().toISOString(), label: "nesta semana" };
+}
+
+function periodFromQuestion(q: string): Period | null {
+  if (/\bontem\b/.test(q)) return dayPeriod(-1, "ontem");
+  if (/\bhoje\b/.test(q)) return dayPeriod(0, "hoje");
+  if (/\b(esta semana|essa semana|semana atual)\b/.test(q)) return weekPeriod();
+  if (/\b(ultimos 7 dias|sete dias)\b/.test(q)) {
+    return { start: new Date(Date.now() - 7 * 86_400_000).toISOString(), end: new Date().toISOString(), label: "nos últimos 7 dias" };
+  }
+  return null;
+}
+
+function canSeeTeamWide(role: string): boolean {
+  return role === "MGMT" || role === "AI" || role === "CS";
+}
+
+function restrictedAnswer(): FastAnswer {
+  return {
+    answer: "Seu perfil só pode consultar dados do próprio escopo operacional.",
+    source: "DIRECT_DB_FAST",
+    intent: "scope_restriction",
+  };
+}
+
+async function directDbAnswer(ops: any, role: string, person: string, question: string): Promise<FastAnswer | null> {
+  const q = norm(question);
+  const { data: rosterData, error: rosterError } = await ops.from("team_roster")
+    .select("person,role,clickup_user")
+    .eq("is_former", false);
+  if (rosterError) throw new Error(`direct_db_roster:${rosterError.message}`);
+  const roster = (rosterData ?? []).map((row: any) => ({
+    person: String(row.person),
+    role: String(row.role),
+    clickup_user: row.clickup_user ? String(row.clickup_user) : null,
+  })) as TeamPerson[];
+
+  const countWords = /\b(quanto|quantos|quantas|total|numero|tivemos|tem|temos)\b/;
+  const listWords = /\b(qual|quais|quem|lista|listar|mostra|mostre|nomes)\b/;
+  const asksClients = /\b(cliente|clientes|carteira|carteiras)\b/.test(q);
+  const mentionedGt = mentionedPerson(q, roster, "GT");
+
+  // 1) Carteira de um GT específico: "quantos clientes tem o Yuri?", "carteira do GT Yuri" etc.
+  if (mentionedGt && asksClients) {
+    if (role === "GT" && mentionedGt.person !== person) return restrictedAnswer();
+    if (role === "DESIGN") return restrictedAnswer();
+
+    let query = ops.from("clients")
+      .select("display_name,lifecycle")
+      .eq("gt_owner", mentionedGt.person)
+      .in("lifecycle", ["ACTIVE", "ONBOARDING"])
+      .order("display_name");
+    const { data, error } = await query;
+    if (error) throw new Error(`direct_db_gt_portfolio:${error.message}`);
+    const rows = data ?? [];
+    const active = rows.filter((row: any) => row.lifecycle === "ACTIVE");
+    const onboarding = rows.filter((row: any) => row.lifecycle === "ONBOARDING");
+
+    const onlyOnboarding = q.includes("onboarding");
+    const onlyActive = /\b(ativo|ativos)\b/.test(q) && !onlyOnboarding;
+    const selected = onlyOnboarding ? onboarding : onlyActive ? active : rows;
+    const label = onlyOnboarding ? "em onboarding" : onlyActive ? "ativos" : "na carteira";
+    let answer = `${mentionedGt.person} tem ${selected.length} ${selected.length === 1 ? "cliente" : "clientes"} ${label}.`;
+    if (!onlyOnboarding && !onlyActive) answer += ` São ${active.length} ativos e ${onboarding.length} em onboarding.`;
+    if (listWords.test(q) || (!countWords.test(q) && asksClients)) {
+      const names = selected.map((row: any) => `• ${row.display_name}`).join("\n");
+      if (names) answer += `\n${names}`;
+    }
+    return { answer, source: "DIRECT_DB_FAST", intent: "gt_portfolio" };
+  }
+
+  // 2) Comparativo das carteiras: "quantos clientes cada GT tem?"
+  const asksGtBreakdown = asksClients && /\b(cada gt|por gt|todos os gt|carteiras dos gt|carteira dos gt)\b/.test(q);
+  if (asksGtBreakdown) {
+    if (!canSeeTeamWide(role)) return restrictedAnswer();
+    const { data, error } = await ops.from("clients")
+      .select("gt_owner,lifecycle")
+      .in("lifecycle", ["ACTIVE", "ONBOARDING"]);
+    if (error) throw new Error(`direct_db_gt_breakdown:${error.message}`);
+    const map = new Map<string, { active: number; onboarding: number }>();
+    for (const row of data ?? []) {
+      const gt = String(row.gt_owner ?? "").trim();
+      if (!gt) continue;
+      const item = map.get(gt) ?? { active: 0, onboarding: 0 };
+      if (row.lifecycle === "ACTIVE") item.active += 1;
+      if (row.lifecycle === "ONBOARDING") item.onboarding += 1;
+      map.set(gt, item);
+    }
+    const lines = [...map.entries()]
+      .map(([gt, value]) => ({ gt, ...value, total: value.active + value.onboarding }))
+      .sort((a, b) => b.total - a.total)
+      .map((item) => `• ${item.gt}: ${item.total} (${item.active} ativos + ${item.onboarding} onboarding)`);
+    return {
+      answer: lines.length ? `Carteiras dos GTs agora:\n${lines.join("\n")}` : "Não encontrei clientes atribuídos a GTs ativos.",
+      source: "DIRECT_DB_FAST",
+      intent: "gt_portfolio_breakdown",
+    };
+  }
+
+  // 3) Onboarding geral ou do próprio escopo.
+  const asksOnboarding = q.includes("onboarding") && /\b(qual|quais|quem|lista|listar|estao|cliente|clientes|quantos|quantas|total)\b/.test(q);
   if (asksOnboarding) {
     let query = ops.from("clients")
       .select("id,display_name,lifecycle,gt_owner,cs_owner,designer_owner")
       .eq("lifecycle", "ONBOARDING")
       .order("display_name");
-
     if (role === "GT") query = query.eq("gt_owner", person);
     if (role === "DESIGN") query = query.eq("designer_owner", person);
 
     const { data, error } = await query;
     if (error) throw new Error(`direct_db_onboarding:${error.message}`);
     const rows = data ?? [];
-
     if (!rows.length) {
       return {
         answer: role === "GT"
           ? `Não há clientes em onboarding atribuídos à carteira de ${person} neste momento.`
           : "Não há clientes em onboarding neste momento.",
-        source: "DIRECT_DB_TEAM",
+        source: "DIRECT_DB_FAST",
+        intent: "onboarding",
       };
     }
+    const wantsList = listWords.test(q) || /\b(estao)\b/.test(q);
+    let answer = `Há ${rows.length} ${rows.length === 1 ? "cliente" : "clientes"} em onboarding.`;
+    if (wantsList) {
+      const lines = rows.map((row: any) => `• ${row.display_name}${row.gt_owner ? ` — GT: ${row.gt_owner}` : " — GT ainda não definido"}`);
+      answer += `\n${lines.join("\n")}`;
+    }
+    return { answer, source: "DIRECT_DB_FAST", intent: "onboarding" };
+  }
 
-    const lines = rows.map((row: any) => {
-      const gt = row.gt_owner ? ` — GT: ${row.gt_owner}` : " — GT ainda não definido";
-      return `• ${row.display_name}${gt}`;
-    });
-
+  // 4) Total da operação ou clientes ativos.
+  const asksOperationTotal = asksClients && countWords.test(q) && q.includes("operacao") && !/\b(ativo|ativos)\b/.test(q);
+  if (asksOperationTotal) {
+    let query = ops.from("clients").select("lifecycle").in("lifecycle", ["ACTIVE", "ONBOARDING"]);
+    if (role === "GT") query = query.eq("gt_owner", person);
+    if (role === "DESIGN") query = query.eq("designer_owner", person);
+    const { data, error } = await query;
+    if (error) throw new Error(`direct_db_operation_total:${error.message}`);
+    const rows = data ?? [];
+    const active = rows.filter((row: any) => row.lifecycle === "ACTIVE").length;
+    const onboarding = rows.filter((row: any) => row.lifecycle === "ONBOARDING").length;
     return {
-      answer: `Há ${rows.length} ${rows.length === 1 ? "cliente" : "clientes"} em onboarding:\n${lines.join("\n")}`,
-      source: "DIRECT_DB_TEAM",
+      answer: role === "GT"
+        ? `${person} tem ${rows.length} clientes na carteira: ${active} ativos e ${onboarding} em onboarding.`
+        : `A operação tem ${rows.length} clientes agora: ${active} ativos e ${onboarding} em onboarding.`,
+      source: "DIRECT_DB_FAST",
+      intent: "operation_total",
     };
   }
 
-  const asksActiveCount = /\b(quantos|quantas|total)\b/.test(q)
-    && /\b(cliente|clientes)\b/.test(q)
-    && /\b(ativo|ativos|operacao)\b/.test(q);
-
+  const asksActiveCount = asksClients && countWords.test(q) && /\b(ativo|ativos)\b/.test(q);
   if (asksActiveCount) {
     let query = ops.from("clients").select("id", { count: "exact", head: true }).eq("lifecycle", "ACTIVE");
     if (role === "GT") query = query.eq("gt_owner", person);
@@ -87,7 +253,103 @@ async function directDbAnswer(ops: any, role: string, person: string, question: 
       answer: role === "GT"
         ? `${person} tem ${total} ${total === 1 ? "cliente ativo" : "clientes ativos"} na carteira.`
         : `Há ${total} ${total === 1 ? "cliente ativo" : "clientes ativos"} na operação.`,
-      source: "DIRECT_DB_TEAM",
+      source: "DIRECT_DB_FAST",
+      intent: "active_clients",
+    };
+  }
+
+  // 5) Tasks / tarefas: produtividade rápida do ClickUp.
+  const asksTasks = /\b(task|tasks|tarefa|tarefas)\b/.test(q);
+  if (asksTasks) {
+    const namedMember = mentionedPerson(q, roster);
+    let taskPerson: TeamPerson | null = namedMember;
+    if (role === "GT" || role === "DESIGN") {
+      if (namedMember && namedMember.person !== person) return restrictedAnswer();
+      taskPerson = roster.find((row) => row.person === person) ?? { person, role, clickup_user: person };
+    }
+
+    const assignee = taskPerson?.clickup_user || taskPerson?.person || null;
+    const period = periodFromQuestion(q) ?? dayPeriod(0, "hoje");
+    const ranking = /\b(quem mais|ranking|por pessoa|por colaborador|cada pessoa|cada colaborador)\b/.test(q);
+    const wantsOverdue = /\b(atrasada|atrasadas|atrasado|atrasados|vencida|vencidas)\b/.test(q);
+    const wantsOpen = /\b(aberta|abertas|aberto|abertos|pendente|pendentes)\b/.test(q) && !/\b(criada|criadas|criado|criados)\b/.test(q);
+    const wantsCreated = /\b(criada|criadas|criado|criados|criamos|abriu|abrimos)\b/.test(q);
+    const wantsClosed = /\b(feita|feitas|feito|feitos|concluida|concluidas|concluido|concluidos|finalizada|finalizadas|finalizado|finalizados|fez|fizeram)\b/.test(q);
+
+    if (ranking) {
+      if (!canSeeTeamWide(role)) return restrictedAnswer();
+      const { data, error } = await ops.from("clickup_tasks")
+        .select("assignee_names,date_closed")
+        .gte("date_closed", period.start)
+        .lt("date_closed", period.end)
+        .not("assignee_names", "is", null)
+        .limit(1000);
+      if (error) throw new Error(`direct_db_task_ranking:${error.message}`);
+      const counts = new Map<string, number>();
+      for (const row of data ?? []) {
+        const names = String(row.assignee_names ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+        for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+      const lines = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, total], index) => `${index + 1}. ${name}: ${total}`);
+      return {
+        answer: lines.length ? `Tasks concluídas ${period.label}, por pessoa:\n${lines.join("\n")}` : `Não há tasks concluídas ${period.label}.`,
+        source: "DIRECT_DB_FAST",
+        intent: "task_ranking",
+      };
+    }
+
+    if (wantsOverdue || (wantsOpen && !/\b(hoje|ontem|semana)\b/.test(q))) {
+      let query = ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).eq("is_closed", false);
+      if (wantsOverdue) query = query.not("due_date", "is", null).lt("due_date", new Date().toISOString());
+      if (assignee) query = query.ilike("assignee_names", `%${assignee}%`);
+      const { count, error } = await query;
+      if (error) throw new Error(`direct_db_task_open:${error.message}`);
+      const total = count ?? 0;
+      const ownerText = taskPerson ? ` de ${taskPerson.person}` : " da operação";
+      return {
+        answer: wantsOverdue
+          ? `Há ${total} ${total === 1 ? "task atrasada" : "tasks atrasadas"}${ownerText} no ClickUp.`
+          : `Há ${total} ${total === 1 ? "task aberta" : "tasks abertas"}${ownerText} no ClickUp.`,
+        source: "DIRECT_DB_FAST",
+        intent: wantsOverdue ? "tasks_overdue" : "tasks_open",
+      };
+    }
+
+    const countFor = async (column: "date_closed" | "date_created") => {
+      let query = ops.from("clickup_tasks")
+        .select("task_id", { count: "exact", head: true })
+        .gte(column, period.start)
+        .lt(column, period.end);
+      if (assignee) query = query.ilike("assignee_names", `%${assignee}%`);
+      const { count, error } = await query;
+      if (error) throw new Error(`direct_db_tasks_${column}:${error.message}`);
+      return count ?? 0;
+    };
+
+    if (wantsCreated) {
+      const total = await countFor("date_created");
+      return {
+        answer: `${taskPerson ? taskPerson.person : "A operação"} teve ${total} ${total === 1 ? "task criada" : "tasks criadas"} ${period.label} no ClickUp.`,
+        source: "DIRECT_DB_FAST",
+        intent: "tasks_created",
+      };
+    }
+
+    if (wantsClosed) {
+      const total = await countFor("date_closed");
+      return {
+        answer: `${taskPerson ? taskPerson.person : "A operação"} concluiu ${total} ${total === 1 ? "task" : "tasks"} ${period.label} no ClickUp.`,
+        source: "DIRECT_DB_FAST",
+        intent: "tasks_closed",
+      };
+    }
+
+    // "Hoje tivemos quantas tasks?" é ambíguo. Entrega os dois números sem pedir esclarecimento.
+    const [closed, created] = await Promise.all([countFor("date_closed"), countFor("date_created")]);
+    return {
+      answer: `${period.label[0].toUpperCase()}${period.label.slice(1)}, ${taskPerson ? taskPerson.person : "a operação"} concluiu ${closed} ${closed === 1 ? "task" : "tasks"} no ClickUp. Foram criadas ${created}.`,
+      source: "DIRECT_DB_FAST",
+      intent: "tasks_snapshot",
     };
   }
 
@@ -189,13 +451,6 @@ Deno.serve(async (req: Request) => {
   if (!question) return reply({ ok: false, error: "missing_question" }, 400);
   if (question.length > 2500) return reply({ ok: false, error: "question_too_long", max_chars: 2500 }, 400);
 
-  const since = new Date(Date.now() - 60_000).toISOString();
-  const { count: recentCount } = await ops.from("opsquestion_interactions")
-    .select("id", { count: "exact", head: true })
-    .eq("user_key", user.id)
-    .gte("created_at", since);
-  if ((recentCount ?? 0) >= 12) return reply({ ok: false, error: "Muitas perguntas em sequência. Aguarde alguns segundos." }, 429);
-
   let scopeLabel = "COMPANY_READ_ONLY";
   let scopeInstruction = "Pode consultar a base operacional da empresa em modo somente leitura.";
   let scopedClients: Array<{ id: string; display_name: string }> = [];
@@ -223,6 +478,7 @@ Deno.serve(async (req: Request) => {
   const requestId = crypto.randomUUID();
   const started = Date.now();
 
+  // FAST LANE: perguntas operacionais objetivas não gastam IA e não entram no rate limit da IA.
   try {
     const direct = await directDbAnswer(ops, role, String(person), question);
     if (direct) {
@@ -244,9 +500,10 @@ Deno.serve(async (req: Request) => {
         ok: true,
         name: "OpsQuestion",
         answer: direct.answer,
-        source: "agency_ops · consulta direta",
+        source: "agency_ops · resposta operacional rápida",
         read_only: true,
         mode: direct.source,
+        intent: direct.intent,
         scope: scopeLabel,
         request_id: requestId,
         latency_ms: latency,
@@ -256,6 +513,15 @@ Deno.serve(async (req: Request) => {
   } catch (err) {
     console.error("[opsquestion-direct-db]", errorText(err));
   }
+
+  // Só a camada de IA recebe limite de rajada; consultas rápidas acima já foram respondidas.
+  const since = new Date(Date.now() - 60_000).toISOString();
+  const { count: recentCount } = await ops.from("opsquestion_interactions")
+    .select("id", { count: "exact", head: true })
+    .eq("user_key", user.id)
+    .gte("created_at", since)
+    .neq("source", "DIRECT_DB_FAST");
+  if ((recentCount ?? 0) >= 12) return reply({ ok: false, error: "Muitas perguntas analíticas em sequência. Aguarde alguns segundos." }, 429);
 
   const [{ data: endpointCfg }, { data: webhookCfg }, { data: secretCfg }] = await Promise.all([
     ops.from("automation_settings").select("value").eq("key", "AI_ASK_ENDPOINT_URL").maybeSingle(),
