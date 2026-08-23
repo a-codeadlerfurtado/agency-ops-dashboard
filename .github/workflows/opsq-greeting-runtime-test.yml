@@ -1,0 +1,174 @@
+name: OpsQuestion Greeting Runtime Test
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  browser-audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install app
+        run: npm ci
+
+      - name: Install Chromium test runtime
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Start the real dashboard
+        run: |
+          npm run dev -- --host 127.0.0.1 --port 4173 > /tmp/opsq-dashboard.log 2>&1 &
+          echo $! > /tmp/opsq-dashboard.pid
+          for attempt in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:4173/ >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/opsq-dashboard.log
+          exit 1
+
+      - name: Test Web Audio inside dashboard Chromium
+        run: |
+          node --input-type=module <<'NODE'
+          import { chromium } from 'playwright';
+
+          const browser = await chromium.launch({
+            headless: true,
+            args: ['--autoplay-policy=no-user-gesture-required'],
+          });
+          const page = await browser.newPage();
+          page.on('console', (msg) => console.log('[browser]', msg.type(), msg.text()));
+          page.on('pageerror', (err) => console.log('[pageerror]', err.message));
+
+          await page.goto('http://127.0.0.1:4173/', { waitUntil: 'networkidle', timeout: 60000 });
+
+          const asset = await page.evaluate(async () => {
+            const response = await fetch('/audio/opsquestion-greeting-full-v6.mp3?v=runtime-test', { cache: 'no-store' });
+            const bytes = await response.arrayBuffer();
+            return {
+              status: response.status,
+              bytes: bytes.byteLength,
+              contentType: response.headers.get('content-type'),
+            };
+          });
+          console.log('ASSET', JSON.stringify(asset));
+          if (asset.status !== 200) throw new Error(`MP3 HTTP ${asset.status}`);
+          if (asset.bytes !== 45981) throw new Error(`MP3 bytes ${asset.bytes}, esperado 45981`);
+
+          await page.evaluate(() => {
+            window.__opsqAudioRuntimeTest = { events: [], errors: [] };
+            const names = [
+              'opsq:greeting-audio-start',
+              'opsq:greeting-audio-progress',
+              'opsq:greeting-audio-ended',
+              'opsq:greeting-audio-error',
+            ];
+            for (const name of names) {
+              window.addEventListener(name, (event) => {
+                const item = {
+                  name,
+                  at: performance.now(),
+                  detail: event instanceof CustomEvent ? event.detail : null,
+                };
+                window.__opsqAudioRuntimeTest.events.push(item);
+                if (name === 'opsq:greeting-audio-error') {
+                  window.__opsqAudioRuntimeTest.errors.push(item);
+                }
+              });
+            }
+
+            for (const old of document.querySelectorAll('.opsq-opening[data-runtime-test]')) old.remove();
+            const unlock = document.createElement('button');
+            unlock.type = 'button';
+            unlock.className = 'auth-submit';
+            unlock.dataset.runtimeTest = 'unlock';
+            unlock.textContent = 'runtime audio unlock';
+            unlock.style.position = 'fixed';
+            unlock.style.left = '12px';
+            unlock.style.top = '12px';
+            unlock.style.zIndex = '2147483647';
+            document.body.appendChild(unlock);
+          });
+
+          await page.locator('button.auth-submit[data-runtime-test="unlock"]').click();
+
+          await page.evaluate(() => {
+            const opening = document.createElement('div');
+            opening.className = 'opsq-opening';
+            opening.dataset.runtimeTest = 'opening';
+            opening.style.position = 'fixed';
+            opening.style.width = '1px';
+            opening.style.height = '1px';
+            document.body.appendChild(opening);
+          });
+
+          await page.waitForFunction(
+            () => window.__opsqAudioRuntimeTest.events.some((e) => e.name === 'opsq:greeting-audio-start'),
+            null,
+            { timeout: 10000 }
+          );
+
+          await page.waitForFunction(
+            () => window.__opsqAudioRuntimeTest.events.some((e) => e.name === 'opsq:greeting-audio-progress' && Number(e.detail?.progress) >= 0.95),
+            null,
+            { timeout: 30000 }
+          );
+
+          await page.waitForFunction(
+            () => window.__opsqAudioRuntimeTest.events.some((e) => e.name === 'opsq:greeting-audio-ended'),
+            null,
+            { timeout: 35000 }
+          );
+
+          const result = await page.evaluate(() => {
+            const events = window.__opsqAudioRuntimeTest.events;
+            const starts = events.filter((e) => e.name === 'opsq:greeting-audio-start');
+            const progresses = events.filter((e) => e.name === 'opsq:greeting-audio-progress');
+            const ended = events.filter((e) => e.name === 'opsq:greeting-audio-ended');
+            const errors = window.__opsqAudioRuntimeTest.errors;
+            const maxProgress = Math.max(0, ...progresses.map((e) => Number(e.detail?.progress || 0)));
+            const startDuration = Number(starts[0]?.detail?.duration || 0);
+            const highProgressSamples = progresses.filter((e) => Number(e.detail?.progress || 0) >= 0.8).length;
+            return {
+              startCount: starts.length,
+              progressCount: progresses.length,
+              endedCount: ended.length,
+              errorCount: errors.length,
+              maxProgress,
+              startDuration,
+              highProgressSamples,
+              errors,
+            };
+          });
+
+          console.log('RUNTIME_RESULT', JSON.stringify(result));
+          if (result.errorCount !== 0) throw new Error(`Web Audio errors: ${JSON.stringify(result.errors)}`);
+          if (result.startCount !== 1) throw new Error(`startCount=${result.startCount}`);
+          if (result.endedCount !== 1) throw new Error(`endedCount=${result.endedCount}`);
+          if (result.maxProgress < 0.99) throw new Error(`maxProgress=${result.maxProgress}`);
+          if (result.startDuration < 22.7 || result.startDuration > 23.0) throw new Error(`duration=${result.startDuration}`);
+          if (result.highProgressSamples < 5) throw new Error(`highProgressSamples=${result.highProgressSamples}`);
+
+          await browser.close();
+          NODE
+
+      - name: Show dashboard log on failure
+        if: failure()
+        run: cat /tmp/opsq-dashboard.log || true
