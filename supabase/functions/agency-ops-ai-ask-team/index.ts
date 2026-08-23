@@ -7,6 +7,9 @@ const CORS = {
   "access-control-allow-methods": "POST,OPTIONS",
 };
 
+const CLOUDFLARE_AI_BASE = "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/api/ai";
+const DIRECT_AI_TIMEOUT_MS = 25_000;
+
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
@@ -17,6 +20,58 @@ function safeAnswer(body: any, raw: string): string | null {
   for (const value of candidates) if (typeof value === "string" && value.trim()) return value.trim();
   if (!body && raw.trim() && !raw.trim().startsWith("<")) return raw.trim();
   return null;
+}
+
+function errorText(error: unknown): string {
+  return String(error instanceof Error ? error.message : error).slice(0, 500);
+}
+
+async function cloudflareFallback(authHeader: string, question: string): Promise<string> {
+  let conversationId = "";
+
+  async function post(path: string, body: Record<string, unknown>) {
+    const response = await fetch(`${CLOUDFLARE_AI_BASE}${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: authHeader,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    const raw = await response.text();
+    let parsed: any = null;
+    try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
+    if (!response.ok || !parsed?.ok) {
+      const detail = parsed?.detail || parsed?.error || raw || `http_${response.status}`;
+      throw new Error(`cloudflare_${path.replaceAll("/", "_")}_${response.status}:${String(detail).slice(0, 260)}`);
+    }
+    return parsed;
+  }
+
+  try {
+    const created = await post("/conversations/create", {
+      client_id: null,
+      title: "OpsQuestion · fallback",
+    });
+    conversationId = String(created?.conversation?.id || "");
+    if (!conversationId) throw new Error("cloudflare_conversation_missing");
+
+    const result = await post("/chat", {
+      conversation_id: conversationId,
+      message: question,
+    });
+    const answer = safeAnswer({ answer: result?.assistant_message?.content }, "");
+    if (!answer) throw new Error("cloudflare_empty_ai_answer");
+    return answer;
+  } finally {
+    if (conversationId) {
+      try {
+        await post("/conversations/delete", { conversation_id: conversationId });
+      } catch {
+        // Falha de limpeza não pode derrubar uma resposta válida do OpsQuestion.
+      }
+    }
+  }
 }
 
 Deno.serve(async (req: Request) => {
@@ -107,11 +162,10 @@ Deno.serve(async (req: Request) => {
   const makeUrl = typeof webhookCfg?.value === "string" ? webhookCfg.value : null;
   const webhookUrl = directUrl ?? makeUrl;
   const readSecret = typeof secretCfg?.value === "string" ? secretCfg.value : null;
-  if (!webhookUrl || !readSecret) return reply({ ok: false, error: "OpsQuestion não está configurado no backend." }, 503);
 
   const requestId = crypto.randomUUID();
   const started = Date.now();
-  const routeMode = directUrl ? "DIRECT_AI_TEAM" : "MAKE_AI_TEAM";
+  let routeMode = directUrl ? "DIRECT_AI_TEAM" : makeUrl ? "MAKE_AI_TEAM" : "CLOUDFLARE_AI_FALLBACK";
 
   await ops.from("opsquestion_interactions").insert({
     user_key: user.id,
@@ -140,54 +194,77 @@ Deno.serve(async (req: Request) => {
     `Pergunta: ${question}`,
   ].filter(Boolean).join("\n\n");
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 55_000);
   let answer: string | null = null;
-  let error: string | null = null;
+  let primaryError: string | null = null;
+  let fallbackError: string | null = null;
 
-  try {
-    const response = await fetch(webhookUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-ai-read-secret": readSecret },
-      body: JSON.stringify({
-        question: prompt,
-        original_question: question,
-        source: "OpsQuestion",
-        request_id: requestId,
-        user: { person, role, access_level: accessLevel, scope: scopeLabel, allowed_clients: scopedClients },
-        constraints: { read_only: true, schema: "agency_ops", timezone: "America/Sao_Paulo", no_invention: true },
-      }),
-      signal: controller.signal,
-    });
-    const raw = await response.text();
-    let parsed: unknown = null;
-    try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
-    answer = response.ok ? safeAnswer(parsed, raw) : null;
-    if (!response.ok) error = `http_${response.status}`;
-    else if (!answer) error = "empty_ai_answer";
-  } catch (err) {
-    error = err instanceof DOMException && err.name === "AbortError"
-      ? "ai_timeout"
-      : String(err instanceof Error ? err.message : err).slice(0, 300);
-  } finally {
-    clearTimeout(timeout);
+  if (webhookUrl && readSecret) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), DIRECT_AI_TIMEOUT_MS);
+    try {
+      const response = await fetch(webhookUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-ai-read-secret": readSecret },
+        body: JSON.stringify({
+          question: prompt,
+          original_question: question,
+          source: "OpsQuestion",
+          request_id: requestId,
+          user: { person, role, access_level: accessLevel, scope: scopeLabel, allowed_clients: scopedClients },
+          constraints: { read_only: true, schema: "agency_ops", timezone: "America/Sao_Paulo", no_invention: true },
+        }),
+        signal: controller.signal,
+      });
+      const raw = await response.text();
+      let parsed: unknown = null;
+      try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
+      answer = response.ok ? safeAnswer(parsed, raw) : null;
+      if (!response.ok) primaryError = `http_${response.status}`;
+      else if (!answer) primaryError = "empty_ai_answer";
+    } catch (err) {
+      primaryError = err instanceof DOMException && err.name === "AbortError"
+        ? "direct_ai_timeout"
+        : errorText(err);
+    } finally {
+      clearTimeout(timeout);
+    }
+  } else if (webhookUrl && !readSecret) {
+    primaryError = "missing_ai_read_secret";
+  } else {
+    primaryError = "direct_ai_not_configured";
+  }
+
+  if (!answer) {
+    try {
+      answer = await cloudflareFallback(authHeader, question);
+      routeMode = "CLOUDFLARE_AI_FALLBACK";
+    } catch (err) {
+      fallbackError = errorText(err);
+    }
   }
 
   const latency = Date.now() - started;
   if (!answer) {
+    const error = [primaryError, fallbackError].filter(Boolean).join(" | ").slice(0, 500) || "ai_unavailable";
     await ops.from("opsquestion_interactions").update({
       status: "ERROR",
       error,
       latency_ms: latency,
       answered_at: new Date().toISOString(),
     }).eq("request_id", requestId);
-    return reply({ ok: false, error: error === "ai_timeout" ? "OpsQuestion demorou demais para responder. Tente uma pergunta mais específica." : "Falha temporária no OpsQuestion.", detail: error, request_id: requestId }, 502);
+    return reply({
+      ok: false,
+      error: "Falha temporária no OpsQuestion.",
+      detail: error,
+      request_id: requestId,
+    }, 502);
   }
 
   await ops.from("opsquestion_interactions").update({
     status: "SUCCESS",
     source: routeMode,
     answer: answer.slice(0, 20000),
+    error: primaryError && routeMode === "CLOUDFLARE_AI_FALLBACK" ? `primary_failed:${primaryError}`.slice(0, 500) : null,
     latency_ms: latency,
     answered_at: new Date().toISOString(),
   }).eq("request_id", requestId);
@@ -196,7 +273,9 @@ Deno.serve(async (req: Request) => {
     ok: true,
     name: "OpsQuestion",
     answer,
-    source: "agency_ops via IA · escopo do perfil",
+    source: routeMode === "CLOUDFLARE_AI_FALLBACK"
+      ? "agency_ops via Cloudflare Workers AI · fallback automático"
+      : "agency_ops via IA · escopo do perfil",
     read_only: true,
     mode: routeMode,
     scope: scopeLabel,
