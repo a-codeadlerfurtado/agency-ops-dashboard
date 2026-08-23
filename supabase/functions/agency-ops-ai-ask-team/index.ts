@@ -6,537 +6,423 @@ const CORS = {
   "access-control-allow-headers": "authorization,apikey,content-type",
   "access-control-allow-methods": "POST,OPTIONS",
 };
-
 const CLOUDFLARE_AI_BASE = "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/api/ai";
 const DIRECT_AI_TIMEOUT_MS = 55_000;
 const AI_RATE_LIMIT_PER_MINUTE = 12;
 
-const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+const reply = (body, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
 });
+const errText = (e) => String(e instanceof Error ? e.message : e).slice(0, 500);
+const clip = (v, max = 360) => {
+  const s = String(v ?? "").trim().replace(/\s+/g, " ");
+  return s.length > max ? `${s.slice(0, max)}…` : s;
+};
+const norm = (v) => String(v ?? "")
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, " ")
+  .trim();
+const fmtDate = (v) => new Intl.DateTimeFormat("pt-BR", {
+  timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric",
+}).format(new Date(v));
+const fmtDateTime = (v) => new Intl.DateTimeFormat("pt-BR", {
+  timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+}).format(new Date(v));
+const formatNames = (names, max = 15) => {
+  const clean = names.filter(Boolean);
+  if (!clean.length) return "";
+  const shown = clean.slice(0, max).join(", ");
+  return clean.length > max ? `${shown} e mais ${clean.length - max}` : shown;
+};
 
-function safeAnswer(body: any, raw: string): string | null {
+function safeAnswer(body, raw) {
   const candidates = [body?.answer, body?.response, body?.output, body?.result, body?.text, body?.message];
-  for (const value of candidates) if (typeof value === "string" && value.trim()) return value.trim();
+  for (const v of candidates) if (typeof v === "string" && v.trim()) return v.trim();
   if (!body && raw.trim() && !raw.trim().startsWith("<")) return raw.trim();
   return null;
 }
 
-function errorText(error: unknown): string {
-  return String(error instanceof Error ? error.message : error).slice(0, 500);
-}
-
-function norm(value: unknown): string {
-  return String(value ?? "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function clip(value: unknown, max = 360): string {
-  const s = String(value ?? "").trim().replace(/\s+/g, " ");
-  return s.length > max ? `${s.slice(0, max)}…` : s;
-}
-
-type TeamPerson = { person: string; role: string; clickup_user: string | null };
-type FastAnswer = { answer: string; source: string; intent: string };
-type Period = { start: string; end: string; label: string };
-type ClientRow = {
-  id: string;
-  display_name: string;
-  lifecycle: string;
-  gt_owner: string | null;
-  cs_owner: string | null;
-  designer_owner: string | null;
-};
-
-type StageIntent = {
-  stage?: "INTRO_MEETING" | "PRODUCT_PERSONA_MEETING" | "INTEGRATION_MEETING" | "RAW_ASSETS";
-  mode?: "CURRENT" | "SCHEDULED" | "WAITING";
-  human: string;
-};
-
-const TECH_REPLACEMENTS: Array<[RegExp, string]> = [
+const TECH = [
   [/\bINTEGRATION_MEETING\b/gi, "reunião de integração com o GT"],
   [/\bPRODUCT_PERSONA_MEETING\b/gi, "reunião de Produto e Persona"],
   [/\bINTRO_MEETING\b/gi, "primeira reunião de apresentação"],
   [/\bRAW_ASSETS\b/gi, "envio/organização dos materiais"],
   [/\bCAMPAIGN_LAUNCH\b/gi, "campanha no ar"],
   [/\bCREATIVE_PRODUCTION\b/gi, "produção de criativos"],
-  [/\bCOMPLETED\b/gi, "concluído"],
-  [/\bSCHEDULED\b/gi, "agendado"],
-  [/\bPENDING\b/gi, "pendente"],
-  [/\bWAITING_SCHEDULING\b/gi, "aguardando agendamento"],
   [/\bACTIVE_DELIVERY\b/gi, "campanha rodando"],
-  [/\bNO_ACTIVE_CAMPAIGN\b/gi, "sem campanha ativa"],
-  [/\bNO_CAMPAIGNS\b/gi, "sem campanha cadastrada"],
   [/\bNO_DELIVERY\b/gi, "sem entrega"],
-  [/\bNO_META_ACCOUNT\b/gi, "sem conta Meta vinculada"],
-  [/\bSTALE\b/gi, "dados desatualizados"],
-  [/\bATTENTION\b/gi, "precisa de atenção"],
-  [/\bFOLLOW_UP\b/gi, "precisa de acompanhamento"],
-  [/\bDATA_INCOMPLETE\b/gi, "dados incompletos"],
-  [/\bUNDETERMINED\b/gi, "ainda sem classificação"],
+  [/\bNO_ACTIVE_CAMPAIGN\b/gi, "sem campanha ativa"],
+  [/\bWAITING_SCHEDULING\b/gi, "aguardando agendamento"],
   [/\bcurrent_stage\b/gi, "etapa atual"],
   [/\bstage_code\b/gi, "etapa"],
   [/\bgt_owner\b/gi, "GT responsável"],
   [/\bcs_owner\b/gi, "CS responsável"],
   [/\bdesigner_owner\b/gi, "designer responsável"],
-  [/\blifecycle\b/gi, "situação do cliente"],
-  [/\bonboarding_cases\b/gi, "onboarding"],
-  [/\bonboarding_events\b/gi, "histórico do onboarding"],
   [/\bagency_ops\b/gi, "base operacional"],
 ];
-
-function humanizeAiAnswer(answer: string): string {
+function humanize(answer) {
   let out = String(answer || "").trim();
-  for (const [pattern, replacement] of TECH_REPLACEMENTS) out = out.replace(pattern, replacement);
-  out = out
-    .replace(/\b(schema|tabela|coluna|enum|campo)\s+["'`]?([a-z0-9_.-]+)["'`]?/gi, (_m, kind, _name) => {
-      const label = String(kind).toLowerCase();
-      return label === "campo" || label === "coluna" ? "informação registrada" : "base operacional";
-    })
+  for (const [a, b] of TECH) out = out.replace(a, b);
+  return out
+    .replace(/\b(schema|tabela|coluna|enum|campo)\s+["'`]?([a-z0-9_.-]+)["'`]?/gi, "informação registrada")
     .replace(/\s{3,}/g, "\n\n")
     .trim();
-  return out;
 }
 
-function tokenSet(value: string): Set<string> {
-  return new Set(norm(value).split(" ").filter(Boolean));
-}
-
-function mentionedPerson(question: string, roster: TeamPerson[], roleFilter?: string): TeamPerson | null {
+function mentionedPerson(question, roster, roleFilter = null) {
   const q = norm(question);
-  const qTokens = tokenSet(q);
+  const tokens = new Set(q.split(" ").filter(Boolean));
   const candidates = roster
-    .filter((row) => !roleFilter || row.role === roleFilter)
-    .map((row) => {
-      const full = norm(row.person);
-      if (q.includes(full)) return { row, score: 1000 + full.length };
-      const parts = full.split(" ").filter((part) => part.length >= 3);
-      const hits = parts.filter((part) => qTokens.has(part));
-      return { row, score: hits.reduce((sum, part) => sum + part.length, 0) };
+    .filter((r) => !roleFilter || r.role === roleFilter)
+    .map((r) => {
+      const full = norm(r.person);
+      if (q.includes(full)) return { r, score: 1000 + full.length };
+      const parts = full.split(" ").filter((p) => p.length >= 3);
+      return { r, score: parts.filter((p) => tokens.has(p)).reduce((s, p) => s + p.length, 0) };
     })
-    .filter((item) => item.score > 0)
+    .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score);
-
   if (!candidates.length) return null;
   if (candidates.length > 1 && candidates[0].score === candidates[1].score) return null;
-  return candidates[0].row;
+  return candidates[0].r;
 }
 
-function resolveClientMention(question: string, clients: ClientRow[]): ClientRow | null {
+function resolveClient(question, clients) {
   const q = ` ${norm(question)} `;
-  let best: ClientRow | null = null;
-  let bestScore = 0;
-  for (const client of clients) {
-    const name = norm(client.display_name);
+  let best = null, score = 0;
+  for (const c of clients) {
+    const name = norm(c.display_name);
     if (!name || name.length < 3) continue;
-    if (q.includes(` ${name} `) && name.length > bestScore) {
-      best = client;
-      bestScore = name.length + 1000;
-      continue;
+    if (q.includes(` ${name} `) && name.length + 1000 > score) {
+      best = c; score = name.length + 1000; continue;
     }
     const parts = name.split(" ").filter((p) => p.length >= 4);
-    const score = parts.filter((p) => q.includes(` ${p} `)).reduce((sum, p) => sum + p.length, 0);
-    if (score >= Math.max(5, Math.floor(name.length * 0.5)) && score > bestScore) {
-      best = client;
-      bestScore = score;
-    }
+    const s = parts.filter((p) => q.includes(` ${p} `)).reduce((a, p) => a + p.length, 0);
+    if (s >= Math.max(5, Math.floor(name.length * 0.5)) && s > score) { best = c; score = s; }
   }
   return best;
 }
 
-function saoPauloDateParts(now = new Date()): { year: number; month: number; day: number } {
+function saoPauloParts() {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "America/Sao_Paulo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(now);
-  const get = (type: string) => Number(parts.find((part) => part.type === type)?.value || 0);
+    timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const get = (t) => Number(parts.find((p) => p.type === t)?.value || 0);
   return { year: get("year"), month: get("month"), day: get("day") };
 }
-
-function dayPeriod(offsetDays: number, label: string): Period {
-  const { year, month, day } = saoPauloDateParts();
-  const startMs = Date.UTC(year, month - 1, day + offsetDays, 3, 0, 0, 0);
-  return { start: new Date(startMs).toISOString(), end: new Date(startMs + 86_400_000).toISOString(), label };
+function dayPeriod(offset, label) {
+  const { year, month, day } = saoPauloParts();
+  const start = Date.UTC(year, month - 1, day + offset, 3, 0, 0, 0);
+  return { start: new Date(start).toISOString(), end: new Date(start + 86_400_000).toISOString(), label };
 }
-
-function weekPeriod(): Period {
-  const { year, month, day } = saoPauloDateParts();
-  const localDate = new Date(Date.UTC(year, month - 1, day));
-  const daysSinceMonday = (localDate.getUTCDay() + 6) % 7;
-  const startMs = Date.UTC(year, month - 1, day - daysSinceMonday, 3, 0, 0, 0);
-  return { start: new Date(startMs).toISOString(), end: new Date().toISOString(), label: "nesta semana" };
+function weekPeriod() {
+  const { year, month, day } = saoPauloParts();
+  const d = new Date(Date.UTC(year, month - 1, day));
+  const sinceMon = (d.getUTCDay() + 6) % 7;
+  const start = Date.UTC(year, month - 1, day - sinceMon, 3, 0, 0, 0);
+  return { start: new Date(start).toISOString(), end: new Date().toISOString(), label: "nesta semana" };
 }
-
-function monthPeriod(): Period {
-  const { year, month } = saoPauloDateParts();
-  const startMs = Date.UTC(year, month - 1, 1, 3, 0, 0, 0);
-  const endMs = Date.UTC(year, month, 1, 3, 0, 0, 0);
-  return { start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString(), label: "neste mês" };
+function monthPeriod() {
+  const { year, month } = saoPauloParts();
+  return {
+    start: new Date(Date.UTC(year, month - 1, 1, 3)).toISOString(),
+    end: new Date(Date.UTC(year, month, 1, 3)).toISOString(),
+    label: "neste mês",
+  };
 }
-
-function periodFromQuestion(q: string): Period | null {
+function periodFromQuestion(q) {
   if (/\bontem\b/.test(q)) return dayPeriod(-1, "ontem");
   if (/\bhoje\b/.test(q)) return dayPeriod(0, "hoje");
   if (/\b(esta semana|essa semana|semana atual|desde segunda)\b/.test(q)) return weekPeriod();
   if (/\b(este mes|esse mes|mes atual)\b/.test(q)) return monthPeriod();
-  if (/\b(ultimos 7 dias|sete dias)\b/.test(q)) {
-    return { start: new Date(Date.now() - 7 * 86_400_000).toISOString(), end: new Date().toISOString(), label: "nos últimos 7 dias" };
-  }
+  if (/\b(ultimos 7 dias|sete dias)\b/.test(q)) return { start: new Date(Date.now() - 7 * 86_400_000).toISOString(), end: new Date().toISOString(), label: "nos últimos 7 dias" };
   return null;
 }
-
-function canSeeTeamWide(role: string): boolean {
-  return role === "MGMT" || role === "AI" || role === "CS";
-}
-
-function canSeeFinance(role: string, person: string): boolean {
-  return role === "MGMT" || person === "Adler Furtado";
-}
-
-function restrictedAnswer(): FastAnswer {
-  return {
-    answer: "Essa informação fica fora do seu escopo de acesso. Posso consultar o que estiver dentro da sua carteira/área.",
-    source: "DIRECT_DB_FAST",
-    intent: "scope_restriction",
-  };
-}
-
-function looksLikeFollowUp(q: string): boolean {
+const teamWide = (role) => ["MGMT", "AI", "CS"].includes(role);
+const financeAllowed = (role, person) => role === "MGMT" || person === "Adler Furtado";
+const restricted = () => ({ answer: "Essa informação fica fora do seu escopo de acesso. Posso consultar o que estiver dentro da sua carteira/área.", source: "DIRECT_DB_FAST", intent: "scope_restriction" });
+function looksLikeFollowUp(q) {
   const words = q.split(" ").filter(Boolean);
-  return words.length <= 6 && /\b(e|eles|elas|deles|delas|esses|essas|isso|hoje|ontem|agora|yuri|felipe|rodrigo|hugo|qual|quais)\b/.test(q);
+  if (words.length > 7) return false;
+  return /^(por cliente|por pessoa|por gt|por vendedor)$/.test(q)
+    || /\b(e|eles|elas|deles|delas|esses|essas|isso|hoje|ontem|agora|cliente|clientes|pessoa|pessoas|yuri|felipe|rodrigo|hugo|qual|quais)\b/.test(q);
 }
-
-function stageIntentFromQuestion(q: string): StageIntent | null {
+function stageIntent(q) {
   const scheduled = /\b(marcad[ao]s?|agendad[ao]s?|agenda|quando e|quando vai|data da)\b/.test(q);
-  const waiting = /\b(aguardando|esperando|falta marcar|sem marcar|marcar integracao|pendente de integracao)\b/.test(q);
-
-  if (/\b(primeira reuniao|1 reuniao|reuniao de apresentacao|apresentacao inicial)\b/.test(q)) {
-    return { stage: "INTRO_MEETING", mode: "CURRENT", human: "primeira reunião de apresentação" };
-  }
-  if (/\b(produto e persona|produto persona|segunda reuniao|2 reuniao|reuniao de produto)\b/.test(q)) {
-    return { stage: "PRODUCT_PERSONA_MEETING", mode: "CURRENT", human: "reunião de Produto e Persona" };
-  }
-  if (/\b(reuniao de integracao|integracao com gt|integracao do gt|em integracao|na integracao|integracao)\b/.test(q)) {
-    return {
-      stage: "INTEGRATION_MEETING",
-      mode: scheduled ? "SCHEDULED" : waiting ? "WAITING" : "CURRENT",
-      human: scheduled ? "integração já marcada" : waiting ? "aguardando marcar a integração" : "reunião de integração com o GT",
-    };
-  }
-  if (/\b(material|materiais|ativos brutos|raw assets|aguardando material|envio de material)\b/.test(q) && /\b(onboarding|etapa|aguardando|cliente|clientes)\b/.test(q)) {
-    return { stage: "RAW_ASSETS", mode: "CURRENT", human: "envio/organização dos materiais" };
-  }
+  const waiting = /\b(aguardando|esperando|falta marcar|sem marcar|pendente de integracao)\b/.test(q);
+  if (/\b(primeira reuniao|1 reuniao|reuniao de apresentacao|apresentacao inicial)\b/.test(q)) return { stage: "INTRO_MEETING", mode: "CURRENT", human: "primeira reunião de apresentação" };
+  if (/\b(produto e persona|produto persona|segunda reuniao|2 reuniao|reuniao de produto)\b/.test(q)) return { stage: "PRODUCT_PERSONA_MEETING", mode: "CURRENT", human: "reunião de Produto e Persona" };
+  if (/\b(reuniao de integracao|integracao com gt|integracao do gt|em integracao|na integracao|integracao)\b/.test(q)) return { stage: "INTEGRATION_MEETING", mode: scheduled ? "SCHEDULED" : waiting ? "WAITING" : "CURRENT", human: scheduled ? "integração já marcada" : waiting ? "aguardando marcar a integração" : "reunião de integração com o GT" };
+  if (/\b(material|materiais|aguardando material|envio de material)\b/.test(q) && /\b(onboarding|etapa|aguardando|cliente|clientes)\b/.test(q)) return { stage: "RAW_ASSETS", mode: "CURRENT", human: "envio/organização dos materiais" };
   return null;
 }
-
-function formatNames(names: string[], max = 12): string {
-  const clean = names.filter(Boolean);
-  if (!clean.length) return "";
-  const shown = clean.slice(0, max);
-  const text = shown.join(", ");
-  return clean.length > max ? `${text} e mais ${clean.length - max}` : text;
+function visibleClients(clients, role, person) {
+  if (role === "GT") return clients.filter((c) => c.gt_owner === person);
+  if (role === "DESIGN") return clients.filter((c) => c.designer_owner === person);
+  return clients;
 }
 
-function visibleClientIds(clients: ClientRow[], role: string, person: string): string[] {
-  if (role === "GT") return clients.filter((c) => c.gt_owner === person).map((c) => c.id);
-  if (role === "DESIGN") return clients.filter((c) => c.designer_owner === person).map((c) => c.id);
-  return clients.map((c) => c.id);
-}
-
-async function directDbAnswer(ops: any, role: string, person: string, question: string, previousQuestion?: string | null): Promise<FastAnswer | null> {
+async function fastAnswer(ops, role, person, question, previousQuestion) {
   const currentQ = norm(question);
   const contextQ = previousQuestion && looksLikeFollowUp(currentQ) ? `${norm(previousQuestion)} ${currentQ}`.trim() : currentQ;
-
-  const [{ data: rosterData, error: rosterError }, { data: clientData, error: clientError }] = await Promise.all([
+  const [{ data: rosterRows, error: rErr }, { data: clientRows, error: cErr }] = await Promise.all([
     ops.from("team_roster").select("person,role,clickup_user").eq("is_former", false),
-    ops.from("clients").select("id,display_name,lifecycle,gt_owner,cs_owner,designer_owner").in("lifecycle", ["ACTIVE", "ONBOARDING", "CHURNED"]).order("display_name").limit(400),
+    ops.from("clients").select("id,display_name,lifecycle,gt_owner,cs_owner,designer_owner,saida").in("lifecycle", ["ACTIVE", "ONBOARDING", "CHURNED"]).order("display_name").limit(500),
   ]);
-  if (rosterError) throw new Error(`direct_db_roster:${rosterError.message}`);
-  if (clientError) throw new Error(`direct_db_clients:${clientError.message}`);
-
-  const roster = (rosterData ?? []).map((row: any) => ({
-    person: String(row.person), role: String(row.role), clickup_user: row.clickup_user ? String(row.clickup_user) : null,
-  })) as TeamPerson[];
-  const clients = (clientData ?? []).map((row: any) => ({
-    id: String(row.id), display_name: String(row.display_name), lifecycle: String(row.lifecycle),
-    gt_owner: row.gt_owner ? String(row.gt_owner) : null,
-    cs_owner: row.cs_owner ? String(row.cs_owner) : null,
-    designer_owner: row.designer_owner ? String(row.designer_owner) : null,
-  })) as ClientRow[];
-
+  if (rErr) throw new Error(`roster:${rErr.message}`);
+  if (cErr) throw new Error(`clients:${cErr.message}`);
+  const roster = rosterRows ?? [];
+  const clients = clientRows ?? [];
+  const activeScope = visibleClients(clients.filter((c) => ["ACTIVE", "ONBOARDING"].includes(c.lifecycle)), role, person);
+  const visibleIds = activeScope.map((c) => c.id);
   const countWords = /\b(quanto|quantos|quantas|total|numero|tivemos|tem|temos)\b/;
   const listWords = /\b(qual|quais|quem|lista|listar|mostra|mostre|nomes|sao)\b/;
   const asksClients = /\b(cliente|clientes|carteira|carteiras)\b/.test(contextQ);
-  const mentionedGt = mentionedPerson(currentQ, roster, "GT") || mentionedPerson(contextQ, roster, "GT");
-  const namedMember = mentionedPerson(currentQ, roster) || mentionedPerson(contextQ, roster);
-  const mentionedClient = resolveClientMention(currentQ, clients) || resolveClientMention(contextQ, clients);
+  const gt = mentionedPerson(currentQ, roster, "GT") || mentionedPerson(contextQ, roster, "GT");
+  const member = mentionedPerson(currentQ, roster) || mentionedPerson(contextQ, roster);
+  const client = resolveClient(currentQ, clients) || resolveClient(contextQ, clients);
 
-  const stageIntent = stageIntentFromQuestion(contextQ);
-  if (stageIntent && /\b(cliente|clientes|quantos|quantas|quem|quais|estao|tem|temos|onboarding|reuniao|integracao|material|materiais)\b/.test(contextQ)) {
-    if (role === "DESIGN") return restrictedAnswer();
-
-    let query = ops.from("gt_onboarding_worklist")
-      .select("client_id,display_name,gt_owner,current_stage,next_action,integration_status,integration_bucket,integration_meet_scheduled_for,integration_attempt_count,last_attempt_outcome")
-      .order("display_name");
-    if (role === "GT") query = query.eq("gt_owner", person);
-    if (mentionedGt && canSeeTeamWide(role)) query = query.eq("gt_owner", mentionedGt.person);
-
-    const { data, error } = await query;
-    if (error) throw new Error(`direct_db_onboarding_stage:${error.message}`);
+  const st = stageIntent(contextQ);
+  if (st && /\b(cliente|clientes|quantos|quantas|quem|quais|estao|tem|temos|onboarding|reuniao|integracao|material|materiais)\b/.test(contextQ)) {
+    if (role === "DESIGN") return restricted();
+    let q = ops.from("gt_onboarding_worklist").select("display_name,gt_owner,current_stage,integration_status,integration_bucket,integration_meet_scheduled_for").order("display_name");
+    if (role === "GT") q = q.eq("gt_owner", person);
+    if (gt && teamWide(role)) q = q.eq("gt_owner", gt.person);
+    const { data, error } = await q;
+    if (error) throw new Error(`onboarding_stage:${error.message}`);
     let rows = data ?? [];
-    if (stageIntent.stage === "INTEGRATION_MEETING" && stageIntent.mode === "SCHEDULED") {
-      rows = rows.filter((row: any) => row.integration_status === "SCHEDULED" || Boolean(row.integration_meet_scheduled_for));
-    } else if (stageIntent.stage === "INTEGRATION_MEETING" && stageIntent.mode === "WAITING") {
-      rows = rows.filter((row: any) => row.integration_status === "PENDING" && row.integration_bucket === "WAITING_SCHEDULING");
-    } else if (stageIntent.stage) {
-      rows = rows.filter((row: any) => row.current_stage === stageIntent.stage);
-    }
-
-    const owner = mentionedGt ? ` do ${mentionedGt.person}` : "";
-    if (!rows.length) {
-      return {
-        answer: `Não encontrei nenhum cliente${owner} ${stageIntent.human === "reunião de integração com o GT" ? "na etapa de reunião de integração agora" : `em ${stageIntent.human}`}.`,
-        source: "DIRECT_DB_FAST", intent: "onboarding_stage",
-      };
-    }
-
-    const names = rows.map((row: any) => String(row.display_name));
-    let answer = `Temos ${rows.length} ${rows.length === 1 ? "cliente" : "clientes"}${owner} ${stageIntent.human === "reunião de integração com o GT" ? "na etapa de reunião de integração agora" : `em ${stageIntent.human}`}: ${formatNames(names)}.`;
-    if (stageIntent.mode === "SCHEDULED") {
-      const details = rows.slice(0, 8).map((row: any) => {
-        if (!row.integration_meet_scheduled_for) return null;
-        const when = new Intl.DateTimeFormat("pt-BR", {
-          timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
-        }).format(new Date(row.integration_meet_scheduled_for));
-        return `${row.display_name}: ${when}`;
-      }).filter(Boolean);
-      if (details.length) answer += `\n${details.map((d: string) => `• ${d}`).join("\n")}`;
+    if (st.stage === "INTEGRATION_MEETING" && st.mode === "SCHEDULED") rows = rows.filter((r) => r.integration_status === "SCHEDULED" || r.integration_meet_scheduled_for);
+    else if (st.stage === "INTEGRATION_MEETING" && st.mode === "WAITING") rows = rows.filter((r) => r.integration_status === "PENDING" && r.integration_bucket === "WAITING_SCHEDULING");
+    else rows = rows.filter((r) => r.current_stage === st.stage);
+    const owner = gt ? ` do ${gt.person}` : "";
+    if (!rows.length) return { answer: `Não encontrei cliente${owner} nessa condição agora.`, source: "DIRECT_DB_FAST", intent: "onboarding_stage" };
+    let answer = `Temos ${rows.length} ${rows.length === 1 ? "cliente" : "clientes"}${owner} ${st.mode === "CURRENT" ? `na etapa de ${st.human}` : st.human}: ${formatNames(rows.map((r) => r.display_name))}.`;
+    if (st.mode === "SCHEDULED") {
+      const details = rows.filter((r) => r.integration_meet_scheduled_for).slice(0, 8).map((r) => `• ${r.display_name}: ${fmtDateTime(r.integration_meet_scheduled_for)}`);
+      if (details.length) answer += `\n${details.join("\n")}`;
     }
     return { answer, source: "DIRECT_DB_FAST", intent: "onboarding_stage" };
   }
 
-  if (mentionedGt && asksClients) {
-    if (role === "GT" && mentionedGt.person !== person) return restrictedAnswer();
-    if (role === "DESIGN") return restrictedAnswer();
-    const rows = clients.filter((c) => c.gt_owner === mentionedGt.person && ["ACTIVE", "ONBOARDING"].includes(c.lifecycle));
+  if (gt && asksClients) {
+    if (role === "GT" && gt.person !== person) return restricted();
+    if (role === "DESIGN") return restricted();
+    const rows = clients.filter((c) => c.gt_owner === gt.person && ["ACTIVE", "ONBOARDING"].includes(c.lifecycle));
     const active = rows.filter((c) => c.lifecycle === "ACTIVE");
     const onboarding = rows.filter((c) => c.lifecycle === "ONBOARDING");
     const onlyOnboarding = contextQ.includes("onboarding");
     const onlyActive = /\b(ativo|ativos)\b/.test(contextQ) && !onlyOnboarding;
     const selected = onlyOnboarding ? onboarding : onlyActive ? active : rows;
-    const label = onlyOnboarding ? "em onboarding" : onlyActive ? "ativos" : "na carteira";
-    let answer = `${mentionedGt.person} está com ${selected.length} ${selected.length === 1 ? "cliente" : "clientes"} ${label}.`;
+    let answer = `${gt.person} está com ${selected.length} ${selected.length === 1 ? "cliente" : "clientes"}${onlyOnboarding ? " em onboarding" : onlyActive ? " ativos" : " na carteira"}.`;
     if (!onlyOnboarding && !onlyActive) answer += ` São ${active.length} ativos e ${onboarding.length} em onboarding.`;
-    if (listWords.test(contextQ) || (!countWords.test(contextQ) && asksClients)) {
-      const names = selected.map((row) => `• ${row.display_name}`).join("\n");
-      if (names) answer += `\n${names}`;
-    }
+    if (listWords.test(contextQ) || (!countWords.test(contextQ) && asksClients)) answer += `\n${selected.map((c) => `• ${c.display_name}`).join("\n")}`;
     return { answer, source: "DIRECT_DB_FAST", intent: "gt_portfolio" };
   }
 
   if (asksClients && /\b(cada gt|por gt|todos os gt|carteiras dos gt|carteira dos gt)\b/.test(contextQ)) {
-    if (!canSeeTeamWide(role)) return restrictedAnswer();
-    const map = new Map<string, { active: number; onboarding: number }>();
-    for (const row of clients.filter((c) => ["ACTIVE", "ONBOARDING"].includes(c.lifecycle))) {
-      const gt = String(row.gt_owner ?? "").trim();
-      if (!gt) continue;
-      const item = map.get(gt) ?? { active: 0, onboarding: 0 };
-      if (row.lifecycle === "ACTIVE") item.active += 1;
-      if (row.lifecycle === "ONBOARDING") item.onboarding += 1;
-      map.set(gt, item);
+    if (!teamWide(role)) return restricted();
+    const map = new Map();
+    for (const c of clients.filter((x) => ["ACTIVE", "ONBOARDING"].includes(x.lifecycle) && x.gt_owner)) {
+      const v = map.get(c.gt_owner) ?? { active: 0, onboarding: 0 };
+      c.lifecycle === "ACTIVE" ? v.active++ : v.onboarding++;
+      map.set(c.gt_owner, v);
     }
-    const lines = [...map.entries()]
-      .map(([gt, value]) => ({ gt, ...value, total: value.active + value.onboarding }))
-      .filter((item) => item.total > 0).sort((a, b) => b.total - a.total)
-      .map((item) => `• ${item.gt}: ${item.total} (${item.active} ativos + ${item.onboarding} onboarding)`);
-    return { answer: lines.length ? `As carteiras estão assim agora:\n${lines.join("\n")}` : "Não encontrei clientes atribuídos aos GTs ativos.", source: "DIRECT_DB_FAST", intent: "gt_portfolio_breakdown" };
+    const lines = [...map.entries()].map(([name, v]) => ({ name, ...v, total: v.active + v.onboarding })).sort((a, b) => b.total - a.total).map((x) => `• ${x.name}: ${x.total} (${x.active} ativos + ${x.onboarding} onboarding)`);
+    return { answer: `As carteiras estão assim agora:\n${lines.join("\n")}`, source: "DIRECT_DB_FAST", intent: "gt_portfolio_breakdown" };
   }
 
   if (contextQ.includes("onboarding") && /\b(qual|quais|quem|lista|listar|estao|cliente|clientes|quantos|quantas|total|tem|temos)\b/.test(contextQ)) {
-    let rows = clients.filter((c) => c.lifecycle === "ONBOARDING");
-    if (role === "GT") rows = rows.filter((c) => c.gt_owner === person);
-    if (role === "DESIGN") rows = rows.filter((c) => c.designer_owner === person);
-    const wantsList = listWords.test(contextQ) || /\bestao\b/.test(contextQ);
+    const rows = activeScope.filter((c) => c.lifecycle === "ONBOARDING");
     let answer = `Temos ${rows.length} ${rows.length === 1 ? "cliente" : "clientes"} em onboarding agora.`;
-    if (wantsList && rows.length) answer += `\n${rows.map((row) => `• ${row.display_name}${row.gt_owner ? ` — GT: ${row.gt_owner}` : " — GT ainda não definido"}`).join("\n")}`;
+    if ((listWords.test(contextQ) || /\bestao\b/.test(contextQ)) && rows.length) answer += `\n${rows.map((c) => `• ${c.display_name}${c.gt_owner ? ` — GT: ${c.gt_owner}` : " — GT ainda não definido"}`).join("\n")}`;
     return { answer, source: "DIRECT_DB_FAST", intent: "onboarding" };
   }
 
   if (asksClients && countWords.test(contextQ) && contextQ.includes("operacao") && !/\b(ativo|ativos)\b/.test(contextQ)) {
-    let rows = clients.filter((c) => ["ACTIVE", "ONBOARDING"].includes(c.lifecycle));
-    if (role === "GT") rows = rows.filter((c) => c.gt_owner === person);
-    if (role === "DESIGN") rows = rows.filter((c) => c.designer_owner === person);
-    const active = rows.filter((c) => c.lifecycle === "ACTIVE").length;
-    const onboarding = rows.filter((c) => c.lifecycle === "ONBOARDING").length;
-    return { answer: role === "GT" ? `Você está com ${rows.length} clientes na carteira: ${active} ativos e ${onboarding} em onboarding.` : `A operação está com ${rows.length} clientes agora: ${active} ativos e ${onboarding} em onboarding.`, source: "DIRECT_DB_FAST", intent: "operation_total" };
+    const active = activeScope.filter((c) => c.lifecycle === "ACTIVE").length;
+    const onboarding = activeScope.filter((c) => c.lifecycle === "ONBOARDING").length;
+    return { answer: role === "GT" ? `Você está com ${activeScope.length} clientes na carteira: ${active} ativos e ${onboarding} em onboarding.` : `A operação está com ${activeScope.length} clientes agora: ${active} ativos e ${onboarding} em onboarding.`, source: "DIRECT_DB_FAST", intent: "operation_total" };
   }
-
   if (asksClients && countWords.test(contextQ) && /\b(ativo|ativos)\b/.test(contextQ)) {
-    let rows = clients.filter((c) => c.lifecycle === "ACTIVE");
-    if (role === "GT") rows = rows.filter((c) => c.gt_owner === person);
-    if (role === "DESIGN") rows = rows.filter((c) => c.designer_owner === person);
-    return { answer: role === "GT" ? `Você está com ${rows.length} clientes ativos na carteira.` : `Temos ${rows.length} clientes ativos na operação.`, source: "DIRECT_DB_FAST", intent: "active_clients" };
+    const total = activeScope.filter((c) => c.lifecycle === "ACTIVE").length;
+    return { answer: role === "GT" ? `Você está com ${total} clientes ativos na carteira.` : `Temos ${total} clientes ativos na operação.`, source: "DIRECT_DB_FAST", intent: "active_clients" };
   }
 
-  if (mentionedClient && /\b(quem cuida|quem ta com|quem esta com|de quem e|responsavel|gt dele|cs dele|designer dele|quem atende)\b/.test(contextQ)) {
-    if (role === "GT" && mentionedClient.gt_owner !== person) return restrictedAnswer();
-    if (role === "DESIGN" && mentionedClient.designer_owner !== person) return restrictedAnswer();
-    const parts = [mentionedClient.gt_owner ? `GT: ${mentionedClient.gt_owner}` : "GT ainda não definido", mentionedClient.cs_owner ? `CS: ${mentionedClient.cs_owner}` : null, mentionedClient.designer_owner ? `designer: ${mentionedClient.designer_owner}` : null].filter(Boolean);
-    return { answer: `${mentionedClient.display_name}: ${parts.join(" · ")}.`, source: "DIRECT_DB_FAST", intent: "client_owners" };
+  if (client && /\b(quem cuida|quem ta com|quem esta com|de quem e|responsavel|gt dele|cs dele|designer dele|quem atende)\b/.test(contextQ)) {
+    if (role === "GT" && client.gt_owner !== person) return restricted();
+    if (role === "DESIGN" && client.designer_owner !== person) return restricted();
+    const parts = [client.gt_owner ? `GT: ${client.gt_owner}` : "GT ainda não definido", client.cs_owner ? `CS: ${client.cs_owner}` : null, client.designer_owner ? `designer: ${client.designer_owner}` : null].filter(Boolean);
+    return { answer: `${client.display_name}: ${parts.join(" · ")}.`, source: "DIRECT_DB_FAST", intent: "client_owners" };
   }
 
   if (/\b(task|tasks|tarefa|tarefas)\b/.test(contextQ)) {
-    let taskPerson: TeamPerson | null = namedMember;
-    if (role === "GT" || role === "DESIGN") {
-      if (taskPerson && taskPerson.person !== person) return restrictedAnswer();
-      taskPerson = roster.find((row) => row.person === person) ?? { person, role, clickup_user: person };
+    let taskPerson = member;
+    if (["GT", "DESIGN"].includes(role)) {
+      if (taskPerson && taskPerson.person !== person) return restricted();
+      taskPerson = roster.find((r) => r.person === person) ?? { person, role, clickup_user: person };
     }
     const assignee = taskPerson?.clickup_user || taskPerson?.person || null;
     const period = periodFromQuestion(contextQ) ?? dayPeriod(0, "hoje");
     const ranking = /\b(quem mais|ranking|por pessoa|por colaborador|cada pessoa|cada colaborador)\b/.test(contextQ);
-    const wantsOverdue = /\b(atrasada|atrasadas|atrasado|atrasados|vencida|vencidas|ficou pra tras|ficaram pra tras)\b/.test(contextQ);
-    const wantsOpen = /\b(aberta|abertas|aberto|abertos|pendente|pendentes)\b/.test(contextQ) && !/\b(criada|criadas|criado|criados)\b/.test(contextQ);
-    const wantsCreated = /\b(criada|criadas|criado|criados|criamos|abriu|abrimos)\b/.test(contextQ);
-    const wantsClosed = /\b(feita|feitas|feito|feitos|concluida|concluidas|concluido|concluidos|finalizada|finalizadas|finalizado|finalizados|fez|fizeram)\b/.test(contextQ);
-
+    const overdue = /\b(atrasada|atrasadas|atrasado|atrasados|vencida|vencidas|ficou pra tras|ficaram pra tras)\b/.test(contextQ);
+    const open = /\b(aberta|abertas|aberto|abertos|pendente|pendentes)\b/.test(contextQ) && !/\b(criada|criadas|criado|criados)\b/.test(contextQ);
+    const created = /\b(criada|criadas|criado|criados|criamos|abriu|abrimos)\b/.test(contextQ);
+    const closed = /\b(feita|feitas|feito|feitos|concluida|concluidas|concluido|concluidos|finalizada|finalizadas|finalizado|finalizados|fez|fizeram)\b/.test(contextQ);
     if (ranking) {
-      if (!canSeeTeamWide(role)) return restrictedAnswer();
+      if (!teamWide(role)) return restricted();
       const { data, error } = await ops.from("clickup_tasks").select("assignee_names,date_closed").gte("date_closed", period.start).lt("date_closed", period.end).not("assignee_names", "is", null).limit(1500);
-      if (error) throw new Error(`direct_db_task_ranking:${error.message}`);
-      const counts = new Map<string, number>();
-      for (const row of data ?? []) for (const name of String(row.assignee_names ?? "").split(",").map((n) => n.trim()).filter(Boolean)) counts.set(name, (counts.get(name) ?? 0) + 1);
-      const lines = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([name, total], i) => `${i + 1}. ${name}: ${total}`);
+      if (error) throw new Error(`task_ranking:${error.message}`);
+      const counts = new Map();
+      for (const row of data ?? []) for (const n of String(row.assignee_names ?? "").split(",").map((x) => x.trim()).filter(Boolean)) counts.set(n, (counts.get(n) ?? 0) + 1);
+      const lines = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10).map(([n, t], i) => `${i + 1}. ${n}: ${t}`);
       return { answer: lines.length ? `Quem mais concluiu tasks ${period.label}:\n${lines.join("\n")}` : `Não teve task concluída ${period.label}.`, source: "DIRECT_DB_FAST", intent: "task_ranking" };
     }
-
-    if (wantsOverdue || (wantsOpen && !/\b(hoje|ontem|semana|mes)\b/.test(contextQ))) {
-      let query = ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).eq("is_closed", false);
-      if (wantsOverdue) query = query.not("due_date", "is", null).lt("due_date", new Date().toISOString());
-      if (assignee) query = query.ilike("assignee_names", `%${assignee}%`);
-      const { count, error } = await query;
-      if (error) throw new Error(`direct_db_task_open:${error.message}`);
-      const total = count ?? 0;
-      const ownerText = taskPerson ? ` de ${taskPerson.person}` : " na operação";
-      return { answer: wantsOverdue ? `Tem ${total} ${total === 1 ? "task atrasada" : "tasks atrasadas"}${ownerText}.` : `Tem ${total} ${total === 1 ? "task aberta" : "tasks abertas"}${ownerText}.`, source: "DIRECT_DB_FAST", intent: wantsOverdue ? "tasks_overdue" : "tasks_open" };
+    if (overdue || (open && !/\b(hoje|ontem|semana|mes)\b/.test(contextQ))) {
+      let q = ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).eq("is_closed", false);
+      if (overdue) q = q.not("due_date", "is", null).lt("due_date", new Date().toISOString());
+      if (assignee) q = q.ilike("assignee_names", `%${assignee}%`);
+      const { count, error } = await q;
+      if (error) throw new Error(`task_open:${error.message}`);
+      return { answer: `Tem ${count ?? 0} ${overdue ? "tasks atrasadas" : "tasks abertas"}${taskPerson ? ` de ${taskPerson.person}` : " na operação"}.`, source: "DIRECT_DB_FAST", intent: overdue ? "tasks_overdue" : "tasks_open" };
     }
-
-    const countFor = async (column: "date_closed" | "date_created") => {
-      let query = ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).gte(column, period.start).lt(column, period.end);
-      if (assignee) query = query.ilike("assignee_names", `%${assignee}%`);
-      const { count, error } = await query;
-      if (error) throw new Error(`direct_db_tasks_${column}:${error.message}`);
+    const countFor = async (column) => {
+      let q = ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).gte(column, period.start).lt(column, period.end);
+      if (assignee) q = q.ilike("assignee_names", `%${assignee}%`);
+      const { count, error } = await q;
+      if (error) throw new Error(`tasks_${column}:${error.message}`);
       return count ?? 0;
     };
-    if (wantsCreated) {
-      const total = await countFor("date_created");
-      return { answer: `${taskPerson ? taskPerson.person : "A operação"} teve ${total} ${total === 1 ? "task criada" : "tasks criadas"} ${period.label}.`, source: "DIRECT_DB_FAST", intent: "tasks_created" };
-    }
-    if (wantsClosed) {
-      const total = await countFor("date_closed");
-      return { answer: `${taskPerson ? taskPerson.person : "A operação"} concluiu ${total} ${total === 1 ? "task" : "tasks"} ${period.label}.`, source: "DIRECT_DB_FAST", intent: "tasks_closed" };
-    }
-    const [closed, created] = await Promise.all([countFor("date_closed"), countFor("date_created")]);
-    return { answer: `${period.label[0].toUpperCase()}${period.label.slice(1)}, ${taskPerson ? taskPerson.person : "a operação"} concluiu ${closed} ${closed === 1 ? "task" : "tasks"}. Foram criadas ${created}.`, source: "DIRECT_DB_FAST", intent: "tasks_snapshot" };
+    if (created) { const total = await countFor("date_created"); return { answer: `${taskPerson ? taskPerson.person : "A operação"} teve ${total} ${total === 1 ? "task criada" : "tasks criadas"} ${period.label}.`, source: "DIRECT_DB_FAST", intent: "tasks_created" }; }
+    if (closed) { const total = await countFor("date_closed"); return { answer: `${taskPerson ? taskPerson.person : "A operação"} concluiu ${total} ${total === 1 ? "task" : "tasks"} ${period.label}.`, source: "DIRECT_DB_FAST", intent: "tasks_closed" }; }
+    const [done, made] = await Promise.all([countFor("date_closed"), countFor("date_created")]);
+    return { answer: `${period.label[0].toUpperCase()}${period.label.slice(1)}, ${taskPerson ? taskPerson.person : "a operação"} concluiu ${done} ${done === 1 ? "task" : "tasks"}. Foram criadas ${made}.`, source: "DIRECT_DB_FAST", intent: "tasks_snapshot" };
   }
 
-  if (/\b(campanha|campanhas|anuncio|anuncios|meta ads)\b/.test(contextQ) && /\b(rodando|no ar|ativa|ativas|pausada|pausadas|sem campanha|parada|paradas|entrega)\b/.test(contextQ)) {
-    const visibleIds = visibleClientIds(clients.filter((c) => ["ACTIVE", "ONBOARDING"].includes(c.lifecycle)), role, person);
+  if (/\b(campanha|campanhas|anuncio|anuncios|meta ads)\b/.test(contextQ) && /\b(rodando|no ar|ativa|ativas|pausada|pausadas|sem campanha|parada|paradas|entrega|sem entrega|desatualizada|desatualizadas)\b/.test(contextQ)) {
     if (!visibleIds.length) return { answer: "Não encontrei clientes no seu escopo agora.", source: "DIRECT_DB_FAST", intent: "campaign_status" };
-    let query = ops.from("campaign_client_latest").select("client_id,display_name,gt_owner,active_campaigns,paused_campaigns,delivery_status,latest_date,age_days").in("client_id", visibleIds).limit(400);
-    if (mentionedGt && canSeeTeamWide(role)) query = query.eq("gt_owner", mentionedGt.person);
-    const { data, error } = await query;
-    if (error) throw new Error(`direct_db_campaigns:${error.message}`);
+    let q = ops.from("campaign_client_latest").select("client_id,display_name,gt_owner,active_campaigns,paused_campaigns,delivery_status,latest_date,age_days").in("client_id", visibleIds).limit(500);
+    if (gt && teamWide(role)) q = q.eq("gt_owner", gt.person);
+    const { data, error } = await q;
+    if (error) throw new Error(`campaigns:${error.message}`);
     let rows = data ?? [];
-    const asksRunning = /\b(rodando|no ar|ativa|ativas|entregando)\b/.test(contextQ) && !/\b(sem campanha|pausada|pausadas)\b/.test(contextQ);
-    const asksPaused = /\b(pausada|pausadas)\b/.test(contextQ);
-    const asksNoCampaign = /\b(sem campanha|sem campanha no ar|parada|paradas)\b/.test(contextQ);
-    if (asksRunning) rows = rows.filter((r: any) => Number(r.active_campaigns || 0) > 0 && r.delivery_status === "ACTIVE_DELIVERY");
-    else if (asksPaused) rows = rows.filter((r: any) => Number(r.active_campaigns || 0) === 0 && Number(r.paused_campaigns || 0) > 0);
-    else if (asksNoCampaign) rows = rows.filter((r: any) => Number(r.active_campaigns || 0) === 0 || ["NO_ACTIVE_CAMPAIGN", "NO_CAMPAIGNS", "NO_DELIVERY"].includes(String(r.delivery_status || "")));
-    const state = asksRunning ? "com campanha rodando" : asksPaused ? "com campanha pausada e nenhuma ativa" : "sem campanha ativa no ar";
+    const activeNoDelivery = /\b(ativa|ativas|ativa sem entrega|ativas sem entrega)\b/.test(contextQ) && /\bsem entrega\b/.test(contextQ);
+    const stale = /\b(desatualizada|desatualizadas|dados desatualizados|stale)\b/.test(contextQ);
+    const paused = /\b(pausada|pausadas)\b/.test(contextQ);
+    const noCampaign = /\b(sem campanha|sem campanha no ar|parada|paradas)\b/.test(contextQ);
+    const running = !activeNoDelivery && !stale && !paused && !noCampaign && /\b(rodando|no ar|ativa|ativas|entregando)\b/.test(contextQ);
+    let state = "nessa condição";
+    if (activeNoDelivery) { rows = rows.filter((r) => Number(r.active_campaigns || 0) > 0 && String(r.delivery_status) === "NO_DELIVERY"); state = "com campanha ativa, mas sem entrega"; }
+    else if (stale) { rows = rows.filter((r) => Number(r.active_campaigns || 0) > 0 && String(r.delivery_status) === "STALE"); state = "com campanha ativa, mas com dados desatualizados"; }
+    else if (paused) { rows = rows.filter((r) => Number(r.active_campaigns || 0) === 0 && Number(r.paused_campaigns || 0) > 0); state = "com campanha pausada e nenhuma ativa"; }
+    else if (noCampaign) { rows = rows.filter((r) => Number(r.active_campaigns || 0) === 0 || ["NO_ACTIVE_CAMPAIGN", "NO_CAMPAIGNS", "NO_DELIVERY"].includes(String(r.delivery_status || ""))); state = "sem campanha ativa no ar"; }
+    else if (running) { rows = rows.filter((r) => Number(r.active_campaigns || 0) > 0 && String(r.delivery_status) === "ACTIVE_DELIVERY"); state = "com campanha rodando e entregando"; }
     let answer = `Temos ${rows.length} ${rows.length === 1 ? "cliente" : "clientes"} ${state}.`;
-    if ((listWords.test(contextQ) || rows.length <= 10) && rows.length) answer += ` ${formatNames(rows.map((r: any) => String(r.display_name)), 15)}.`;
-    return { answer, source: "DIRECT_DB_FAST", intent: "campaign_status" };
+    if (rows.length) answer += ` ${formatNames(rows.map((r) => r.display_name), 20)}.`;
+    return { answer, source: "DIRECT_DB_FAST", intent: activeNoDelivery ? "campaign_active_no_delivery" : "campaign_status" };
   }
 
-  if (/\b(precisa de atencao|precisam de atencao|risco|churnar|churn|dando problema|problema|reclamando|reclamacao|insatisfeito|insatisfeitos)\b/.test(contextQ)) {
-    if (role === "DESIGN") return restrictedAnswer();
-    const visibleIds = visibleClientIds(clients.filter((c) => ["ACTIVE", "ONBOARDING"].includes(c.lifecycle)), role, person);
-    let query = ops.from("client_health_board").select("client_id,display_name,priority,gt_owner,external_risk_level,external_summary,external_recommended_action,sentimento,sinais_alerta,reclamacoes,prioridade").in("client_id", visibleIds).order("prioridade", { ascending: false, nullsFirst: false }).limit(120);
-    if (mentionedGt && canSeeTeamWide(role)) query = query.eq("gt_owner", mentionedGt.person);
-    const { data, error } = await query;
-    if (error) throw new Error(`direct_db_health:${error.message}`);
+  const salesIntent = /\b(vendeu|venderam|vendas|venda|mais vendeu|vendeu mais|ranking de vendas)\b/.test(contextQ);
+  if (salesIntent) {
+    if (role === "DESIGN") return restricted();
+    const { data, error } = await ops.from("weekly_commercial_reports")
+      .select("client_id,week_start,week_end,gt_owner,metrics,commercial_leads,meta_leads,generated_at")
+      .order("week_end", { ascending: false })
+      .order("generated_at", { ascending: false })
+      .limit(1000);
+    if (error) throw new Error(`sales_reports:${error.message}`);
     let rows = data ?? [];
-    const complaintMode = /\b(reclamando|reclamacao|reclamacoes)\b/.test(contextQ);
-    const churnMode = /\b(churnar|churn|risco)\b/.test(contextQ);
-    rows = rows.filter((r: any) => complaintMode ? Boolean(String(r.reclamacoes ?? "").trim()) : churnMode ? ["ATTENTION", "FOLLOW_UP"].includes(String(r.priority || "")) || /high|alto|critical|critico/i.test(String(r.external_risk_level || "")) : ["ATTENTION", "FOLLOW_UP"].includes(String(r.priority || "")));
+    if (role === "GT") rows = rows.filter((r) => r.gt_owner === person);
+    if (gt && teamWide(role)) rows = rows.filter((r) => r.gt_owner === gt.person);
+    if (!rows.length) return { answer: "Ainda não tenho relatório comercial suficiente para dizer quem vendeu mais.", source: "DIRECT_DB_FAST", intent: "sales_ranking" };
+    const latestWeek = rows[0].week_end;
+    rows = rows.filter((r) => r.week_end === latestWeek);
+    const clientMap = new Map(clients.map((c) => [c.id, c.display_name]));
+    const byClient = new Map();
+    for (const r of rows) {
+      if (!visibleIds.includes(r.client_id) && !teamWide(role)) continue;
+      const name = clientMap.get(r.client_id) || "Cliente sem nome";
+      if (!byClient.has(r.client_id)) byClient.set(r.client_id, { name, sales: Number(r.metrics?.sales || 0), proposals: Number(r.metrics?.proposals || 0), visits: Number(r.metrics?.visits_completed || 0) });
+    }
+    const ranking = [...byClient.values()].sort((a, b) => b.sales - a.sales || b.proposals - a.proposals);
+    const start = rows[0]?.week_start;
+    const periodText = start && latestWeek ? `${fmtDate(start)} a ${fmtDate(latestWeek)}` : "no relatório mais recente";
+    if (!ranking.length) return { answer: `Ainda não tenho dados comerciais comparáveis para os clientes no período ${periodText}.`, source: "DIRECT_DB_FAST", intent: "sales_ranking" };
+    const positive = ranking.filter((x) => x.sales > 0);
+    if (!positive.length) {
+      if (ranking.length === 1) return { answer: `No relatório comercial mais recente (${periodText}), só tenho ${ranking[0].name} reportado e ele marcou 0 vendas. Então ainda não dá para dizer quem vendeu mais entre os clientes — faltam relatórios dos outros grupos.`, source: "DIRECT_DB_FAST", intent: "sales_ranking" };
+      return { answer: `No relatório comercial mais recente (${periodText}), há ${ranking.length} clientes reportados e nenhum registrou venda.`, source: "DIRECT_DB_FAST", intent: "sales_ranking" };
+    }
+    const top = positive[0].sales;
+    const winners = positive.filter((x) => x.sales === top);
+    let answer = winners.length === 1 ? `${winners[0].name} foi quem mais vendeu no relatório comercial mais recente (${periodText}), com ${top} ${top === 1 ? "venda" : "vendas"}.` : `Tem empate no topo no relatório comercial mais recente (${periodText}): ${formatNames(winners.map((x) => x.name))}, com ${top} vendas cada.`;
+    const top5 = positive.slice(0, 5).map((x, i) => `${i + 1}. ${x.name}: ${x.sales}`).join("\n");
+    if (positive.length > 1) answer += `\n${top5}`;
+    return { answer, source: "DIRECT_DB_FAST", intent: "sales_ranking" };
+  }
+
+  if (/\b(precisa de atencao|precisam de atencao|risco|churnar|dando problema|problema|reclamando|reclamacao|insatisfeito|insatisfeitos)\b/.test(contextQ)) {
+    if (role === "DESIGN") return restricted();
+    let q = ops.from("client_health_board").select("client_id,display_name,priority,gt_owner,external_risk_level,external_summary,external_recommended_action,sentimento,sinais_alerta,reclamacoes,prioridade").in("client_id", visibleIds).order("prioridade", { ascending: false, nullsFirst: false }).limit(120);
+    if (gt && teamWide(role)) q = q.eq("gt_owner", gt.person);
+    const { data, error } = await q;
+    if (error) throw new Error(`health:${error.message}`);
+    let rows = data ?? [];
+    const complaints = /\b(reclamando|reclamacao|reclamacoes)\b/.test(contextQ);
+    const risk = /\b(churnar|risco)\b/.test(contextQ);
+    rows = rows.filter((r) => complaints ? Boolean(String(r.reclamacoes ?? "").trim()) : risk ? ["ATTENTION", "FOLLOW_UP"].includes(String(r.priority || "")) || /high|alto|critical|critico/i.test(String(r.external_risk_level || "")) : ["ATTENTION", "FOLLOW_UP"].includes(String(r.priority || "")));
     if (!rows.length) return { answer: "Não encontrei nenhum cliente com sinal claro nessa condição agora.", source: "DIRECT_DB_FAST", intent: "client_health" };
-    const lines = rows.slice(0, 10).map((r: any) => `• ${r.display_name}: ${clip(r.reclamacoes || r.sinais_alerta || r.external_summary || "há sinais de atenção registrados", 180)}`);
-    return { answer: `Encontrei ${rows.length} ${rows.length === 1 ? "cliente" : "clientes"} que merecem atenção agora.${lines.length ? `\n${lines.join("\n")}` : ""}${rows.length > 10 ? `\n…e mais ${rows.length - 10}.` : ""}`, source: "DIRECT_DB_FAST", intent: "client_health" };
+    const lines = rows.slice(0, 10).map((r) => `• ${r.display_name}: ${clip(r.reclamacoes || r.sinais_alerta || r.external_summary || "há sinais de atenção registrados", 180)}`);
+    return { answer: `Encontrei ${rows.length} ${rows.length === 1 ? "cliente" : "clientes"} que merecem atenção agora.\n${lines.join("\n")}${rows.length > 10 ? `\n…e mais ${rows.length - 10}.` : ""}`, source: "DIRECT_DB_FAST", intent: "client_health" };
   }
 
   if (/\b(quem esta atrasado|quem ta atrasado|o que esta atrasado|o que ta atrasado|ficou pra tras|ficaram pra tras|pendencias atrasadas)\b/.test(contextQ)) {
-    const visibleIds = visibleClientIds(clients.filter((c) => ["ACTIVE", "ONBOARDING"].includes(c.lifecycle)), role, person);
-    const nowIso = new Date().toISOString();
-    const [workRes, clickRes] = await Promise.all([
-      ops.from("work_items").select("client_id,title,target_person,due_at").in("client_id", visibleIds).in("status", ["OPEN", "IN_PROGRESS", "WAITING", "SNOOZED"]).not("due_at", "is", null).lt("due_at", nowIso).order("due_at").limit(80),
-      ops.from("clickup_tasks").select("client_id,name,assignee_names,due_date").in("client_id", visibleIds).eq("is_closed", false).not("due_date", "is", null).lt("due_date", nowIso).order("due_date").limit(80),
+    const now = new Date().toISOString();
+    const [a, b] = await Promise.all([
+      ops.from("work_items").select("client_id,title,due_at").in("client_id", visibleIds).in("status", ["OPEN", "IN_PROGRESS", "WAITING", "SNOOZED"]).not("due_at", "is", null).lt("due_at", now).order("due_at").limit(80),
+      ops.from("clickup_tasks").select("client_id,name,due_date").in("client_id", visibleIds).eq("is_closed", false).not("due_date", "is", null).lt("due_date", now).order("due_date").limit(80),
     ]);
-    if (workRes.error) throw new Error(`direct_db_late_work:${workRes.error.message}`);
-    if (clickRes.error) throw new Error(`direct_db_late_clickup:${clickRes.error.message}`);
-    const work = workRes.data ?? [], click = clickRes.data ?? [];
-    const clientMap = new Map(clients.map((c) => [c.id, c.display_name]));
-    const sample = [...work.map((r: any) => ({ client: clientMap.get(String(r.client_id)) || "Sem cliente", item: r.title })), ...click.map((r: any) => ({ client: clientMap.get(String(r.client_id)) || "Sem cliente", item: r.name }))].slice(0, 8);
-    return { answer: `Temos ${work.length + click.length} pendências vencidas no seu escopo agora: ${work.length} operacionais e ${click.length} tasks do ClickUp.${sample.length ? `\n${sample.map((r) => `• ${r.client}: ${clip(r.item, 120)}`).join("\n")}` : ""}`, source: "DIRECT_DB_FAST", intent: "overdue_snapshot" };
+    if (a.error) throw new Error(`late_work:${a.error.message}`);
+    if (b.error) throw new Error(`late_click:${b.error.message}`);
+    const nameMap = new Map(clients.map((c) => [c.id, c.display_name]));
+    const sample = [...(a.data ?? []).map((r) => ({ client: nameMap.get(r.client_id) || "Sem cliente", item: r.title })), ...(b.data ?? []).map((r) => ({ client: nameMap.get(r.client_id) || "Sem cliente", item: r.name }))].slice(0, 8);
+    return { answer: `Temos ${(a.data?.length ?? 0) + (b.data?.length ?? 0)} pendências vencidas no seu escopo agora: ${a.data?.length ?? 0} operacionais e ${b.data?.length ?? 0} tasks do ClickUp.${sample.length ? `\n${sample.map((r) => `• ${r.client}: ${clip(r.item, 120)}`).join("\n")}` : ""}`, source: "DIRECT_DB_FAST", intent: "overdue_snapshot" };
   }
 
-  if (/\b(devendo|inadimplente|inadimplentes|mensalidade|mrr|vence essa semana|vencem essa semana|pagamento atrasado|pagamentos atrasados)\b/.test(contextQ)) {
-    if (!canSeeFinance(role, person)) return restrictedAnswer();
-    const { data, error } = await ops.from("client_finance_controls").select("client_id,payment_status,operational_status,monthly_value,next_due_date,overdue_since,pause_reason").limit(300);
-    if (error) throw new Error(`direct_db_finance:${error.message}`);
+  if (/\b(devendo|inadimplente|inadimplentes|mensalidade|mrr|pagamento atrasado|pagamentos atrasados)\b/.test(contextQ)) {
+    if (!financeAllowed(role, person)) return restricted();
+    const { data, error } = await ops.from("client_finance_controls").select("client_id,monthly_value,overdue_since").limit(300);
+    if (error) throw new Error(`finance:${error.message}`);
     const rows = data ?? [];
     const nameMap = new Map(clients.map((c) => [c.id, c.display_name]));
     if (/\b(devendo|inadimplente|inadimplentes|pagamento atrasado|pagamentos atrasados)\b/.test(contextQ)) {
-      const late = rows.filter((r: any) => Boolean(r.overdue_since));
-      return { answer: late.length ? `Temos ${late.length} ${late.length === 1 ? "cliente com pagamento atrasado" : "clientes com pagamento atrasado"}: ${formatNames(late.map((r: any) => nameMap.get(String(r.client_id)) || "Cliente sem nome"), 20)}.` : "Não encontrei cliente com pagamento atrasado registrado agora.", source: "DIRECT_DB_FAST", intent: "finance_overdue" };
+      const late = rows.filter((r) => r.overdue_since);
+      return { answer: late.length ? `Temos ${late.length} ${late.length === 1 ? "cliente com pagamento atrasado" : "clientes com pagamento atrasado"}: ${formatNames(late.map((r) => nameMap.get(r.client_id) || "Cliente sem nome"), 20)}.` : "Não encontrei cliente com pagamento atrasado registrado agora.", source: "DIRECT_DB_FAST", intent: "finance_overdue" };
     }
-    if (/\b(mensalidade|mrr)\b/.test(contextQ) && countWords.test(contextQ)) {
-      const total = rows.reduce((sum: number, r: any) => sum + Number(r.monthly_value || 0), 0);
-      return { answer: `O valor mensal registrado soma R$ ${total.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`, source: "DIRECT_DB_FAST", intent: "finance_mrr" };
-    }
+    const total = rows.reduce((s, r) => s + Number(r.monthly_value || 0), 0);
+    return { answer: `O valor mensal registrado soma R$ ${total.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`, source: "DIRECT_DB_FAST", intent: "finance_mrr" };
   }
 
-  if (/\b(churn|churns|churned|saiu|sairam|perdemos|encerrado|encerraram)\b/.test(contextQ) && /\b(cliente|clientes|quem|quantos|quantas|esse mes|este mes|hoje|ontem|semana)\b/.test(contextQ)) {
-    if (role === "GT" || role === "DESIGN") return restrictedAnswer();
-    const period = periodFromQuestion(contextQ) ?? monthPeriod();
-    const { data, error } = await ops.from("clients").select("display_name,saida").eq("lifecycle", "CHURNED").gte("saida", period.start.slice(0, 10)).lt("saida", period.end.slice(0, 10)).order("saida", { ascending: false });
-    if (error) throw new Error(`direct_db_churn:${error.message}`);
-    const rows = data ?? [];
-    return { answer: rows.length ? `Tivemos ${rows.length} ${rows.length === 1 ? "churn" : "churns"} ${period.label}: ${formatNames(rows.map((r: any) => String(r.display_name)), 20)}.` : `Não encontrei churn registrado ${period.label}.`, source: "DIRECT_DB_FAST", intent: "churn_period" };
+  if (/\b(churn|churns|churned|saiu|sairam|perdemos|encerrado|encerraram)\b/.test(contextQ) && /\b(cliente|clientes|quem|quantos|quantas|mes|hoje|ontem|semana)\b/.test(contextQ)) {
+    if (["GT", "DESIGN"].includes(role)) return restricted();
+    const p = periodFromQuestion(contextQ) ?? monthPeriod();
+    const rows = clients.filter((c) => c.lifecycle === "CHURNED" && c.saida && c.saida >= p.start.slice(0, 10) && c.saida < p.end.slice(0, 10));
+    return { answer: rows.length ? `Tivemos ${rows.length} ${rows.length === 1 ? "churn" : "churns"} ${p.label}: ${formatNames(rows.map((r) => r.display_name), 20)}.` : `Não encontrei churn registrado ${p.label}.`, source: "DIRECT_DB_FAST", intent: "churn_period" };
   }
 
   return null;
 }
 
-async function cloudflareFallback(authHeader: string, question: string): Promise<string> {
+async function cloudflareFallback(authHeader, question) {
   let conversationId = "";
-  async function post(path: string, body: Record<string, unknown>) {
+  async function post(path, body) {
     const response = await fetch(`${CLOUDFLARE_AI_BASE}${path}`, { method: "POST", headers: { Authorization: authHeader, "content-type": "application/json" }, body: JSON.stringify(body) });
     const raw = await response.text();
-    let parsed: any = null;
-    try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
-    if (!response.ok || !parsed?.ok) {
-      const detail = parsed?.detail || parsed?.error || raw || `http_${response.status}`;
-      throw new Error(`cloudflare_${path.replaceAll("/", "_")}_${response.status}:${String(detail).slice(0, 260)}`);
-    }
+    let parsed = null;
+    try { parsed = raw ? JSON.parse(raw) : null; } catch {}
+    if (!response.ok || !parsed?.ok) throw new Error(`cloudflare_${response.status}:${clip(parsed?.detail || parsed?.error || raw, 250)}`);
     return parsed;
   }
   try {
@@ -552,51 +438,41 @@ async function cloudflareFallback(authHeader: string, question: string): Promise
   }
 }
 
-function operationalPrompt(person: string, role: string, scopeInstruction: string, allowedClientsText: string, question: string, previous?: { question?: string; answer?: string } | null): string {
-  const conversationContext = previous?.question ? `CONTEXTO DA ÚLTIMA TROCA (use apenas se a pergunta atual for continuação):\nPergunta anterior: ${clip(previous.question, 700)}\nResposta anterior: ${clip(previous.answer, 1200)}` : "";
+function operationalPrompt(person, role, scope, allowedClients, question, previous) {
+  const last = previous?.question ? `CONTEXTO DA ÚLTIMA TROCA:\nPergunta anterior: ${clip(previous.question, 700)}\nResposta anterior: ${clip(previous.answer, 1200)}` : "";
   return [
     "Você é o OpsQuestion, copiloto operacional interno da Leonardo Imobi.",
-    "Fale como alguém da equipe de operações: português do Brasil, natural, direto, curto e útil. Não fale como banco de dados, documentação técnica ou suporte de TI.",
-    "REGRA CENTRAL: entenda primeiro a intenção operacional da pergunta; depois consulte os dados; só então responda em linguagem humana.",
-    "Nunca mostre ao usuário nomes de tabela, schema, coluna, enum, stage_code, current_stage, códigos em CAIXA_ALTA ou identificadores internos, a menos que ele peça explicitamente uma explicação técnica do banco.",
-    "Traduza estados internos para o jeito da equipe: INTRO_MEETING = primeira reunião de apresentação; PRODUCT_PERSONA_MEETING = reunião de Produto e Persona; INTEGRATION_MEETING = reunião de integração com o GT; RAW_ASSETS = envio/organização dos materiais; campanha no ar = onboarding concluído.",
-    "Vocabulário da operação: 'carteira do Yuri/Felipe/Rodrigo' = clientes atribuídos ao GT; se não disser 'ativos', conte ativos + onboarding e separe os dois números. 'task feita' = task concluída no ClickUp. 'quem está parado/atrasado' = procure falta de avanço, prazos vencidos e pendências e explique o motivo em português.",
-    "Reuniões: 'em integração' significa cliente cuja etapa atual é integração com o GT. 'integração marcada/agendada' significa que existe data agendada. 'aguardando integração' significa que está esperando agendamento. Não misture essas três coisas.",
-    "Campanhas: 'rodando/no ar' = existe campanha ativa com entrega; 'pausada' = sem campanha ativa e com campanha pausada; 'sem campanha' = nenhuma campanha ativa. Explique o resultado sem mostrar delivery_status ou códigos internos.",
-    "Saúde: 'dando problema', 'precisa de atenção', 'pode churnar', 'reclamando' devem virar uma síntese de nomes + motivo + ação recomendada quando houver evidência.",
-    "WhatsApp: quando perguntarem o que o cliente falou, reclamou, pediu ou combinou, sintetize as mensagens relevantes com contexto e data; não despeje mensagens cruas sem necessidade.",
-    "Responsabilidade: 'quem cuida', 'de quem é', 'quem deveria resolver' = responda com pessoas/áreas reais. Se não houver responsável, diga 'ainda não foi atribuído'.",
-    "Datas relativas como hoje, ontem, esta semana e últimos dias usam America/Sao_Paulo automaticamente. Não pergunte timezone.",
-    "Aceite erro de digitação, abreviação e fala informal: 'qnts cliente yuri tem', 'tasks hj', 'qm ta atrasado' devem ser entendidos normalmente.",
-    "Se houver uma interpretação claramente mais provável, assuma e responda. Se ajudar, diga em uma frase curta 'Entendi como...' sem transformar isso em interrogatório.",
-    "Só peça esclarecimento quando existirem duas interpretações humanas realmente plausíveis e a resposta mudaria bastante. Nesse caso faça UMA pergunta curta em linguagem comum. Exemplo: 'Você quer quem está nessa etapa agora ou quem já tem a reunião marcada?' Nunca ofereça opções com nomes de colunas/códigos.",
-    "Se a pergunta for ambígua mas você puder entregar os dois números de forma útil, entregue os dois em vez de perguntar. Exemplo: 'quantas tasks tivemos hoje?' => concluídas + criadas.",
-    "Use SOMENTE dados encontrados na base operacional. Nunca invente fatos, números, responsáveis, datas, status ou evidências. Se não houver evidência suficiente, diga em português simples o que não encontrou.",
-    "A consulta é SOMENTE LEITURA. Nunca execute nem proponha alteração de dados.",
-    `Usuário autenticado: ${person} (${role}).`,
-    `ESCOPO OBRIGATÓRIO: ${scopeInstruction}`,
-    allowedClientsText,
-    conversationContext,
-    `PERGUNTA ATUAL: ${question}`,
+    "Fale como alguém da equipe: português do Brasil, natural, direto, curto e útil. Não fale como banco de dados, documentação ou suporte técnico.",
+    "Entenda primeiro a intenção operacional. Depois consulte os dados. Só então responda.",
+    "Nunca mostre nomes de tabela, schema, coluna, enum, stage_code, current_stage ou códigos internos, salvo se o usuário pedir tecnicamente.",
+    "Vocabulário: carteira = clientes atribuídos ao GT; task feita = task concluída; integração = integração com GT; campanha ativa sem entrega = campanha ativa que não está entregando; campanha rodando = ativa e entregando.",
+    "Quando perguntarem quem vendeu mais por cliente, use os relatórios comerciais semanais e a métrica de vendas reportadas. Não confunda resultado/leads do Meta com venda.",
+    "Se só houver dados de poucos clientes, diga isso claramente em vez de inventar ranking geral.",
+    "Aceite fala informal e erro de digitação. Perguntas curtas como 'por cliente', 'e o Yuri?', 'e hoje?' podem continuar a pergunta anterior.",
+    "Se houver interpretação claramente mais provável, assuma e responda. Só peça esclarecimento se houver duas interpretações humanas realmente plausíveis e a resposta mudar bastante.",
+    "Use America/Sao_Paulo para datas relativas. Nunca invente fatos, números, responsáveis, datas ou evidências.",
+    "Consulta somente leitura.",
+    `Usuário: ${person} (${role}).`,
+    `Escopo: ${scope}`,
+    allowedClients,
+    last,
+    `Pergunta atual: ${question}`,
   ].filter(Boolean).join("\n\n");
 }
 
-Deno.serve(async (req: Request) => {
+Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (req.method !== "POST") return reply({ ok: false, error: "method_not_allowed" }, 405);
-
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!supabaseUrl || !anonKey || !serviceRole) return reply({ ok: false, error: "server_configuration" }, 500);
-
   const authHeader = req.headers.get("Authorization") ?? "";
   if (!authHeader.startsWith("Bearer ")) return reply({ ok: false, error: "unauthorized" }, 401);
   const auth = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } }, auth: { persistSession: false, autoRefreshToken: false } });
   const { data: userData } = await auth.auth.getUser();
   const user = userData?.user;
   if (!user) return reply({ ok: false, error: "unauthorized" }, 401);
-
   const db = createClient(supabaseUrl, serviceRole, { auth: { persistSession: false, autoRefreshToken: false } });
   const ops = db.schema("agency_ops");
   const [{ data: pref }, { data: approvals }] = await Promise.all([
@@ -607,7 +483,6 @@ Deno.serve(async (req: Request) => {
   if (!person || !(approvals ?? []).length) return reply({ ok: false, error: "OpsQuestion indisponível: conta ainda não liberada." }, 403);
   const { data: roster } = await ops.from("team_roster").select("person,role,access_level").eq("person", person).eq("is_former", false).maybeSingle();
   if (!roster) return reply({ ok: false, error: "OpsQuestion indisponível: colaborador não está ativo." }, 403);
-
   const role = String(roster.role ?? "");
   const accessLevel = String(roster.access_level ?? "RESTRICTED");
   const body = await req.json().catch(() => ({}));
@@ -616,38 +491,47 @@ Deno.serve(async (req: Request) => {
   if (question.length > 2500) return reply({ ok: false, error: "question_too_long", max_chars: 2500 }, 400);
 
   let scopeLabel = "COMPANY_READ_ONLY";
-  let scopeInstruction = "Pode consultar a base operacional da empresa em modo somente leitura.";
-  let scopedClients: Array<{ id: string; display_name: string }> = [];
+  let scope = "Pode consultar a base operacional da empresa em modo somente leitura.";
+  let scopedClients = [];
   if (role === "GT") {
     scopeLabel = "GT_PORTFOLIO_READ_ONLY";
-    scopeInstruction = `Responda somente sobre clientes da carteira de ${person}.`;
+    scope = `Responda somente sobre clientes da carteira de ${person}.`;
     const { data } = await ops.from("clients").select("id,display_name").eq("gt_owner", person).in("lifecycle", ["ACTIVE", "ONBOARDING"]).order("display_name");
-    scopedClients = (data ?? []).map((row: any) => ({ id: String(row.id), display_name: String(row.display_name) }));
+    scopedClients = data ?? [];
   } else if (role === "DESIGN") {
     scopeLabel = "DESIGN_SELF_READ_ONLY";
-    scopeInstruction = `Priorize somente produtividade própria e trabalho de design associado a ${person}. Não revele saúde, financeiro ou carteira de outros usuários.`;
+    scope = `Priorize produtividade própria e trabalho de design de ${person}.`;
   } else if (role === "CS") {
     scopeLabel = "CS_SHARED_BASE_READ_ONLY";
-    scopeInstruction = "Os CS atendem a base compartilhada; pode consultar os clientes da operação em modo somente leitura.";
-  } else if (role === "MGMT" || role === "AI") {
+    scope = "Pode consultar a base compartilhada dos CS em modo somente leitura.";
+  } else if (["MGMT", "AI"].includes(role)) {
     scopeLabel = "FULL_READ_ONLY";
-    scopeInstruction = "Pode consultar a visão operacional ampla em modo somente leitura.";
+    scope = "Pode consultar a visão operacional ampla em modo somente leitura.";
   }
 
-  const { data: previousRows } = await ops.from("opsquestion_interactions").select("question,answer,created_at").eq("user_key", user.id).eq("status", "SUCCESS").order("created_at", { ascending: false }).limit(1);
+  const { data: previousRows } = await ops.from("opsquestion_interactions")
+    .select("question,answer,created_at")
+    .eq("user_key", user.id)
+    .eq("status", "SUCCESS")
+    .order("created_at", { ascending: false })
+    .limit(1);
   const previous = previousRows?.[0] ?? null;
   const requestId = crypto.randomUUID();
   const started = Date.now();
 
   try {
-    const direct = await directDbAnswer(ops, role, String(person), question, previous?.question ?? null);
+    const direct = await fastAnswer(ops, role, String(person), question, previous?.question ?? null);
     if (direct) {
       const latency = Date.now() - started;
-      await ops.from("opsquestion_interactions").insert({ user_key: user.id, person, role, access_level: accessLevel, question, status: "SUCCESS", source: direct.source, answer: direct.answer.slice(0, 20000), request_id: requestId, latency_ms: latency, answered_at: new Date().toISOString() });
+      await ops.from("opsquestion_interactions").insert({
+        user_key: user.id, person, role, access_level: accessLevel, question,
+        status: "SUCCESS", source: direct.source, answer: direct.answer.slice(0, 20000),
+        request_id: requestId, latency_ms: latency, answered_at: new Date().toISOString(),
+      });
       return reply({ ok: true, name: "OpsQuestion", answer: direct.answer, source: "Base operacional · resposta rápida", read_only: true, mode: direct.source, intent: direct.intent, scope: scopeLabel, request_id: requestId, latency_ms: latency, generated_at: new Date().toISOString() });
     }
-  } catch (err) {
-    console.error("[opsquestion-fast-lane]", errorText(err));
+  } catch (e) {
+    console.error("[opsquestion-fast-lane]", errText(e));
   }
 
   const since = new Date(Date.now() - 60_000).toISOString();
@@ -665,13 +549,10 @@ Deno.serve(async (req: Request) => {
   const readSecret = typeof secretCfg?.value === "string" ? secretCfg.value : null;
   let routeMode = directUrl ? "DIRECT_AI_TEAM" : makeUrl ? "MAKE_AI_TEAM" : "CLOUDFLARE_AI_FALLBACK";
   await ops.from("opsquestion_interactions").insert({ user_key: user.id, person, role, access_level: accessLevel, question, status: "PENDING", source: routeMode, request_id: requestId });
+  const allowedClients = role === "GT" ? `Clientes permitidos: ${scopedClients.map((c) => c.display_name).join("; ") || "nenhum"}.` : "";
+  const prompt = operationalPrompt(String(person), role, scope, allowedClients, question, previous);
 
-  const allowedClientsText = role === "GT" ? `Clientes permitidos nesta carteira: ${scopedClients.length ? scopedClients.map((c) => c.display_name).join("; ") : "nenhum cliente ativo/onboarding encontrado"}.` : "";
-  const prompt = operationalPrompt(String(person), role, scopeInstruction, allowedClientsText, question, previous);
-
-  let answer: string | null = null;
-  let primaryError: string | null = null;
-  let fallbackError: string | null = null;
+  let answer = null, primaryError = null, fallbackError = null;
   if (webhookUrl && readSecret) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), DIRECT_AI_TIMEOUT_MS);
@@ -679,34 +560,36 @@ Deno.serve(async (req: Request) => {
       const response = await fetch(webhookUrl, {
         method: "POST",
         headers: { "content-type": "application/json", "x-ai-read-secret": readSecret },
-        body: JSON.stringify({ question: prompt, original_question: question, source: "OpsQuestion", request_id: requestId, user: { person, role, access_level: accessLevel, scope: scopeLabel, allowed_clients: scopedClients }, constraints: { read_only: true, schema: "agency_ops", timezone: "America/Sao_Paulo", no_invention: true, human_language: true, hide_technical_identifiers: true, infer_common_operational_meaning: true } }),
+        body: JSON.stringify({
+          question: prompt, original_question: question, source: "OpsQuestion", request_id: requestId,
+          user: { person, role, access_level: accessLevel, scope: scopeLabel, allowed_clients: scopedClients },
+          constraints: { read_only: true, schema: "agency_ops", timezone: "America/Sao_Paulo", no_invention: true, human_language: true, hide_technical_identifiers: true, infer_common_operational_meaning: true },
+        }),
         signal: controller.signal,
       });
       const raw = await response.text();
-      let parsed: unknown = null;
-      try { parsed = raw ? JSON.parse(raw) : null; } catch { parsed = null; }
+      let parsed = null;
+      try { parsed = raw ? JSON.parse(raw) : null; } catch {}
       answer = response.ok ? safeAnswer(parsed, raw) : null;
       if (!response.ok) primaryError = `http_${response.status}`;
       else if (!answer) primaryError = "empty_ai_answer";
-    } catch (err) {
-      primaryError = err instanceof DOMException && err.name === "AbortError" ? "direct_ai_timeout" : errorText(err);
+    } catch (e) {
+      primaryError = e instanceof DOMException && e.name === "AbortError" ? "direct_ai_timeout" : errText(e);
     } finally { clearTimeout(timeout); }
   } else if (webhookUrl && !readSecret) primaryError = "missing_ai_read_secret";
   else primaryError = "direct_ai_not_configured";
 
   if (!answer) {
     try { answer = await cloudflareFallback(authHeader, question); routeMode = "CLOUDFLARE_AI_FALLBACK"; }
-    catch (err) { fallbackError = errorText(err); }
+    catch (e) { fallbackError = errText(e); }
   }
-
   const latency = Date.now() - started;
   if (!answer) {
     const error = [primaryError, fallbackError].filter(Boolean).join(" | ").slice(0, 500) || "ai_unavailable";
     await ops.from("opsquestion_interactions").update({ status: "ERROR", error, latency_ms: latency, answered_at: new Date().toISOString() }).eq("request_id", requestId);
     return reply({ ok: false, error: "Falha temporária no OpsQuestion.", detail: error, request_id: requestId }, 502);
   }
-
-  answer = humanizeAiAnswer(answer);
+  answer = humanize(answer);
   await ops.from("opsquestion_interactions").update({ status: "SUCCESS", source: routeMode, answer: answer.slice(0, 20000), error: primaryError && routeMode === "CLOUDFLARE_AI_FALLBACK" ? `primary_failed:${primaryError}`.slice(0, 500) : null, latency_ms: latency, answered_at: new Date().toISOString() }).eq("request_id", requestId);
   return reply({ ok: true, name: "OpsQuestion", answer, source: routeMode === "CLOUDFLARE_AI_FALLBACK" ? "Base operacional · IA de contingência" : "Base operacional · análise IA", read_only: true, mode: routeMode, scope: scopeLabel, request_id: requestId, latency_ms: latency, generated_at: new Date().toISOString() });
 });
