@@ -8,7 +8,7 @@ const CORS = {
 };
 
 const CLOUDFLARE_AI_BASE = "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/api/ai";
-const DIRECT_AI_TIMEOUT_MS = 25_000;
+const DIRECT_AI_TIMEOUT_MS = 55_000;
 
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -24,6 +24,74 @@ function safeAnswer(body: any, raw: string): string | null {
 
 function errorText(error: unknown): string {
   return String(error instanceof Error ? error.message : error).slice(0, 500);
+}
+
+function norm(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+async function directDbAnswer(ops: any, role: string, person: string, question: string): Promise<{ answer: string; source: string } | null> {
+  const q = norm(question);
+
+  const asksOnboarding = q.includes("onboarding") && /\b(qual|quais|quem|lista|listar|estao|cliente|clientes|quantos|quantas)\b/.test(q);
+  if (asksOnboarding) {
+    let query = ops.from("clients")
+      .select("id,display_name,lifecycle,gt_owner,cs_owner,designer_owner")
+      .eq("lifecycle", "ONBOARDING")
+      .order("display_name");
+
+    if (role === "GT") query = query.eq("gt_owner", person);
+    if (role === "DESIGN") query = query.eq("designer_owner", person);
+
+    const { data, error } = await query;
+    if (error) throw new Error(`direct_db_onboarding:${error.message}`);
+    const rows = data ?? [];
+
+    if (!rows.length) {
+      return {
+        answer: role === "GT"
+          ? `Não há clientes em onboarding atribuídos à carteira de ${person} neste momento.`
+          : "Não há clientes em onboarding neste momento.",
+        source: "DIRECT_DB_TEAM",
+      };
+    }
+
+    const lines = rows.map((row: any) => {
+      const gt = row.gt_owner ? ` — GT: ${row.gt_owner}` : " — GT ainda não definido";
+      return `• ${row.display_name}${gt}`;
+    });
+
+    return {
+      answer: `Há ${rows.length} ${rows.length === 1 ? "cliente" : "clientes"} em onboarding:\n${lines.join("\n")}`,
+      source: "DIRECT_DB_TEAM",
+    };
+  }
+
+  const asksActiveCount = /\b(quantos|quantas|total)\b/.test(q)
+    && /\b(cliente|clientes)\b/.test(q)
+    && /\b(ativo|ativos|operacao)\b/.test(q);
+
+  if (asksActiveCount) {
+    let query = ops.from("clients").select("id", { count: "exact", head: true }).eq("lifecycle", "ACTIVE");
+    if (role === "GT") query = query.eq("gt_owner", person);
+    if (role === "DESIGN") query = query.eq("designer_owner", person);
+    const { count, error } = await query;
+    if (error) throw new Error(`direct_db_active_count:${error.message}`);
+    const total = count ?? 0;
+    return {
+      answer: role === "GT"
+        ? `${person} tem ${total} ${total === 1 ? "cliente ativo" : "clientes ativos"} na carteira.`
+        : `Há ${total} ${total === 1 ? "cliente ativo" : "clientes ativos"} na operação.`,
+      source: "DIRECT_DB_TEAM",
+    };
+  }
+
+  return null;
 }
 
 async function cloudflareFallback(authHeader: string, question: string): Promise<string> {
@@ -152,6 +220,43 @@ Deno.serve(async (req: Request) => {
     scopeInstruction = "O usuário possui visão operacional ampla. Pode consultar a base da empresa em modo somente leitura.";
   }
 
+  const requestId = crypto.randomUUID();
+  const started = Date.now();
+
+  try {
+    const direct = await directDbAnswer(ops, role, String(person), question);
+    if (direct) {
+      const latency = Date.now() - started;
+      await ops.from("opsquestion_interactions").insert({
+        user_key: user.id,
+        person,
+        role,
+        access_level: accessLevel,
+        question,
+        status: "SUCCESS",
+        source: direct.source,
+        answer: direct.answer.slice(0, 20000),
+        request_id: requestId,
+        latency_ms: latency,
+        answered_at: new Date().toISOString(),
+      });
+      return reply({
+        ok: true,
+        name: "OpsQuestion",
+        answer: direct.answer,
+        source: "agency_ops · consulta direta",
+        read_only: true,
+        mode: direct.source,
+        scope: scopeLabel,
+        request_id: requestId,
+        latency_ms: latency,
+        generated_at: new Date().toISOString(),
+      });
+    }
+  } catch (err) {
+    console.error("[opsquestion-direct-db]", errorText(err));
+  }
+
   const [{ data: endpointCfg }, { data: webhookCfg }, { data: secretCfg }] = await Promise.all([
     ops.from("automation_settings").select("value").eq("key", "AI_ASK_ENDPOINT_URL").maybeSingle(),
     ops.from("automation_settings").select("value").eq("key", "MAKE_AI_ASK_WEBHOOK_URL").maybeSingle(),
@@ -163,8 +268,6 @@ Deno.serve(async (req: Request) => {
   const webhookUrl = directUrl ?? makeUrl;
   const readSecret = typeof secretCfg?.value === "string" ? secretCfg.value : null;
 
-  const requestId = crypto.randomUUID();
-  const started = Date.now();
   let routeMode = directUrl ? "DIRECT_AI_TEAM" : makeUrl ? "MAKE_AI_TEAM" : "CLOUDFLARE_AI_FALLBACK";
 
   await ops.from("opsquestion_interactions").insert({
