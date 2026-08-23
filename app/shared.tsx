@@ -1,12 +1,7 @@
 "use client";
 
-// Camada compartilhada: constantes, tipos, formatadores e primitivas visuais.
-// Estava tudo no mesmo arquivo de 1600 linhas que as telas tambem ocupam, entao
-// qualquer ajuste de layout disputava o mesmo arquivo com qualquer ajuste de
-// formatacao. Aqui fica o que todo mundo importa e quase ninguem edita.
-
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createClient, type Session } from "@supabase/supabase-js";
+import { useEffect, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
 
 export const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
 export const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
@@ -15,16 +10,11 @@ export const CONTRACTS_API = `${SUPABASE_URL}/functions/v1/agency-ops-contracts-
 export const CLICKUP_API_URL = `${SUPABASE_URL}/functions/v1/clickup-sync-api`;
 export const CS_CLIENTS_API = `${SUPABASE_URL}/functions/v1/agency-ops-cs-clients-api`;
 export const WORK_ITEM_CREATE_API = `${SUPABASE_URL}/functions/v1/agency-ops-work-item-create-api`;
-// Backend da IA roda na VPS Hostinger, atras do mesmo dominio do Dashboard.
-// Same-origin de proposito: nenhum preflight de CORS e nenhuma credencial
-// privilegiada precisa transitar pelo navegador.
 export const AI_API_BASE = "/api/ai";
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// O dashboard aceita a mesma conta em mais de um computador. O logout padrao do
-// Supabase pode revogar outras sessoes; aqui qualquer signOut() sem escopo passa a
-// encerrar somente esta sessao/browser. Chamadas que precisem explicitamente de outro
-// escopo ainda podem informa-lo normalmente.
+// O dashboard aceita a mesma conta em mais de um computador. Logout sem escopo
+// encerra somente esta sessao/browser, sem revogar as demais sessoes da conta.
 const rawSignOut = supabase.auth.signOut.bind(supabase.auth);
 supabase.auth.signOut = ((options?: Parameters<typeof rawSignOut>[0]) => rawSignOut(options ?? { scope: "local" })) as typeof supabase.auth.signOut;
 
@@ -47,8 +37,15 @@ export type TeamMember = {
   clients_touched: number;
   tasks_created_total: number;
   tasks_created_30d: number;
-  portfolio: Array<{ client_id: string; display_name: string; priority: "ATTENTION" | "FOLLOW_UP" | "OK" | "DATA_INCOMPLETE" | "UNDETERMINED" | null; lifecycle: "ACTIVE" | "ONBOARDING"; next_step: string | null }>;
+  portfolio: Array<{
+    client_id: string;
+    display_name: string;
+    priority: "ATTENTION" | "FOLLOW_UP" | "OK" | "DATA_INCOMPLETE" | "UNDETERMINED" | null;
+    lifecycle: "ACTIVE" | "ONBOARDING";
+    next_step: string | null;
+  }>;
 };
+
 export type HomeData = {
   kpis: Row;
   clients: Row[];
@@ -102,8 +99,6 @@ export function formatMoney(value: unknown) {
   }).format(Number(value || 0));
 }
 
-// Simbolo da Leonardo Imobi: o retangulo com a haste esquerda estendida formando o
-// "L", e as duas cunhas inclinadas. Inline em SVG para escalar sem arquivo externo.
 export function BrandMark() {
   return <svg viewBox="0 0 276 390" role="img" aria-label="Leonardo Imobi" fill="none">
     <rect x="6.5" y="6.5" width="263" height="252" stroke="currentColor" strokeWidth="13" />
@@ -151,38 +146,31 @@ export function healthScore(client: Row) {
   return Math.max(0, score);
 }
 
-// Painel sobreposto precisa prender o foco. Sem isso o Tab continua passeando pelo
-// conteudo atras do painel: quem usa teclado perde a referencia de onde esta, e o
-// leitor de tela le' a pagina inteira em vez do dialogo. Ao fechar, o foco volta
-// para o elemento que abriu.
 export function useDialogFocus(close: () => void) {
   const ref = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    const anterior = document.activeElement as HTMLElement | null;
-    const focaveis = () => Array.from(
+    const previous = document.activeElement as HTMLElement | null;
+    const focusables = () => Array.from(
       ref.current?.querySelectorAll<HTMLElement>(
         'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
       ) ?? []
-    ).filter((el) => el.offsetParent !== null);
-    focaveis()[0]?.focus();
-    function aoTeclar(evento: KeyboardEvent) {
-      if (evento.key === "Escape") { evento.stopPropagation(); close(); return; }
-      if (evento.key !== "Tab") return;
-      const itens = focaveis();
-      if (!itens.length) return;
-      const primeiro = itens[0], ultimo = itens[itens.length - 1];
-      if (evento.shiftKey && document.activeElement === primeiro) { evento.preventDefault(); ultimo.focus(); }
-      else if (!evento.shiftKey && document.activeElement === ultimo) { evento.preventDefault(); primeiro.focus(); }
+    ).filter((element) => element.offsetParent !== null);
+    focusables()[0]?.focus();
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") { event.stopPropagation(); close(); return; }
+      if (event.key !== "Tab") return;
+      const items = focusables();
+      if (!items.length) return;
+      const first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     }
-    document.addEventListener("keydown", aoTeclar);
-    return () => { document.removeEventListener("keydown", aoTeclar); anterior?.focus?.(); };
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("keydown", onKey); previous?.focus?.(); };
   }, [close]);
   return ref;
 }
 
-// Alguns campos chegam com marcador interno do coletor, tipo
-// "[SEM TEXTO RECONHECIDO - VER RAW_JSON]". Isso e' recado de sistema, nao assunto
-// do cliente: quem le' a lista precisa de contexto, nao de um ponteiro para o log.
 export const MARCADOR_INTERNO = /^\s*\[?\s*(sem texto reconhecido|ver raw_json|raw_json|sem conte[uú]do|sem texto|null|undefined)\b/i;
 export function text(value: unknown) {
   if (value === null || value === undefined || value === "") return "—";
@@ -195,12 +183,12 @@ export function initials(value: unknown) {
   return String(value || "CO").trim().split(/\s+/).map((part) => part[0]).slice(0,2).join("").toUpperCase();
 }
 
-// Todas as chamadas autenticadas passam por esta camada. Chamadas que ja possuem
-// o token da sessao usam esse token diretamente; as demais compartilham uma unica
-// leitura de sessao concorrente. Refresh so acontece depois de um 401 real e tambem
-// e compartilhado. Isso evita tempestade de getSession/refresh durante a montagem.
+// Uma pagina do dashboard monta varios consumidores do mesmo payload home. A camada
+// abaixo impede que uma resposta 401 de uma requisicao atrasada derrube uma sessao
+// que ja foi renovada por outra requisicao concorrente.
 let accessTokenPromise: Promise<string | null> | null = null;
 let refreshSessionPromise: Promise<string | null> | null = null;
+let homeRequest: { token: string; promise: Promise<any> } | null = null;
 
 export class SessionExpiredError extends Error {
   code = "SESSION_EXPIRED";
@@ -239,28 +227,49 @@ function authHeaders(init: RequestInit, token: string) {
 }
 
 export async function authenticatedFetch(input: RequestInfo | URL, init: RequestInit = {}, tokenHint?: string | null): Promise<Response> {
-  const currentToken = tokenHint || await liveAccessToken();
-  if (!currentToken) throw new SessionExpiredError();
+  const initialToken = tokenHint || await liveAccessToken();
+  if (!initialToken) throw new SessionExpiredError();
 
-  const request = (token: string) => fetch(input, { ...init, headers: authHeaders(init, token) });
-  let response = await request(currentToken);
-  if (response.status !== 401) return response;
+  const attempted = new Set<string>();
+  const request = async (token: string | null): Promise<Response | null> => {
+    if (!token || attempted.has(token)) return null;
+    attempted.add(token);
+    return fetch(input, { ...init, headers: authHeaders(init, token) });
+  };
+
+  let lastResponse = await request(initialToken);
+  if (lastResponse && lastResponse.status !== 401) return lastResponse;
+
+  // Se outro consumidor ja renovou a sessao enquanto esta requisicao estava no ar,
+  // usa o token novo antes de tentar qualquer refresh adicional.
+  const liveToken = await liveAccessToken();
+  const liveResponse = await request(liveToken);
+  if (liveResponse) {
+    lastResponse = liveResponse;
+    if (liveResponse.status !== 401) return liveResponse;
+  }
 
   const refreshedToken = await refreshAccessToken();
-  if (!refreshedToken) {
-    await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
-    throw new SessionExpiredError();
+  const refreshedResponse = await request(refreshedToken);
+  if (refreshedResponse) {
+    lastResponse = refreshedResponse;
+    if (refreshedResponse.status !== 401) return refreshedResponse;
   }
 
-  response = await request(refreshedToken);
-  if (response.status === 401) {
-    await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
-    throw new SessionExpiredError();
+  // Uma segunda leitura cobre o caso em que um refresh paralelo terminou depois do
+  // nosso refresh. O ponto crucial: um 401 isolado NAO executa signOut automaticamente.
+  const finalLiveToken = await liveAccessToken();
+  const finalResponse = await request(finalLiveToken);
+  if (finalResponse) {
+    lastResponse = finalResponse;
+    if (finalResponse.status !== 401) return finalResponse;
   }
-  return response;
+
+  if (lastResponse) return lastResponse;
+  throw new SessionExpiredError();
 }
 
-export async function api(view: string, token: string, params: Record<string, string> = {}) {
+async function executeApi(view: string, token: string, params: Record<string, string>) {
   const url = new URL(API_URL);
   url.searchParams.set("view", view);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
@@ -268,9 +277,6 @@ export async function api(view: string, token: string, params: Record<string, st
   if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
   const json = await response.json();
 
-  // CS precisa abrir solicitações para qualquer cliente da operação. O endpoint
-  // principal continua com o escopo histórico de CS, então enriquecemos o payload
-  // do home por uma rota autenticada específica, sem elevar o perfil inteiro.
   if (view === "home" && json?.profile?.role === "CS") {
     try {
       const clientResponse = await authenticatedFetch(CS_CLIENTS_API, { cache: "no-store" }, token);
@@ -282,20 +288,31 @@ export async function api(view: string, token: string, params: Record<string, st
         }
       }
     } catch {
-      // Falha complementar não derruba o dashboard; a API principal continua válida.
+      // O enriquecimento de CS e complementar e nunca derruba o home.
     }
   }
 
-  // Defesa em profundidade no navegador: GT nunca recebe na Central de Notificações
-  // evento de cliente fora da própria carteira. Notificação sem client_id também não
-  // entra para GT, evitando ruído genérico e vazamento entre carteiras. Alertas de
-  // saldo seguem exatamente a mesma regra porque também carregam client_id.
   if (view === "home" && json?.profile?.role === "GT") {
     const walletIds = new Set((json.clients || []).map((client: Row) => String(client.client_id)).filter(Boolean));
     json.notifications = (json.notifications || []).filter((item: Row) => item?.client_id && walletIds.has(String(item.client_id)));
   }
 
   return json;
+}
+
+export async function api(view: string, token: string, params: Record<string, string> = {}) {
+  // page.tsx, DashboardEnhancementsGate, AdlerSidebar e DashboardEnhancements pedem
+  // home praticamente no mesmo instante. Para o mesmo token todos recebem a mesma
+  // Promise e somente UMA requisicao sai para a Edge Function.
+  if (view === "home" && Object.keys(params).length === 0) {
+    if (homeRequest?.token === token) return homeRequest.promise;
+    const promise = executeApi(view, token, params).finally(() => {
+      if (homeRequest?.promise === promise) homeRequest = null;
+    });
+    homeRequest = { token, promise };
+    return promise;
+  }
+  return executeApi(view, token, params);
 }
 
 export async function apiPost(view: string, token: string, body: Row = {}) {
@@ -350,19 +367,14 @@ export function Metric({ label, value, tone = "", hint = "", loading = false }: 
   );
 }
 
-// A notificacao de tarefa concluida carrega DUAS pessoas diferentes, e elas ja'
-// foram confundidas na tela: quem fechou a task (actor, do evento real de
-// mudanca de status no ClickUp) nao e' necessariamente o responsavel (assignee
-// da task). Aqui a leitura separa as duas, para o painel nunca mais dizer que o
-// responsavel concluiu.
 const MARCA_RESPONSAVEL = " · Responsável pela task: ";
 export function taskCompletion(item: Row) {
   const description = String(item?.description ?? "");
-  const corte = description.indexOf(MARCA_RESPONSAVEL);
-  if (corte < 0) return null;
+  const cut = description.indexOf(MARCA_RESPONSAVEL);
+  if (cut < 0) return null;
   return {
-    tarefa: description.slice(0, corte).trim(),
-    responsavel: description.slice(corte + MARCA_RESPONSAVEL.length).trim() || null,
+    tarefa: description.slice(0, cut).trim(),
+    responsavel: description.slice(cut + MARCA_RESPONSAVEL.length).trim() || null,
     concluidaPor: item?.actor ? String(item.actor) : null,
   };
 }
