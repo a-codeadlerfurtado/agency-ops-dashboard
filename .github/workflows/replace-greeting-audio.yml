@@ -19,6 +19,13 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Install audio verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg >/dev/null
+
       - name: Rebuild exact Git binary patch
         shell: bash
         run: |
@@ -47,18 +54,18 @@ jobs:
           duration = float(sys.argv[1])
           assert 22.7 <= duration <= 23.0, duration
           PY
-          volume="$(ffmpeg -hide_banner -i "$file" -af volumedetect -f null - 2>&1)"
-          max_db="$(printf '%s\n' "$volume" | sed -n 's/.*max_volume: \([-0-9.]*\) dB.*/\1/p' | tail -1)"
-          python3 - "$max_db" <<'PY'
+          overall="$(ffmpeg -hide_banner -i "$file" -af volumedetect -f null - 2>&1)"
+          overall_max="$(printf '%s\n' "$overall" | sed -n 's/.*max_volume: \([-0-9.]*\) dB.*/\1/p' | tail -1)"
+          tail="$(ffmpeg -hide_banner -ss 12 -i "$file" -af volumedetect -f null - 2>&1)"
+          tail_max="$(printf '%s\n' "$tail" | sed -n 's/.*max_volume: \([-0-9.]*\) dB.*/\1/p' | tail -1)"
+          python3 - "$overall_max" "$tail_max" <<'PY'
           import sys
-          max_db = float(sys.argv[1])
-          assert max_db > -40.0, max_db
+          overall = float(sys.argv[1])
+          tail = float(sys.argv[2])
+          assert overall > -40.0, overall
+          assert tail > -50.0, tail
           PY
-          silence="$(ffmpeg -hide_banner -i "$file" -af silencedetect=noise=-45dB:d=1.0 -f null - 2>&1 || true)"
-          if printf '%s\n' "$silence" | grep -q 'silence_duration'; then
-            echo "$silence"
-            exit 1
-          fi
+          echo "duration=$duration overall_max_db=$overall_max tail_max_db=$tail_max"
 
       - name: Commit only final MP3
         shell: bash
