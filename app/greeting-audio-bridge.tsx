@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-const AUDIO_URL = "/audio/opsquestion-greeting-full-v6.mp3?v=20260822-webaudio-static-v16";
+const AUDIO_URL = "/audio/opsquestion-greeting-full-v6.mp3?v=20260822-webaudio-static-v17";
 const FALLBACK_DURATION = 22.824;
 
 function emit(name: string, detail?: Record<string, unknown>) {
@@ -38,7 +38,7 @@ export default function GreetingAudioBridge() {
 
     const loadDecodedBuffer = async () => {
       const response = await fetch(AUDIO_URL, {
-        cache: "force-cache",
+        cache: "no-store",
         credentials: "same-origin",
       });
       if (!response.ok) throw new Error(`Falha ao carregar MP3 (${response.status})`);
