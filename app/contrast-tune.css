@@ -1,32 +1,66 @@
 /*
  * Dark-theme contrast + accent tune.
- * Neutral graphite base with clearly visible orange + light-blue accents.
- * Light theme intentionally untouched.
+ * Neutral graphite base with semantic orange + light-blue accents.
+ * Orange = action/priority, light blue = information/interaction,
+ * green/yellow/red = operational status. Light theme intentionally untouched.
  */
 :root:not([data-theme="light"]) {
   --bg: #070a0d;
   --panel: #14191e;
   --panel2: #0e1317;
   --line: #35414b;
+  --text: #edf4f8;
+  --muted: #a6b4bf;
   --blue: #76c6ff;
   --accent: #ff7a2f;
   --accent-soft: rgba(255, 122, 47, 0.18);
   --wash: rgba(118, 198, 255, 0.085);
+  --shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
 }
 
 :root:not([data-theme="light"]) body {
   background:
-    radial-gradient(circle at 10% -8%, rgba(118, 198, 255, 0.12), transparent 29rem),
-    radial-gradient(circle at 92% 1%, rgba(255, 122, 47, 0.15), transparent 27rem),
+    radial-gradient(circle at 10% -8%, rgba(118, 198, 255, 0.10), transparent 29rem),
+    radial-gradient(circle at 92% 1%, rgba(255, 122, 47, 0.13), transparent 27rem),
     var(--bg) !important;
 }
 
-:root:not([data-theme="light"]) .card {
-  border-color: var(--line);
-  background-color: var(--panel);
+/* Header: quiet graphite surface that ties the palette together. */
+:root:not([data-theme="light"]) .top {
+  position: relative;
+  padding: 10px 12px;
+  margin: -8px -10px 22px;
+  border: 1px solid rgba(118, 198, 255, 0.10);
+  border-radius: 14px;
+  background: linear-gradient(100deg, rgba(118, 198, 255, 0.045), rgba(255, 122, 47, 0.035) 55%, rgba(255,255,255,0.012));
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
 }
 
-/* KPI cards: visible alternating orange / light-blue detail */
+:root:not([data-theme="light"]) .top::after {
+  content: "";
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255,122,47,.55), rgba(118,198,255,.28), transparent 72%);
+  pointer-events: none;
+}
+
+/* Main surfaces: hierarchy through tone, not heavy borders. */
+:root:not([data-theme="light"]) .card {
+  border-color: rgba(96, 117, 132, 0.42);
+  background-color: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+:root:not([data-theme="light"]) .executive-grid > article.card,
+:root:not([data-theme="light"]) .standalone.card,
+:root:not([data-theme="light"]) .section.card {
+  background: linear-gradient(180deg, #171d22 0%, #14191e 100%);
+}
+
+/* KPI cards: alternating action/info accent while preserving semantic statuses elsewhere. */
 :root:not([data-theme="light"]) .kpis .metric:nth-child(odd) {
   border-top: 2px solid rgba(255, 122, 47, 0.78);
   background: linear-gradient(155deg, rgba(255, 122, 47, 0.075), transparent 42%), var(--panel);
@@ -45,10 +79,10 @@
   color: #8fd2ff;
 }
 
-/* Navigation: orange active state, light-blue hover */
+/* Navigation: orange means selected/active; light blue means hover/exploration. */
 :root:not([data-theme="light"]) .side-nav {
   background: #0c1115;
-  border-right-color: #35414b;
+  border-right-color: rgba(96, 117, 132, 0.36);
 }
 
 :root:not([data-theme="light"]) .side-nav-items button.active,
@@ -58,6 +92,12 @@
   box-shadow: inset 3px 0 #ff7a2f;
 }
 
+:root:not([data-theme="light"]) .side-nav-items button.active svg,
+:root:not([data-theme="light"]) .side-nav-items a.active svg {
+  color: #ff934f;
+  stroke: currentColor;
+}
+
 :root:not([data-theme="light"]) .side-nav-items button:hover,
 :root:not([data-theme="light"]) .side-nav-items a:hover,
 :root:not([data-theme="light"]) .side-nav-toggle:hover {
@@ -65,29 +105,57 @@
   color: #bfe5ff;
 }
 
-/* Buttons stay dark, but alternate accent is obvious on interaction */
+/* Buttons: neutral by default, orange only for action/priority. */
 :root:not([data-theme="light"]) .btn {
   background: linear-gradient(135deg, #1a2127, #141b20);
-  border-color: #43525e;
+  border-color: rgba(99, 119, 134, 0.56);
 }
 
 :root:not([data-theme="light"]) .btn:hover {
-  border-color: #ff7a2f;
-  box-shadow: 0 0 0 1px rgba(255, 122, 47, 0.16);
-}
-
-:root:not([data-theme="light"]) .theme-btn:hover,
-:root:not([data-theme="light"]) .control:focus {
   border-color: #76c6ff;
   box-shadow: 0 0 0 1px rgba(118, 198, 255, 0.12);
 }
 
-/* Tables and work cards */
+:root:not([data-theme="light"]) .btn.primary,
+:root:not([data-theme="light"]) .btn-primary,
+:root:not([data-theme="light"]) button.primary {
+  background: linear-gradient(135deg, #ff843e, #e9621d) !important;
+  border-color: rgba(255, 154, 97, 0.82) !important;
+  color: #fff !important;
+  box-shadow: 0 8px 20px rgba(255, 122, 47, 0.15);
+}
+
+:root:not([data-theme="light"]) .btn.primary:hover,
+:root:not([data-theme="light"]) .btn-primary:hover,
+:root:not([data-theme="light"]) button.primary:hover {
+  border-color: #ffb084 !important;
+  box-shadow: 0 9px 22px rgba(255, 122, 47, 0.22), 0 0 0 1px rgba(255, 154, 97, 0.12);
+}
+
+/* Light blue is reserved for focus, links and information. */
+:root:not([data-theme="light"]) .theme-btn:hover,
+:root:not([data-theme="light"]) .control:focus {
+  border-color: #76c6ff;
+  box-shadow: 0 0 0 2px rgba(118, 198, 255, 0.10);
+}
+
+:root:not([data-theme="light"]) a:not(.side-nav-items a) {
+  text-decoration-color: rgba(118, 198, 255, 0.35);
+}
+
+/* Tables and work cards: quieter internal separators, clearer hover. */
 :root:not([data-theme="light"]) th {
   background: #151c22;
 }
 
-:root:not([data-theme="light"]) tbody tr:hover {
+:root:not([data-theme="light"]) td,
+:root:not([data-theme="light"]) .alert,
+:root:not([data-theme="light"]) .risk-watch > button {
+  border-color: rgba(91, 109, 122, 0.28);
+}
+
+:root:not([data-theme="light"]) tbody tr:hover,
+:root:not([data-theme="light"]) .risk-watch > button:hover {
   background: rgba(118, 198, 255, 0.075) !important;
 }
 
@@ -95,6 +163,7 @@
 :root:not([data-theme="light"]) .action-card,
 :root:not([data-theme="light"]) .stage button {
   background: #161d23;
+  border-color: rgba(91, 109, 122, 0.38);
 }
 
 :root:not([data-theme="light"]) .action-card:nth-child(odd),
@@ -109,10 +178,11 @@
 
 :root:not([data-theme="light"]) .action-card:hover,
 :root:not([data-theme="light"]) .stage button:hover {
-  border-color: #ff7a2f;
+  border-color: rgba(118, 198, 255, 0.68);
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(118, 198, 255, 0.06);
 }
 
-/* Progress gradients */
+/* Progress/charts: blue is the informational series, orange the comparison/highlight. */
 :root:not([data-theme="light"]) .stage-bar,
 :root:not([data-theme="light"]) .health-rail,
 :root:not([data-theme="light"]) .funnel-row > div {
@@ -124,24 +194,48 @@
   background: linear-gradient(90deg, #ff7a2f 0%, #ff9a61 38%, #76c6ff 100%) !important;
 }
 
-/* Executive / source areas get mixed accents instead of blue-only */
+/* Semantic status colors remain exclusive to operational meaning. */
+:root:not([data-theme="light"]) .green,
+:root:not([data-theme="light"]) .chip.OK,
+:root:not([data-theme="light"]) .chip.COMPLETE,
+:root:not([data-theme="light"]) .chip.DONE,
+:root:not([data-theme="light"]) .chip.COMPLETED {
+  color: var(--green);
+}
+
+:root:not([data-theme="light"]) .yellow,
+:root:not([data-theme="light"]) .chip.FOLLOW_UP,
+:root:not([data-theme="light"]) .chip.MEDIUM,
+:root:not([data-theme="light"]) .chip.PARTIAL {
+  color: var(--yellow);
+}
+
+:root:not([data-theme="light"]) .red,
+:root:not([data-theme="light"]) .chip.ATTENTION,
+:root:not([data-theme="light"]) .chip.CRITICAL,
+:root:not([data-theme="light"]) .chip.HIGH,
+:root:not([data-theme="light"]) .chip.ERROR {
+  color: var(--red);
+}
+
+/* Executive/source areas use mixed accents instead of blue-only decoration. */
 :root:not([data-theme="light"]) .source-banner {
-  border-color: rgba(118, 198, 255, 0.26);
-  background: linear-gradient(90deg, rgba(118, 198, 255, 0.09), rgba(255, 122, 47, 0.08));
+  border-color: rgba(118, 198, 255, 0.22);
+  background: linear-gradient(90deg, rgba(118, 198, 255, 0.08), rgba(255, 122, 47, 0.07));
 }
 
 :root:not([data-theme="light"]) .executive-story {
   background: linear-gradient(
     145deg,
     var(--panel),
-    color-mix(in srgb, #ff7a2f 10%, var(--panel)) 52%,
-    color-mix(in srgb, #76c6ff 10%, var(--panel))
+    color-mix(in srgb, #ff7a2f 9%, var(--panel)) 52%,
+    color-mix(in srgb, #76c6ff 9%, var(--panel))
   ) !important;
 }
 
 :root:not([data-theme="light"]) .panel-heading h3,
 :root:not([data-theme="light"]) .section-title {
-  color: #d9efff;
+  color: #e1f1fb;
 }
 
 :root:not([data-theme="light"]) .eyebrow,
@@ -151,5 +245,35 @@
 
 :root:not([data-theme="light"]) .logo {
   background: linear-gradient(135deg, #214f70 0%, #327eb0 48%, #ff7a2f 145%) !important;
-  box-shadow: 0 10px 28px rgba(118, 198, 255, 0.16), 0 0 0 1px rgba(255, 122, 47, 0.16);
+  box-shadow: 0 10px 28px rgba(118, 198, 255, 0.13), 0 0 0 1px rgba(255, 122, 47, 0.16);
+}
+
+/* Microinteractions: responsive but restrained. */
+:root:not([data-theme="light"]) .btn,
+:root:not([data-theme="light"]) .theme-btn,
+:root:not([data-theme="light"]) .control,
+:root:not([data-theme="light"]) .action-card,
+:root:not([data-theme="light"]) .stage button,
+:root:not([data-theme="light"]) .risk-watch > button,
+:root:not([data-theme="light"]) .side-nav-items button,
+:root:not([data-theme="light"]) .side-nav-items a {
+  transition: background-color 170ms ease, background 170ms ease, border-color 170ms ease, color 170ms ease, box-shadow 170ms ease, transform 170ms ease;
+}
+
+:root:not([data-theme="light"]) .action-card:hover,
+:root:not([data-theme="light"]) .stage button:hover {
+  transform: translateY(-1px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-theme="light"]) .btn,
+  :root:not([data-theme="light"]) .theme-btn,
+  :root:not([data-theme="light"]) .control,
+  :root:not([data-theme="light"]) .action-card,
+  :root:not([data-theme="light"]) .stage button,
+  :root:not([data-theme="light"]) .risk-watch > button,
+  :root:not([data-theme="light"]) .side-nav-items button,
+  :root:not([data-theme="light"]) .side-nav-items a {
+    transition: none;
+  }
 }
