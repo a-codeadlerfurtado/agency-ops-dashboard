@@ -15,14 +15,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Apply exact binary audio
+      - name: Rebuild binary patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .opsq/part-* > .opsq/replace-audio.patch
+      - name: Apply exact audio binary
         shell: bash
         run: |
           set -euo pipefail
           rm -f public/audio/opsquestion-greeting-full-v6.mp3
           git apply --binary .opsq/replace-audio.patch
-          test "$(wc -c < public/audio/opsquestion-greeting-full-v6.mp3)" = "548081"
-          echo "e07b03172248498d36c4d8c9de81bbbb87b372fbda5277aa54d1baab428ac1d0  public/audio/opsquestion-greeting-full-v6.mp3" | sha256sum -c -
+          test "$(wc -c < public/audio/opsquestion-greeting-full-v6.mp3)" = "182784"
+          echo "4417f91b830da09a2a8f63cfeb37edee80b3ac78d835ada4b15997b48f33ef8d  public/audio/opsquestion-greeting-full-v6.mp3" | sha256sum -c -
       - name: Commit only final MP3
         shell: bash
         run: |
