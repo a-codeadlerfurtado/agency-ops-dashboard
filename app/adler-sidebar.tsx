@@ -94,6 +94,7 @@ export default function AdlerSidebar() {
   useEffect(() => {
     if (!isAdler || window.location.pathname !== "/") {
       document.querySelector(".side-nav-items")?.classList.remove("adler-nav-active");
+      document.querySelector(".shell")?.classList.remove("adler-overview-clean");
       setContainer(null);
       return;
     }
@@ -117,8 +118,16 @@ export default function AdlerSidebar() {
       observer.disconnect();
       window.clearInterval(timer);
       document.querySelector(".side-nav-items")?.classList.remove("adler-nav-active");
+      document.querySelector(".shell")?.classList.remove("adler-overview-clean");
     };
   }, [isAdler]);
+
+  useEffect(() => {
+    const shell = document.querySelector(".shell");
+    if (!shell) return;
+    shell.classList.toggle("adler-overview-clean", Boolean(isAdler && activeView === "overview" && window.location.pathname === "/"));
+    return () => shell.classList.remove("adler-overview-clean");
+  }, [isAdler, activeView]);
 
   const allowed = useMemo(() => new Set<string>(Array.isArray(profile?.views) ? profile.views : []), [profile?.views]);
   const can = (view: string) => view === "contracts" ? contractsAvailable : !allowed.size || allowed.has(view);
@@ -202,6 +211,11 @@ export default function AdlerSidebar() {
       .adler-nav-child.active{color:#eef6ff!important;background:rgba(55,139,226,.12)!important;border-color:rgba(75,151,232,.2)!important}
       .adler-nav-single{margin-top:2px}
       .adler-nav-badge{min-width:18px;height:18px;padding:0 5px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:rgba(255,91,105,.14);color:#ff8995;font-size:9px;font-weight:900}
+      .shell.adler-overview-clean > .grid.kpis,
+      .shell.adler-overview-clean > .smart-search,
+      .shell.adler-overview-clean > .attention-box,
+      .shell.adler-overview-clean > .executive-grid,
+      .shell.adler-overview-clean > .media-section{display:none!important}
       .sidebar-collapsed .adler-nav-parent,.sidebar-collapsed .adler-nav-child,.sidebar-collapsed .adler-nav-single{font-size:0!important;padding-left:8px!important;padding-right:8px!important;justify-content:center}
       .sidebar-collapsed .adler-nav-parent span:first-child::first-letter,.sidebar-collapsed .adler-nav-child span:first-child::first-letter,.sidebar-collapsed .adler-nav-single span:first-child::first-letter{font-size:11px}
       .sidebar-collapsed .adler-nav-children{padding-left:0;margin-left:0;border-left:0}
@@ -221,7 +235,7 @@ export default function AdlerSidebar() {
       {can("clickup") && single({ key: "clickup", label: "ClickUp", view: "clickup" })}
       {can("evidence") && single({ key: "evidence", label: "Evidências", view: "evidence" })}
       {can("audit") && single({ key: "audit", label: "Auditoria", view: "audit" })}
-      {contractsAvailable && single({ key: "contracts", label: contractsAvailable ? "Contratos" : "Contratos", view: "contracts" })}
+      {contractsAvailable && single({ key: "contracts", label: "Contratos", view: "contracts" })}
       {single({ key: "ia", label: "IA", href: "/ia" })}
     </div>
   </>, container);
