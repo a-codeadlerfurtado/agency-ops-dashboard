@@ -49,7 +49,9 @@ export default function OpsQuestionWidget() {
 
     try {
       const controller = new AbortController();
-      const timeout = window.setTimeout(() => controller.abort(), 65_000);
+      // A rota principal pode usar até 55s e ainda acionar contingência.
+      // O front não deve matar uma recuperação válida no meio do caminho.
+      const timeout = window.setTimeout(() => controller.abort(), 100_000);
       let response: Response;
       try {
         response = await authenticatedFetch(ASK_URL, {
@@ -71,7 +73,7 @@ export default function OpsQuestionWidget() {
         setMessages((prev) => [...prev, {
           role: "ai",
           text: String(json.answer || "Sem resposta."),
-          source: json.source || "agency_ops",
+          source: json.source || "Base operacional",
           latencyMs: Number(json.latency_ms || 0) || undefined,
         }]);
       }
@@ -84,7 +86,7 @@ export default function OpsQuestionWidget() {
       } else if (error instanceof DOMException && error.name === "AbortError") {
         setMessages((prev) => [...prev, {
           role: "ai",
-          text: "O OpsQuestion demorou demais para responder. Tente uma pergunta mais específica.",
+          text: "Essa consulta passou do tempo de resposta. Tente novamente — não precisa reformular a pergunta.",
         }]);
       } else {
         setMessages((prev) => [...prev, {
@@ -122,7 +124,7 @@ export default function OpsQuestionWidget() {
               <span style={{ width: 28, height: 28, borderRadius: 9, display: "grid", placeItems: "center", background: "rgba(59,130,246,.16)", color: "#93c5fd", fontWeight: 900 }}>✦</span>
               <span style={{ display: "flex", flexDirection: "column" }}>
                 <b style={{ fontSize: 13 }}>OpsQuestion</b>
-                <small style={{ color: "#718399", fontSize: 9.5, marginTop: 2 }}>agency_ops · somente leitura</small>
+                <small style={{ color: "#718399", fontSize: 9.5, marginTop: 2 }}>Base operacional · somente leitura</small>
               </span>
             </div>
             <button onClick={() => setOpen(false)} aria-label="Minimizar OpsQuestion" style={{ border: 0, background: "transparent", color: "#94a3b8", fontSize: 20, cursor: "pointer", padding: "2px 6px" }}>−</button>
@@ -146,7 +148,7 @@ export default function OpsQuestionWidget() {
                 {message.role === "ai" && message.source && <small style={{ display: "block", color: "#617188", fontSize: 9.5, marginTop: 4, paddingLeft: 2 }}>Fonte: {message.source}{message.latencyMs ? ` · ${(message.latencyMs / 1000).toFixed(1)}s` : ""}</small>}
               </div>
             ))}
-            {asking && <div style={{ alignSelf: "flex-start", color: "#8ea0b7", fontSize: 11.5, padding: "7px 9px", background: "#101a28", borderRadius: "10px 10px 10px 3px" }}>Consultando o agency_ops…</div>}
+            {asking && <div style={{ alignSelf: "flex-start", color: "#8ea0b7", fontSize: 11.5, padding: "7px 9px", background: "#101a28", borderRadius: "10px 10px 10px 3px" }}>Consultando a base operacional…</div>}
             <div ref={endRef} />
           </div>
 
