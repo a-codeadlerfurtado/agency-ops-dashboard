@@ -20,7 +20,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .opsq/part-* > .opsq/replace-audio-complete.patch
+          cat .opsq/v16-* > .opsq/replace-audio-complete.patch
 
       - name: Apply exact audio binary
         shell: bash
