@@ -22,6 +22,7 @@ import LearningShortcut from "./learning-shortcut";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
 import MotionSystem from "./motion-system";
 import GreetingAudioBridge from "./greeting-audio-bridge";
+import PreGreetingShield from "./pre-greeting-shield";
 import DailyGreeting from "./daily-greeting-v3";
 
 export const viewport: Viewport = {
@@ -46,6 +47,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       </head>
       <body>
         <GreetingAudioBridge />
+        <PreGreetingShield />
         {children}
         <MotionSystem />
         <AIHeadRouter />
