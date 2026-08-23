@@ -9,20 +9,21 @@ permissions:
 
 jobs:
   replace-audio:
-    if: contains(github.event.head_commit.message, 'stage full greeting audio')
+    if: contains(github.event.head_commit.message, 'stage full greeting audio final')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Rebuild binary patch
+      - name: Rebuild exact Git binary patch
         shell: bash
         run: |
           set -euo pipefail
-          cat .opsq/v16-* > .opsq/replace-audio-complete.patch
+          cat .opsq/final-00 .opsq/final-01 .opsq/final-02 .opsq/final-03 > .opsq/replace-audio-complete.patch
+          test "$(wc -c < .opsq/replace-audio-complete.patch)" = "56867"
 
-      - name: Apply exact audio binary
+      - name: Apply validated MP3 binary
         shell: bash
         run: |
           set -euo pipefail
@@ -45,7 +46,6 @@ jobs:
           PY
           volume="$(ffmpeg -hide_banner -i "$file" -af volumedetect -f null - 2>&1)"
           echo "$volume"
-          echo "$volume" | grep -q 'max_volume:'
           max_db="$(printf '%s\n' "$volume" | sed -n 's/.*max_volume: \([-0-9.]*\) dB.*/\1/p' | tail -1)"
           python3 - "$max_db" <<'PY'
           import sys
