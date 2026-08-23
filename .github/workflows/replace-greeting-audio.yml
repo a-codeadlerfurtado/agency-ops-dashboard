@@ -15,11 +15,6 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Rebuild binary patch
-        shell: bash
-        run: |
-          set -euo pipefail
-          cat .opsq/part-* > .opsq/replace-audio.patch
       - name: Apply exact audio binary
         shell: bash
         run: |
