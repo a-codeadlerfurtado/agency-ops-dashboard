@@ -258,11 +258,26 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
   return response;
 }
 
-export async function api(view: string, _token: string, params: Record<string, string> = {}) {
+export async function api(view: string, token: string, params: Record<string, string> = {}) {
   const url = new URL(API_URL);
   url.searchParams.set("view", view);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  const response = await authenticatedFetch(url, { cache: "no-store" });
+
+  // O home precisa chegar antes de qualquer enriquecimento. No mobile vimos o
+  // preflight do wrapper autenticado sem o GET subsequente, enquanto chamadas com
+  // fetch direto (mesmo token + apikey) passam normalmente. Mantemos o wrapper como
+  // fallback apenas se o token capturado pela tela já tiver vencido.
+  let response: Response;
+  if (view === "home" && token) {
+    response = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY },
+      cache: "no-store",
+    });
+    if (response.status === 401) response = await authenticatedFetch(url, { cache: "no-store" });
+  } else {
+    response = await authenticatedFetch(url, { cache: "no-store" });
+  }
+
   if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
   const json = await response.json();
 
