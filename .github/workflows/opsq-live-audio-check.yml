@@ -1,0 +1,24 @@
+name: OpsQuestion Live Audio Check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  live-audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Install ffmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+      - name: Download audio from live Cloudflare dashboard
+        run: |
+          URL='https://agency-ops-dashboard.lakassessoriadigital.workers.dev/audio/opsquestion-greeting-full-v6.mp3?v=20260822-webaudio-static-v17'
+          curl -fL --no-cache -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' "$URL" -o /tmp/live.mp3
+          echo "LIVE_BYTES=$(wc -c < /tmp/live.mp3)"
+          echo "LIVE_SHA256=$(sha256sum /tmp/live.mp3 | awk '{print $1}')"
+          echo "LIVE_DURATION=$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 /tmp/live.mp3)"
+          ffmpeg -v error -i /tmp/live.mp3 -f null -
