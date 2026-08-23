@@ -15,11 +15,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Rebuild binary patch
         shell: bash
         run: |
           set -euo pipefail
           cat .opsq/part-* > .opsq/replace-audio-complete.patch
+
       - name: Apply exact audio binary
         shell: bash
         run: |
@@ -28,6 +30,34 @@ jobs:
           git apply --binary .opsq/replace-audio-complete.patch
           test "$(wc -c < public/audio/opsquestion-greeting-full-v6.mp3)" = "45981"
           echo "a749d3a2fe4094b19a5c66925ae154170dd9e4aad77b228eb07070dc5598e0b0  public/audio/opsquestion-greeting-full-v6.mp3" | sha256sum -c -
+
+      - name: Verify full audible MP3
+        shell: bash
+        run: |
+          set -euo pipefail
+          file="public/audio/opsquestion-greeting-full-v6.mp3"
+          ffmpeg -v error -i "$file" -f null -
+          duration="$(ffprobe -v error -show_entries format=duration -of default=nw=1:nk=1 "$file")"
+          python3 - "$duration" <<'PY'
+          import sys
+          duration = float(sys.argv[1])
+          assert 22.7 <= duration <= 23.0, duration
+          PY
+          volume="$(ffmpeg -hide_banner -i "$file" -af volumedetect -f null - 2>&1)"
+          echo "$volume"
+          echo "$volume" | grep -q 'max_volume:'
+          max_db="$(printf '%s\n' "$volume" | sed -n 's/.*max_volume: \([-0-9.]*\) dB.*/\1/p' | tail -1)"
+          python3 - "$max_db" <<'PY'
+          import sys
+          max_db = float(sys.argv[1])
+          assert max_db > -40.0, max_db
+          PY
+          silence="$(ffmpeg -hide_banner -i "$file" -af silencedetect=noise=-45dB:d=1.0 -f null - 2>&1 || true)"
+          if printf '%s\n' "$silence" | grep -q 'silence_duration'; then
+            echo "$silence"
+            exit 1
+          fi
+
       - name: Commit only final MP3
         shell: bash
         run: |
@@ -38,4 +68,8 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
           git commit -m "Replace greeting MP3 binary only"
-          git push
+          for attempt in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && exit 0
+            sleep 2
+          done
+          exit 1
