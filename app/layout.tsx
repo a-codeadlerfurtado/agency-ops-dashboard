@@ -35,6 +35,7 @@ import MotionSystem from "./motion-system";
 import GreetingAudioBridge from "./greeting-audio-bridge";
 import PreGreetingShield from "./pre-greeting-shield";
 import DailyGreeting from "./daily-greeting-v3";
+import TeamAccessAdmin from "./team-access-admin";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -81,6 +82,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <NotificationsHomeLink />
         <AutomationNavBridge />
         <DonnahNavBridge />
+        <TeamAccessAdmin />
         <DailyGreeting />
         <OpsQuestionWidget />
         <OpsQuestionBrand />
