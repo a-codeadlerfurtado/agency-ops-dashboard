@@ -128,7 +128,7 @@ function buildPrompt(question: string) {
     "Antes de recomendar pausar campanha/criativo, confirme se ainda está ativo. Se a situação atual não estiver disponível, recomende primeiro validar o status e só então pausar se ainda estiver ativo e o problema persistir.",
     "Quando houver divergência Meta x comercial, não conclua automaticamente que os leads são inválidos: considere também subnotificação, atraso de atualização e diferença de período.",
     "Para perguntas de decisão, risco, gargalo ou diagnóstico, termine com 'Próximos passos' e no máximo 3 itens.",
-    "Cada próximo passo deve seguir EXATAMENTE o formato: `1) GT — NOME EXATO DO CLIENTE — ação`, `2) CS — NOME EXATO DO CLIENTE — ação`, `3) Operações — NOME EXATO DO CLIENTE — ação` (use Design apenas para produção/revisão visual).",
+    "Cada próximo passo deve seguir EXATAMENTE o formato `<N>) <ÁREA> — <NOME EXATO DO CLIENTE> — <AÇÃO>`. Escolha a área correta para cada ação; pode haver mais de uma ação para a mesma área. Use Design somente para produção/revisão visual.",
     "Regra de responsabilidade: Meta/campanha/auditoria/reconciliação de leads = GT; falar/retornar/fazer call com cliente = CS; criação/revisão visual = Design; processo/sistema/escalonamento interno = Operações.",
     "Finalize com Confiança: alta/média/baixa e uma frase explicando o motivo quando não for totalmente factual.",
   ].join("\n\n");
@@ -150,14 +150,16 @@ function actionLines(answer: string) {
 
 function inferRole(text: string) {
   const q = norm(text);
+  // A natureza da ação vence qualquer rótulo sugerido pelo modelo.
+  if (/\b(comunicar|falar com o cliente|retornar ao cliente|retorno ao cliente|call com o cliente|ligar para o cliente|apresentar ao cliente|follow up com o cliente)\b/.test(q)) return "CS";
+  if (/\b(meta|campanha|campanhas|auditar campanha|auditoria de campanha|auditoria tecnica|pausar campanha|pausar criativo|cpl|ctr|cpm|publico|segmentacao|reconciliar leads|meta x comercial|leads meta)\b/.test(q)) return "GT";
+  if (/\b(criar arte|criar criativo|produzir criativo|revisar layout|ajustar layout|logo|identidade visual|peca visual|design)\b/.test(q)) return "DESIGN";
+  if (/\b(process|sistema|integracao|banco de dados|escalar|escalon|operacao|gestao)\b/.test(q)) return "MGMT";
+  // Rótulo explícito é apenas fallback quando o conteúdo não determina a área.
   if (/^(gt|gestor de trafego|trafego)\b/.test(q)) return "GT";
   if (/^(cs|customer success|atendimento|relacionamento)\b/.test(q)) return "CS";
   if (/^(design|designer)\b/.test(q)) return "DESIGN";
   if (/^(operacoes|operacao|gestao|adler)\b/.test(q)) return "MGMT";
-  if (/\b(comunicar|falar com o cliente|retornar ao cliente|retorno ao cliente|call com o cliente|ligar para o cliente|apresentar ao cliente|follow up com o cliente)\b/.test(q)) return "CS";
-  if (/\b(meta|campanha|campanhas|auditar campanha|auditoria de campanha|pausar campanha|pausar criativo|cpl|ctr|cpm|publico|segmentacao|reconciliar leads|meta x comercial|leads meta)\b/.test(q)) return "GT";
-  if (/\b(criar arte|criar criativo|produzir criativo|revisar layout|ajustar layout|logo|identidade visual|peca visual|design)\b/.test(q)) return "DESIGN";
-  if (/\b(process|sistema|integracao|banco de dados|escalar|escalon|operacao|gestao)\b/.test(q)) return "MGMT";
   return "MGMT";
 }
 
