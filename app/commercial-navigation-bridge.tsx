@@ -100,22 +100,31 @@ function installLeonardoExecutiveShortcuts() {
   if (window.location.pathname !== "/commercial-direction") return;
   const header = document.querySelector<HTMLElement>(".cd-top");
   if (!header) return;
+
+  header.querySelectorAll('[data-leonardo-exec-shortcut="revenue"],[data-leonardo-exec-shortcut="contracts"]').forEach((node) => node.remove());
+
   const first = header.querySelector<HTMLButtonElement>("button");
   if (first && first.dataset.leonardoHomeFixed !== "true") {
     first.dataset.leonardoHomeFixed = "true";
     first.textContent = "Dashboard";
     first.onclick = () => window.location.assign("/");
   }
-  const add = (key:string,label:string,href:string) => {
-    if (header.querySelector(`[data-leonardo-exec-shortcut="${key}"]`)) return;
-    const b=document.createElement("button");
-    b.type="button";b.className="leonardo-exec-shortcut";b.dataset.leonardoExecShortcut=key;b.textContent=label;
-    b.addEventListener("click",()=>window.location.assign(href));
+
+  const mainTabs = document.querySelector<HTMLElement>(".cd-main-tabs");
+  const cockpit = mainTabs ? Array.from(mainTabs.querySelectorAll<HTMLButtonElement>("button")).find((button) => normalize(button.textContent || "") === "cockpit") : null;
+  if (cockpit) cockpit.textContent = "Visão Geral";
+
+  if (!header.querySelector('[data-leonardo-exec-shortcut="agenda"]')) {
+    const button=document.createElement("button");
+    button.type="button";
+    button.className="leonardo-exec-shortcut";
+    button.dataset.leonardoExecShortcut="agenda";
+    button.textContent="Agenda";
+    button.title="Agenda automática de reuniões";
+    button.addEventListener("click",()=>window.location.assign("/agenda"));
     const brand=header.querySelector(".cd-brand");
-    if (brand) header.insertBefore(b,brand); else header.appendChild(b);
-  };
-  add("revenue","Mensalidades & Impl.","/client-revenue");
-  add("contracts","Contratos","/contracts");
+    if (brand) header.insertBefore(button,brand); else header.appendChild(button);
+  }
 }
 
 export default function CommercialNavigationBridge() {
