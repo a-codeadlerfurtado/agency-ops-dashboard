@@ -11,6 +11,15 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   headers: { ...cors, "content-type": "application/json; charset=utf-8" },
 });
 
+function internalRole(value: unknown) {
+  const raw = String(value || "").trim().toUpperCase();
+  if (raw.includes("GERENTE") || raw.includes("OPERA") || raw === "MGMT") return "MGMT";
+  if (raw.includes("CUSTOMER") || raw === "CS") return "CS";
+  if (raw.includes("TRÁFEGO") || raw.includes("TRAFEGO") || raw === "GT") return "GT";
+  if (raw.includes("DESIGN")) return "DESIGN";
+  return raw || "VIEWER";
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "GET") return json({ ok: false, error: "METHOD_NOT_ALLOWED" }, 405);
@@ -29,36 +38,36 @@ Deno.serve(async (req) => {
 
   const user = authData.user;
   const meta = user.user_metadata || {};
-  const person = String(meta.collaborator_person || meta.full_name || meta.name || "").trim();
 
-  let role = String(meta.role || "").toUpperCase();
-  let carteira = String(meta.carteira || "").trim();
-
-  const { data: profileRows } = await admin
+  const { data: preferenceRows } = await admin
     .schema("agency_ops")
-    .from("dashboard_user_profiles")
-    .select("person,role,carteira")
-    .or(`auth_user_id.eq.${user.id},person.eq.${person.replace(/,/g, "")}`)
+    .from("user_preferences")
+    .select("user_key,name,role,collaborator_person,metadata")
+    .eq("user_key", user.id)
     .limit(1);
-  const profile = profileRows?.[0] || null;
-  if (profile?.role) role = String(profile.role).toUpperCase();
-  if (profile?.carteira) carteira = String(profile.carteira);
+  const preferences = preferenceRows?.[0] || null;
+
+  const person = String(preferences?.collaborator_person || preferences?.name || meta.collaborator_person || meta.full_name || meta.name || "").trim();
+  const role = internalRole(preferences?.role || meta.role);
+  const carteira = String(preferences?.metadata?.carteira || meta.carteira || "").trim();
 
   let allowedClientIds: string[] | null = null;
   if (["GT", "DESIGN"].includes(role)) {
     const field = role === "GT" ? "gt_owner" : "designer_owner";
-    const { data: clientRows } = await admin
+    const { data: clientRows, error: clientScopeError } = await admin
       .schema("agency_ops")
       .from("clients")
-      .select("client_id")
+      .select("id")
       .eq(field, person)
       .in("lifecycle", ["ACTIVE", "ONBOARDING"]);
-    allowedClientIds = (clientRows || []).map((row: any) => String(row.client_id));
+    if (clientScopeError) return json({ ok: false, error: clientScopeError.message }, 500);
+    allowedClientIds = (clientRows || []).map((row: any) => String(row.id));
   }
 
-  const clientQuery = admin.schema("agency_ops").from("clients").select("client_id,display_name,cs_owner,gt_owner,designer_owner,lifecycle");
-  const { data: clients = [] } = allowedClientIds ? await clientQuery.in("client_id", allowedClientIds) : await clientQuery;
-  const clientMap = new Map((clients || []).map((row: any) => [String(row.client_id), row]));
+  const clientQuery = admin.schema("agency_ops").from("clients").select("id,display_name,cs_owner,gt_owner,designer_owner,lifecycle");
+  const { data: clients = [], error: clientsError } = allowedClientIds ? await clientQuery.in("id", allowedClientIds) : await clientQuery;
+  if (clientsError) return json({ ok: false, error: clientsError.message }, 500);
+  const clientMap = new Map((clients || []).map((row: any) => [String(row.id), row]));
 
   let notifQuery = admin
     .schema("agency_ops")
@@ -67,7 +76,7 @@ Deno.serve(async (req) => {
     .order("occurred_at", { ascending: false })
     .limit(300);
   if (allowedClientIds) {
-    if (!allowedClientIds.length) return json({ ok: true, items: [], generated_at: new Date().toISOString() });
+    if (!allowedClientIds.length) return json({ ok: true, role, person, carteira, items: [], generated_at: new Date().toISOString() });
     notifQuery = notifQuery.in("client_id", allowedClientIds);
   }
 
@@ -79,19 +88,31 @@ Deno.serve(async (req) => {
     .limit(300);
   if (allowedClientIds) alertQuery = alertQuery.in("client_id", allowedClientIds);
 
-  const [{ data: notifications = [], error: notifError }, { data: alerts = [], error: alertError }] = await Promise.all([notifQuery, alertQuery]);
-  if (notifError) return json({ ok: false, error: notifError.message }, 500);
-  if (alertError) return json({ ok: false, error: alertError.message }, 500);
+  const [notifResult, alertResult, readsResult] = await Promise.all([
+    notifQuery,
+    alertQuery,
+    admin.schema("agency_ops").from("platform_notification_reads").select("notification_id,read_at").eq("user_key", user.id),
+  ]);
 
-  const notifItems = (notifications || []).map((row: any) => ({
-    ...row,
-    kind: "NOTIFICATION",
-    status: row.read_at ? "READ" : "OPEN",
-    client_name: row.client_id ? clientMap.get(String(row.client_id))?.display_name || null : null,
-    source_label: row.source || "Operação",
-  }));
+  if (notifResult.error) return json({ ok: false, error: notifResult.error.message }, 500);
+  if (alertResult.error) return json({ ok: false, error: alertResult.error.message }, 500);
+  if (readsResult.error) return json({ ok: false, error: readsResult.error.message }, 500);
 
-  const alertItems = (alerts || []).map((row: any) => ({
+  const readMap = new Map((readsResult.data || []).map((row: any) => [String(row.notification_id), row.read_at]));
+
+  const notifItems = (notifResult.data || []).map((row: any) => {
+    const personalReadAt = readMap.get(String(row.id)) || row.read_at || null;
+    return {
+      ...row,
+      kind: "NOTIFICATION",
+      read_at: personalReadAt,
+      status: personalReadAt ? "READ" : "OPEN",
+      client_name: row.client_id ? clientMap.get(String(row.client_id))?.display_name || null : null,
+      source_label: row.source || "Operação",
+    };
+  });
+
+  const alertItems = (alertResult.data || []).map((row: any) => ({
     ...row,
     kind: "ALERT",
     id: String(row.id),
