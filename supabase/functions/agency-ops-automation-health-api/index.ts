@@ -216,7 +216,7 @@ Deno.serve(async (req) => {
       ...row,
       friendly_name: friendlyJob(row.job_name),
       family: family(row.job_name),
-      status: dashboardResolved ? "RESOLVED" : rawStatus,
+      status: dashboardResolved ? "OK" : rawStatus,
       raw_status: rawStatus,
       issue_key: issueKey,
       dashboard_resolved: dashboardResolved,
@@ -225,7 +225,7 @@ Deno.serve(async (req) => {
       latest_run: latest,
     };
   }).sort((a, b) => {
-    const rank: Record<string, number> = { ERROR: 0, DEGRADED: 1, RESOLVED: 2, OK: 3 };
+    const rank: Record<string, number> = { ERROR: 0, DEGRADED: 1, OK: 2 };
     return (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || String(a.friendly_name).localeCompare(String(b.friendly_name), "pt-BR");
   });
 
@@ -280,19 +280,10 @@ Deno.serve(async (req) => {
   for (const incident of activeIncidents) {
     const key = String(incident.issue_key);
     const current = recurrenceMap.get(key) || {
-      key,
-      issue_key: key,
-      client_id: incident.client_id,
-      client_name: incident.client_name,
-      product_label: incident.product_label,
-      signature: errorSignature(incident),
-      count: 0,
-      critical: 0,
-      open: 0,
-      first_at: incident.created_at,
-      last_at: incident.created_at,
-      last_incident_id: incident.id,
-      incident_ids: [],
+      key, issue_key: key, client_id: incident.client_id, client_name: incident.client_name,
+      product_label: incident.product_label, signature: errorSignature(incident), count: 0,
+      critical: 0, open: 0, first_at: incident.created_at, last_at: incident.created_at,
+      last_incident_id: incident.id, incident_ids: [],
     };
     current.count += 1;
     current.incident_ids.push(String(incident.id));
@@ -311,7 +302,8 @@ Deno.serve(async (req) => {
     .sort((a, b) => Number(b.count) - Number(a.count) || time(b.last_at) - time(a.last_at))
     .slice(0, 30);
 
-  const timeline = [...issueRuns, ...enrichedIncidents]
+  const activeIssueRuns = issueRuns.filter((row) => !row.dashboard_resolved);
+  const timeline = [...activeIssueRuns, ...activeIncidents]
     .sort((a, b) => time(b.occurred_at) - time(a.occurred_at))
     .slice(0, 150);
 
@@ -325,19 +317,16 @@ Deno.serve(async (req) => {
     period: { days, since, until: new Date().toISOString() },
     summary: {
       monitored_automations: automations.length,
-      automations_with_issue: automations.filter((row) => !["OK", "RESOLVED"].includes(row.status)).length,
-      execution_issues: issueRuns.filter((row) => !row.dashboard_resolved).length,
+      automations_with_issue: automations.filter((row) => row.status !== "OK").length,
+      execution_issues: activeIssueRuns.length,
       lead_data_incidents: activeIncidents.length,
       critical_incidents: criticalIncidents.length,
       open_incidents: openIncidents.length,
       affected_clients: activeAffectedClients.size,
       recurring_groups: recurring.length,
-      resolved_in_period: timeline.filter((row) => row.dashboard_resolved).length,
+      resolved_in_period: resolutions.filter((row) => time(row.resolved_at) >= time(since)).length,
     },
-    automations,
-    recurring,
-    timeline,
-    incidents: enrichedIncidents,
+    automations, recurring, timeline, incidents: enrichedIncidents,
     generated_at: new Date().toISOString(),
   });
 });
