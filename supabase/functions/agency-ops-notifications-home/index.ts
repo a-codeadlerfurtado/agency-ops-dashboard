@@ -22,7 +22,7 @@ function internalRole(value: unknown) {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
-  if (req.method !== "GET") return json({ ok: false, error: "METHOD_NOT_ALLOWED" }, 405);
+  if (!["GET", "POST"].includes(req.method)) return json({ ok: false, error: "METHOD_NOT_ALLOWED" }, 405);
 
   const auth = req.headers.get("authorization") || "";
   if (!auth.toLowerCase().startsWith("bearer ")) return json({ ok: false, error: "UNAUTHORIZED" }, 401);
@@ -64,6 +64,45 @@ Deno.serve(async (req) => {
     allowedClientIds = (clientRows || []).map((row: any) => String(row.id));
   }
 
+  if (req.method === "POST") {
+    const body = await req.json().catch(() => ({}));
+    const action = String(body?.action || "").toUpperCase();
+    const notificationId = String(body?.notification_id || "").trim();
+    if (action !== "RESOLVE" || !notificationId) return json({ ok: false, error: "INVALID_ACTION" }, 400);
+
+    const { data: notification, error: notificationError } = await admin
+      .schema("agency_ops")
+      .from("platform_notifications")
+      .select("id,client_id")
+      .eq("id", notificationId)
+      .maybeSingle();
+    if (notificationError) return json({ ok: false, error: notificationError.message }, 500);
+    if (!notification) return json({ ok: false, error: "NOT_FOUND" }, 404);
+    if (allowedClientIds && (!notification.client_id || !allowedClientIds.includes(String(notification.client_id)))) {
+      return json({ ok: false, error: "FORBIDDEN" }, 403);
+    }
+
+    const resolvedAt = new Date().toISOString();
+    const [{ error: resolveError }, { error: readError }] = await Promise.all([
+      admin.schema("agency_ops").from("platform_notification_resolutions").upsert({
+        notification_id: notificationId,
+        user_key: user.id,
+        resolved_at: resolvedAt,
+        resolved_by: person || user.email || user.id,
+        resolution_note: body?.note ? String(body.note).slice(0, 1000) : null,
+      }, { onConflict: "notification_id,user_key" }),
+      admin.schema("agency_ops").from("platform_notification_reads").upsert({
+        notification_id: notificationId,
+        user_key: user.id,
+        read_at: resolvedAt,
+      }, { onConflict: "notification_id,user_key" }),
+    ]);
+    if (resolveError) return json({ ok: false, error: resolveError.message }, 500);
+    if (readError) return json({ ok: false, error: readError.message }, 500);
+
+    return json({ ok: true, notification_id: notificationId, status: "RESOLVED", resolved_at: resolvedAt, resolved_by: person || user.email || user.id });
+  }
+
   const clientQuery = admin.schema("agency_ops").from("clients").select("id,display_name,cs_owner,gt_owner,designer_owner,lifecycle");
   const { data: clients = [], error: clientsError } = allowedClientIds ? await clientQuery.in("id", allowedClientIds) : await clientQuery;
   if (clientsError) return json({ ok: false, error: clientsError.message }, 500);
@@ -88,25 +127,32 @@ Deno.serve(async (req) => {
     .limit(300);
   if (allowedClientIds) alertQuery = alertQuery.in("client_id", allowedClientIds);
 
-  const [notifResult, alertResult, readsResult] = await Promise.all([
+  const [notifResult, alertResult, readsResult, resolutionsResult] = await Promise.all([
     notifQuery,
     alertQuery,
     admin.schema("agency_ops").from("platform_notification_reads").select("notification_id,read_at").eq("user_key", user.id),
+    admin.schema("agency_ops").from("platform_notification_resolutions").select("notification_id,resolved_at,resolved_by,resolution_note").eq("user_key", user.id),
   ]);
 
   if (notifResult.error) return json({ ok: false, error: notifResult.error.message }, 500);
   if (alertResult.error) return json({ ok: false, error: alertResult.error.message }, 500);
   if (readsResult.error) return json({ ok: false, error: readsResult.error.message }, 500);
+  if (resolutionsResult.error) return json({ ok: false, error: resolutionsResult.error.message }, 500);
 
   const readMap = new Map((readsResult.data || []).map((row: any) => [String(row.notification_id), row.read_at]));
+  const resolutionMap = new Map((resolutionsResult.data || []).map((row: any) => [String(row.notification_id), row]));
 
   const notifItems = (notifResult.data || []).map((row: any) => {
     const personalReadAt = readMap.get(String(row.id)) || row.read_at || null;
+    const resolution = resolutionMap.get(String(row.id)) as any;
     return {
       ...row,
       kind: "NOTIFICATION",
       read_at: personalReadAt,
-      status: personalReadAt ? "READ" : "OPEN",
+      resolved_at: resolution?.resolved_at || null,
+      resolved_by: resolution?.resolved_by || null,
+      resolution_note: resolution?.resolution_note || null,
+      status: resolution ? "RESOLVED" : (personalReadAt ? "READ" : "OPEN"),
       client_name: row.client_id ? clientMap.get(String(row.client_id))?.display_name || null : null,
       source_label: row.source || "Operação",
     };
