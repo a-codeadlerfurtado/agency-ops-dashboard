@@ -67,12 +67,11 @@ export default function LeadQualityAlert() {
     } catch {}
   }, [session?.access_token]);
 
-  useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    if (!session?.access_token || eligible !== true) return;
-    const timer = window.setInterval(load, 5000);
-    return () => window.clearInterval(timer);
-  }, [eligible, load, session?.access_token]);
+    if (!session?.access_token) return;
+    const timer = window.setTimeout(load, 55_000);
+    return () => window.clearTimeout(timer);
+  }, [load, session?.access_token]);
 
   const sorted = useMemo(() => [...incidents].sort((a, b) =>
     Number(b.occurrence_no) - Number(a.occurrence_no) ||
