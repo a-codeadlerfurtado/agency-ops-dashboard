@@ -45,7 +45,27 @@ function install() {
     const next = rewriteUrl(raw);
     if (next === raw) return original(input, init);
 
-    if (input instanceof Request) return original(new Request(next, input), init);
+    if (input instanceof Request) {
+      const clone = input.clone();
+      const method = init?.method || clone.method;
+      const body = ["GET", "HEAD"].includes(method.toUpperCase())
+        ? undefined
+        : (init?.body ?? await clone.blob());
+      return original(next, {
+        method,
+        headers: init?.headers || clone.headers,
+        body,
+        cache: init?.cache || clone.cache,
+        credentials: init?.credentials || clone.credentials,
+        mode: init?.mode || clone.mode,
+        redirect: init?.redirect || clone.redirect,
+        referrer: init?.referrer || clone.referrer,
+        referrerPolicy: init?.referrerPolicy || clone.referrerPolicy,
+        integrity: init?.integrity || clone.integrity,
+        keepalive: init?.keepalive ?? clone.keepalive,
+        signal: init?.signal || clone.signal,
+      });
+    }
     return original(next, init);
   }) as typeof window.fetch;
 }
