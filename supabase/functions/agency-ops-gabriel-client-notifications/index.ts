@@ -7,14 +7,18 @@ const norm=(value:unknown)=>String(value??"").normalize("NFD").replace(/[\u0300-
 function isAiServiceEvent(row:any){
   if(!row||typeof row!=="object")return false;
   const meta=row.metadata&&typeof row.metadata==="object"?row.metadata:{};
-  if(meta.ai_workspace===true||meta.n8n_verified===true||meta.created_inside_ai_work_center===true||meta.ai_classified===true)return true;
-  if(String(meta.target_role??row.target_role??"").trim().toUpperCase()==="AI")return true;
-  if(norm(meta.target_person??row.target_person??"")==="gabriel castro")return true;
+  const strongAiOrigin=meta.ai_workspace===true||meta.n8n_verified===true||meta.created_inside_ai_work_center===true;
   const combined=norm([
     row.type,row.source,row.title,row.description,row.next_action,row.owner,row.actor,
     meta.service,meta.product,meta.category,meta.workspace,meta.source,meta.type,meta.title,meta.description,meta.next_action
   ].filter(Boolean).join(" "));
-  return /\bia\b|inteligencia artificial|\bn8n\b|agente de ia|agente virtual|chatbot|bot de atendimento|assistente virtual|\bllm\b|openai|prompt|webhook|automacao|fluxo de atendimento|integracao com whatsapp|whatsapp integrado|donnah/.test(combined);
+  const explicitTech=/\bn8n\b|agente de ia|agente virtual|chatbot|bot de atendimento|assistente virtual|\bllm\b|openai|prompt|webhook|fluxo de atendimento|integracao com whatsapp|whatsapp integrado|donnah/.test(combined);
+  const explicitAi=/\bia\b|inteligencia artificial/.test(combined);
+  const automationContext=/\bautomacao\b/.test(combined)&&/(n8n|\bia\b|inteligencia artificial|agente|chatbot|bot|assistente virtual|webhook|whatsapp|lead|atendimento|donnah)/.test(combined);
+  const trafficOrMedia=/campanha|campaign|meta ads|google ads|trafego|gestor de trafego|anuncio|ads\b|criativo|creative|cpl\b|cpm\b|ctr\b|cpc\b|orcamento de midia|saldo de conta|saldo meta|conta de anuncio|conjunto de anuncio|adset/.test(combined);
+  if(strongAiOrigin)return true;
+  if(trafficOrMedia&&!(explicitTech||automationContext))return false;
+  return explicitTech||explicitAi||automationContext;
 }
 
 Deno.serve(async(req:Request)=>{
@@ -75,5 +79,5 @@ Deno.serve(async(req:Request)=>{
   const unread=items.filter((r:any)=>r.kind==="NOTIFICATION"&&!r.read_at).length;
   const openAlerts=items.filter((r:any)=>r.kind==="ALERT"&&String(r.status).toUpperCase()!=="RESOLVED");
   const criticalOpen=openAlerts.filter((r:any)=>["CRITICAL","HIGH"].includes(String(r.level).toUpperCase())).length;
-  return reply({...body,scope:"AI_SERVICE_ONLY_NO_COMMERCIAL_GROUPS",items,summary:{...(body.summary||{}),unread,open_alerts:openAlerts.length,critical_open:criticalOpen,resolved_alerts:items.filter((r:any)=>r.kind==="ALERT").length-openAlerts.length,total:items.length},commercial_groups_excluded:true,notifications_ai_service_only:true,generated_at:new Date().toISOString()});
+  return reply({...body,scope:"AI_SERVICE_STRICT_ONLY_NO_COMMERCIAL_GROUPS",items,summary:{...(body.summary||{}),unread,open_alerts:openAlerts.length,critical_open:criticalOpen,resolved_alerts:items.filter((r:any)=>r.kind==="ALERT").length-openAlerts.length,total:items.length},commercial_groups_excluded:true,notifications_ai_service_only:true,generated_at:new Date().toISOString()});
 });
