@@ -5,6 +5,7 @@ import "./dashboard-enhancements.css";
 import "./onboarding-legacy.css";
 import "./motion-system.css";
 import "./contrast-tune.css";
+import NetworkConcurrencyGuard from "./network-concurrency-guard";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -65,6 +66,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         />
       </head>
       <body>
+        <NetworkConcurrencyGuard />
         <GabrielScopeNetwork />
         <GreetingAudioBridge />
         <PreGreetingShield />
