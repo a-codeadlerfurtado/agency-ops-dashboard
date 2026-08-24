@@ -3,6 +3,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const GRAPH_API_VERSION = "v21.0";
 const TZ = "America/Sao_Paulo";
+const MAX_RANGE_DAYS = 366;
 const CORS = {
   "access-control-allow-origin": "*",
   "access-control-allow-headers": "authorization,apikey,content-type,x-cron-secret",
@@ -31,6 +32,7 @@ type InsightRow = {
   cost_per_action_type?: Action[];
 };
 type Profile = { person: string; role: string; access_level: string };
+type Period = { start: string; end: string };
 
 function num(v: unknown) {
   const value = Number(v ?? 0);
@@ -74,6 +76,16 @@ function shift(day: string, delta: number) {
   date.setUTCDate(date.getUTCDate() + delta);
   return iso(date);
 }
+function localToday(now = new Date()) {
+  const p = ymdParts(now);
+  return iso(new Date(Date.UTC(p.year, p.month - 1, p.day)));
+}
+function defaultPeriod(now = new Date()): Period {
+  const today = localToday(now);
+  const dow = new Date(`${today}T12:00:00Z`).getUTCDay();
+  const end = dow === 1 ? shift(today, -1) : today;
+  return { start: shift(end, -6), end };
+}
 function latestCompletedSunday(now = new Date()) {
   const p = ymdParts(now);
   const local = new Date(Date.UTC(p.year, p.month - 1, p.day));
@@ -82,6 +94,21 @@ function latestCompletedSunday(now = new Date()) {
   return iso(new Date(local.getTime() - daysBack * 86_400_000));
 }
 function validDate(value: string | null) { return !!value && /^\d{4}-\d{2}-\d{2}$/.test(value); }
+function compareDays(a: string, b: string) { return a.localeCompare(b); }
+function rangeDays(start: string, end: string) {
+  const startMs = new Date(`${start}T12:00:00Z`).getTime();
+  const endMs = new Date(`${end}T12:00:00Z`).getTime();
+  return Math.floor((endMs - startMs) / 86_400_000) + 1;
+}
+function normalizePeriod(startCandidate: string | null, endCandidate: string | null, fallback?: Period): Period | null {
+  if (validDate(startCandidate) && validDate(endCandidate)) {
+    const start = String(startCandidate), end = String(endCandidate);
+    if (compareDays(start, end) > 0) return null;
+    if (rangeDays(start, end) > MAX_RANGE_DAYS) return null;
+    return { start, end };
+  }
+  return fallback ?? null;
+}
 function ddmm(day: string) {
   const [, month, date] = day.split("-");
   return `${date}/${month}`;
@@ -126,7 +153,7 @@ function campaignAnalysis(row: any, accountAvgCpa: number | null) {
     return `A campanha apresentou bom desempenho, gerando ${brNumber(results)} ${noun} com custo dentro de um patamar saudável para a conta. Seguimos acompanhando para sustentar a eficiência e ampliar o volume.`;
   }
   if (results > 0 && cpa != null && accountAvgCpa != null && cpa > accountAvgCpa * 1.25) {
-    return `A campanha gerou ${brNumber(results)} ${noun}, porém com custo acima da média observada na conta nesta semana. Seguimos com otimizações para buscar mais eficiência sem perder volume de entrega.`;
+    return `A campanha gerou ${brNumber(results)} ${noun}, porém com custo acima da média observada na conta neste período. Seguimos com otimizações para buscar mais eficiência sem perder volume de entrega.`;
   }
   if (results > 0) {
     return `A campanha manteve entrega consistente e gerou ${brNumber(results)} ${noun} no período. Seguimos monitorando os indicadores e realizando otimizações para ampliar o volume mantendo a eficiência da captação.`;
@@ -139,7 +166,7 @@ function campaignAnalysis(row: any, accountAvgCpa: number | null) {
   }
   return "A campanha não registrou conversões no período e apresentou volume reduzido de entrega. Seguimos acompanhando a estrutura para validar a necessidade de novos ajustes.";
 }
-function buildMessage(client: any, weekStart: string, weekEnd: string, campaigns: any[]) {
+function buildMessage(client: any, periodStart: string, periodEnd: string, campaigns: any[]) {
   const code = reportCode(client.metadata);
   const header = code ? `${code} — ${client.display_name}` : client.display_name;
   const totalSpend = campaigns.reduce((sum, row) => sum + num(row.spend), 0);
@@ -168,7 +195,7 @@ function buildMessage(client: any, weekStart: string, weekEnd: string, campaigns
     "",
     header,
     "",
-    `Segue relatório de tráfego do dia ${ddmm(weekStart)} a ${ddmm(weekEnd)}:`,
+    `Segue relatório de tráfego do dia ${ddmm(periodStart)} a ${ddmm(periodEnd)}:`,
     "",
     body,
   ].join("\n");
@@ -212,9 +239,8 @@ async function resolveProfile(req: Request, supabaseUrl: string, anonKey: string
 }
 function canUse(profile: Profile) { return profile.role === "GT" || profile.role === "MGMT"; }
 
-async function generateReports(db: any, metaToken: string, weekEnd: string, scopePerson: string | null, onlyClientId: string | null = null) {
+async function generateReports(db: any, metaToken: string, periodStart: string, periodEnd: string, scopePerson: string | null, onlyClientId: string | null = null) {
   const ops = db.schema("agency_ops");
-  const weekStart = shift(weekEnd, -6);
   let clientQuery = ops.from("clients").select("id,display_name,gt_owner,metadata,lifecycle").eq("lifecycle", "ACTIVE");
   if (scopePerson) clientQuery = clientQuery.eq("gt_owner", scopePerson);
   if (onlyClientId) clientQuery = clientQuery.eq("id", onlyClientId);
@@ -236,7 +262,7 @@ async function generateReports(db: any, metaToken: string, weekEnd: string, scop
   const accountRows = (integrations ?? []).map((row: any) => ({ ...row, meta_ad_account_id: String(row.meta_ad_account_id) }));
   const accountResults = await inBatches(accountRows, 8, async (integration: any) => {
     try {
-      const rows = await fetchInsights(integration.meta_ad_account_id, metaToken, weekStart, weekEnd);
+      const rows = await fetchInsights(integration.meta_ad_account_id, metaToken, periodStart, periodEnd);
       return { ok: true, integration, rows, error: null };
     } catch (error) {
       return { ok: false, integration, rows: [] as InsightRow[], error: String(error instanceof Error ? error.message : error).slice(0, 300) };
@@ -298,7 +324,7 @@ async function generateReports(db: any, metaToken: string, weekEnd: string, scop
       queried_accounts: clientIntegrations.length,
       account_errors: errors,
       graph_api_version: GRAPH_API_VERSION,
-      source: "META_MARKETING_API_LIVE_WEEKLY",
+      source: "META_MARKETING_API_LIVE_PERIOD",
     };
     let dataStatus = "READY";
     if (!clientIntegrations.length) dataStatus = "NO_META_ACCOUNT";
@@ -308,12 +334,12 @@ async function generateReports(db: any, metaToken: string, weekEnd: string, scop
 
     const payload = {
       client_id: clientId,
-      week_start: weekStart,
-      week_end: weekEnd,
+      week_start: periodStart,
+      week_end: periodEnd,
       client_name: client.display_name,
       client_code: reportCode(client.metadata),
       gt_owner: client.gt_owner,
-      report_text: buildMessage(client, weekStart, weekEnd, campaigns),
+      report_text: buildMessage(client, periodStart, periodEnd, campaigns),
       campaigns,
       summary,
       data_status: dataStatus,
@@ -325,7 +351,7 @@ async function generateReports(db: any, metaToken: string, weekEnd: string, scop
       generated_at: now,
       updated_at: now,
     };
-    const { data: saved, error: saveError } = await ops.from("weekly_traffic_reports").upsert(payload, { onConflict: "client_id,week_end" }).select("*").single();
+    const { data: saved, error: saveError } = await ops.from("weekly_traffic_reports").upsert(payload, { onConflict: "client_id,week_start,week_end" }).select("*").single();
     if (saveError) throw new Error(saveError.message);
     output.push(saved);
   }
@@ -346,9 +372,12 @@ Deno.serve(async (req: Request) => {
   if (req.method === "POST" && cronSecret && req.headers.get("x-cron-secret") === cronSecret) {
     const body = await req.json().catch(() => ({}));
     if (body?.action !== "generate_all") return reply({ error: "invalid_cron_action" }, 400);
-    const weekEnd = validDate(body?.week_end) ? String(body.week_end) : latestCompletedSunday();
-    const reports = await generateReports(db, metaToken, weekEnd, null);
-    return reply({ ok: true, mode: "CRON", week_end: weekEnd, generated: reports.length, generated_at: new Date().toISOString() });
+    const periodEnd = validDate(body?.week_end) ? String(body.week_end) : latestCompletedSunday();
+    const periodStart = validDate(body?.week_start) ? String(body.week_start) : shift(periodEnd, -6);
+    const period = normalizePeriod(periodStart, periodEnd);
+    if (!period) return reply({ error: "invalid_period" }, 400);
+    const reports = await generateReports(db, metaToken, period.start, period.end, null);
+    return reply({ ok: true, mode: "CRON", period, week_end: period.end, generated: reports.length, generated_at: new Date().toISOString() });
   }
 
   const profile = await resolveProfile(req, supabaseUrl, anonKey, db);
@@ -358,32 +387,52 @@ Deno.serve(async (req: Request) => {
 
   if (req.method === "GET") {
     const url = new URL(req.url);
-    const requestedWeek = url.searchParams.get("week_end");
-    const weekEnd = validDate(requestedWeek) ? requestedWeek! : latestCompletedSunday();
-    let query = ops.from("weekly_traffic_reports").select("*").eq("week_end", weekEnd).order("client_name");
+    const requestedStart = url.searchParams.get("start") || url.searchParams.get("period_start") || url.searchParams.get("week_start");
+    const requestedEnd = url.searchParams.get("end") || url.searchParams.get("period_end") || url.searchParams.get("week_end");
+    const legacyWeekEnd = url.searchParams.get("week_end");
+    let period: Period | null = null;
+    if (validDate(requestedStart) && validDate(requestedEnd)) period = normalizePeriod(requestedStart, requestedEnd);
+    else if (!requestedStart && validDate(legacyWeekEnd)) period = normalizePeriod(shift(String(legacyWeekEnd), -6), String(legacyWeekEnd));
+    else period = defaultPeriod();
+    if (!period) return reply({ error: "invalid_period", detail: `Use um período válido de até ${MAX_RANGE_DAYS} dias.` }, 400);
+
+    let query = ops.from("weekly_traffic_reports").select("*").eq("week_start", period.start).eq("week_end", period.end).order("client_name");
     if (isGt) query = query.eq("gt_owner", profile.person);
     let { data: reports, error } = await query;
     if (error) return reply({ error: "query_failed", detail: error.message }, 500);
     if (!(reports ?? []).length) {
-      await generateReports(db, metaToken, weekEnd, isGt ? profile.person : null);
-      let retry = ops.from("weekly_traffic_reports").select("*").eq("week_end", weekEnd).order("client_name");
+      await generateReports(db, metaToken, period.start, period.end, isGt ? profile.person : null);
+      let retry = ops.from("weekly_traffic_reports").select("*").eq("week_start", period.start).eq("week_end", period.end).order("client_name");
       if (isGt) retry = retry.eq("gt_owner", profile.person);
       const retried = await retry;
       reports = retried.data ?? [];
       error = retried.error;
       if (error) return reply({ error: "query_failed", detail: error.message }, 500);
     }
-    let historyQuery = ops.from("weekly_traffic_reports").select("week_end").order("week_end", { ascending: false }).limit(1000);
+
+    let historyQuery = ops.from("weekly_traffic_reports").select("week_start,week_end").order("week_end", { ascending: false }).limit(2000);
     if (isGt) historyQuery = historyQuery.eq("gt_owner", profile.person);
     const { data: history } = await historyQuery;
-    const weeks = [...new Set((history ?? []).map((row: any) => String(row.week_end)))].slice(0, 16);
+    const seen = new Set<string>();
+    const periods = [] as Period[];
+    for (const row of history ?? []) {
+      const start = String((row as any).week_start || ""), end = String((row as any).week_end || "");
+      const key = `${start}:${end}`;
+      if (!start || !end || seen.has(key)) continue;
+      seen.add(key);
+      periods.push({ start, end });
+      if (periods.length >= 24) break;
+    }
+    const weeks = [...new Set(periods.filter((item) => rangeDays(item.start, item.end) === 7).map((item) => item.end))].slice(0, 16);
     return reply({
       profile,
-      week: { start: shift(weekEnd, -6), end: weekEnd },
+      period,
+      week: period,
       reports: reports ?? [],
+      periods,
       weeks,
       generated_at: new Date().toISOString(),
-      source: "META_MARKETING_API_LIVE_WEEKLY",
+      source: "META_MARKETING_API_LIVE_PERIOD",
     });
   }
 
@@ -391,14 +440,18 @@ Deno.serve(async (req: Request) => {
     const body = await req.json().catch(() => ({}));
     const action = String(body?.action || "").toLowerCase();
     if (action === "regenerate") {
-      const weekEnd = validDate(body?.week_end) ? String(body.week_end) : latestCompletedSunday();
+      const fallback = defaultPeriod();
+      const endCandidate = validDate(body?.period_end) ? String(body.period_end) : validDate(body?.week_end) ? String(body.week_end) : fallback.end;
+      const startCandidate = validDate(body?.period_start) ? String(body.period_start) : validDate(body?.week_start) ? String(body.week_start) : shift(endCandidate, -6);
+      const period = normalizePeriod(startCandidate, endCandidate);
+      if (!period) return reply({ error: "invalid_period", detail: `Use um período válido de até ${MAX_RANGE_DAYS} dias.` }, 400);
       const clientId = body?.client_id ? String(body.client_id) : null;
       if (clientId && isGt) {
         const { data: client } = await ops.from("clients").select("id,gt_owner").eq("id", clientId).maybeSingle();
         if (!client || client.gt_owner !== profile.person) return reply({ error: "forbidden_client" }, 403);
       }
-      const reports = await generateReports(db, metaToken, weekEnd, isGt ? profile.person : null, clientId);
-      return reply({ ok: true, action: "regenerate", week_end: weekEnd, generated: reports.length, reports });
+      const reports = await generateReports(db, metaToken, period.start, period.end, isGt ? profile.person : null, clientId);
+      return reply({ ok: true, action: "regenerate", period, week_end: period.end, generated: reports.length, reports });
     }
     if (action === "review" || action === "sent") {
       const reportId = String(body?.report_id || "");
