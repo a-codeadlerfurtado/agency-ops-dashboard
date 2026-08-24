@@ -21,6 +21,7 @@ import LeadQualityAlert from "./lead-quality-alert";
 import NotificationLeadDetailBridge from "./notification-lead-detail-bridge";
 import NotificationLeadClickOverride from "./notification-lead-click-override";
 import ClientNotificationsBridge from "./client-notifications-bridge";
+import LeonardoMeetingNotificationBridge from "./leonardo-meeting-notification-bridge";
 import NotificationsHomeLink from "./notifications-home-link";
 import AutomationNavBridge from "./automation-nav-bridge";
 import LearningShortcut from "./learning-shortcut";
@@ -75,6 +76,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <NotificationLeadDetailBridge />
         <NotificationLeadClickOverride />
         <ClientNotificationsBridge />
+        <LeonardoMeetingNotificationBridge />
         <NotificationsHomeLink />
         <AutomationNavBridge />
         <DailyGreeting />
