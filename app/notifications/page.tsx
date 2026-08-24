@@ -7,14 +7,19 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL, formatDate, supabase, text } from "../
 type Row = Record<string, any>;
 type Filter = "OPEN" | "CRITICAL" | "RESOLVED" | "ALL";
 
-const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-client-notifications`;
-
 function tone(value: unknown) {
   const raw = String(value || "").toUpperCase();
   if (["CRITICAL", "HIGH", "ERROR"].includes(raw)) return "critical";
   if (["MEDIUM", "WARNING", "WARN", "ATTENTION"].includes(raw)) return "attention";
   if (["SUCCESS", "OK", "LOW"].includes(raw)) return "ok";
   return "info";
+}
+
+function statusLabel(item: Row) {
+  const status = String(item.status || "").toUpperCase();
+  if (status === "RESOLVED") return "Resolvida";
+  if (status === "READ" || item.read_at) return "Lida";
+  return "Aberta";
 }
 
 export default function NotificationsPage() {
@@ -67,7 +72,7 @@ export default function NotificationsPage() {
   return <main className="nh-page">
     <style>{styles}</style>
     <header className="nh-head">
-      <div><span>Central de Notificações</span><h1>Notificações</h1><p>Todas as notificações e alertas operacionais em uma visão completa.</p></div>
+      <div><span>Central de Notificações</span><h1>Notificações</h1><p>O sino mostra o que ainda exige atenção. Aqui fica o histórico completo, inclusive o que já foi resolvido.</p></div>
       <a href="/">Voltar para a Home</a>
     </header>
 
@@ -86,17 +91,21 @@ export default function NotificationsPage() {
     {loading && <div className="nh-empty">Carregando notificações…</div>}
     {!loading && !visible.length && !error && <div className="nh-empty">Nenhuma notificação neste filtro.</div>}
 
-    <section className="nh-list">{visible.map((item) => <article className={`nh-item ${tone(item.level)}`} key={`${item.kind}:${item.id}`}>
-      <div className="nh-item-top"><span>{text(item.client_name || "Operação geral")}</span><time>{formatDate(item.occurred_at)}</time></div>
-      <h2>{text(item.title)}</h2>
-      <p>{text(item.description)}</p>
-      <div className="nh-meta"><span>{text(item.source_label || item.source || "Operação")}</span><span>{text(item.owner || item.actor || "Sem responsável")}</span><span>{String(item.status || (item.read_at ? "READ" : "OPEN"))}</span></div>
-      {item.next_action && <div className="nh-next"><b>Próxima ação</b><span>{text(item.next_action)}</span></div>}
-      {item.client_id && <a href={`/?client=${encodeURIComponent(String(item.client_id))}&clientNotifications=1&notification=${encodeURIComponent(String(item.title || ""))}`}>Abrir cliente →</a>}
-    </article>)}</section>
+    <section className="nh-list">{visible.map((item) => {
+      const resolvedItem = String(item.status || "").toUpperCase() === "RESOLVED";
+      return <article className={`nh-item ${tone(item.level)}${resolvedItem ? " resolved" : ""}`} key={`${item.kind}:${item.id}`}>
+        <div className="nh-item-top"><span>{text(item.client_name || "Operação geral")}</span><time>{formatDate(item.occurred_at)}</time></div>
+        <h2>{text(item.title)}</h2>
+        <p>{text(item.description)}</p>
+        <div className="nh-meta"><span>{text(item.source_label || item.source || "Operação")}</span><span>{text(item.owner || item.actor || "Sem responsável")}</span><span className={resolvedItem ? "nh-status resolved" : "nh-status"}>{statusLabel(item)}</span></div>
+        {resolvedItem && item.resolved_at && <div className="nh-resolved"><b>✓ Resolvida</b><span>{item.resolved_by ? `por ${text(item.resolved_by)} · ` : ""}{formatDate(item.resolved_at)}</span></div>}
+        {item.next_action && !resolvedItem && <div className="nh-next"><b>Próxima ação</b><span>{text(item.next_action)}</span></div>}
+        {item.client_id && <a href={`/?client=${encodeURIComponent(String(item.client_id))}&clientNotifications=1&notification=${encodeURIComponent(String(item.title || ""))}`}>Abrir cliente →</a>}
+      </article>;
+    })}</section>
   </main>;
 }
 
 const styles = `
-*{box-sizing:border-box}.nh-page{min-height:100vh;background:#08111d;color:#e7f0f8;padding:34px;max-width:1500px;margin:0 auto;font-family:Inter,system-ui,sans-serif}.nh-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:26px}.nh-head span{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#7392ad}.nh-head h1{font-size:34px;margin:5px 0}.nh-head p{margin:0;color:#8198ad}.nh-head a,.nh-item>a{color:#d8ecff;text-decoration:none;border:1px solid rgba(111,166,214,.25);border-radius:10px;padding:10px 14px;background:rgba(45,112,172,.1)}.nh-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.nh-kpis article{padding:18px;border:1px solid rgba(116,156,192,.18);border-radius:15px;background:#0e1b2b}.nh-kpis small{display:block;color:#7790a7;font-size:10px;letter-spacing:.09em}.nh-kpis b{display:block;font-size:28px;margin-top:6px}.nh-kpis .danger b{color:#ff826e}.nh-filters{display:flex;gap:7px;margin-bottom:18px}.nh-filters button{border:1px solid transparent;border-radius:9px;padding:9px 13px;background:transparent;color:#88a0b6;cursor:pointer}.nh-filters button.active{background:rgba(58,139,211,.16);border-color:rgba(58,139,211,.28);color:#eef8ff}.nh-list{display:grid;gap:10px}.nh-item{padding:18px 19px;border:1px solid rgba(116,156,192,.18);border-radius:15px;background:#0d1a29;border-left:3px solid #4d83ae}.nh-item.critical{border-left-color:#ef6955}.nh-item.attention{border-left-color:#d6a247}.nh-item.ok{border-left-color:#3bb886}.nh-item-top{display:flex;justify-content:space-between;color:#7f98ae;font-size:11px}.nh-item h2{font-size:15px;margin:9px 0 6px}.nh-item p{font-size:13px;color:#9db0c2;line-height:1.55;margin:0 0 10px}.nh-meta{display:flex;gap:12px;flex-wrap:wrap;font-size:10px;color:#748da3;margin-bottom:12px}.nh-next{display:flex;gap:10px;padding:10px 12px;border-radius:10px;background:rgba(41,105,162,.1);font-size:12px;margin-bottom:13px}.nh-next b{color:#bcd9ee}.nh-next span{color:#92a9bc}.nh-item>a{display:inline-block;font-size:11px;padding:7px 10px}.nh-empty,.nh-error{padding:30px;text-align:center;border:1px dashed rgba(116,156,192,.2);border-radius:14px;color:#849db3}.nh-error{color:#ff9d8d}@media(max-width:800px){.nh-page{padding:18px}.nh-head{flex-direction:column}.nh-kpis{grid-template-columns:repeat(2,1fr)}}
+*{box-sizing:border-box}.nh-page{min-height:100vh;background:#08111d;color:#e7f0f8;padding:34px;max-width:1500px;margin:0 auto;font-family:Inter,system-ui,sans-serif}.nh-head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px;margin-bottom:26px}.nh-head span{font-size:11px;text-transform:uppercase;letter-spacing:.12em;color:#7392ad}.nh-head h1{font-size:34px;margin:5px 0}.nh-head p{margin:0;color:#8198ad}.nh-head a,.nh-item>a{color:#d8ecff;text-decoration:none;border:1px solid rgba(111,166,214,.25);border-radius:10px;padding:10px 14px;background:rgba(45,112,172,.1)}.nh-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.nh-kpis article{padding:18px;border:1px solid rgba(116,156,192,.18);border-radius:15px;background:#0e1b2b}.nh-kpis small{display:block;color:#7790a7;font-size:10px;letter-spacing:.09em}.nh-kpis b{display:block;font-size:28px;margin-top:6px}.nh-kpis .danger b{color:#ff826e}.nh-filters{display:flex;gap:7px;margin-bottom:18px}.nh-filters button{border:1px solid transparent;border-radius:9px;padding:9px 13px;background:transparent;color:#88a0b6;cursor:pointer}.nh-filters button.active{background:rgba(58,139,211,.16);border-color:rgba(58,139,211,.28);color:#eef8ff}.nh-list{display:grid;gap:10px}.nh-item{padding:18px 19px;border:1px solid rgba(116,156,192,.18);border-radius:15px;background:#0d1a29;border-left:3px solid #4d83ae}.nh-item.critical{border-left-color:#ef6955}.nh-item.attention{border-left-color:#d6a247}.nh-item.ok{border-left-color:#3bb886}.nh-item.resolved{border-left-color:#3bb886;background:rgba(11,28,35,.88)}.nh-item-top{display:flex;justify-content:space-between;color:#7f98ae;font-size:11px}.nh-item h2{font-size:15px;margin:9px 0 6px}.nh-item p{font-size:13px;color:#9db0c2;line-height:1.55;margin:0 0 10px}.nh-meta{display:flex;gap:12px;flex-wrap:wrap;font-size:10px;color:#748da3;margin-bottom:12px}.nh-status.resolved{color:#8fe0b6}.nh-resolved{display:flex;gap:8px;align-items:center;padding:9px 11px;margin-bottom:12px;border:1px solid rgba(59,184,134,.18);border-radius:10px;background:rgba(59,184,134,.08);font-size:11px}.nh-resolved b{color:#8fe0b6}.nh-resolved span{color:#769b89}.nh-next{display:flex;gap:10px;padding:10px 12px;border-radius:10px;background:rgba(41,105,162,.1);font-size:12px;margin-bottom:13px}.nh-next b{color:#bcd9ee}.nh-next span{color:#92a9bc}.nh-item>a{display:inline-block;font-size:11px;padding:7px 10px}.nh-empty,.nh-error{padding:30px;text-align:center;border:1px dashed rgba(116,156,192,.2);border-radius:14px;color:#849db3}.nh-error{color:#ff9d8d}@media(max-width:800px){.nh-page{padding:18px}.nh-head{flex-direction:column}.nh-kpis{grid-template-columns:repeat(2,1fr)}}
 `;
