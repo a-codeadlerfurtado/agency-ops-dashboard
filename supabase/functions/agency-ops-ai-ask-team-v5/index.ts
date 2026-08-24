@@ -42,14 +42,10 @@ function resolveNamed(question: string, rows: any[], field: string) {
 }
 
 function actionLines(answer: string) {
-  const normalized = norm(answer);
-  const marker = normalized.lastIndexOf("proximos passos");
-  let section = answer;
-  if (marker >= 0) {
-    const rawLower = answer.toLowerCase();
-    const accentIndex = Math.max(rawLower.lastIndexOf("próximos passos"), rawLower.lastIndexOf("proximos passos"));
-    if (accentIndex >= 0) section = answer.slice(accentIndex);
-  }
+  const rawLower = answer.toLowerCase();
+  const marker = Math.max(rawLower.lastIndexOf("próximos passos"), rawLower.lastIndexOf("proximos passos"));
+  if (marker < 0) return [];
+  const section = answer.slice(marker);
   const lines = section.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const numbered = lines.filter((line) => /^(?:\d{1,2}[.)]|[-•])\s+/.test(line));
   const source = numbered.length ? numbered : lines.slice(1, 4);
@@ -58,10 +54,14 @@ function actionLines(answer: string) {
 
 function inferRole(text: string) {
   const q = norm(text);
+  if (/^(operacoes|operacao|adler|gestao|management)\b/.test(q)) return "MGMT";
+  if (/^(designer|design)\b/.test(q)) return "DESIGN";
+  if (/^(cs|customer success|atendimento|relacionamento)\b/.test(q)) return "CS";
+  if (/^(gt|gestor de trafego|trafego)\b/.test(q)) return "GT";
+  if (/\b(operacoes|operacao|adler|gestao|management)\b/.test(q)) return "MGMT";
   if (/\b(designer|design|criativo|criativos)\b/.test(q)) return "DESIGN";
   if (/\b(cs|customer success|atendimento|relacionamento)\b/.test(q)) return "CS";
   if (/\b(gt|gestor de trafego|trafego|campanha|meta ads|meta)\b/.test(q)) return "GT";
-  if (/\b(operacoes|operacao|adler|gestao|management)\b/.test(q)) return "MGMT";
   return "MGMT";
 }
 
@@ -77,7 +77,7 @@ function inferType(text: string) {
   const q = norm(text);
   if (/\b(criativo|criativos|design|logo|layout|arte)\b/.test(q)) return "CREATIVE_REQUEST";
   if (/\b(integracao|api|z api|zapi|erro tecnico|webhook|falha tecnica|sincronizacao)\b/.test(q)) return "TECHNICAL";
-  if (/\b(responder|cliente|follow up|cobrar|retorno|contato)\b/.test(q)) return "CLIENT_FOLLOWUP";
+  if (/\b(responder|follow up|cobrar|retorno|contato)\b/.test(q)) return "CLIENT_FOLLOWUP";
   if (/\b(clickup|task|tarefa)\b/.test(q)) return "CLICKUP";
   if (/\b(escalar|escalonar|escalacao)\b/.test(q)) return "ESCALATION";
   return "GENERAL";
