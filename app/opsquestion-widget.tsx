@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, authenticatedFetch, isSessionExpiredError, supabase } from "./shared";
 
-const ASK_URL = `${SUPABASE_URL}/functions/v1/agency-ops-ai-ask-team`;
+const ASK_URL = `${SUPABASE_URL}/functions/v1/agency-ops-ai-ask-team-v2`;
 
 type ChatMessage = {
   role: "user" | "ai";
