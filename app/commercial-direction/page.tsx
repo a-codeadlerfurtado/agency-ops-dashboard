@@ -142,12 +142,12 @@ export default function CommercialDirectionPage() {
   if (!authReady || !session) return <main className="cd-loading">Carregando…</main>;
   return <main className="cd-shell">
     <header className="cd-top">
-      <div className="cd-brand"><BrandMark /><span><small>Leonardo Imobi</small><b>Painel Comercial</b></span></div>
+      <div className="cd-brand"><BrandMark /><span><small>Leonardo Imobi</small><b>Home Comercial</b></span></div>
       <div className="cd-profile"><b>{text(payload.profile?.person, "Direção Comercial")}</b><small>{text(payload.profile?.display_role, "Comercial")} · somente leitura</small></div>
     </header>
 
     <section className="cd-hero">
-      <div><span>COMERCIAL · VISÃO EXECUTIVA</span><h1>Vendas, campanhas e carteira. <em>Sem operação.</em></h1><p>Um painel focado em aquisição, pipeline e clientes. Conversas, clientes sem resposta, alertas de problema e controles operacionais não fazem parte deste perfil.</p></div>
+      <div><span>HOME · COMERCIAL</span><h1>Visão geral de vendas, campanhas e carteira. <em>Sem operação.</em></h1><p>Um painel focado em aquisição, pipeline e clientes. Conversas, clientes sem resposta, alertas de problema e controles operacionais não fazem parte deste perfil.</p></div>
       <div className="cd-refresh"><small>Atualizado {date(payload.generated_at, true)}</small><button onClick={load} disabled={loading}>{loading ? "Atualizando…" : "Atualizar"}</button></div>
     </section>
 
