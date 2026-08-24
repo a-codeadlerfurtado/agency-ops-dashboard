@@ -47,11 +47,8 @@ export default function OnboardingRequiredAlerts() {
 
   useEffect(() => {
     if (!session?.access_token) return;
-    load();
-    const timer = window.setInterval(load, 15_000);
-    const visible = () => { if (!document.hidden) load(); };
-    document.addEventListener("visibilitychange", visible);
-    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", visible); };
+    const timer = window.setTimeout(load, 35_000);
+    return () => window.clearTimeout(timer);
   }, [session?.access_token, load]);
 
   useEffect(() => {
