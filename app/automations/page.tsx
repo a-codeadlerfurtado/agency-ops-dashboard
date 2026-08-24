@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "../shared";
 import { AutomationHealthCenter } from "../views/automations";
+import AutomationResolveBridge from "../automation-resolve-bridge";
 
 const ADLER_USER_ID = "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
 
@@ -35,6 +36,7 @@ export default function AutomationsPage() {
       <span>Ctrl + Alt + H também volta para a Home</span>
     </nav>
     <AutomationHealthCenter token={session.access_token} />
+    <AutomationResolveBridge />
   </main>;
 }
 
