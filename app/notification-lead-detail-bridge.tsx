@@ -18,6 +18,45 @@ function isLeadQualityNotification(item: Row | null | undefined) {
     || /lead incompleto/i.test(String(item.title || ""));
 }
 
+function normalize(value: unknown) {
+  return String(value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLocaleLowerCase("pt-BR");
+}
+
+function exactNotificationForButton(rows: Row[], button: HTMLButtonElement) {
+  const title = normalize(button.querySelector("b")?.textContent || "");
+  const visible = normalize(button.textContent || "");
+  const candidates = rows.filter((item) => {
+    if (!isLeadQualityNotification(item)) return false;
+    if (normalize(item.title) !== title) return false;
+    const description = normalize(item.description);
+    return Boolean(description) && visible.includes(description);
+  });
+
+  if (candidates.length === 1) return candidates[0];
+
+  // Em recorrências o título traz o número da ocorrência. Se, por alguma razão,
+  // a descrição renderizada mudou apenas na parte do ator/data, usamos também
+  // cliente + produto + ocorrência para chegar a uma única notificação.
+  const byIdentity = rows.filter((item) => {
+    if (!isLeadQualityNotification(item) || normalize(item.title) !== title) return false;
+    const description = normalize(item.description);
+    const product = normalize(item.metadata?.product_label);
+    const occurrence = Number(item.metadata?.occurrence_no || 0);
+    const occurrenceText = occurrence ? `${occurrence}` : "";
+    const descriptionMatches = description ? visible.includes(description) : false;
+    const productMatches = product ? visible.includes(product) : false;
+    const occurrenceMatches = occurrenceText ? visible.includes(occurrenceText) : true;
+    return descriptionMatches || (productMatches && occurrenceMatches);
+  });
+
+  return byIdentity.length === 1 ? byIdentity[0] : null;
+}
+
 export default function NotificationLeadDetailBridge() {
   const [session, setSession] = useState<Session | null>(null);
   const [notifications, setNotifications] = useState<Row[]>([]);
@@ -38,7 +77,7 @@ export default function NotificationLeadDetailBridge() {
   }, []);
 
   const loadNotifications = useCallback(async () => {
-    if (!session?.access_token || loadingRef.current) return [] as Row[];
+    if (!session?.access_token || loadingRef.current) return notifications;
     loadingRef.current = true;
     try {
       const home = await api("home", session.access_token);
@@ -82,39 +121,28 @@ export default function NotificationLeadDetailBridge() {
       if (!notificationButton) return;
 
       const title = notificationButton.querySelector("b")?.textContent?.trim() || "";
-      const visuallyLeadQuality = /lead incompleto/i.test(title);
-      if (!visuallyLeadQuality) {
-        const list = notificationButton.parentElement;
-        const index = list ? Array.from(list.children).indexOf(notificationButton) : -1;
-        const cached = index >= 0 ? notifications[index] : null;
-        if (!isLeadQualityNotification(cached)) return;
-      }
+      if (!/lead incompleto/i.test(title)) return;
 
+      // Impede SEMPRE o clique original do NotificationCenter para este tipo de alerta.
+      // Assim ele nunca cai no fallback genérico que abre a ficha de algum cliente.
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
 
-      const list = notificationButton.parentElement;
-      const index = list ? Array.from(list.children).indexOf(notificationButton) : -1;
-      let rows = notifications;
-      let item = index >= 0 ? rows[index] : null;
+      setSelected({ item: { title, metadata: {} }, loading: true });
+      setCopied(false);
 
-      if (!isLeadQualityNotification(item)) {
-        setSelected({ item: { title, metadata: {} }, loading: true });
-        rows = await loadNotifications();
-        item = index >= 0 ? rows[index] : null;
-      }
-
-      if (!isLeadQualityNotification(item)) {
-        item = rows.find((candidate) => isLeadQualityNotification(candidate) && String(candidate.title || "") === title)
-          || rows.find((candidate) => isLeadQualityNotification(candidate));
+      let item = exactNotificationForButton(notifications, notificationButton);
+      if (!item) {
+        const fresh = await loadNotifications();
+        item = exactNotificationForButton(fresh, notificationButton);
       }
 
       if (!item) {
         setSelected({
           item: {
             title: title || "Lead incompleto",
-            description: "Não foi possível carregar os detalhes desta ocorrência agora.",
+            description: "Não consegui vincular esta linha a uma ocorrência única com segurança. Nenhum cliente foi aberto para evitar mostrar o registro errado. Atualize a Central de Notificações e tente novamente.",
             metadata: {},
           },
         });
@@ -122,7 +150,6 @@ export default function NotificationLeadDetailBridge() {
       }
 
       setSelected({ item });
-      setCopied(false);
       try {
         if (!item.read_at) await apiPost("notifications-read", session.access_token, { id: item.id });
       } catch {
