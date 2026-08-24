@@ -40,6 +40,7 @@ import DailyGreeting from "./daily-greeting-v3";
 import TeamAccessAdmin from "./team-access-admin";
 import GabrielTasklogMode from "./gabriel-tasklog-mode";
 import GabrielScopeNetwork from "./gabriel-scope-network";
+import TeamNowBridge from "./team-now-bridge";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -77,6 +78,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <CommercialNavigationBridge />
         <CommercialVitorPerformanceBridge />
         <CommercialNotificationsBridge />
+        <TeamNowBridge />
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
         <CockpitCollapseBridge />
