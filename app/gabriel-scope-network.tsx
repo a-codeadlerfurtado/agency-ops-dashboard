@@ -26,6 +26,7 @@ function rewriteUrl(raw: string) {
   if (raw.includes("/functions/v1/agency-ops-profile-data-api")) return raw.replace("/functions/v1/agency-ops-profile-data-api", "/functions/v1/agency-ops-gabriel-profile-data-api");
   if (raw.includes("/functions/v1/agency-ops-work-item-create-api")) return raw.replace("/functions/v1/agency-ops-work-item-create-api", "/functions/v1/agency-ops-gabriel-work-item-create-api");
   if (raw.includes("/functions/v1/agency-ops-ai-work-api")) return raw.replace("/functions/v1/agency-ops-ai-work-api", "/functions/v1/agency-ops-gabriel-ai-work-api");
+  if (raw.includes("/functions/v1/agency-ops-client-notifications")) return raw.replace("/functions/v1/agency-ops-client-notifications", "/functions/v1/agency-ops-gabriel-client-notifications");
   return raw;
 }
 
