@@ -14,6 +14,8 @@ const normalize = (value: string) => value
   .trim()
   .toLowerCase();
 
+const isLeonardo = (role: string | null, person: string | null) => role === "COMMERCIAL" && normalize(person || "") === "leonardo augusto";
+
 function ensureStyles() {
   if (document.getElementById("commercial-navigation-style")) return;
   const style = document.createElement("style");
@@ -25,6 +27,7 @@ function ensureStyles() {
     .commercial-section-nav button{border:1px solid transparent;background:transparent;color:#91aa9f;border-radius:8px;padding:9px 12px;cursor:pointer;font:inherit;font-size:11px;font-weight:750}
     .commercial-section-nav button:hover{background:rgba(255,255,255,.045);color:#eef8f3}
     .commercial-section-nav button.active{border-color:rgba(103,215,161,.28);background:rgba(44,145,98,.14);color:#dff8ea}
+    .cd-main-tabs [data-leonardo-agenda]{border-color:rgba(116,196,158,.2)}
     @media(max-width:760px){.commercial-section-nav{margin:-6px 12px 14px;overflow:auto}.commercial-section-nav .commercial-section-label{display:none}.commercial-section-nav button{white-space:nowrap}}
   `;
   document.head.appendChild(style);
@@ -47,12 +50,12 @@ function installDashboardTab(role: string | null) {
   const container = document.querySelector<HTMLElement>(".side-nav-items");
   if (!container) return;
 
-  const isCommercial = role === "COMMERCIAL";
-  const label = isCommercial ? "Direção Comercial" : "Funil comercial";
-  const href = isCommercial ? "/commercial-direction" : "/sales-funnel";
+  const commercial = role === "COMMERCIAL";
+  const label = commercial ? "Direção Comercial" : "Funil comercial";
+  const href = commercial ? "/commercial-direction" : "/sales-funnel";
   const existing = container.querySelector<HTMLButtonElement>("[data-commercial-funnel-nav]");
   if (existing) {
-    if (existing.dataset.commercialMode === (isCommercial ? "direction" : "funnel")) return;
+    if (existing.dataset.commercialMode === (commercial ? "direction" : "funnel")) return;
     existing.remove();
   }
 
@@ -64,7 +67,7 @@ function installDashboardTab(role: string | null) {
   const button = document.createElement("button");
   button.type = "button";
   button.dataset.commercialFunnelNav = "true";
-  button.dataset.commercialMode = isCommercial ? "direction" : "funnel";
+  button.dataset.commercialMode = commercial ? "direction" : "funnel";
   button.title = label;
   if (template?.className) button.className = template.className.replace(/\bactive\b/g, "").trim();
   button.textContent = label;
@@ -91,6 +94,28 @@ function installCommercialSubnav(path: string, fridayAllowed: boolean) {
   nav.appendChild(makeSectionButton("Visão do funil", "/sales-funnel", path === "/sales-funnel"));
   if (fridayAllowed || path === "/friday-report") nav.appendChild(makeSectionButton("Relatório de sexta", "/friday-report", path === "/friday-report"));
   anchor.parentElement.insertBefore(nav, anchor.nextSibling);
+}
+
+function tuneLeonardoDirection() {
+  if (window.location.pathname !== "/commercial-direction") return;
+  const mainTabs = document.querySelector<HTMLElement>(".cd-main-tabs");
+  if (!mainTabs) return;
+
+  const cockpit = Array.from(mainTabs.querySelectorAll<HTMLButtonElement>("button")).find((button) => normalize(button.textContent || "") === "cockpit");
+  if (cockpit) { cockpit.textContent = "Visão Geral"; cockpit.title = "Visão Geral"; }
+
+  if (!mainTabs.querySelector("[data-leonardo-agenda]")) {
+    const agenda = document.createElement("button");
+    agenda.type = "button";
+    agenda.dataset.leonardoAgenda = "true";
+    agenda.textContent = "Agenda";
+    agenda.title = "Agenda automática de reuniões";
+    agenda.addEventListener("click", () => window.location.assign("/agenda"));
+    mainTabs.appendChild(agenda);
+  }
+
+  const back = document.querySelector<HTMLButtonElement>(".cd-top > button");
+  if (back) back.style.display = "none";
 }
 
 export default function CommercialNavigationBridge() {
@@ -124,9 +149,9 @@ export default function CommercialNavigationBridge() {
   }, [session?.access_token]);
 
   useEffect(() => {
-    const isLeonardo = profileRole === "COMMERCIAL" && normalize(profilePerson || "") === "leonardo augusto";
-    if (!isLeonardo) return;
+    if (!isLeonardo(profileRole, profilePerson)) return;
     if (window.location.pathname === "/") window.location.replace("/commercial-direction");
+    if (window.location.pathname === "/client-revenue" || window.location.pathname === "/contracts") window.location.replace("/commercial-direction");
   }, [profileRole, profilePerson]);
 
   useEffect(() => {
@@ -166,6 +191,7 @@ export default function CommercialNavigationBridge() {
         removeLegacyShortcuts();
         if (path === "/") installDashboardTab(profileRole);
         if (path === "/sales-funnel" || path === "/friday-report") installCommercialSubnav(path, fridayAllowed);
+        if (isLeonardo(profileRole, profilePerson)) tuneLeonardoDirection();
       });
     };
     apply();
@@ -176,9 +202,9 @@ export default function CommercialNavigationBridge() {
       observer.disconnect();
       window.clearInterval(timer);
       window.cancelAnimationFrame(frame);
-      document.querySelectorAll("[data-commercial-funnel-nav],[data-commercial-section-nav]").forEach((node) => node.remove());
+      document.querySelectorAll("[data-commercial-funnel-nav],[data-commercial-section-nav],[data-leonardo-agenda]").forEach((node) => node.remove());
     };
-  }, [session, fridayAllowed, profileRole]);
+  }, [session, fridayAllowed, profileRole, profilePerson]);
 
   return null;
 }
