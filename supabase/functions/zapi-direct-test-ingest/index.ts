@@ -34,8 +34,29 @@ Deno.serve(async (req) => {
 
   if (req.method !== 'POST') return new Response('method', { status: 405 });
 
+  const contentType = req.headers.get('content-type')?.toLowerCase() || '';
+  if (!contentType.startsWith('application/json')) {
+    return new Response(JSON.stringify({ ok: false, error: 'content_type_required' }), {
+      status: 415,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+  const declaredLength = Number(req.headers.get('content-length') || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > 512 * 1024) {
+    return new Response(JSON.stringify({ ok: false, error: 'payload_too_large' }), {
+      status: 413,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
+
   const url = new URL(req.url);
-  const token = url.searchParams.get('token') || req.headers.get('x-zapi-test-token') || '';
+  const token = req.headers.get('x-zapi-test-token') || url.searchParams.get('token') || '';
+  if (!token || token.length > 512) {
+    return new Response(JSON.stringify({ ok: false, error: 'unauthorized' }), {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
 
   let payload: Record<string, unknown>;
   try {
@@ -55,17 +76,23 @@ Deno.serve(async (req) => {
     });
   }
 
-  const projectUrl = Deno.env.get('SUPABASE_URL')!;
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
+  const projectUrl = Deno.env.get('SUPABASE_URL') || '';
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+  if (!projectUrl || !serviceRoleKey) {
+    console.error({ event: 'zapi_ingest_configuration_missing' });
+    return new Response(JSON.stringify({ ok: false, error: 'server_configuration' }), {
+      status: 500,
+      headers: { 'content-type': 'application/json' },
+    });
+  }
 
   try {
     const rpc = await fetch(`${projectUrl}/rest/v1/rpc/ingest_zapi_direct_official_atomic`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'apikey': anonKey,
-        'authorization': `Bearer ${anonKey}`,
+        'apikey': serviceRoleKey,
+        'authorization': `Bearer ${serviceRoleKey}`,
       },
       body: JSON.stringify({ p_payload: payload, p_token: token }),
     });
@@ -80,9 +107,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    if (serviceRoleKey) {
-      EdgeRuntime.waitUntil(drainQueue(projectUrl, serviceRoleKey));
-    }
+    EdgeRuntime.waitUntil(drainQueue(projectUrl, serviceRoleKey));
 
     return new Response(body || JSON.stringify({ ok: true, accepted: true, queued: true }), {
       status: 200,
