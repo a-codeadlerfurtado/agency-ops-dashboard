@@ -14,6 +14,7 @@ import OnboardingRequiredAlerts from "./onboarding-required-alerts";
 import OnboardingRoleRouter from "./onboarding-role-router";
 import CommercialNavigationBridge from "./commercial-navigation-bridge";
 import CommercialHomeGuard from "./commercial-home-guard";
+import CommercialInlineDashboard from "./commercial-inline-dashboard";
 import AdlerFinanceNavBridge from "./adler-finance-nav-bridge";
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
@@ -75,6 +76,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OnboardingRequiredAlerts />
         <OnboardingRoleRouter />
         <CommercialHomeGuard />
+        <CommercialInlineDashboard />
         <CommercialNavigationBridge />
         <AdlerFinanceNavBridge />
         <IntegrationHealthBar />
