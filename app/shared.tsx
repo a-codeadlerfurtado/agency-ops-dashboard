@@ -11,6 +11,7 @@ import { createClient, type Session } from "@supabase/supabase-js";
 export const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
 export const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
 export const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api`;
+export const DASHBOARD_CLIENT_VERSION = "hotfix-20260824";
 export const CONTRACTS_API = `${SUPABASE_URL}/functions/v1/agency-ops-contracts-api`;
 export const CLICKUP_API_URL = `${SUPABASE_URL}/functions/v1/clickup-sync-api`;
 export const CS_CLIENTS_API = `${SUPABASE_URL}/functions/v1/agency-ops-cs-clients-api`;
@@ -258,9 +259,32 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
   return response;
 }
 
+let profileLiteCache: { userId: string; promise: Promise<Row> } | null = null;
+
+export async function loadProfileLite(): Promise<Row> {
+  const { data, error } = await supabase.auth.getSession();
+  const userId = data.session?.user.id;
+  if (error || !userId) throw new SessionExpiredError();
+
+  if (!profileLiteCache || profileLiteCache.userId !== userId) {
+    const promise = authenticatedFetch(`${SUPABASE_URL}/functions/v1/agency-ops-profile-lite`, { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
+        return response.json();
+      })
+      .catch((caught) => {
+        if (profileLiteCache?.promise === promise) profileLiteCache = null;
+        throw caught;
+      });
+    profileLiteCache = { userId, promise };
+  }
+  return profileLiteCache.promise;
+}
+
 export async function api(view: string, _token: string, params: Record<string, string> = {}) {
   const url = new URL(API_URL);
   url.searchParams.set("view", view);
+  url.searchParams.set("client", DASHBOARD_CLIENT_VERSION);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
   const response = await authenticatedFetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
