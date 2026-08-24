@@ -3,7 +3,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const CORS={"access-control-allow-origin":"*","access-control-allow-headers":"authorization,apikey,content-type","access-control-allow-methods":"GET,POST,OPTIONS"};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...CORS,"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
-const ALLOWED=new Set(["Adler Furtado","Leonardo Augusto"]);
+const ALLOWED=new Set(["Adler Furtado"]);
 const num=(v:unknown)=>v===null||v===undefined||v===""?null:Number(v);
 
 Deno.serve(async(req:Request)=>{
