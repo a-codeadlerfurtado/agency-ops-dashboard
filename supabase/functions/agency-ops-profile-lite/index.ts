@@ -27,8 +27,30 @@ Deno.serve(async(req:Request)=>{
   if(prefError)return respond({error:"profile_query_failed"},500);
   const person=String(pref?.collaborator_person||pref?.name||"").trim();
   if(!person)return respond({error:"profile_not_found"},404);
-  const {data:roster,error:rosterError}=await ops.from("team_roster").select("person,role,access_level").eq("person",person).eq("is_former",false).maybeSingle();
+
+  const [{data:roster,error:rosterError},{data:approvals}]=await Promise.all([
+    ops.from("team_roster").select("person,role,access_level").eq("person",person).eq("is_former",false).maybeSingle(),
+    ops.from("access_requests").select("kind,status").eq("user_key",userKey).eq("status","APPROVED"),
+  ]);
   if(rosterError||!roster)return respond({error:"profile_not_found"},404);
+
+  const approved=approvals??[];
+  const accountApproved=approved.some((row:any)=>row.kind==="SIGNUP");
+  const elevated=roster.access_level==="RESTRICTED"&&approved.some((row:any)=>row.kind==="ELEVATION");
+  const isFull=accountApproved&&(roster.access_level==="FULL"||elevated);
   const {data:views,error:viewsError}=await ops.rpc("dashboard_allowed_views",{p_person:person,p_role:roster.role});
-  return respond({ok:true,profile:{person:roster.person,role:roster.role,access_level:roster.access_level,views:Array.isArray(views)&&!viewsError?views:[]},generated_at:new Date().toISOString()});
+
+  return respond({
+    ok:true,
+    profile:{
+      person:roster.person,
+      role:roster.role,
+      access_level:roster.access_level,
+      account_approved:accountApproved,
+      elevated,
+      is_full:isFull,
+      views:Array.isArray(views)&&!viewsError?views:[],
+    },
+    generated_at:new Date().toISOString(),
+  });
 });
