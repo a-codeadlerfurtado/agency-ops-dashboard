@@ -51,6 +51,17 @@ function dataOf(value: any) {
   return value?.success === true && value?.data != null ? value.data : value;
 }
 
+function normalizeToken(value: unknown) {
+  let token = String(value || "")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim();
+  token = token.replace(/^['"`]+|['"`]+$/g, "").trim();
+  token = token.replace(/^Bearer\s+/i, "").trim();
+  const embedded = token.match(/dnh_mcp_[A-Za-z0-9_-]+/);
+  if (embedded?.[0]) token = embedded[0];
+  return token.replace(/\s+/g, "");
+}
+
 async function postMcp(token: string, body: any, session?: string | null, protocol = "2025-03-26") {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,
@@ -164,11 +175,11 @@ Deno.serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const targetPerson = String(body?.person || "").trim();
-    const token = String(body?.token || "").trim();
+    const token = normalizeToken(body?.token);
     const secretName = allowed.get(targetPerson);
     if (!secretName) return json({ ok: false, error: "PERSON_NOT_ALLOWED" }, 400);
-    if (!token.startsWith("dnh_mcp_") || token.length < 40 || token.length > 300) {
-      return json({ ok: false, error: "INVALID_DONNAH_TOKEN" }, 400);
+    if (!token || token.length < 16 || token.length > 1000) {
+      return json({ ok: false, error: "DONNAH_TOKEN_MISSING" }, 400);
     }
 
     let probe: any;
