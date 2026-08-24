@@ -141,6 +141,12 @@ export default function CommercialNavigationBridge() {
   useEffect(() => { ensureStyles(); removeLegacyShortcuts(); }, []);
 
   useEffect(() => {
+    const email=String(session?.user?.email||"").toLowerCase();
+    if(email!==LEONARDO_EMAIL)return;
+    if(["/client-revenue","/contracts"].includes(window.location.pathname))window.location.replace("/commercial-direction");
+  },[session?.user?.email]);
+
+  useEffect(() => {
     if (!session?.access_token) { setProfileRole(null); return; }
     let active = true;
     authenticatedFetch(DASHBOARD_API, { cache: "no-store" })
