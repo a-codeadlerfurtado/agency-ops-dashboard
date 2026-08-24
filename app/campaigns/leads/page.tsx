@@ -191,7 +191,7 @@ export default function LeadConferencePage() {
     }
     return map;
   },[meta]);
-  const gtOptions = useMemo(() => [...new Set((meta?.clients || []).map((row:Row) => String(row.gt_owner || "").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"pt-BR")),[meta]);
+  const gtOptions = useMemo<string[]>(() => [...new Set<string>((meta?.clients || []).map((row: Row) => String(row.gt_owner || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR")), [meta]);
 
   const allMerged = useMemo(() => {
     return (meta?.clients || []).map((client:Row) => {
