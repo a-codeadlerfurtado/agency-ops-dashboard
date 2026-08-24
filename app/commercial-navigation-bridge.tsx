@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, authenticatedFetch, loadProfileLite, supabase } from "./shared";
 
 const FRIDAY_API = `${SUPABASE_URL}/functions/v1/agency-ops-friday-report-api`;
+const GABRIEL_USER_ID = "197fb469-bc67-492c-9b74-154372760633";
 const normalize = (value: string) => value
   .normalize("NFD")
   .replace(/[\u0300-\u036f]/g, "")
@@ -30,6 +31,10 @@ function ensureStyles() {
 
 function removeLegacyShortcuts() {
   document.querySelectorAll(".sales-funnel-shortcut,.friday-report-shortcut").forEach((node) => node.remove());
+}
+
+function removeCommercialNavigation() {
+  document.querySelectorAll("[data-commercial-funnel-nav],[data-commercial-section-nav]").forEach((node) => node.remove());
 }
 
 function makeSectionButton(label: string, href: string, active: boolean) {
@@ -107,7 +112,7 @@ export default function CommercialNavigationBridge() {
   }, [profileRole]);
 
   useEffect(() => {
-    if (profileRole === "COMMERCIAL" || !session?.access_token) { setFridayAllowed(false); return; }
+    if (profileRole === "COMMERCIAL" || session?.user?.id === GABRIEL_USER_ID || !session?.access_token) { setFridayAllowed(false); return; }
     const path = window.location.pathname;
     if (path !== "/sales-funnel" && path !== "/friday-report") return;
     let active = true;
@@ -115,10 +120,14 @@ export default function CommercialNavigationBridge() {
       .then((response) => { if (active) setFridayAllowed(response.ok); })
       .catch(() => { if (active) setFridayAllowed(false); });
     return () => { active = false; };
-  }, [session?.access_token, profileRole]);
+  }, [session?.access_token, session?.user?.id, profileRole]);
 
   useEffect(() => {
     if (!session || profileRole === "COMMERCIAL") return;
+    if (session.user.id === GABRIEL_USER_ID) {
+      removeCommercialNavigation();
+      return;
+    }
     let frame = 0;
     const apply = () => {
       window.cancelAnimationFrame(frame);
@@ -137,7 +146,7 @@ export default function CommercialNavigationBridge() {
       observer.disconnect();
       window.clearInterval(timer);
       window.cancelAnimationFrame(frame);
-      document.querySelectorAll("[data-commercial-funnel-nav],[data-commercial-section-nav]").forEach((node) => node.remove());
+      removeCommercialNavigation();
     };
   }, [session, fridayAllowed, profileRole]);
 
