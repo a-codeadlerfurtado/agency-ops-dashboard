@@ -1,7 +1,23 @@
 "use client";
 
+import { useEffect } from "react";
+import { supabase } from "./shared";
+
 const GABRIEL_USER_ID = "197fb469-bc67-492c-9b74-154372760633";
 const MARK = "__opsGabrielScopeFetchInstalled";
+const BLOCKED_GABRIEL_APIS = [
+  "/functions/v1/agency-ops-sales-funnel-api",
+  "/functions/v1/agency-ops-friday-report-api",
+  "/functions/v1/agency-ops-commercial-direction-api",
+  "/functions/v1/agency-ops-commercial-portfolio-api",
+];
+
+const normalize = (value: unknown) => String(value ?? "")
+  .normalize("NFD")
+  .replace(/[\u0300-\u036f]/g, "")
+  .replace(/\s+/g, " ")
+  .trim()
+  .toLowerCase();
 
 function bearerFrom(input: RequestInfo | URL, init?: RequestInit) {
   const headers = new Headers(input instanceof Request ? input.headers : undefined);
@@ -42,6 +58,13 @@ function install() {
     if (!token || tokenSubject(token) !== GABRIEL_USER_ID) return original(input, init);
 
     const raw = input instanceof Request ? input.url : String(input);
+    if (BLOCKED_GABRIEL_APIS.some((part) => raw.includes(part))) {
+      return new Response(JSON.stringify({ error: "forbidden", scope: "GABRIEL_AI_ONLY" }), {
+        status: 403,
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+      });
+    }
+
     const next = rewriteUrl(raw);
     if (next === raw) return original(input, init);
 
@@ -70,9 +93,57 @@ function install() {
   }) as typeof window.fetch;
 }
 
+function removeCommercialUiForGabriel() {
+  const forbidden = new Set([
+    "funil comercial",
+    "direcao comercial",
+    "relatorio de sexta",
+    "visao do funil",
+  ]);
+  document.querySelectorAll<HTMLElement>(".side-nav-items button,.side-nav-items a,[data-commercial-funnel-nav],[data-commercial-section-nav]").forEach((node) => {
+    const label = normalize(node.getAttribute("title") || node.textContent || "");
+    if (forbidden.has(label) || node.hasAttribute("data-commercial-section-nav")) node.remove();
+  });
+}
+
 install();
 
 export default function GabrielScopeNetwork() {
   install();
+
+  useEffect(() => {
+    let enabled = false;
+    let frame = 0;
+
+    const apply = () => {
+      if (!enabled) return;
+      window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(() => {
+        removeCommercialUiForGabriel();
+        if (["/sales-funnel", "/friday-report", "/commercial-direction", "/commercial-clients"].includes(window.location.pathname)) {
+          window.location.replace("/");
+        }
+      });
+    };
+
+    const setSession = (userId?: string | null) => {
+      enabled = String(userId || "") === GABRIEL_USER_ID;
+      apply();
+    };
+
+    supabase.auth.getSession().then(({ data }) => setSession(data.session?.user?.id));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => setSession(session?.user?.id));
+    const observer = new MutationObserver(apply);
+    observer.observe(document.body, { childList: true, subtree: true });
+    const timer = window.setInterval(apply, 900);
+
+    return () => {
+      subscription.unsubscribe();
+      observer.disconnect();
+      window.clearInterval(timer);
+      window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
   return null;
 }
