@@ -7,23 +7,12 @@ import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
 const FRIDAY_API = `${SUPABASE_URL}/functions/v1/agency-ops-friday-report-api`;
 const DASHBOARD_API = `${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api?view=home`;
 
-const EXECUTIVE_AREAS = [
-  { key: "cockpit", label: "Cockpit" },
-  { key: "commercial", label: "Comercial" },
-  { key: "revenue", label: "Receita" },
-  { key: "acquisition", label: "Aquisição" },
-  { key: "postsale", label: "Pós-venda" },
-  { key: "intelligence", label: "Inteligência" },
-] as const;
-
 const normalize = (value: string) => value
   .normalize("NFD")
   .replace(/[\u0300-\u036f]/g, "")
   .replace(/\s+/g, " ")
   .trim()
   .toLowerCase();
-
-const isLeonardoProfile = (role: string | null, person: string | null) => role === "COMMERCIAL" && normalize(person || "") === "leonardo augusto";
 
 function ensureStyles() {
   if (document.getElementById("commercial-navigation-style")) return;
@@ -36,7 +25,6 @@ function ensureStyles() {
     .commercial-section-nav button{border:1px solid transparent;background:transparent;color:#91aa9f;border-radius:8px;padding:9px 12px;cursor:pointer;font:inherit;font-size:11px;font-weight:750}
     .commercial-section-nav button:hover{background:rgba(255,255,255,.045);color:#eef8f3}
     .commercial-section-nav button.active{border-color:rgba(103,215,161,.28);background:rgba(44,145,98,.14);color:#dff8ea}
-    .side-nav-items [data-commercial-executive-nav="true"]{width:100%;text-align:left}
     @media(max-width:760px){.commercial-section-nav{margin:-6px 12px 14px;overflow:auto}.commercial-section-nav .commercial-section-label{display:none}.commercial-section-nav button{white-space:nowrap}}
   `;
   document.head.appendChild(style);
@@ -55,86 +43,10 @@ function makeSectionButton(label: string, href: string, active: boolean) {
   return button;
 }
 
-function restoreExecutiveSidebar() {
-  const container = document.querySelector<HTMLElement>(".side-nav-items");
-  if (!container) return;
-  container.querySelectorAll<HTMLElement>("[data-commercial-executive-nav='true']").forEach((node) => node.remove());
-  Array.from(container.children).forEach((raw) => {
-    const node = raw as HTMLElement;
-    if (node.dataset.commercialHiddenByExecutive !== "true") return;
-    node.style.display = node.dataset.commercialOriginalDisplay === "__EMPTY__" ? "" : (node.dataset.commercialOriginalDisplay || "");
-    delete node.dataset.commercialHiddenByExecutive;
-    delete node.dataset.commercialOriginalDisplay;
-  });
-  delete container.dataset.commercialExecutiveSidebar;
-}
-
-function installExecutiveSidebar() {
-  const container = document.querySelector<HTMLElement>(".side-nav-items");
-  if (!container) return;
-  container.dataset.commercialExecutiveSidebar = "true";
-
-  const children = Array.from(container.children) as HTMLElement[];
-  const contractNode = children.find((node) => normalize(node.getAttribute("title") || node.textContent || "") === "contratos") || null;
-  const template = contractNode || children.find((node) => node.tagName === "BUTTON") || null;
-
-  for (const node of children) {
-    if (node.dataset.commercialExecutiveNav === "true") continue;
-    const label = normalize(node.getAttribute("title") || node.textContent || "");
-    const keep = label === "contratos";
-    if (keep) {
-      if (node.dataset.commercialHiddenByExecutive === "true") {
-        node.style.display = node.dataset.commercialOriginalDisplay === "__EMPTY__" ? "" : (node.dataset.commercialOriginalDisplay || "");
-        delete node.dataset.commercialHiddenByExecutive;
-        delete node.dataset.commercialOriginalDisplay;
-      }
-      continue;
-    }
-    if (node.dataset.commercialHiddenByExecutive !== "true") {
-      node.dataset.commercialOriginalDisplay = node.style.display || "__EMPTY__";
-      node.dataset.commercialHiddenByExecutive = "true";
-    }
-    node.style.display = "none";
-  }
-
-  for (const area of EXECUTIVE_AREAS) {
-    if (container.querySelector(`[data-commercial-executive-area="${area.key}"]`)) continue;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.dataset.commercialExecutiveNav = "true";
-    button.dataset.commercialExecutiveArea = area.key;
-    button.title = area.label;
-    button.textContent = area.label;
-    if (template?.className) button.className = template.className.replace(/\bactive\b/g, "").trim();
-    button.addEventListener("click", () => window.location.assign(`/commercial-direction?area=${area.key}`));
-    if (contractNode) container.insertBefore(button, contractNode);
-    else container.appendChild(button);
-  }
-}
-
-function applyCommercialDirectionAreaFromQuery() {
-  if (window.location.pathname !== "/commercial-direction") return;
-  const requested = new URLSearchParams(window.location.search).get("area");
-  if (!requested) return;
-  const area = EXECUTIVE_AREAS.find((item) => item.key === requested);
-  if (!area) return;
-  const buttons = Array.from(document.querySelectorAll<HTMLButtonElement>(".cd-main-tabs button"));
-  const target = buttons.find((button) => normalize(button.textContent || "") === normalize(area.label));
-  if (!target || target.classList.contains("active")) return;
-  target.click();
-}
-
-function installDashboardTab(role: string | null, person: string | null) {
+function installDashboardTab(role: string | null) {
   const container = document.querySelector<HTMLElement>(".side-nav-items");
   if (!container) return;
 
-  if (isLeonardoProfile(role, person)) {
-    container.querySelectorAll("[data-commercial-funnel-nav]").forEach((node) => node.remove());
-    installExecutiveSidebar();
-    return;
-  }
-
-  restoreExecutiveSidebar();
   const isCommercial = role === "COMMERCIAL";
   const label = isCommercial ? "Direção Comercial" : "Funil comercial";
   const href = isCommercial ? "/commercial-direction" : "/sales-funnel";
@@ -185,7 +97,6 @@ export default function CommercialNavigationBridge() {
   const [session, setSession] = useState<Session | null>(null);
   const [fridayAllowed, setFridayAllowed] = useState(false);
   const [profileRole, setProfileRole] = useState<string | null>(null);
-  const [profilePerson, setProfilePerson] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -196,18 +107,15 @@ export default function CommercialNavigationBridge() {
   useEffect(() => { ensureStyles(); removeLegacyShortcuts(); }, []);
 
   useEffect(() => {
-    if (!session?.access_token) { setProfileRole(null); setProfilePerson(null); return; }
+    if (!session?.access_token) { setProfileRole(null); return; }
     let active = true;
     authenticatedFetch(DASHBOARD_API, { cache: "no-store" })
       .then(async (response) => {
         if (!active || !response.ok) return;
         const body = await response.json().catch(() => ({}));
-        if (active) {
-          setProfileRole(String(body?.profile?.role || "") || null);
-          setProfilePerson(String(body?.profile?.person || body?.preferences?.name || "") || null);
-        }
+        if (active) setProfileRole(String(body?.profile?.role || "") || null);
       })
-      .catch(() => { if (active) { setProfileRole(null); setProfilePerson(null); } });
+      .catch(() => { if (active) setProfileRole(null); });
     return () => { active = false; };
   }, [session?.access_token]);
 
@@ -245,12 +153,9 @@ export default function CommercialNavigationBridge() {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
         const path = window.location.pathname;
-        const leonardo = isLeonardoProfile(profileRole, profilePerson);
         removeLegacyShortcuts();
-        if (path === "/") installDashboardTab(profileRole, profilePerson);
-        else if (!leonardo) restoreExecutiveSidebar();
+        if (path === "/") installDashboardTab(profileRole);
         if (path === "/sales-funnel" || path === "/friday-report") installCommercialSubnav(path, fridayAllowed);
-        if (leonardo && path === "/commercial-direction") applyCommercialDirectionAreaFromQuery();
       });
     };
     apply();
@@ -262,9 +167,8 @@ export default function CommercialNavigationBridge() {
       window.clearInterval(timer);
       window.cancelAnimationFrame(frame);
       document.querySelectorAll("[data-commercial-funnel-nav],[data-commercial-section-nav]").forEach((node) => node.remove());
-      restoreExecutiveSidebar();
     };
-  }, [session, fridayAllowed, profileRole, profilePerson]);
+  }, [session, fridayAllowed, profileRole]);
 
   return null;
 }
