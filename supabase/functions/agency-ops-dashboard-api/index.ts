@@ -1,13 +1,16 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const CORS = {
-  "access-control-allow-origin": "*",
+const ALLOWED_ORIGINS = new Set([
+  "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
+  "http://localhost:3000",
+  "http://localhost:5173",
+]);
+const CORS_BASE = {
   "access-control-allow-headers": "content-type,x-dashboard-key,authorization,apikey",
   "access-control-allow-methods": "GET,POST,OPTIONS",
   "access-control-max-age": "86400",
 };
-const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 
 async function sha256(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
@@ -46,7 +49,18 @@ const aggregateTaskLog = (rows: any[]) => {
 };
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+  const origin = req.headers.get("origin");
+  const originAllowed = !origin || ALLOWED_ORIGINS.has(origin);
+  const cors = origin && originAllowed ? { ...CORS_BASE, "access-control-allow-origin": origin, "vary": "Origin" } : CORS_BASE;
+  const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+    status,
+    headers: { ...cors, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: originAllowed ? 204 : 403, headers: cors });
+  }
+  if (!originAllowed) return respond({ error: "origin_not_allowed" }, 403);
   if (!['GET','POST'].includes(req.method)) return respond({ error: "method_not_allowed" }, 405);
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -59,7 +73,7 @@ Deno.serve(async (req) => {
 
   if (req.method === "GET" && view === "roster") {
     const [{ data: rosterRows }, { data: claimedRows }] = await Promise.all([
-      ops.from("team_roster").select("person,role").eq("is_former", false).order("person"),
+      ops.from("team_roster").select("person").eq("is_former", false).order("person"),
       ops.from("user_preferences").select("collaborator_person").not("collaborator_person", "is", null),
     ]);
     const claimed = new Set((claimedRows ?? []).map((row: any) => row.collaborator_person));
