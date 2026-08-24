@@ -1,16 +1,15 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const CORS = {
-  "access-control-allow-origin": "*",
+const ALLOWED_ORIGINS = new Set([
+  "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
+  "http://localhost:3000",
+  "http://localhost:5173",
+]);
+const CORS_BASE = {
   "access-control-allow-headers": "authorization,apikey,content-type",
   "access-control-allow-methods": "GET,POST,OPTIONS",
 };
-
-const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
-  status,
-  headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-});
 
 type Row = Record<string, any>;
 
@@ -74,7 +73,17 @@ function time(value: unknown) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+  const requestId = crypto.randomUUID();
+  const origin = req.headers.get("origin");
+  const originAllowed = !origin || ALLOWED_ORIGINS.has(origin);
+  const cors = origin && originAllowed ? { ...CORS_BASE, "access-control-allow-origin": origin, "vary": "Origin" } : CORS_BASE;
+  const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+    status,
+    headers: { ...cors, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+
+  if (req.method === "OPTIONS") return new Response(null, { status: originAllowed ? 204 : 403, headers: cors });
+  if (!originAllowed) return respond({ error: "origin_not_allowed" }, 403);
   if (!["GET", "POST"].includes(req.method)) return respond({ error: "method_not_allowed" }, 405);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -171,9 +180,16 @@ Deno.serve(async (req) => {
       .limit(2000),
   ]);
 
-  if (healthResult.error) return respond({ error: "automation_health_query_failed", detail: healthResult.error.message }, 500);
-  if (runsResult.error) return respond({ error: "job_runs_query_failed", detail: runsResult.error.message }, 500);
-  if (incidentsResult.error) return respond({ error: "incidents_query_failed", detail: incidentsResult.error.message }, 500);
+  if (healthResult.error || runsResult.error || incidentsResult.error) {
+    console.error({
+      event: "automation_health_query_failed",
+      request_id: requestId,
+      health: healthResult.error?.message,
+      runs: runsResult.error?.message,
+      incidents: incidentsResult.error?.message,
+    });
+    return respond({ error: "data_query_failed", request_id: requestId }, 500);
+  }
   if (resolutionsResult.error) return respond({ error: "resolutions_query_failed", detail: resolutionsResult.error.message }, 500);
 
   const health = (healthResult.data || []) as Row[];
@@ -189,9 +205,13 @@ Deno.serve(async (req) => {
   const dispatchIds = [...new Set(incidents.map((row) => row.dispatch_id).filter((value) => value != null).map(String))];
   const dispatchById = new Map<string, Row>();
   if (dispatchIds.length) {
-    const { data: dispatches } = await ops.from("meta_lead_dispatches")
+    const { data: dispatches, error: dispatchError } = await ops.from("meta_lead_dispatches")
       .select("id,message_id,event_at,connected_phone,recipient_phone,product_label,lead_name,lead_phone,lead_email,recipient_client_id,expected_client_id,routing_status,recipient_match_method,expected_match_method,group_product_evidence_count")
       .in("id", dispatchIds.slice(0, 800));
+    if (dispatchError) {
+      console.error({ event: "dispatch_enrichment_failed", request_id: requestId, error: dispatchError.message });
+      return respond({ error: "data_query_failed", request_id: requestId }, 500);
+    }
     for (const row of dispatches || []) dispatchById.set(String(row.id), row as Row);
   }
 
