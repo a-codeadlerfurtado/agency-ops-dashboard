@@ -38,3 +38,4 @@ já está em produção no projeto Supabase — não é necessário reaplicar as
 <!-- deploy trigger: commercial-direction-v2 2026-08-24 -->
 <!-- deploy trigger: leonardo-executive-home 2026-08-24T12:40-03:00 -->
 <!-- deploy trigger: remove-leonardo-auto-redirect 2026-08-24T12:49-03:00 -->
+<!-- deploy trigger: gabriel-ai-only-no-commercial-groups 2026-08-24T13:03-03:00 -->
