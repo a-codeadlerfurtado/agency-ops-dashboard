@@ -7,14 +7,19 @@ const norm=(value:unknown)=>String(value??"").normalize("NFD").replace(/[\u0300-
 function isAiServiceEvent(row:any){
   if(!row||typeof row!=="object")return false;
   const meta=row.metadata&&typeof row.metadata==="object"?row.metadata:{};
-  if(meta.ai_workspace===true||meta.n8n_verified===true||meta.created_inside_ai_work_center===true||meta.ai_classified===true)return true;
-  if(String(meta.target_role??row.target_role??"").trim().toUpperCase()==="AI")return true;
-  if(norm(meta.target_person??row.target_person??"")==="gabriel castro")return true;
+  const strongAiOrigin=meta.ai_workspace===true||meta.n8n_verified===true||meta.created_inside_ai_work_center===true;
   const combined=norm([
     row.type,row.source,row.title,row.description,row.next_action,row.owner,row.actor,
     meta.service,meta.product,meta.category,meta.workspace,meta.source,meta.type,meta.title,meta.description,meta.next_action
   ].filter(Boolean).join(" "));
-  return /\bia\b|inteligencia artificial|\bn8n\b|agente de ia|agente virtual|chatbot|bot de atendimento|assistente virtual|\bllm\b|openai|prompt|webhook|automacao|fluxo de atendimento|integracao com whatsapp|whatsapp integrado|donnah/.test(combined);
+  const explicitTech=/\bn8n\b|agente de ia|agente virtual|chatbot|bot de atendimento|assistente virtual|\bllm\b|openai|prompt/.test(combined);
+  const explicitAi=/\bia\b|inteligencia artificial/.test(combined);
+  const automationContext=/\bautomacao\b/.test(combined)&&/(n8n|\bia\b|inteligencia artificial|agente|chatbot|bot|assistente virtual|webhook|whatsapp|lead|atendimento)/.test(combined);
+  const integrationContext=/(webhook|integracao com whatsapp|whatsapp integrado)/.test(combined)&&/(n8n|\bia\b|inteligencia artificial|agente|chatbot|bot|assistente virtual|automacao)/.test(combined);
+  const trafficOrMedia=/campanha|campaign|meta ads|google ads|trafego|gestor de trafego|anuncio|ads\b|criativo|creative|cpl\b|cpm\b|ctr\b|cpc\b|orcamento de midia|saldo de conta|saldo meta|conta de anuncio|conjunto de anuncio|adset/.test(combined);
+  if(strongAiOrigin)return true;
+  if(trafficOrMedia&&!(explicitTech||automationContext||integrationContext))return false;
+  return explicitTech||explicitAi||automationContext||integrationContext;
 }
 
 Deno.serve(async(req:Request)=>{
@@ -36,7 +41,7 @@ Deno.serve(async(req:Request)=>{
   if(pref?.collaborator_person!=="Gabriel Castro"||!(approval||[]).length)return json({ok:false,error:"FORBIDDEN"},403);
   const allowedIds=(aiRows||[]).map((r:any)=>String(r.client_id)).filter(Boolean);
   const allowedSet=new Set(allowedIds);
-  if(!allowedIds.length)return json({ok:true,role:"AI",person:"Gabriel Castro",scope:"AI_SERVICE_ONLY_NO_COMMERCIAL_GROUPS",items:[],generated_at:new Date().toISOString()});
+  if(!allowedIds.length)return json({ok:true,role:"AI",person:"Gabriel Castro",scope:"AI_SERVICE_STRICT_ONLY_NO_COMMERCIAL_GROUPS",items:[],generated_at:new Date().toISOString()});
 
   const {data:groups}=await ops.from("whatsapp_group_registry").select("chat_id,chat_name").eq("group_kind","COMERCIAL");
   const commercialChatIds=new Set((groups||[]).map((r:any)=>String(r.chat_id||"")).filter(Boolean));
@@ -91,5 +96,5 @@ Deno.serve(async(req:Request)=>{
   }).map((r:any)=>{const readAt=readMap.get(String(r.id))||r.read_at||null;const resolution:any=resolutionMap.get(String(r.id));return {...r,kind:"NOTIFICATION",read_at:readAt,resolved_at:resolution?.resolved_at||null,resolved_by:resolution?.resolved_by||null,resolution_note:resolution?.resolution_note||null,status:resolution?"RESOLVED":(readAt?"READ":"OPEN"),client_name:clientMap.get(String(r.client_id))||null,source_label:r.source||"IA"};});
   const alertItems=(alerts||[]).filter((r:any)=>!isCommercialOrigin(r)&&isAiServiceEvent(r)).map((r:any)=>({...r,kind:"ALERT",id:String(r.id),level:r.severity,occurred_at:r.last_detected_at||r.first_detected_at,read_at:null,client_name:clientMap.get(String(r.client_id))||null,source_label:r.source||"IA"}));
   const items=[...notifItems,...alertItems].sort((a:any,b:any)=>new Date(b.occurred_at||0).getTime()-new Date(a.occurred_at||0).getTime()).slice(0,400);
-  return json({ok:true,role:"AI",person:"Gabriel Castro",scope:"AI_SERVICE_ONLY_NO_COMMERCIAL_GROUPS",commercial_groups_excluded:true,notifications_ai_service_only:true,items,generated_at:new Date().toISOString()});
+  return json({ok:true,role:"AI",person:"Gabriel Castro",scope:"AI_SERVICE_STRICT_ONLY_NO_COMMERCIAL_GROUPS",commercial_groups_excluded:true,notifications_ai_service_only:true,items,generated_at:new Date().toISOString()});
 });
