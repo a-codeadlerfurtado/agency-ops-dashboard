@@ -97,6 +97,7 @@ export default function CommercialNavigationBridge() {
   const [session, setSession] = useState<Session | null>(null);
   const [fridayAllowed, setFridayAllowed] = useState(false);
   const [profileRole, setProfileRole] = useState<string | null>(null);
+  const [profilePerson, setProfilePerson] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -107,17 +108,26 @@ export default function CommercialNavigationBridge() {
   useEffect(() => { ensureStyles(); removeLegacyShortcuts(); }, []);
 
   useEffect(() => {
-    if (!session?.access_token) { setProfileRole(null); return; }
+    if (!session?.access_token) { setProfileRole(null); setProfilePerson(null); return; }
     let active = true;
     authenticatedFetch(DASHBOARD_API, { cache: "no-store" })
       .then(async (response) => {
         if (!active || !response.ok) return;
         const body = await response.json().catch(() => ({}));
-        if (active) setProfileRole(String(body?.profile?.role || "") || null);
+        if (active) {
+          setProfileRole(String(body?.profile?.role || "") || null);
+          setProfilePerson(String(body?.profile?.person || body?.preferences?.name || "") || null);
+        }
       })
-      .catch(() => { if (active) setProfileRole(null); });
+      .catch(() => { if (active) { setProfileRole(null); setProfilePerson(null); } });
     return () => { active = false; };
   }, [session?.access_token]);
+
+  useEffect(() => {
+    const isLeonardo = profileRole === "COMMERCIAL" && normalize(profilePerson || "") === "leonardo augusto";
+    if (!isLeonardo) return;
+    if (window.location.pathname === "/") window.location.replace("/commercial-direction");
+  }, [profileRole, profilePerson]);
 
   useEffect(() => {
     if (profileRole !== "COMMERCIAL") return;
