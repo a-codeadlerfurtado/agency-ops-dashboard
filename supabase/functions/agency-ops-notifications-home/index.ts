@@ -20,6 +20,11 @@ function internalRole(value: unknown) {
   return raw || "VIEWER";
 }
 
+function canSeePrivateNotification(row: any, person: string) {
+  if (row?.metadata?.private_to_person !== true) return true;
+  return String(row?.metadata?.target_person || "").trim() === person;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (!["GET", "POST"].includes(req.method)) return json({ ok: false, error: "METHOD_NOT_ALLOWED" }, 405);
@@ -73,11 +78,12 @@ Deno.serve(async (req) => {
     const { data: notification, error: notificationError } = await admin
       .schema("agency_ops")
       .from("platform_notifications")
-      .select("id,client_id")
+      .select("id,client_id,metadata")
       .eq("id", notificationId)
       .maybeSingle();
     if (notificationError) return json({ ok: false, error: notificationError.message }, 500);
     if (!notification) return json({ ok: false, error: "NOT_FOUND" }, 404);
+    if (!canSeePrivateNotification(notification, person)) return json({ ok: false, error: "FORBIDDEN" }, 403);
     if (allowedClientIds && (!notification.client_id || !allowedClientIds.includes(String(notification.client_id)))) {
       return json({ ok: false, error: "FORBIDDEN" }, 403);
     }
@@ -142,7 +148,8 @@ Deno.serve(async (req) => {
   const readMap = new Map((readsResult.data || []).map((row: any) => [String(row.notification_id), row.read_at]));
   const resolutionMap = new Map((resolutionsResult.data || []).map((row: any) => [String(row.notification_id), row]));
 
-  const notifItems = (notifResult.data || []).map((row: any) => {
+  const visibleNotifRows = (notifResult.data || []).filter((row: any) => canSeePrivateNotification(row, person));
+  const notifItems = visibleNotifRows.map((row: any) => {
     const personalReadAt = readMap.get(String(row.id)) || row.read_at || null;
     const resolution = resolutionMap.get(String(row.id)) as any;
     return {
