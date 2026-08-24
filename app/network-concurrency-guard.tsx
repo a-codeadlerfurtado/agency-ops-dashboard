@@ -27,8 +27,6 @@ function authScope(input: RequestInfo | URL, init?: RequestInit) {
   const headers = new Headers(typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined);
   new Headers(init?.headers || {}).forEach((value, key) => headers.set(key, value));
   const token = headers.get("authorization") || "anon";
-  // A chave fica apenas em memoria e nunca e logada. Separar por token impede que
-  // uma troca de usuario na mesma aba reaproveite resposta do perfil anterior.
   return token;
 }
 
@@ -38,6 +36,22 @@ function cloneStored(stored: StoredResponse) {
     statusText: stored.statusText,
     headers: stored.headers,
   });
+}
+
+function rewriteProfileProbe(input: RequestInfo | URL, init?: RequestInit) {
+  const raw = requestUrl(input);
+  if (window.location.pathname === "/") return { input, url: raw };
+  if (!raw.includes("/agency-ops-dashboard-api") || !raw.includes("view=home")) return { input, url: raw };
+
+  const target = new URL(raw);
+  target.pathname = target.pathname.replace("/agency-ops-dashboard-api", "/agency-ops-profile-lite");
+  target.searchParams.delete("view");
+  const nextUrl = target.toString();
+
+  if (typeof Request !== "undefined" && input instanceof Request) {
+    return { input: new Request(nextUrl, input), url: nextUrl };
+  }
+  return { input: nextUrl, url: nextUrl };
 }
 
 export default function NetworkConcurrencyGuard() {
@@ -51,40 +65,34 @@ export default function NetworkConcurrencyGuard() {
     const inFlight = new Map<string, Promise<Response>>();
     const tinyCache = new Map<string, { expiresAt: number; response: StoredResponse }>();
 
-    const cacheTtl = (url: string) => {
-      // Perfil e permissoes mudam raramente. Uma janela curta evita que varias
-      // bridges consultem o banco novamente logo apos o primeiro carregamento.
-      if (url.includes("/agency-ops-profile-lite")) return 20_000;
-      return 0;
-    };
+    const cacheTtl = (url: string) => url.includes("/agency-ops-profile-lite") ? 20_000 : 0;
 
-    window.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const method = requestMethod(input, init);
-      const url = requestUrl(input);
-      if (method !== "GET" || !url.startsWith(SUPABASE_FUNCTIONS_PREFIX)) {
-        return originalFetch(input, init);
+    window.fetch = (async (rawInput: RequestInfo | URL, init?: RequestInit) => {
+      const method = requestMethod(rawInput, init);
+      const rawUrl = requestUrl(rawInput);
+      if (method !== "GET" || !rawUrl.startsWith(SUPABASE_FUNCTIONS_PREFIX)) {
+        return originalFetch(rawInput, init);
       }
 
-      // A Home ja devolve gt_owner, personal_focus, design_focus e identidade ClickUp.
-      // O page.tsx ainda faz uma chamada antiga de enriquecimento logo depois do home;
-      // ela varre ClickUp de novo e chegou a levar mais de 100s. Na rota raiz esse
-      // complemento e redundante, entao preservamos os dados do payload principal sem
-      // abrir uma segunda consulta pesada por usuario.
-      if (window.location.pathname === "/" && url.includes("/agency-ops-profile-data-api")) {
+      if (window.location.pathname === "/" && rawUrl.includes("/agency-ops-profile-data-api")) {
         return new Response(JSON.stringify({ profile: {}, focus: null, client_gt: [] }), {
           status: 200,
           headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
         });
       }
 
-      const key = `${authScope(input, init)}::${url}`;
+      // Fora da Home, as bridges so usam view=home para descobrir perfil/permissao.
+      // Trocar automaticamente pelo endpoint leve evita remontar o dashboard inteiro
+      // quando o usuario esta em Agenda, Campanhas, Onboarding ou qualquer outra rota.
+      const rewritten = rewriteProfileProbe(rawInput, init);
+      const input = rewritten.input;
+      const url = rewritten.url;
+
+      const key = `${authScope(rawInput, init)}::${url}`;
       const cached = tinyCache.get(key);
       if (cached && cached.expiresAt > Date.now()) return cloneStored(cached.response);
       if (cached) tinyCache.delete(key);
 
-      // Todas as requisicoes GET identicas do mesmo usuario compartilham a mesma
-      // chamada enquanto ela estiver em voo. Isso impede que page + bridges lancem
-      // cinco copias de view=home ao mesmo tempo.
       const pending = inFlight.get(key);
       if (pending) return (await pending).clone();
 
@@ -117,8 +125,6 @@ export default function NetworkConcurrencyGuard() {
     }) as typeof window.fetch;
 
     return () => {
-      // Em producao o RootLayout nao desmonta. A restauracao evita comportamento
-      // estranho em Fast Refresh durante desenvolvimento.
       if (w.__opsOriginalFetch === originalFetch) {
         window.fetch = originalFetch;
         w.__opsFetchConcurrencyGuard = false;
