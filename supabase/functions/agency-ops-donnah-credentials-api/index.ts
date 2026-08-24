@@ -149,7 +149,8 @@ Deno.serve(async (req) => {
       if (error) return json({ ok: false, error: error.message }, 500);
 
       const secrets = await sql<{ name: string }[]>`
-        select name from vault.secrets where name in ${sql([...allowed.values()])}
+        select name from vault.secrets
+        where name in ('DONNAH_MCP_GUSTAVO_LIMA','DONNAH_MCP_YURI_MELO','DONNAH_MCP_RODRIGO_CAVALHEIRO')
       `;
       const configured = new Set(secrets.map((row) => row.name));
       return json({
