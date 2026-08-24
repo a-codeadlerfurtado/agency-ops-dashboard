@@ -5,11 +5,29 @@ const AI_WORKSPACE = `${SUPABASE}/functions/v1/agency-ops-ai-workspace`;
 const AI_MODEL = "@cf/zai-org/glm-4.7-flash";
 const OPS_FAST_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 
+type RateLimiter = {
+  limit: (options: { key: string }) => Promise<{ success: boolean }>;
+};
+
 type WorkerEnv = {
   AI?: {
-    run: (model: string, input: Record<string, unknown>) => Promise<any>;
+    run: (model: string, input: Record<string, unknown>) => Promise<unknown>;
   };
+  AI_RATE_LIMITER?: RateLimiter;
 };
+
+const MAX_JSON_BYTES = 128 * 1024;
+const PUBLIC_AI_ACTIONS = new Set([
+  "clients",
+  "bootstrap",
+  "conversations/list",
+  "conversations/create",
+  "conversations/get",
+  "conversations/rename",
+  "conversations/archive",
+  "conversations/delete",
+  "conversations/set-client",
+]);
 
 const CSP = [
   "default-src 'self'",
@@ -67,6 +85,58 @@ function aiText(result: any): string | null {
   return null;
 }
 
+async function rateLimitKey(authorization: string, action: string): Promise<string> {
+  const bytes = new TextEncoder().encode(`${authorization}:${action}`);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function parseJsonBody(request: Request): Promise<
+  { ok: true; body: Record<string, unknown> } |
+  { ok: false; response: Response }
+> {
+  const contentType = request.headers.get("content-type")?.toLowerCase() ?? "";
+  if (!contentType.startsWith("application/json")) {
+    return { ok: false, response: json({ ok: false, error: "content_type_required" }, 415) };
+  }
+
+  const declaredLength = Number(request.headers.get("content-length") || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_JSON_BYTES) {
+    return { ok: false, response: json({ ok: false, error: "payload_too_large" }, 413) };
+  }
+
+  const reader = request.body?.getReader();
+  if (!reader) return { ok: false, response: json({ ok: false, error: "invalid_json" }, 400) };
+
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > MAX_JSON_BYTES) {
+      await reader.cancel();
+      return { ok: false, response: json({ ok: false, error: "payload_too_large" }, 413) };
+    }
+    chunks.push(value);
+  }
+
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(bytes));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid_json_object");
+    return { ok: true, body: parsed as Record<string, unknown> };
+  } catch {
+    return { ok: false, response: json({ ok: false, error: "invalid_json" }, 400) };
+  }
+}
+
 async function edgeCall(request: Request, action: string, payload?: unknown): Promise<Response> {
   const headers = new Headers();
   const authorization = request.headers.get("authorization");
@@ -80,7 +150,7 @@ async function edgeCall(request: Request, action: string, payload?: unknown): Pr
   });
 }
 
-async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
+async function handleAI(request: Request, env: WorkerEnv, requestId: string): Promise<Response> {
   const url = new URL(request.url);
   const action = url.pathname.slice("/api/ai/".length).replace(/^\/+|\/+$/g, "");
 
@@ -99,16 +169,36 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
   }
 
   if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
-  if (!request.headers.get("authorization")?.startsWith("Bearer ")) return json({ ok: false, error: "unauthorized" }, 401);
+  const authorization = request.headers.get("authorization") ?? "";
+  if (!authorization.startsWith("Bearer ")) return json({ ok: false, error: "unauthorized" }, 401);
+  if (action !== "chat" && !PUBLIC_AI_ACTIONS.has(action)) return json({ ok: false, error: "not_found" }, 404);
 
-  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  if (env.AI_RATE_LIMITER) {
+    const key = await rateLimitKey(authorization, action);
+    const { success } = await env.AI_RATE_LIMITER.limit({ key });
+    if (!success) {
+      console.warn({ event: "ai_rate_limited", action, request_id: requestId });
+      return json({ ok: false, error: "rate_limited", request_id: requestId }, 429);
+    }
+  }
+
+  const parsed = await parseJsonBody(request);
+  if (!parsed.ok) return parsed.response;
+  const body = parsed.body;
 
   if (action !== "chat") {
     const upstream = await edgeCall(request, action, body);
+    if (!upstream.ok) {
+      console.error({ event: "ai_upstream_failed", action, status: upstream.status, request_id: requestId });
+      const status = upstream.status === 401 || upstream.status === 403 || upstream.status === 404
+        ? upstream.status
+        : 502;
+      return json({ ok: false, error: "upstream_failed", request_id: requestId }, status);
+    }
     const raw = await upstream.text();
     return secure(new Response(raw, {
       status: upstream.status,
-      headers: { "content-type": upstream.headers.get("content-type") || "application/json; charset=utf-8", "cache-control": "no-store" },
+      headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
     }));
   }
 
@@ -118,7 +208,11 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
   const preparedResponse = await edgeCall(request, "prepare-chat", body);
   const prepared = await preparedResponse.json().catch(() => null) as any;
   if (!preparedResponse.ok || !prepared?.ok) {
-    return json(prepared || { ok: false, error: "prepare_chat_failed" }, preparedResponse.status || 502);
+    console.error({ event: "ai_prepare_failed", status: preparedResponse.status, request_id: requestId });
+    const status = preparedResponse.status === 401 || preparedResponse.status === 403 || preparedResponse.status === 404
+      ? preparedResponse.status
+      : 502;
+    return json({ ok: false, error: "prepare_chat_failed", request_id: requestId }, status);
   }
 
   const messages = [
@@ -151,21 +245,25 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
       });
     }
   } catch (error) {
-    return json({ ok: false, error: "workers_ai_failed", detail: error instanceof Error ? error.message : String(error), model: selectedModel }, 502);
+    console.error({
+      event: "workers_ai_failed",
+      model: selectedModel,
+      request_id: requestId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return json({ ok: false, error: "workers_ai_failed", request_id: requestId }, 502);
   }
 
   const modelLatency = Date.now() - started;
   const answer = aiText(result);
   if (!answer) {
-    const finishReason = result?.choices?.[0]?.finish_reason ?? null;
-    const usage = result?.usage || result?.result?.usage || {};
-    return json({
-      ok: false,
-      error: "empty_ai_answer",
-      detail: finishReason ? `finish_reason:${finishReason}` : "workers_ai_returned_no_final_text",
-      usage,
+    console.error({
+      event: "empty_ai_answer",
       model: selectedModel,
-    }, 502);
+      finish_reason: result?.choices?.[0]?.finish_reason ?? null,
+      request_id: requestId,
+    });
+    return json({ ok: false, error: "empty_ai_answer", request_id: requestId }, 502);
   }
 
   const usage = result?.usage || result?.result?.usage || {};
@@ -186,7 +284,8 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
   });
   const completed = await completionResponse.json().catch(() => null) as any;
   if (!completionResponse.ok || !completed?.ok) {
-    return json(completed || { ok: false, error: "complete_chat_failed" }, completionResponse.status || 502);
+    console.error({ event: "ai_complete_failed", status: completionResponse.status, request_id: requestId });
+    return json({ ok: false, error: "complete_chat_failed", request_id: requestId }, 502);
   }
 
   return json({
@@ -212,7 +311,18 @@ export default {
   async fetch(request: Request, env: WorkerEnv, context: unknown): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/api/ai" || url.pathname.startsWith("/api/ai/")) {
-      return handleAI(request, env);
+      const requestId = request.headers.get("cf-ray") || crypto.randomUUID();
+      try {
+        return await handleAI(request, env, requestId);
+      } catch (error) {
+        console.error({
+          event: "ai_request_failed",
+          path: url.pathname,
+          request_id: requestId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return json({ ok: false, error: "internal_error", request_id: requestId }, 500);
+      }
     }
 
     const response = await handler.fetch(request, env, context);
