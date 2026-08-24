@@ -23,6 +23,8 @@ const normalize = (value: string) => value
   .trim()
   .toLowerCase();
 
+const isLeonardoProfile = (role: string | null, person: string | null) => role === "COMMERCIAL" && normalize(person || "") === "leonardo augusto";
+
 function ensureStyles() {
   if (document.getElementById("commercial-navigation-style")) return;
   const style = document.createElement("style");
@@ -122,22 +124,23 @@ function applyCommercialDirectionAreaFromQuery() {
   target.click();
 }
 
-function installDashboardTab(role: string | null) {
+function installDashboardTab(role: string | null, person: string | null) {
   const container = document.querySelector<HTMLElement>(".side-nav-items");
   if (!container) return;
 
-  if (role === "COMMERCIAL") {
+  if (isLeonardoProfile(role, person)) {
     container.querySelectorAll("[data-commercial-funnel-nav]").forEach((node) => node.remove());
     installExecutiveSidebar();
     return;
   }
 
   restoreExecutiveSidebar();
-  const label = "Funil comercial";
-  const href = "/sales-funnel";
+  const isCommercial = role === "COMMERCIAL";
+  const label = isCommercial ? "Direção Comercial" : "Funil comercial";
+  const href = isCommercial ? "/commercial-direction" : "/sales-funnel";
   const existing = container.querySelector<HTMLButtonElement>("[data-commercial-funnel-nav]");
   if (existing) {
-    if (existing.dataset.commercialMode === "funnel") return;
+    if (existing.dataset.commercialMode === (isCommercial ? "direction" : "funnel")) return;
     existing.remove();
   }
 
@@ -149,7 +152,7 @@ function installDashboardTab(role: string | null) {
   const button = document.createElement("button");
   button.type = "button";
   button.dataset.commercialFunnelNav = "true";
-  button.dataset.commercialMode = "funnel";
+  button.dataset.commercialMode = isCommercial ? "direction" : "funnel";
   button.title = label;
   if (template?.className) button.className = template.className.replace(/\bactive\b/g, "").trim();
   button.textContent = label;
@@ -182,6 +185,7 @@ export default function CommercialNavigationBridge() {
   const [session, setSession] = useState<Session | null>(null);
   const [fridayAllowed, setFridayAllowed] = useState(false);
   const [profileRole, setProfileRole] = useState<string | null>(null);
+  const [profilePerson, setProfilePerson] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -192,15 +196,18 @@ export default function CommercialNavigationBridge() {
   useEffect(() => { ensureStyles(); removeLegacyShortcuts(); }, []);
 
   useEffect(() => {
-    if (!session?.access_token) { setProfileRole(null); return; }
+    if (!session?.access_token) { setProfileRole(null); setProfilePerson(null); return; }
     let active = true;
     authenticatedFetch(DASHBOARD_API, { cache: "no-store" })
       .then(async (response) => {
         if (!active || !response.ok) return;
         const body = await response.json().catch(() => ({}));
-        if (active) setProfileRole(String(body?.profile?.role || "") || null);
+        if (active) {
+          setProfileRole(String(body?.profile?.role || "") || null);
+          setProfilePerson(String(body?.profile?.person || body?.preferences?.name || "") || null);
+        }
       })
-      .catch(() => { if (active) setProfileRole(null); });
+      .catch(() => { if (active) { setProfileRole(null); setProfilePerson(null); } });
     return () => { active = false; };
   }, [session?.access_token]);
 
@@ -238,11 +245,12 @@ export default function CommercialNavigationBridge() {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
         const path = window.location.pathname;
+        const leonardo = isLeonardoProfile(profileRole, profilePerson);
         removeLegacyShortcuts();
-        if (path === "/") installDashboardTab(profileRole);
-        else if (profileRole !== "COMMERCIAL") restoreExecutiveSidebar();
+        if (path === "/") installDashboardTab(profileRole, profilePerson);
+        else if (!leonardo) restoreExecutiveSidebar();
         if (path === "/sales-funnel" || path === "/friday-report") installCommercialSubnav(path, fridayAllowed);
-        if (profileRole === "COMMERCIAL" && path === "/commercial-direction") applyCommercialDirectionAreaFromQuery();
+        if (leonardo && path === "/commercial-direction") applyCommercialDirectionAreaFromQuery();
       });
     };
     apply();
@@ -256,7 +264,7 @@ export default function CommercialNavigationBridge() {
       document.querySelectorAll("[data-commercial-funnel-nav],[data-commercial-section-nav]").forEach((node) => node.remove());
       restoreExecutiveSidebar();
     };
-  }, [session, fridayAllowed, profileRole]);
+  }, [session, fridayAllowed, profileRole, profilePerson]);
 
   return null;
 }
