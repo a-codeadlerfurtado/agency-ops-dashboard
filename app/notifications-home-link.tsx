@@ -53,12 +53,13 @@ export default function NotificationsHomeLink() {
       const description = smalls.join(" ");
       const candidates = remoteItems.filter((item) => norm(item.title) === title);
       if (!candidates.length) return null;
-      const exact = candidates.find((item) => {
+      const exactCandidates = candidates.filter((item) => {
         const itemDescription = norm(item.description || "");
         return itemDescription && description && (description.includes(itemDescription.slice(0, 70)) || itemDescription.includes(description.slice(0, 70)));
       });
+      const activeExact = exactCandidates.find((item) => String(item.status || "").toUpperCase() !== "RESOLVED");
       const active = candidates.find((item) => String(item.status || "").toUpperCase() !== "RESOLVED");
-      return exact || active || candidates[0];
+      return activeExact || active || exactCandidates[0] || candidates[0];
     };
 
     const decrementBellBadge = () => {
