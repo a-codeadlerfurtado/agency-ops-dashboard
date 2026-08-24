@@ -5,7 +5,6 @@ import "./dashboard-enhancements.css";
 import "./onboarding-legacy.css";
 import "./motion-system.css";
 import "./contrast-tune.css";
-import NetworkConcurrencyGuard from "./network-concurrency-guard";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -42,7 +41,6 @@ import DailyGreeting from "./daily-greeting-v3";
 import TeamAccessAdmin from "./team-access-admin";
 import GabrielTasklogMode from "./gabriel-tasklog-mode";
 import GabrielScopeNetwork from "./gabriel-scope-network";
-import TeamNowBridge from "./team-now-bridge";
 import LeadershipNavigationBridge from "./leadership-navigation-bridge";
 
 export const viewport: Viewport = {
@@ -66,7 +64,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         />
       </head>
       <body>
-        <NetworkConcurrencyGuard />
         <GabrielScopeNetwork />
         <GreetingAudioBridge />
         <PreGreetingShield />
@@ -84,7 +81,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <CommercialVitorPerformanceBridge />
         <CommercialNotificationsBridge />
         <LeadershipNavigationBridge />
-        <TeamNowBridge />
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
         <CockpitCollapseBridge />
