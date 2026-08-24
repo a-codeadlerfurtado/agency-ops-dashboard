@@ -6,6 +6,7 @@ import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
 
 const FRIDAY_API = `${SUPABASE_URL}/functions/v1/agency-ops-friday-report-api`;
 const DASHBOARD_API = `${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api?view=home`;
+const LEONARDO_EMAIL = "lakassessoriadigital@gmail.com";
 
 const normalize = (value: string) => value
   .normalize("NFD")
@@ -25,7 +26,9 @@ function ensureStyles() {
     .commercial-section-nav button{border:1px solid transparent;background:transparent;color:#91aa9f;border-radius:8px;padding:9px 12px;cursor:pointer;font:inherit;font-size:11px;font-weight:750}
     .commercial-section-nav button:hover{background:rgba(255,255,255,.045);color:#eef8f3}
     .commercial-section-nav button.active{border-color:rgba(103,215,161,.28);background:rgba(44,145,98,.14);color:#dff8ea}
-    @media(max-width:760px){.commercial-section-nav{margin:-6px 12px 14px;overflow:auto}.commercial-section-nav .commercial-section-label{display:none}.commercial-section-nav button{white-space:nowrap}}
+    .leonardo-exec-shortcut{border:1px solid rgba(112,221,183,.22)!important;background:rgba(16,45,36,.7)!important;color:#a9d9c8!important;border-radius:9px!important;padding:8px 11px!important;font-size:11px!important;font-weight:750!important;cursor:pointer!important}
+    .leonardo-exec-shortcut:hover{background:rgba(31,92,68,.7)!important;color:#effff8!important}
+    @media(max-width:760px){.commercial-section-nav{margin:-6px 12px 14px;overflow:auto}.commercial-section-nav .commercial-section-label{display:none}.commercial-section-nav button{white-space:nowrap}.leonardo-exec-shortcut{display:none!important}}
   `;
   document.head.appendChild(style);
 }
@@ -93,6 +96,28 @@ function installCommercialSubnav(path: string, fridayAllowed: boolean) {
   anchor.parentElement.insertBefore(nav, anchor.nextSibling);
 }
 
+function installLeonardoExecutiveShortcuts() {
+  if (window.location.pathname !== "/commercial-direction") return;
+  const header = document.querySelector<HTMLElement>(".cd-top");
+  if (!header) return;
+  const first = header.querySelector<HTMLButtonElement>("button");
+  if (first && first.dataset.leonardoHomeFixed !== "true") {
+    first.dataset.leonardoHomeFixed = "true";
+    first.textContent = "Cockpit";
+    first.onclick = () => window.location.assign("/commercial-direction");
+  }
+  const add = (key:string,label:string,href:string) => {
+    if (header.querySelector(`[data-leonardo-exec-shortcut="${key}"]`)) return;
+    const b=document.createElement("button");
+    b.type="button";b.className="leonardo-exec-shortcut";b.dataset.leonardoExecShortcut=key;b.textContent=label;
+    b.addEventListener("click",()=>window.location.assign(href));
+    const brand=header.querySelector(".cd-brand");
+    if (brand) header.insertBefore(b,brand); else header.appendChild(b);
+  };
+  add("revenue","Mensalidades & Impl.","/client-revenue");
+  add("contracts","Contratos","/contracts");
+}
+
 export default function CommercialNavigationBridge() {
   const [session, setSession] = useState<Session | null>(null);
   const [fridayAllowed, setFridayAllowed] = useState(false);
@@ -106,6 +131,14 @@ export default function CommercialNavigationBridge() {
   }, []);
 
   useEffect(() => { ensureStyles(); removeLegacyShortcuts(); }, []);
+
+  useEffect(() => {
+    const email = String(session?.user?.email || "").toLowerCase();
+    if (email === LEONARDO_EMAIL && window.location.pathname === "/") {
+      document.documentElement.style.visibility = "hidden";
+      window.location.replace("/commercial-direction");
+    }
+  }, [session?.user?.email]);
 
   useEffect(() => {
     if (!session?.access_token) { setProfileRole(null); setProfilePerson(null); return; }
@@ -166,6 +199,7 @@ export default function CommercialNavigationBridge() {
         removeLegacyShortcuts();
         if (path === "/") installDashboardTab(profileRole);
         if (path === "/sales-funnel" || path === "/friday-report") installCommercialSubnav(path, fridayAllowed);
+        if (String(session.user.email || "").toLowerCase() === LEONARDO_EMAIL) installLeonardoExecutiveShortcuts();
       });
     };
     apply();
@@ -176,7 +210,8 @@ export default function CommercialNavigationBridge() {
       observer.disconnect();
       window.clearInterval(timer);
       window.cancelAnimationFrame(frame);
-      document.querySelectorAll("[data-commercial-funnel-nav],[data-commercial-section-nav]").forEach((node) => node.remove());
+      document.querySelectorAll("[data-commercial-funnel-nav],[data-commercial-section-nav],[data-leonardo-exec-shortcut]").forEach((node) => node.remove());
+      document.documentElement.style.visibility = "";
     };
   }, [session, fridayAllowed, profileRole]);
 
