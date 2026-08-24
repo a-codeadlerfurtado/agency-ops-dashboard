@@ -15,6 +15,8 @@ export const CONTRACTS_API = `${SUPABASE_URL}/functions/v1/agency-ops-contracts-
 export const CLICKUP_API_URL = `${SUPABASE_URL}/functions/v1/clickup-sync-api`;
 export const CS_CLIENTS_API = `${SUPABASE_URL}/functions/v1/agency-ops-cs-clients-api`;
 export const WORK_ITEM_CREATE_API = `${SUPABASE_URL}/functions/v1/agency-ops-work-item-create-api`;
+const HOME_PROXY_URL = "/api/dashboard-home";
+const HOME_REQUEST_TIMEOUT_MS = 15_000;
 // Backend da IA roda na VPS Hostinger, atras do mesmo dominio do Dashboard.
 // Same-origin de proposito: nenhum preflight de CORS e nenhuma credencial
 // privilegiada precisa transitar pelo navegador.
@@ -202,6 +204,7 @@ export function initials(value: unknown) {
 // de logout. Se o access token apenas venceu, fazemos UM refresh compartilhado e
 // repetimos a requisicao uma unica vez.
 let refreshSessionPromise: Promise<string | null> | null = null;
+let homeRequestPromise: Promise<Response> | null = null;
 
 export class SessionExpiredError extends Error {
   code = "SESSION_EXPIRED";
@@ -258,25 +261,61 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
   return response;
 }
 
+async function dashboardHomeRequest(token: string): Promise<Response> {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), HOME_REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(HOME_PROXY_URL, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error("A Visão Geral não respondeu em 15 segundos.");
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+async function dashboardHomeResponse(token: string): Promise<Response> {
+  // Gate compartilhado: page, enhancements, gate e sidebar podem pedir a home ao
+  // mesmo tempo. Uma única chamada same-origin atende todos e elimina a rajada de
+  // preflights concorrentes que deixava o mobile preso em Atualizando.
+  if (!homeRequestPromise) {
+    homeRequestPromise = (async () => {
+      let response = await dashboardHomeRequest(token);
+      if (response.status !== 401) return response;
+
+      const refreshedToken = await refreshAccessToken();
+      if (!refreshedToken) {
+        await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+        throw new SessionExpiredError();
+      }
+
+      response = await dashboardHomeRequest(refreshedToken);
+      if (response.status === 401) {
+        await supabase.auth.signOut({ scope: "local" }).catch(() => undefined);
+        throw new SessionExpiredError();
+      }
+      return response;
+    })().finally(() => { homeRequestPromise = null; });
+  }
+
+  const shared = await homeRequestPromise;
+  return shared.clone();
+}
+
 export async function api(view: string, token: string, params: Record<string, string> = {}) {
   const url = new URL(API_URL);
   url.searchParams.set("view", view);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
 
-  // O home precisa chegar antes de qualquer enriquecimento. No mobile vimos o
-  // preflight do wrapper autenticado sem o GET subsequente, enquanto chamadas com
-  // fetch direto (mesmo token + apikey) passam normalmente. Mantemos o wrapper como
-  // fallback apenas se o token capturado pela tela já tiver vencido.
-  let response: Response;
-  if (view === "home" && token) {
-    response = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY },
-      cache: "no-store",
-    });
-    if (response.status === 401) response = await authenticatedFetch(url, { cache: "no-store" });
-  } else {
-    response = await authenticatedFetch(url, { cache: "no-store" });
-  }
+  const response = view === "home"
+    ? await dashboardHomeResponse(token || await liveAccessToken() || "")
+    : await authenticatedFetch(url, { cache: "no-store" });
 
   if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
   const json = await response.json();
