@@ -101,9 +101,9 @@ export default function CommercialNavigationBridge() {
   useEffect(() => {
     if (profileRole !== "COMMERCIAL") return;
     const path = window.location.pathname;
-    if (path === "/commercial-direction") return;
+    if (path === "/commercial-home") return;
     const tab = path === "/campaigns" ? "campaigns" : path === "/commercial-clients" ? "portfolio" : path === "/sales-funnel" || path === "/friday-report" ? "funnel" : "overview";
-    window.location.replace(`/commercial-direction${tab === "overview" ? "" : `?tab=${tab}`}`);
+    window.location.replace(`/commercial-home${tab === "overview" ? "" : `?tab=${tab}`}`);
   }, [profileRole]);
 
   useEffect(() => {
