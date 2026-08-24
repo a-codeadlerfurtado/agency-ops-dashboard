@@ -130,6 +130,26 @@ Deno.serve(async (req: Request) => {
   }
   if (carteiraDe) rows = rows.filter((row: any) => row.gt_owner === identity.person);
 
+  const gabrielAiHealth = identity.person === "Gabriel Castro" && identity.role === "AI";
+  if (gabrielAiHealth) {
+    const [serviceResult, sourceResult] = await Promise.all([
+      ops.from("client_services")
+        .select("client_id")
+        .eq("service_key", "IA")
+        .eq("owner_key", "OURS")
+        .in("service_status", ["ACTIVE", "BUILDING"]),
+      ops.from("ai_source_registry")
+        .select("client_id")
+        .eq("source_type", "N8N_CHAT")
+        .eq("owner_hint", "OURS")
+        .eq("active", true),
+    ]);
+    if (serviceResult.error || sourceResult.error) return json({ error: "ai_scope_query_failed" }, 500);
+    const serviceIds = new Set((serviceResult.data || []).map((row: any) => String(row.client_id)));
+    const n8nIds = new Set((sourceResult.data || []).map((row: any) => String(row.client_id)));
+    rows = rows.filter((row: any) => serviceIds.has(String(row.client_id)) && n8nIds.has(String(row.client_id)));
+  }
+
   const ids = rows.map((row: any) => String(row.client_id));
   const [snapResult, campaignResult, slaResult, weeklyResult] = ids.length ? await Promise.all([
     ops.from("client_operational_snapshot").select("*").in("client_id", ids),
@@ -188,7 +208,14 @@ Deno.serve(async (req: Request) => {
       satisfacao_media: media("external_satisfaction_avg"), risco_medio: media("external_risk_avg"),
       saude_media: media("health_score"), operacional_media: media("operational_score"), resultado_media: media("result_score"),
     },
-    profile: { person: identity.person, role: identity.role, access_level: identity.accessLevel, scoped: Boolean(carteiraDe), carteira: carteiraDe },
+    profile: {
+      person: identity.person,
+      role: identity.role,
+      access_level: identity.accessLevel,
+      scoped: Boolean(carteiraDe) || gabrielAiHealth,
+      carteira: carteiraDe,
+      scope_model: gabrielAiHealth ? "AI_N8N_ACTIVE" : (carteiraDe ? "OWN_WALLET" : "DEFAULT"),
+    },
     generated_at: new Date().toISOString(),
   });
 });
