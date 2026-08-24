@@ -4,6 +4,10 @@ import { useEffect } from "react";
 
 const SUPABASE_FUNCTIONS_PREFIX = "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/";
 const PROFILE_API = `${SUPABASE_FUNCTIONS_PREFIX}agency-ops-profile-lite`;
+const HOME_TIMEOUT_MS = 18_000;
+const DEFAULT_TIMEOUT_MS = 25_000;
+const PROFILE_TIMEOUT_MS = 6_000;
+const FAILURE_COOLDOWN_MS = 10_000;
 
 type StoredResponse = {
   body: ArrayBuffer;
@@ -66,7 +70,25 @@ export default function NetworkConcurrencyGuard() {
     const tinyCache = new Map<string, { expiresAt: number; response: StoredResponse }>();
     const profileCache = new Map<string, { expiresAt: number; profile: LiteProfile }>();
     const profileFlight = new Map<string, Promise<LiteProfile | null>>();
+    const cooldown = new Map<string, number>();
     const cacheTtl = (url: string) => url.includes("/agency-ops-profile-lite") ? 20_000 : 0;
+
+    function timeoutFor(url: string) {
+      return url.includes("/agency-ops-dashboard-api") && url.includes("view=home") ? HOME_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
+    }
+
+    function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit | undefined, timeoutMs: number) {
+      const controller = new AbortController();
+      const upstream = init?.signal;
+      const onAbort = () => controller.abort(upstream?.reason);
+      if (upstream?.aborted) onAbort();
+      else upstream?.addEventListener("abort", onAbort, { once: true });
+      const timer = window.setTimeout(() => controller.abort(new DOMException("Tempo limite da requisição excedido", "TimeoutError")), timeoutMs);
+      return originalFetch(input, { ...init, signal: controller.signal }).finally(() => {
+        window.clearTimeout(timer);
+        upstream?.removeEventListener("abort", onAbort);
+      });
+    }
 
     async function getLiteProfile(rawInput: RequestInfo | URL, init?: RequestInit): Promise<LiteProfile | null> {
       const scope = authScope(rawInput, init);
@@ -76,7 +98,7 @@ export default function NetworkConcurrencyGuard() {
       if (cached) profileCache.delete(scope);
       const pending = profileFlight.get(scope);
       if (pending) return pending;
-      const promise = originalFetch(PROFILE_API, { headers: mergedHeaders(rawInput, init), cache: "no-store" })
+      const promise = fetchWithTimeout(PROFILE_API, { headers: mergedHeaders(rawInput, init), cache: "no-store" }, PROFILE_TIMEOUT_MS)
         .then(async (response) => {
           if (!response.ok) return null;
           const body = await response.json().catch(() => null);
@@ -136,13 +158,17 @@ export default function NetworkConcurrencyGuard() {
       const input = rewritten.input;
       const url = rewritten.url;
       const key = `${authScope(rawInput, init)}::${url}`;
+      const blockedUntil = cooldown.get(key) || 0;
+      if (blockedUntil > Date.now()) return localJson({ error: "temporarily_unavailable", retry_after_ms: blockedUntil - Date.now() }, 503);
+      if (blockedUntil) cooldown.delete(key);
+
       const cached = tinyCache.get(key);
       if (cached && cached.expiresAt > Date.now()) return cloneStored(cached.response);
       if (cached) tinyCache.delete(key);
       const pending = inFlight.get(key);
       if (pending) return (await pending).clone();
 
-      const request = originalFetch(input, init)
+      const request = fetchWithTimeout(input, init, timeoutFor(url))
         .then(async (response) => {
           const ttl = cacheTtl(url);
           if (ttl > 0 && response.ok) {
@@ -158,6 +184,13 @@ export default function NetworkConcurrencyGuard() {
           }
           return response;
         })
+        .catch((error) => {
+          if (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")) {
+            cooldown.set(key, Date.now() + FAILURE_COOLDOWN_MS);
+            return localJson({ error: "client_timeout", retry_after_ms: FAILURE_COOLDOWN_MS }, 504);
+          }
+          throw error;
+        })
         .finally(() => inFlight.delete(key));
       inFlight.set(key, request);
       return (await request).clone();
@@ -165,7 +198,7 @@ export default function NetworkConcurrencyGuard() {
 
     return () => {
       if (w.__opsOriginalFetch === originalFetch) { window.fetch = originalFetch; w.__opsFetchConcurrencyGuard = false; }
-      inFlight.clear(); tinyCache.clear(); profileCache.clear(); profileFlight.clear();
+      inFlight.clear(); tinyCache.clear(); profileCache.clear(); profileFlight.clear(); cooldown.clear();
     };
   }, []);
   return null;
