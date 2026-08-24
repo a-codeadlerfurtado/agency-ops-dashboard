@@ -121,14 +121,20 @@ Deno.serve(async (req) => {
   }
 
   if (req.method === "POST") {
-    const body = await req.json().catch(() => ({}));
-    if (String(body?.action || "").toLowerCase() !== "resolve") return respond({ error: "unsupported_action" }, 400);
-    const issueKey = String(body?.issue_key || "").trim();
-    const issueKind = String(body?.issue_kind || "ISSUE").trim().toUpperCase();
-    const referenceId = body?.reference_id == null ? null : String(body.reference_id);
-    const incidentIds = Array.isArray(body?.incident_ids) ? body.incident_ids.map(String).filter(Boolean).slice(0, 800) : [];
-    const note = body?.note == null ? null : String(body.note).trim().slice(0, 2000);
-    if (!issueKey) return respond({ error: "issue_key_required" }, 400);
+    const contentType = req.headers.get("content-type")?.toLowerCase() || "";
+    if (!contentType.startsWith("application/json")) return respond({ error: "content_type_required" }, 415);
+    const declaredLength = Number(req.headers.get("content-length") || 0);
+    if (Number.isFinite(declaredLength) && declaredLength > 64 * 1024) return respond({ error: "payload_too_large" }, 413);
+    const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body) return respond({ error: "invalid_json" }, 400);
+    if (String(body.action || "").toLowerCase() !== "resolve") return respond({ error: "unsupported_action" }, 400);
+    const issueKey = String(body.issue_key || "").trim();
+    const issueKind = String(body.issue_kind || "ISSUE").trim().toUpperCase();
+    const referenceId = body.reference_id == null ? null : String(body.reference_id).slice(0, 200);
+    const incidentIds = Array.isArray(body.incident_ids) ? body.incident_ids.map(String).filter(Boolean).slice(0, 200) : [];
+    const note = body.note == null ? null : String(body.note).trim().slice(0, 2000);
+    if (!issueKey || issueKey.length > 512) return respond({ error: "invalid_issue_key" }, 400);
+    if (!["LEAD_DATA", "JOB", "AUTOMATION"].includes(issueKind)) return respond({ error: "invalid_issue_kind" }, 400);
 
     const resolvedAt = new Date().toISOString();
     const { error: resolutionError } = await ops.from("automation_issue_resolutions").upsert({
@@ -141,7 +147,10 @@ Deno.serve(async (req) => {
       note,
       updated_at: resolvedAt,
     }, { onConflict: "issue_key" });
-    if (resolutionError) return respond({ error: "resolve_failed", detail: resolutionError.message }, 500);
+    if (resolutionError) {
+      console.error({ event: "resolve_failed", request_id: requestId, error: resolutionError.message });
+      return respond({ error: "resolve_failed", request_id: requestId }, 500);
+    }
 
     if (issueKind === "LEAD_DATA") {
       const ids = incidentIds.length ? incidentIds : referenceId ? [referenceId] : [];
