@@ -36,6 +36,7 @@ import GreetingAudioBridge from "./greeting-audio-bridge";
 import PreGreetingShield from "./pre-greeting-shield";
 import DailyGreeting from "./daily-greeting-v3";
 import TeamAccessAdmin from "./team-access-admin";
+import GabrielTasklogMode from "./gabriel-tasklog-mode";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -83,6 +84,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <AutomationNavBridge />
         <DonnahNavBridge />
         <TeamAccessAdmin />
+        <GabrielTasklogMode />
         <DailyGreeting />
         <OpsQuestionWidget />
         <OpsQuestionBrand />
