@@ -19,6 +19,7 @@ import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
 import LeadQualityAlert from "./lead-quality-alert";
 import LearningShortcut from "./learning-shortcut";
+import HomeShortcut from "./home-shortcut";
 import LogoutShortcut from "./logout-shortcut";
 import ProfileMenuDismiss from "./profile-menu-dismiss";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
@@ -68,6 +69,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OpsQuestionWidget />
         <OpsQuestionBrand />
         <LearningShortcut />
+        <HomeShortcut />
         <LogoutShortcut />
         <ProfileMenuDismiss />
       </body>
