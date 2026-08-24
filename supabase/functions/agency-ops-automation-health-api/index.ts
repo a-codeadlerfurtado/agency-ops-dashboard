@@ -1,16 +1,15 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const CORS = {
-  "access-control-allow-origin": "*",
+const ALLOWED_ORIGINS = new Set([
+  "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
+  "http://localhost:3000",
+  "http://localhost:5173",
+]);
+const CORS_BASE = {
   "access-control-allow-headers": "authorization,apikey,content-type",
   "access-control-allow-methods": "GET,POST,OPTIONS",
 };
-
-const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
-  status,
-  headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-});
 
 type Row = Record<string, any>;
 
@@ -74,7 +73,17 @@ function time(value: unknown) {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+  const requestId = crypto.randomUUID();
+  const origin = req.headers.get("origin");
+  const originAllowed = !origin || ALLOWED_ORIGINS.has(origin);
+  const cors = origin && originAllowed ? { ...CORS_BASE, "access-control-allow-origin": origin, "vary": "Origin" } : CORS_BASE;
+  const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+    status,
+    headers: { ...cors, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+
+  if (req.method === "OPTIONS") return new Response(null, { status: originAllowed ? 204 : 403, headers: cors });
+  if (!originAllowed) return respond({ error: "origin_not_allowed" }, 403);
   if (!["GET", "POST"].includes(req.method)) return respond({ error: "method_not_allowed" }, 405);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -112,14 +121,20 @@ Deno.serve(async (req) => {
   }
 
   if (req.method === "POST") {
-    const body = await req.json().catch(() => ({}));
-    if (String(body?.action || "").toLowerCase() !== "resolve") return respond({ error: "unsupported_action" }, 400);
-    const issueKey = String(body?.issue_key || "").trim();
-    const issueKind = String(body?.issue_kind || "ISSUE").trim().toUpperCase();
-    const referenceId = body?.reference_id == null ? null : String(body.reference_id);
-    const incidentIds = Array.isArray(body?.incident_ids) ? body.incident_ids.map(String).filter(Boolean).slice(0, 800) : [];
-    const note = body?.note == null ? null : String(body.note).trim().slice(0, 2000);
-    if (!issueKey) return respond({ error: "issue_key_required" }, 400);
+    const contentType = req.headers.get("content-type")?.toLowerCase() || "";
+    if (!contentType.startsWith("application/json")) return respond({ error: "content_type_required" }, 415);
+    const declaredLength = Number(req.headers.get("content-length") || 0);
+    if (Number.isFinite(declaredLength) && declaredLength > 64 * 1024) return respond({ error: "payload_too_large" }, 413);
+    const body = await req.json().catch(() => null) as Record<string, unknown> | null;
+    if (!body) return respond({ error: "invalid_json" }, 400);
+    if (String(body.action || "").toLowerCase() !== "resolve") return respond({ error: "unsupported_action" }, 400);
+    const issueKey = String(body.issue_key || "").trim();
+    const issueKind = String(body.issue_kind || "ISSUE").trim().toUpperCase();
+    const referenceId = body.reference_id == null ? null : String(body.reference_id).slice(0, 200);
+    const incidentIds = Array.isArray(body.incident_ids) ? body.incident_ids.map(String).filter(Boolean).slice(0, 200) : [];
+    const note = body.note == null ? null : String(body.note).trim().slice(0, 2000);
+    if (!issueKey || issueKey.length > 512) return respond({ error: "invalid_issue_key" }, 400);
+    if (!["LEAD_DATA", "JOB", "AUTOMATION"].includes(issueKind)) return respond({ error: "invalid_issue_kind" }, 400);
 
     const resolvedAt = new Date().toISOString();
     const { error: resolutionError } = await ops.from("automation_issue_resolutions").upsert({
@@ -132,7 +147,10 @@ Deno.serve(async (req) => {
       note,
       updated_at: resolvedAt,
     }, { onConflict: "issue_key" });
-    if (resolutionError) return respond({ error: "resolve_failed", detail: resolutionError.message }, 500);
+    if (resolutionError) {
+      console.error({ event: "resolve_failed", request_id: requestId, error: resolutionError.message });
+      return respond({ error: "resolve_failed", request_id: requestId }, 500);
+    }
 
     if (issueKind === "LEAD_DATA") {
       const ids = incidentIds.length ? incidentIds : referenceId ? [referenceId] : [];
@@ -171,10 +189,20 @@ Deno.serve(async (req) => {
       .limit(2000),
   ]);
 
-  if (healthResult.error) return respond({ error: "automation_health_query_failed", detail: healthResult.error.message }, 500);
-  if (runsResult.error) return respond({ error: "job_runs_query_failed", detail: runsResult.error.message }, 500);
-  if (incidentsResult.error) return respond({ error: "incidents_query_failed", detail: incidentsResult.error.message }, 500);
-  if (resolutionsResult.error) return respond({ error: "resolutions_query_failed", detail: resolutionsResult.error.message }, 500);
+  if (healthResult.error || runsResult.error || incidentsResult.error) {
+    console.error({
+      event: "automation_health_query_failed",
+      request_id: requestId,
+      health: healthResult.error?.message,
+      runs: runsResult.error?.message,
+      incidents: incidentsResult.error?.message,
+    });
+    return respond({ error: "data_query_failed", request_id: requestId }, 500);
+  }
+  if (resolutionsResult.error) {
+    console.error({ event: "resolutions_query_failed", request_id: requestId, error: resolutionsResult.error.message });
+    return respond({ error: "data_query_failed", request_id: requestId }, 500);
+  }
 
   const health = (healthResult.data || []) as Row[];
   const runs = (runsResult.data || []) as Row[];
@@ -189,9 +217,13 @@ Deno.serve(async (req) => {
   const dispatchIds = [...new Set(incidents.map((row) => row.dispatch_id).filter((value) => value != null).map(String))];
   const dispatchById = new Map<string, Row>();
   if (dispatchIds.length) {
-    const { data: dispatches } = await ops.from("meta_lead_dispatches")
+    const { data: dispatches, error: dispatchError } = await ops.from("meta_lead_dispatches")
       .select("id,message_id,event_at,connected_phone,recipient_phone,product_label,lead_name,lead_phone,lead_email,recipient_client_id,expected_client_id,routing_status,recipient_match_method,expected_match_method,group_product_evidence_count")
       .in("id", dispatchIds.slice(0, 800));
+    if (dispatchError) {
+      console.error({ event: "dispatch_enrichment_failed", request_id: requestId, error: dispatchError.message });
+      return respond({ error: "data_query_failed", request_id: requestId }, 500);
+    }
     for (const row of dispatches || []) dispatchById.set(String(row.id), row as Row);
   }
 

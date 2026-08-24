@@ -114,6 +114,7 @@ export default function NotificationLeadDetailBridge() {
 
   useEffect(() => {
     if (!session?.access_token) return;
+    const accessToken = session.access_token;
 
     async function handleClick(event: MouseEvent) {
       const target = event.target as HTMLElement | null;
@@ -151,7 +152,7 @@ export default function NotificationLeadDetailBridge() {
 
       setSelected({ item });
       try {
-        if (!item.read_at) await apiPost("notifications-read", session.access_token, { id: item.id });
+        if (!item.read_at) await apiPost("notifications-read", accessToken, { id: item.id });
       } catch {
         // A visualização do detalhe não depende da marcação como lida.
       }
