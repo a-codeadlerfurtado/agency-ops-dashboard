@@ -106,7 +106,7 @@ export default function CommercialDirectionPage() {
     return defs.map(([label,re])=>({label,count:meetings.filter(m=>re.test(`${m.summary||""} ${JSON.stringify(m.decisions||[])} ${JSON.stringify(m.ai_signals||{})}`)).length})).sort((a,b)=>b.count-a.count);
   },[meetings]);
 
-  const saleQuality=useMemo(()=>wonClients.map(w=>{
+  const saleQuality:Row[]=useMemo<Row[]>(()=>wonClients.map((w:Row):Row=>{
     const client=w.client||null; const clientId=client?.id||null;
     const handoff=handoffs.find(h=>String(h.crm_lead_id||"")===String(w.id)||clientId&&String(h.client_id)===String(clientId));
     const churn=clientId?churns.find(c=>String(c.client_id)===String(clientId)):null;
