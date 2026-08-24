@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { SUPABASE_URL, SUPABASE_ANON_KEY, supabase } from "./shared";
+import { SUPABASE_URL, SUPABASE_ANON_KEY, authenticatedFetch, supabase } from "./shared";
 
 const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-campaign-notes-api`;
+const DASHBOARD_API = `${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api?view=home`;
 
 type Selection = { clientName: string; campaignName: string; accountKey: string };
 type NoteRow = { id: string; note: string; author_person: string; created_at: string };
@@ -19,6 +20,7 @@ function when(value: string) {
 
 export default function CampaignNotesBridge() {
   const [session, setSession] = useState<Session | null>(null);
+  const [role, setRole] = useState<string | null>(null);
   const [selected, setSelected] = useState<Selection | null>(null);
   const [campaign, setCampaign] = useState<CampaignInfo | null>(null);
   const [notes, setNotes] = useState<NoteRow[]>([]);
@@ -34,8 +36,27 @@ export default function CampaignNotesBridge() {
   }, []);
 
   useEffect(() => {
+    if (!session?.access_token) { setRole(null); return; }
+    let active = true;
+    authenticatedFetch(DASHBOARD_API, { cache: "no-store" })
+      .then(async (response) => {
+        if (!active || !response.ok) return;
+        const body = await response.json().catch(() => ({}));
+        if (active) setRole(String(body?.profile?.role || "") || null);
+      })
+      .catch(() => { if (active) setRole(null); });
+    return () => { active = false; };
+  }, [session?.access_token]);
+
+  useEffect(() => { if (role === "COMMERCIAL") setSelected(null); }, [role]);
+
+  useEffect(() => {
     const markTables = () => {
       if (window.location.pathname !== "/campaigns") return;
+      if (role === "COMMERCIAL") {
+        document.querySelectorAll<HTMLTableElement>('table[data-campaign-notes="true"]').forEach((table) => delete table.dataset.campaignNotes);
+        return;
+      }
       document.querySelectorAll<HTMLElement>("section.tc-section").forEach((section) => {
         const heading = section.querySelector(".tc-section-head h3")?.textContent?.trim();
         if (heading !== "Campanhas do período") return;
@@ -44,7 +65,7 @@ export default function CampaignNotesBridge() {
       });
     };
     const click = (event: MouseEvent) => {
-      if (window.location.pathname !== "/campaigns") return;
+      if (role === "COMMERCIAL" || window.location.pathname !== "/campaigns") return;
       const target = event.target as HTMLElement | null;
       const row = target?.closest<HTMLTableRowElement>('table[data-campaign-notes="true"] tbody tr');
       if (!row || !row.querySelector("td")) return;
@@ -61,10 +82,10 @@ export default function CampaignNotesBridge() {
     observer.observe(document.body, { childList: true, subtree: true });
     document.addEventListener("click", click, true);
     return () => { observer.disconnect(); document.removeEventListener("click", click, true); };
-  }, []);
+  }, [role]);
 
   const load = useCallback(async () => {
-    if (!selected || !session?.access_token) return;
+    if (!selected || !session?.access_token || role === "COMMERCIAL") return;
     setLoading(true); setError(""); setNotes([]); setCampaign(null);
     try {
       const url = new URL(API_URL);
@@ -86,7 +107,7 @@ export default function CampaignNotesBridge() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao carregar observações.");
     } finally { setLoading(false); }
-  }, [selected, session?.access_token]);
+  }, [selected, session?.access_token, role]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -99,7 +120,7 @@ export default function CampaignNotesBridge() {
 
   const save = useCallback(async () => {
     const note = text.trim();
-    if (!selected || !session?.access_token || !note || saving) return;
+    if (!selected || !session?.access_token || !note || saving || role === "COMMERCIAL") return;
     setSaving(true); setError("");
     try {
       const response = await fetch(API_URL, {
@@ -119,9 +140,9 @@ export default function CampaignNotesBridge() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Não foi possível salvar a observação.");
     } finally { setSaving(false); }
-  }, [saving, selected, session?.access_token, text]);
+  }, [saving, selected, session?.access_token, text, role]);
 
-  if (!selected) return <style>{baseStyles}</style>;
+  if (!selected || role === "COMMERCIAL") return <style>{baseStyles}</style>;
 
   return <>
     <style>{baseStyles}</style>
