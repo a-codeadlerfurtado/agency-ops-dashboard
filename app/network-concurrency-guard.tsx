@@ -52,8 +52,8 @@ export default function NetworkConcurrencyGuard() {
     const tinyCache = new Map<string, { expiresAt: number; response: StoredResponse }>();
 
     const cacheTtl = (url: string) => {
-      // Perfil e permissoes mudam raramente. Uma janela curtissima evita que dezenas
-      // de bridges consultem o banco de novo logo apos o primeiro carregamento.
+      // Perfil e permissoes mudam raramente. Uma janela curta evita que varias
+      // bridges consultem o banco novamente logo apos o primeiro carregamento.
       if (url.includes("/agency-ops-profile-lite")) return 20_000;
       return 0;
     };
@@ -65,11 +65,26 @@ export default function NetworkConcurrencyGuard() {
         return originalFetch(input, init);
       }
 
+      // A Home ja devolve gt_owner, personal_focus, design_focus e identidade ClickUp.
+      // O page.tsx ainda faz uma chamada antiga de enriquecimento logo depois do home;
+      // ela varre ClickUp de novo e chegou a levar mais de 100s. Na rota raiz esse
+      // complemento e redundante, entao preservamos os dados do payload principal sem
+      // abrir uma segunda consulta pesada por usuario.
+      if (window.location.pathname === "/" && url.includes("/agency-ops-profile-data-api")) {
+        return new Response(JSON.stringify({ profile: {}, focus: null, client_gt: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+        });
+      }
+
       const key = `${authScope(input, init)}::${url}`;
       const cached = tinyCache.get(key);
       if (cached && cached.expiresAt > Date.now()) return cloneStored(cached.response);
       if (cached) tinyCache.delete(key);
 
+      // Todas as requisicoes GET identicas do mesmo usuario compartilham a mesma
+      // chamada enquanto ela estiver em voo. Isso impede que page + bridges lancem
+      // cinco copias de view=home ao mesmo tempo.
       const pending = inFlight.get(key);
       if (pending) return (await pending).clone();
 
