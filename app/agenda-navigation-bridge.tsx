@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { API_URL, authenticatedFetch, supabase } from "./shared";
+import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
+
+const PROFILE_API = `${SUPABASE_URL}/functions/v1/agency-ops-profile-lite`;
 
 const normalize = (value: string) => value
   .normalize("NFD")
@@ -48,7 +50,7 @@ export default function AgendaNavigationBridge() {
   useEffect(() => {
     if (!session?.access_token) { setAllowed(false); return; }
     let active = true;
-    authenticatedFetch(`${API_URL}?view=home`, { cache: "no-store" })
+    authenticatedFetch(PROFILE_API)
       .then(async (response) => {
         if (!active || !response.ok) { if (active) setAllowed(false); return; }
         const body = await response.json().catch(() => ({}));
