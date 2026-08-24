@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
 
 const FRIDAY_API = `${SUPABASE_URL}/functions/v1/agency-ops-friday-report-api`;
+const DASHBOARD_API = `${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api?view=home`;
 
 const normalize = (value: string) => value
   .normalize("NFD")
@@ -18,10 +19,7 @@ function ensureStyles() {
   const style = document.createElement("style");
   style.id = "commercial-navigation-style";
   style.textContent = `
-    /* Os antigos atalhos flutuantes foram aposentados. O acesso comercial agora
-       faz parte da navegacao do dashboard e o relatorio vive dentro dela. */
     .sales-funnel-shortcut,.friday-report-shortcut{display:none!important}
-
     .commercial-section-nav{max-width:1440px;margin:-10px auto 18px;display:flex;align-items:center;gap:8px;padding:7px;border:1px solid rgba(116,196,158,.16);background:rgba(8,22,20,.82);border-radius:12px;backdrop-filter:blur(12px)}
     .commercial-section-nav .commercial-section-label{padding:0 8px;color:#6f9184;font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}
     .commercial-section-nav button{border:1px solid transparent;background:transparent;color:#91aa9f;border-radius:8px;padding:9px 12px;cursor:pointer;font:inherit;font-size:11px;font-weight:750}
@@ -45,9 +43,18 @@ function makeSectionButton(label: string, href: string, active: boolean) {
   return button;
 }
 
-function installDashboardTab() {
+function installDashboardTab(role: string | null) {
   const container = document.querySelector<HTMLElement>(".side-nav-items");
-  if (!container || container.querySelector("[data-commercial-funnel-nav]")) return;
+  if (!container) return;
+
+  const isCommercial = role === "COMMERCIAL";
+  const label = isCommercial ? "Direção Comercial" : "Funil comercial";
+  const href = isCommercial ? "/commercial-direction" : "/sales-funnel";
+  const existing = container.querySelector<HTMLButtonElement>("[data-commercial-funnel-nav]");
+  if (existing) {
+    if (existing.dataset.commercialMode === (isCommercial ? "direction" : "funnel")) return;
+    existing.remove();
+  }
 
   const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
   const campaigns = buttons.find((button) => normalize(button.title || button.textContent || "").startsWith("campanhas"));
@@ -57,13 +64,12 @@ function installDashboardTab() {
   const button = document.createElement("button");
   button.type = "button";
   button.dataset.commercialFunnelNav = "true";
-  button.title = "Funil comercial";
+  button.dataset.commercialMode = isCommercial ? "direction" : "funnel";
+  button.title = label;
   if (template?.className) button.className = template.className.replace(/\bactive\b/g, "").trim();
-  button.textContent = "Funil comercial";
-  button.addEventListener("click", () => window.location.assign("/sales-funnel"));
+  button.textContent = label;
+  button.addEventListener("click", () => window.location.assign(href));
 
-  // Comercial fica junto de Campanhas; se Campanhas nao existir naquele perfil,
-  // entra logo depois de Onboarding. Nao e mais um balao solto na tela.
   if (campaigns) container.insertBefore(button, campaigns);
   else if (onboarding?.nextSibling) container.insertBefore(button, onboarding.nextSibling);
   else container.appendChild(button);
@@ -83,19 +89,14 @@ function installCommercialSubnav(path: string, fridayAllowed: boolean) {
   label.textContent = "Funil comercial";
   nav.appendChild(label);
   nav.appendChild(makeSectionButton("Visão do funil", "/sales-funnel", path === "/sales-funnel"));
-
-  // Relatorio de sexta passa a ser uma subarea do Funil Comercial. Mantemos a
-  // permissao da API existente; quem nao pode abrir o relatorio nao ve a subaba.
-  if (fridayAllowed || path === "/friday-report") {
-    nav.appendChild(makeSectionButton("Relatório de sexta", "/friday-report", path === "/friday-report"));
-  }
-
+  if (fridayAllowed || path === "/friday-report") nav.appendChild(makeSectionButton("Relatório de sexta", "/friday-report", path === "/friday-report"));
   anchor.parentElement.insertBefore(nav, anchor.nextSibling);
 }
 
 export default function CommercialNavigationBridge() {
   const [session, setSession] = useState<Session | null>(null);
   const [fridayAllowed, setFridayAllowed] = useState(false);
+  const [profileRole, setProfileRole] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -103,16 +104,25 @@ export default function CommercialNavigationBridge() {
     return () => subscription.unsubscribe();
   }, []);
 
+  useEffect(() => { ensureStyles(); removeLegacyShortcuts(); }, []);
+
   useEffect(() => {
-    ensureStyles();
-    removeLegacyShortcuts();
-  }, []);
+    if (!session?.access_token) { setProfileRole(null); return; }
+    let active = true;
+    authenticatedFetch(DASHBOARD_API, { cache: "no-store" })
+      .then(async (response) => {
+        if (!active || !response.ok) return;
+        const body = await response.json().catch(() => ({}));
+        if (active) setProfileRole(String(body?.profile?.role || "") || null);
+      })
+      .catch(() => { if (active) setProfileRole(null); });
+    return () => { active = false; };
+  }, [session?.access_token]);
 
   useEffect(() => {
     if (!session?.access_token) { setFridayAllowed(false); return; }
     const path = window.location.pathname;
     if (path !== "/sales-funnel" && path !== "/friday-report") return;
-
     let active = true;
     authenticatedFetch(FRIDAY_API, { cache: "no-store" })
       .then((response) => { if (active) setFridayAllowed(response.ok); })
@@ -123,30 +133,26 @@ export default function CommercialNavigationBridge() {
   useEffect(() => {
     if (!session) return;
     let frame = 0;
-
     const apply = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
         const path = window.location.pathname;
         removeLegacyShortcuts();
-
-        if (path === "/") installDashboardTab();
+        if (path === "/") installDashboardTab(profileRole);
         if (path === "/sales-funnel" || path === "/friday-report") installCommercialSubnav(path, fridayAllowed);
       });
     };
-
     apply();
     const observer = new MutationObserver(apply);
     observer.observe(document.body, { childList: true, subtree: true });
     const timer = window.setInterval(apply, 1200);
-
     return () => {
       observer.disconnect();
       window.clearInterval(timer);
       window.cancelAnimationFrame(frame);
       document.querySelectorAll("[data-commercial-funnel-nav],[data-commercial-section-nav]").forEach((node) => node.remove());
     };
-  }, [session, fridayAllowed]);
+  }, [session, fridayAllowed, profileRole]);
 
   return null;
 }
