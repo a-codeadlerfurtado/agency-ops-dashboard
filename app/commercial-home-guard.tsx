@@ -20,21 +20,28 @@ function enableCommercialScope() {
 }
 
 function disableCommercialScope() {
-  document.documentElement.classList.remove("commercial-profile");
+  document.documentElement.classList.remove("commercial-profile", "commercial-overview-active");
   document.getElementById(COMMERCIAL_STYLE_ID)?.remove();
 }
 
+function legacyDestination() {
+  const path = window.location.pathname;
+  if (!["/commercial-home", "/commercial-direction", "/commercial-clients"].includes(path)) return null;
+  if (path === "/commercial-clients") return "/?commercial_view=clients";
+  const tab = new URLSearchParams(window.location.search).get("tab");
+  if (tab === "campaigns") return "/?commercial_view=campaigns";
+  if (tab === "portfolio") return "/?commercial_view=clients";
+  if (tab === "funnel") return "/?commercial_mode=funnel";
+  return "/";
+}
+
 /**
- * O dashboard principal em / continua sendo a home operacional da gestão.
- * Perfis COMMERCIAL não devem carregar essa visão: a home deles é /commercial-home.
+ * COMMERCIAL permanece no shell principal do dashboard. As rotas comerciais
+ * antigas existem apenas por compatibilidade e são normalizadas uma única vez
+ * para /. Depois disso, nenhuma navegação do Leonardo sai do dashboard principal.
  *
- * A exceção é commercial_view, usada para abrir áreas comerciais que ainda vivem
- * dentro do shell principal (ex.: pré-clientes). Assim mantemos a navegação
- * comercial sem reexpor a Visão Geral operacional.
- *
- * O OpsQuestion permanece disponível no perfil comercial. Apenas superfícies
- * explicitamente operacionais (saúde de integrações e alertas de operação)
- * são suprimidas para esse papel.
+ * OpsQuestion continua disponível. Apenas superfícies globais estritamente
+ * operacionais são ocultadas para o papel comercial.
  */
 export default function CommercialHomeGuard() {
   const [session, setSession] = useState<Session | null>(null);
@@ -62,13 +69,8 @@ export default function CommercialHomeGuard() {
         }
 
         enableCommercialScope();
-        if (window.location.pathname !== "/") return;
-
-        const params = new URLSearchParams(window.location.search);
-        if (params.get("commercial_view")) return;
-
-        document.documentElement.style.visibility = "hidden";
-        window.location.replace("/commercial-home");
+        const destination = legacyDestination();
+        if (destination) window.location.replace(destination);
       })
       .catch(() => undefined);
 
