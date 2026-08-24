@@ -11,6 +11,8 @@ const CLOUDFLARE_AI_BASE = "https://agency-ops-dashboard.lakassessoriadigital.wo
 const CREATE_TIMEOUT_MS = 5_000;
 const CHAT_TIMEOUT_MS = 38_000;
 const CLEANUP_TIMEOUT_MS = 2_500;
+const CACHE_TTL_MS = 20 * 60_000;
+const STALE_PENDING_MS = 2 * 60_000;
 
 const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -111,7 +113,8 @@ function resolveNamed(question: string, rows: any[], field: string) {
 
 function actionLines(answer: string) {
   const rawLower = answer.toLowerCase();
-  const marker = Math.max(rawLower.lastIndexOf("próximos passos"), rawLower.lastIndexOf("proximos passos"));
+  const markers = ["próximos passos", "proximos passos", "ações prioritárias", "acoes prioritarias", "3 ações prioritárias", "3 acoes prioritarias"];
+  const marker = markers.reduce((best, item) => Math.max(best, rawLower.lastIndexOf(item)), -1);
   if (marker < 0) return [];
   const section = answer.slice(marker);
   const lines = section.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -151,6 +154,35 @@ function inferType(text: string) {
   if (/\b(clickup|task|tarefa)\b/.test(q)) return "CLICKUP";
   if (/\b(escalar|escalonar|escalacao)\b/.test(q)) return "ESCALATION";
   return "GENERAL";
+}
+
+function buildActions(answer: string, requestId: string, questionClient: any, permitted: any[], roster: any[]) {
+  const baseClient = questionClient || resolveNamed(answer, permitted, "display_name");
+  return actionLines(answer).map((text, index) => {
+    const client = baseClient || resolveNamed(text, permitted, "display_name");
+    const role = inferRole(text);
+    let targetPerson: string | null = null;
+    if (client && role === "CS") targetPerson = client.cs_owner || null;
+    else if (client && role === "DESIGN") targetPerson = client.designer_owner || null;
+    else if (role !== "GT") {
+      const named = resolveNamed(text, roster ?? [], "person");
+      if (named && named.role === role) targetPerson = named.person;
+    }
+    return {
+      id: `${requestId}:${index + 1}`,
+      title: clip(text, 220),
+      description: text,
+      client_id: client?.id ?? null,
+      client_name: client?.display_name ?? null,
+      target_role: role,
+      target_person: targetPerson,
+      priority: inferPriority(text),
+      type: inferType(text),
+      create_clickup: /\b(clickup|task|tarefa)\b/.test(norm(text)),
+      source: "opsquestion_v5",
+      source_id: requestId,
+    };
+  });
 }
 
 Deno.serve(async (req: Request) => {
@@ -196,6 +228,53 @@ Deno.serve(async (req: Request) => {
   const questionClient = resolveNamed(question, permitted, "display_name");
   const requestId = crypto.randomUUID();
 
+  const staleBefore = new Date(Date.now() - STALE_PENDING_MS).toISOString();
+  await ops.from("opsquestion_interactions").update({
+    status: "ERROR",
+    error: "stale_pending_reaped",
+    answered_at: new Date().toISOString(),
+  }).eq("user_key", userData.user.id).eq("status", "PENDING").lt("created_at", staleBefore);
+
+  const cacheSince = new Date(Date.now() - CACHE_TTL_MS).toISOString();
+  const { data: recentSuccess } = await ops.from("opsquestion_interactions")
+    .select("question,answer,request_id,created_at")
+    .eq("user_key", userData.user.id)
+    .eq("status", "SUCCESS")
+    .not("answer", "is", null)
+    .gte("created_at", cacheSince)
+    .order("created_at", { ascending: false })
+    .limit(30);
+  const cached = (recentSuccess ?? []).find((row: any) => norm(row.question) === norm(question) && String(row.answer || "").trim());
+  if (cached) {
+    const answer = String(cached.answer).trim();
+    const actions = buildActions(answer, requestId, questionClient, permitted, roster ?? []);
+    const latency = Date.now() - startedAt;
+    await ops.from("opsquestion_interactions").insert({
+      user_key: userData.user.id,
+      person,
+      role: me.role,
+      access_level: me.access_level ?? null,
+      question,
+      answer: answer.slice(0, 30000),
+      status: "SUCCESS",
+      source: "OPSQUESTION_CACHE_V5",
+      latency_ms: latency,
+      request_id: requestId,
+      answered_at: new Date().toISOString(),
+    });
+    return respond({
+      ok: true,
+      answer,
+      source: "Cache operacional recente",
+      latency_ms: latency,
+      request_id: requestId,
+      client: questionClient?.display_name ?? resolveNamed(answer, permitted, "display_name")?.display_name ?? null,
+      suggested_actions: actions,
+      cached: true,
+      cached_from: cached.created_at,
+    });
+  }
+
   const { data: interaction } = await ops.from("opsquestion_interactions").insert({
     user_key: userData.user.id,
     person,
@@ -203,7 +282,7 @@ Deno.serve(async (req: Request) => {
     access_level: me.access_level ?? null,
     question,
     status: "PENDING",
-    source: "CLOUDFLARE_WORKERS_AI_V5",
+    source: "CLOUDFLARE_WORKERS_AI_FAST_V5",
     request_id: requestId,
   }).select("id").maybeSingle();
 
@@ -219,44 +298,19 @@ Deno.serve(async (req: Request) => {
     const completion = await timedPost(`${CLOUDFLARE_AI_BASE}/chat`, authorization, {
       conversation_id: conversationId,
       message: buildPrompt(question),
+      ops_fast: true,
     }, CHAT_TIMEOUT_MS);
 
     const answer = String(completion?.assistant_message?.content || "").trim();
     if (!answer) throw new Error("empty_answer");
 
-    const lines = actionLines(answer);
-    const actions = lines.map((text, index) => {
-      const client = questionClient || resolveNamed(text, permitted, "display_name");
-      const role = inferRole(text);
-      let targetPerson: string | null = null;
-      if (client && role === "CS") targetPerson = client.cs_owner || null;
-      else if (client && role === "DESIGN") targetPerson = client.designer_owner || null;
-      else if (role !== "GT") {
-        const named = resolveNamed(text, roster ?? [], "person");
-        if (named && named.role === role) targetPerson = named.person;
-      }
-      return {
-        id: `${requestId}:${index + 1}`,
-        title: clip(text, 220),
-        description: text,
-        client_id: client?.id ?? null,
-        client_name: client?.display_name ?? null,
-        target_role: role,
-        target_person: targetPerson,
-        priority: inferPriority(text),
-        type: inferType(text),
-        create_clickup: /\b(clickup|task|tarefa)\b/.test(norm(text)),
-        source: "opsquestion_v5",
-        source_id: requestId,
-      };
-    });
-
+    const actions = buildActions(answer, requestId, questionClient, permitted, roster ?? []);
     const latency = Date.now() - startedAt;
     if (interaction?.id) {
       await ops.from("opsquestion_interactions").update({
         answer: answer.slice(0, 30000),
         status: "SUCCESS",
-        source: "CLOUDFLARE_WORKERS_AI_V5",
+        source: "CLOUDFLARE_WORKERS_AI_FAST_V5",
         latency_ms: latency,
         answered_at: new Date().toISOString(),
       }).eq("id", interaction.id);
@@ -265,11 +319,13 @@ Deno.serve(async (req: Request) => {
     return respond({
       ok: true,
       answer,
-      source: "Workers AI · base operacional",
+      source: "Workers AI rápido · base operacional",
       latency_ms: latency,
       request_id: requestId,
-      client: questionClient?.display_name ?? null,
+      client: questionClient?.display_name ?? resolveNamed(answer, permitted, "display_name")?.display_name ?? null,
       suggested_actions: actions,
+      model: completion?.model ?? null,
+      timing: completion?.timing ?? null,
     });
   } catch (error) {
     const latency = Date.now() - startedAt;
@@ -278,7 +334,7 @@ Deno.serve(async (req: Request) => {
     if (interaction?.id) {
       await ops.from("opsquestion_interactions").update({
         status: "ERROR",
-        source: "CLOUDFLARE_WORKERS_AI_V5",
+        source: "CLOUDFLARE_WORKERS_AI_FAST_V5",
         latency_ms: latency,
         error: detail,
         answered_at: new Date().toISOString(),
