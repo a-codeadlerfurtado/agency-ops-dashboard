@@ -3,18 +3,25 @@
 import { useEffect, useState } from "react";
 import { supabase } from "./shared";
 
+const LEONARDO_EMAIL = "lakassessoriadigital@gmail.com";
+
 export default function HomeShortcut() {
   const [authenticated, setAuthenticated] = useState(false);
+  const [email, setEmail] = useState("");
 
   useEffect(() => {
     let mounted = true;
 
     supabase.auth.getSession().then(({ data }) => {
-      if (mounted) setAuthenticated(Boolean(data.session));
+      if (!mounted) return;
+      setAuthenticated(Boolean(data.session));
+      setEmail(String(data.session?.user?.email || "").toLowerCase());
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (mounted) setAuthenticated(Boolean(session));
+      if (!mounted) return;
+      setAuthenticated(Boolean(session));
+      setEmail(String(session?.user?.email || "").toLowerCase());
     });
 
     return () => {
@@ -38,14 +45,13 @@ export default function HomeShortcut() {
       event.preventDefault();
       event.stopPropagation();
 
-      if (window.location.pathname !== "/") {
-        window.location.assign("/");
-      }
+      const target = email === LEONARDO_EMAIL ? "/commercial-direction" : "/";
+      if (window.location.pathname !== target) window.location.assign(target);
     }
 
     window.addEventListener("keydown", handleKeyDown, { capture: true });
     return () => window.removeEventListener("keydown", handleKeyDown, { capture: true });
-  }, [authenticated]);
+  }, [authenticated, email]);
 
   return null;
 }
