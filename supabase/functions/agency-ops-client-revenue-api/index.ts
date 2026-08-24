@@ -3,7 +3,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const CORS={"access-control-allow-origin":"*","access-control-allow-headers":"authorization,apikey,content-type","access-control-allow-methods":"GET,POST,OPTIONS"};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...CORS,"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
-const ALLOWED=new Set(["Adler Furtado","Leonardo Augusto"]);
+const ALLOWED=new Set(["Adler Furtado"]);
 const num=(v:unknown)=>v===null||v===undefined||v===""?null:Number(v);
 
 Deno.serve(async(req:Request)=>{
@@ -30,28 +30,13 @@ Deno.serve(async(req:Request)=>{
     const monthly=num(body.monthly_value),implementation=num(body.implementation_value),term=num(body.term_months);
     if((monthly!==null&&!Number.isFinite(monthly))||(implementation!==null&&!Number.isFinite(implementation))||(term!==null&&!Number.isFinite(term))) return json({ok:false,error:"invalid_number"},400);
     if((monthly??0)<0||(implementation??0)<0||(term??0)<0) return json({ok:false,error:"negative_value"},400);
-    const patch={
-      client_id:clientId,
-      monthly_value:monthly,
-      implementation_value:implementation,
-      term_months:term===null?null:Math.round(term),
-      implementation_payment:body.implementation_payment?String(body.implementation_payment).slice(0,120):null,
-      implementation_installments:Array.isArray(body.implementation_installments)?body.implementation_installments.map((x:unknown)=>Number(x)).filter((x:number)=>Number.isFinite(x)&&x>=0):null,
-      notes:body.notes?String(body.notes).slice(0,2000):null,
-      source:"MANUAL",
-      source_crm_lead_id:null,
-      updated_by:person,
-      updated_at:new Date().toISOString(),
-    };
+    const patch={client_id:clientId,monthly_value:monthly,implementation_value:implementation,term_months:term===null?null:Math.round(term),implementation_payment:body.implementation_payment?String(body.implementation_payment).slice(0,120):null,implementation_installments:Array.isArray(body.implementation_installments)?body.implementation_installments.map((x:unknown)=>Number(x)).filter((x:number)=>Number.isFinite(x)&&x>=0):null,notes:body.notes?String(body.notes).slice(0,2000):null,source:"MANUAL",source_crm_lead_id:null,updated_by:person,updated_at:new Date().toISOString()};
     const {data,error}=await ops.from("client_commercial_terms").upsert(patch,{onConflict:"client_id"}).select().single();
     if(error) return json({ok:false,error:"save_failed"},500);
     return json({ok:true,term:data});
   }
 
-  const [clientsRes,termsRes]=await Promise.all([
-    ops.from("clients").select("id,display_name,lifecycle,service,entrada,cs_owner,gt_owner,crm_lead_id").order("display_name"),
-    ops.from("client_commercial_terms").select("*")
-  ]);
+  const [clientsRes,termsRes]=await Promise.all([ops.from("clients").select("id,display_name,lifecycle,service,entrada,cs_owner,gt_owner,crm_lead_id").order("display_name"),ops.from("client_commercial_terms").select("*")]);
   if(clientsRes.error||termsRes.error) return json({ok:false,error:"query_failed"},500);
   const clients=clientsRes.data||[],terms=termsRes.data||[];
   const crmIds=[...new Set(clients.map((c:any)=>c.crm_lead_id).filter(Boolean).map(String))];
@@ -67,15 +52,7 @@ Deno.serve(async(req:Request)=>{
     const monthly=manual?.monthly_value!=null?Number(manual.monthly_value):crmMonthly;
     const implementation=manual?.implementation_value!=null?Number(manual.implementation_value):crmImplementation;
     const source=manual?"MANUAL":(crmMonthly!=null||crmImplementation!=null?"CRM_VINCULADO":"NAO_INFORMADO");
-    return {
-      client_id:c.id,display_name:c.display_name,lifecycle:c.lifecycle,service:c.service,entrada:c.entrada,cs_owner:c.cs_owner,gt_owner:c.gt_owner,crm_lead_id:c.crm_lead_id,
-      monthly_value:monthly,implementation_value:implementation,
-      term_months:manual?.term_months??lead?.closed_term_months??null,
-      implementation_payment:manual?.implementation_payment??lead?.closed_setup_payment??null,
-      implementation_installments:manual?.implementation_installments??lead?.closed_setup_installment_values??null,
-      notes:manual?.notes??null,source,updated_by:manual?.updated_by??null,updated_at:manual?.updated_at??lead?.closed_at??null,
-      crm_stage:lead?.stage??null,crm_lead_name:lead?.name??null,
-    };
+    return {client_id:c.id,display_name:c.display_name,lifecycle:c.lifecycle,service:c.service,entrada:c.entrada,cs_owner:c.cs_owner,gt_owner:c.gt_owner,crm_lead_id:c.crm_lead_id,monthly_value:monthly,implementation_value:implementation,term_months:manual?.term_months??lead?.closed_term_months??null,implementation_payment:manual?.implementation_payment??lead?.closed_setup_payment??null,implementation_installments:manual?.implementation_installments??lead?.closed_setup_installment_values??null,notes:manual?.notes??null,source,updated_by:manual?.updated_by??null,updated_at:manual?.updated_at??lead?.closed_at??null,crm_stage:lead?.stage??null,crm_lead_name:lead?.name??null};
   });
   const current=rows.filter((r:any)=>["ACTIVE","ONBOARDING"].includes(String(r.lifecycle)));
   const knownMonthly=current.filter((r:any)=>r.monthly_value!=null);
