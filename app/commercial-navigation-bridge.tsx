@@ -2,11 +2,9 @@
 
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
+import { SUPABASE_URL, authenticatedFetch, loadProfileLite, supabase } from "./shared";
 
 const FRIDAY_API = `${SUPABASE_URL}/functions/v1/agency-ops-friday-report-api`;
-const PROFILE_API = `${SUPABASE_URL}/functions/v1/agency-ops-profile-lite`;
-
 const normalize = (value: string) => value
   .normalize("NFD")
   .replace(/[\u0300-\u036f]/g, "")
@@ -109,15 +107,20 @@ export default function CommercialNavigationBridge() {
   useEffect(() => {
     if (!session?.access_token) { setProfileRole(null); return; }
     let active = true;
-    authenticatedFetch(PROFILE_API, { cache: "no-store" })
-      .then(async (response) => {
-        if (!active || !response.ok) return;
-        const body = await response.json().catch(() => ({}));
+    loadProfileLite()
+      .then((body) => {
         if (active) setProfileRole(String(body?.profile?.role || "") || null);
       })
       .catch(() => { if (active) setProfileRole(null); });
     return () => { active = false; };
   }, [session?.access_token]);
+
+  useEffect(() => {
+    if (profileRole === "COMMERCIAL" && window.location.pathname === "/") {
+      window.location.replace("/commercial-direction");
+      return;
+    }
+  }, [profileRole]);
 
   useEffect(() => {
     if (profileRole !== "COMMERCIAL") return;
