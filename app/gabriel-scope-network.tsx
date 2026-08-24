@@ -22,11 +22,12 @@ function tokenSubject(token: string) {
 }
 
 function rewriteUrl(raw: string) {
-  if (raw.includes("/functions/v1/agency-ops-dashboard-api")) return raw.replace("/functions/v1/agency-ops-dashboard-api", "/functions/v1/agency-ops-dashboard-scope");
+  if (raw.includes("/functions/v1/agency-ops-dashboard-api")) return raw.replace("/functions/v1/agency-ops-dashboard-api", "/functions/v1/agency-ops-gabriel-dashboard-safe");
   if (raw.includes("/functions/v1/agency-ops-profile-data-api")) return raw.replace("/functions/v1/agency-ops-profile-data-api", "/functions/v1/agency-ops-gabriel-profile-data-api");
   if (raw.includes("/functions/v1/agency-ops-work-item-create-api")) return raw.replace("/functions/v1/agency-ops-work-item-create-api", "/functions/v1/agency-ops-gabriel-work-item-create-api");
   if (raw.includes("/functions/v1/agency-ops-ai-work-api")) return raw.replace("/functions/v1/agency-ops-ai-work-api", "/functions/v1/agency-ops-gabriel-ai-work-api");
   if (raw.includes("/functions/v1/agency-ops-client-notifications")) return raw.replace("/functions/v1/agency-ops-client-notifications", "/functions/v1/agency-ops-gabriel-client-notifications");
+  if (raw.includes("/functions/v1/agency-ops-notifications-home")) return raw.replace("/functions/v1/agency-ops-notifications-home", "/functions/v1/agency-ops-gabriel-notifications-home");
   return raw;
 }
 
