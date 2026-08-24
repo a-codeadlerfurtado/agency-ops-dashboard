@@ -175,12 +175,12 @@ async function buildRecommendation(ops: any, request: any, clientName: string, g
   if (opsNotes.length + campaignNotes.length) confidence += 8;
   confidence = Math.min(96, confidence);
 
-  const loadSnapshot = await loadSnapshot(ops, candidates);
-  const loads = loadSnapshot.map((row) => row.weighted_load);
+  const loadRows = await loadSnapshot(ops, candidates);
+  const loads = loadRows.map((row) => row.weighted_load);
   const minLoad = Math.min(...loads), maxLoad = Math.max(...loads);
   const scores = candidates.map((person) => {
     const profile = GT_PROFILES[person];
-    const load = loadSnapshot.find((row) => row.person === person)?.weighted_load ?? maxLoad;
+    const load = loadRows.find((row) => row.person === person)?.weighted_load ?? maxLoad;
     const loadPenalty = maxLoad > minLoad ? ((load - minLoad) / (maxLoad - minLoad)) * 30 : 0;
     let score = 68 + profile.balanceBias - loadPenalty;
     if (complexity >= 72) score += person === "Felipe Oliveira" ? 34 : person === "Yuri Melo" ? 2 : -10;
@@ -190,7 +190,7 @@ async function buildRecommendation(ops: any, request: any, clientName: string, g
     if (relationship.profile === "RELACIONAL / EXPANSIVO") score += person === "Rodrigo Cavalheiro" ? 14 : person === "Felipe Oliveira" ? 8 : 2;
     if (relationship.profile === "OBJETIVO / DIRETO") score += person === "Yuri Melo" ? 9 : person === "Felipe Oliveira" ? 6 : 5;
     score = Math.max(0, Math.min(100, Math.round(score)));
-    return { person, score, weighted_load: load, clients: loadSnapshot.find((row) => row.person === person)?.clients ?? 0, profile: profile.description };
+    return { person, score, weighted_load: load, clients: loadRows.find((row) => row.person === person)?.clients ?? 0, profile: profile.description };
   }).sort((a, b) => b.score - a.score);
 
   const recommended = scores[0]?.person ?? null;
@@ -217,7 +217,7 @@ async function buildRecommendation(ops: any, request: any, clientName: string, g
     rationale,
     evidence: evidence.sort((a, b) => b.weight - a.weight).slice(0, 8),
     source_coverage: sourceCoverage,
-    load_snapshot: loadSnapshot,
+    load_snapshot: loadRows,
     engine_version: "gt-fit-v1.1",
     updated_at: new Date().toISOString(),
   };
