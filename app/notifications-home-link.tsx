@@ -157,12 +157,10 @@ export default function NotificationsHomeLink() {
 
     const observer = new MutationObserver(() => { void ensureUI(); });
     observer.observe(document.body, { childList: true, subtree: true });
-    const timer = window.setInterval(() => { void ensureUI(); }, 700);
     void ensureUI();
 
     return () => {
       observer.disconnect();
-      window.clearInterval(timer);
     };
   }, []);
 
