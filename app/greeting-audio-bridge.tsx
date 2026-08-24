@@ -145,6 +145,44 @@ export default function GreetingAudioBridge() {
       startedAt = 0;
     };
 
+    const closeOpeningThroughUi = (attempt = 0) => {
+      if (disposed || !document.querySelector(".opsq-opening")) return;
+      const button = document.querySelector(".opsq-enter-btn") as HTMLButtonElement | null;
+      if (button) {
+        button.click();
+        return;
+      }
+      if (attempt < 8) {
+        window.requestAnimationFrame(() => closeOpeningThroughUi(attempt + 1));
+      }
+    };
+
+    const skipOpening = (event: KeyboardEvent) => {
+      if (disposed || event.key !== "Escape" || !document.querySelector(".opsq-opening")) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      // Marca a reprodução como concluída antes de parar a source para impedir
+      // que o poll de 80 ms tente reiniciar o áudio enquanto o React fecha a abertura.
+      playbackCompleted = true;
+      stopPlayback();
+      stopKeeper();
+
+      // A própria DailyGreetingV3 já sabe liberar a entrada quando recebe "ended".
+      // Em perfis sem áudio o botão já existe; no perfil com áudio ele aparece após
+      // esse evento. Em ambos os casos fechamos usando o botão normal do componente,
+      // preservando o estado React em vez de remover o DOM manualmente.
+      emit("opsq:greeting-audio-progress", {
+        progress: 1,
+        currentTime: duration,
+        duration,
+        skipped: true,
+      });
+      emit("opsq:greeting-audio-ended", { skipped: true });
+      window.requestAnimationFrame(() => closeOpeningThroughUi());
+    };
+
     const startOpeningPlayback = async () => {
       // IMPORTANTE: playbackStarting impede que o poll de 80 ms abra várias
       // reproduções concorrentes enquanto espera unlock/buffer. playbackCompleted
@@ -224,6 +262,7 @@ export default function GreetingAudioBridge() {
 
     document.addEventListener("pointerdown", unlockFromLoginGesture, true);
     document.addEventListener("keydown", unlockFromLoginGesture, true);
+    document.addEventListener("keydown", skipOpening, true);
     document.addEventListener("submit", unlockFromLoginGesture, true);
 
     const observer = new MutationObserver(syncOpening);
@@ -257,6 +296,7 @@ export default function GreetingAudioBridge() {
       window.clearInterval(poll);
       document.removeEventListener("pointerdown", unlockFromLoginGesture, true);
       document.removeEventListener("keydown", unlockFromLoginGesture, true);
+      document.removeEventListener("keydown", skipOpening, true);
       document.removeEventListener("submit", unlockFromLoginGesture, true);
       stopPlayback();
       stopKeeper();
