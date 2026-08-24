@@ -6,10 +6,9 @@ import { api, supabase } from "./shared";
 import DashboardEnhancements from "./dashboard-enhancements";
 
 /**
- * O perfil de Design já tem uma home própria, deliberadamente limitada a tarefas
- * criativas. A camada operacional ampla não deve recolocar clientes, campanhas ou
- * alertas genéricos nessa tela. Para os demais perfis, o próprio endpoint home já
- * devolve somente o escopo autorizado de cada sessão.
+ * Design e Direção Comercial têm homes próprias e deliberadamente limitadas ao
+ * escopo do papel. A camada operacional ampla não deve recolocar tarefas,
+ * produtividade individual, alertas técnicos ou controles de execução nessas telas.
  */
 export default function DashboardEnhancementsGate() {
   const [session, setSession] = useState<Session | null>(null);
@@ -30,6 +29,6 @@ export default function DashboardEnhancementsGate() {
     return () => { active = false; };
   }, [session?.access_token]);
 
-  if (!session || !role || role === "DESIGN") return null;
+  if (!session || !role || role === "DESIGN" || role === "COMMERCIAL") return null;
   return <DashboardEnhancements />;
 }
