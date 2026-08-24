@@ -5,6 +5,7 @@ import { supabase } from "./shared";
 
 const GABRIEL_USER_ID = "197fb469-bc67-492c-9b74-154372760633";
 const MARK = "__opsGabrielScopeFetchInstalled";
+const STYLE_ID = "gabriel-ai-only-navigation-style";
 const BLOCKED_GABRIEL_APIS = [
   "/functions/v1/agency-ops-sales-funnel-api",
   "/functions/v1/agency-ops-friday-report-api",
@@ -94,6 +95,29 @@ function install() {
   }) as typeof window.fetch;
 }
 
+function ensureGabrielNavigationShield() {
+  document.documentElement.dataset.gabrielAiOnly = "true";
+  if (document.getElementById(STYLE_ID)) return;
+  const style = document.createElement("style");
+  style.id = STYLE_ID;
+  style.textContent = `
+    html[data-gabriel-ai-only="true"] [data-commercial-funnel-nav],
+    html[data-gabriel-ai-only="true"] [data-commercial-section-nav],
+    html[data-gabriel-ai-only="true"] .sales-funnel-shortcut,
+    html[data-gabriel-ai-only="true"] .friday-report-shortcut {
+      display: none !important;
+      visibility: hidden !important;
+      pointer-events: none !important;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function clearGabrielNavigationShield() {
+  delete document.documentElement.dataset.gabrielAiOnly;
+  document.getElementById(STYLE_ID)?.remove();
+}
+
 function removeCommercialUiForGabriel() {
   const forbidden = new Set([
     "funil comercial",
@@ -103,7 +127,10 @@ function removeCommercialUiForGabriel() {
   ]);
   document.querySelectorAll<HTMLElement>(".side-nav-items button,.side-nav-items a,[data-commercial-funnel-nav],[data-commercial-section-nav]").forEach((node) => {
     const label = normalize(node.getAttribute("title") || node.textContent || "");
-    if (forbidden.has(label) || node.hasAttribute("data-commercial-section-nav")) node.remove();
+    if (forbidden.has(label) || node.hasAttribute("data-commercial-section-nav")) {
+      node.style.setProperty("display", "none", "important");
+      node.remove();
+    }
   });
 }
 
@@ -118,6 +145,7 @@ export default function GabrielScopeNetwork() {
 
     const apply = () => {
       if (!enabled) return;
+      ensureGabrielNavigationShield();
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
         removeCommercialUiForGabriel();
@@ -129,20 +157,22 @@ export default function GabrielScopeNetwork() {
 
     const setSession = (userId?: string | null) => {
       enabled = String(userId || "") === GABRIEL_USER_ID;
-      apply();
+      if (enabled) apply();
+      else clearGabrielNavigationShield();
     };
 
     supabase.auth.getSession().then(({ data }) => setSession(data.session?.user?.id));
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => setSession(session?.user?.id));
     const observer = new MutationObserver(apply);
     observer.observe(document.body, { childList: true, subtree: true });
-    const timer = window.setInterval(apply, 900);
+    const timer = window.setInterval(apply, 250);
 
     return () => {
       subscription.unsubscribe();
       observer.disconnect();
       window.clearInterval(timer);
       window.cancelAnimationFrame(frame);
+      clearGabrielNavigationShield();
     };
   }, []);
 
