@@ -6,6 +6,7 @@ import { SUPABASE_URL, authenticatedFetch } from "./shared";
 
 type Row = Record<string, any>;
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-team-now-api`;
+const PROFILE_API = `${SUPABASE_URL}/functions/v1/agency-ops-profile-lite`;
 
 function time(value: unknown) {
   if (!value) return "—";
@@ -23,8 +24,10 @@ export default function TeamNowBridge() {
   const [target, setTarget] = useState<HTMLElement | null>(null);
   const [payload, setPayload] = useState<Row | null>(null);
   const [loading, setLoading] = useState(false);
+  const [allowed, setAllowed] = useState(false);
 
   async function load() {
+    if (!allowed) return;
     setLoading(true);
     try {
       const response = await authenticatedFetch(API, { cache: "no-store" });
@@ -39,14 +42,26 @@ export default function TeamNowBridge() {
   }
 
   useEffect(() => {
-    if (window.location.pathname !== "/") return;
-    load();
-    const timer = window.setInterval(load, 30000);
-    return () => window.clearInterval(timer);
+    let active = true;
+    authenticatedFetch(PROFILE_API)
+      .then(async (response) => {
+        if (!active || !response.ok) return;
+        const body = await response.json().catch(() => ({}));
+        if (active) setAllowed(String(body?.profile?.person || "") === "Adler Furtado");
+      })
+      .catch(() => { if (active) setAllowed(false); });
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
-    if (window.location.pathname !== "/") return;
+    if (!allowed || window.location.pathname !== "/") { setPayload(null); return; }
+    load();
+    const timer = window.setInterval(load, 30000);
+    return () => window.clearInterval(timer);
+  }, [allowed]);
+
+  useEffect(() => {
+    if (!allowed || window.location.pathname !== "/") return;
     const attach = () => {
       const anchors = [...document.querySelectorAll<HTMLElement>("section.grid.kpis")];
       const anchor = anchors.find((node) => node.textContent?.includes("Clientes ativos")) || null;
@@ -66,13 +81,13 @@ export default function TeamNowBridge() {
       observer.disconnect();
       document.querySelectorAll("[data-team-now-host]").forEach((node) => node.remove());
     };
-  }, []);
+  }, [allowed]);
 
   const members: Row[] = payload?.members || [];
   const active = useMemo(() => members.filter((m) => m.presence === "IN_MEETING"), [members]);
   const probable = useMemo(() => members.filter((m) => m.presence === "PROBABLE"), [members]);
 
-  if (!target || !payload) return null;
+  if (!allowed || !target || !payload) return null;
 
   return createPortal(
     <section className="team-now-card">
