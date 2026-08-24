@@ -120,6 +120,22 @@ export default function CommercialNavigationBridge() {
   }, [session?.access_token]);
 
   useEffect(() => {
+    if (profileRole !== "COMMERCIAL") return;
+    const routeClients = (event: MouseEvent) => {
+      if (window.location.pathname !== "/") return;
+      const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>(".side-nav-items button") : null;
+      if (!button) return;
+      const label = normalize(button.title || button.textContent || "");
+      if (label !== "clientes") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      window.location.assign("/commercial-clients");
+    };
+    document.addEventListener("click", routeClients, true);
+    return () => document.removeEventListener("click", routeClients, true);
+  }, [profileRole]);
+
+  useEffect(() => {
     if (!session?.access_token) { setFridayAllowed(false); return; }
     const path = window.location.pathname;
     if (path !== "/sales-funnel" && path !== "/friday-report") return;
