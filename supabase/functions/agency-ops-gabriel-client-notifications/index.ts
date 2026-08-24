@@ -8,14 +8,17 @@ function isAiServiceEvent(row:any){
   if(!row||typeof row!=="object")return false;
   const meta=row.metadata&&typeof row.metadata==="object"?row.metadata:{};
   const strongAiOrigin=meta.ai_workspace===true||meta.n8n_verified===true||meta.created_inside_ai_work_center===true;
-  const combined=norm([
-    row.type,row.source,row.title,row.description,row.next_action,row.owner,row.actor,
-    meta.service,meta.product,meta.category,meta.workspace,meta.source,meta.type,meta.title,meta.description,meta.next_action
+  const subject=norm([
+    row.type,row.source,row.title,row.next_action,
+    meta.service,meta.product,meta.category,meta.workspace,meta.source,meta.type,meta.title,meta.next_action,
+    meta.task_name,meta.list,meta.clickup_list_name
   ].filter(Boolean).join(" "));
-  const explicitTech=/\bn8n\b|agente de ia|agente virtual|chatbot|bot de atendimento|assistente virtual|\bllm\b|openai|prompt/.test(combined);
-  const explicitAi=/\bia\b|inteligencia artificial/.test(combined);
-  const automationContext=/\bautomacao\b/.test(combined)&&/(n8n|\bia\b|inteligencia artificial|agente|chatbot|bot|assistente virtual|webhook|whatsapp|lead|atendimento)/.test(combined);
-  const integrationContext=/(webhook|integracao com whatsapp|whatsapp integrado)/.test(combined)&&/(n8n|\bia\b|inteligencia artificial|agente|chatbot|bot|assistente virtual|automacao)/.test(combined);
+  const detail=norm([row.description,meta.description].filter(Boolean).join(" "));
+  const combined=`${subject} ${detail}`.trim();
+  const explicitTech=/\bn8n\b|agente de ia|agente virtual|chatbot|bot de atendimento|assistente virtual|\bllm\b|openai|prompt/.test(subject);
+  const explicitAi=/\bia\b|inteligencia artificial/.test(subject);
+  const automationContext=/\bautomacao\b/.test(subject)&&/(n8n|\bia\b|inteligencia artificial|agente|chatbot|bot|assistente virtual|webhook|whatsapp|lead|atendimento)/.test(combined);
+  const integrationContext=/(webhook|integracao com whatsapp|whatsapp integrado)/.test(subject)&&/(n8n|\bia\b|inteligencia artificial|agente|chatbot|bot|assistente virtual|automacao)/.test(combined);
   const trafficOrMedia=/campanha|campaign|meta ads|google ads|trafego|gestor de trafego|anuncio|ads\b|criativo|creative|cpl\b|cpm\b|ctr\b|cpc\b|orcamento de midia|saldo de conta|saldo meta|conta de anuncio|conjunto de anuncio|adset/.test(combined);
   if(strongAiOrigin)return true;
   if(trafficOrMedia&&!(explicitTech||automationContext||integrationContext))return false;
