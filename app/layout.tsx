@@ -13,6 +13,7 @@ import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OnboardingRequiredAlerts from "./onboarding-required-alerts";
 import OnboardingRoleRouter from "./onboarding-role-router";
 import CommercialNavigationBridge from "./commercial-navigation-bridge";
+import AgendaNavigationBridge from "./agenda-navigation-bridge";
 import CommercialVitorPerformanceBridge from "./commercial-vitor-performance-bridge";
 import CommercialNotificationsBridge from "./commercial-notifications-bridge";
 import AIHeadRouter from "./ai-head-router";
@@ -77,6 +78,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OnboardingRequiredAlerts />
         <OnboardingRoleRouter />
         <CommercialNavigationBridge />
+        <AgendaNavigationBridge />
         <CommercialVitorPerformanceBridge />
         <CommercialNotificationsBridge />
         <LeadershipNavigationBridge />
