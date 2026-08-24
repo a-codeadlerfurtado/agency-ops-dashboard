@@ -13,6 +13,7 @@ import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OnboardingRequiredAlerts from "./onboarding-required-alerts";
 import OnboardingRoleRouter from "./onboarding-role-router";
 import CommercialNavigationBridge from "./commercial-navigation-bridge";
+import CommercialHomeGuard from "./commercial-home-guard";
 import AdlerFinanceNavBridge from "./adler-finance-nav-bridge";
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
@@ -73,6 +74,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OnboardingAssignmentBridge />
         <OnboardingRequiredAlerts />
         <OnboardingRoleRouter />
+        <CommercialHomeGuard />
         <CommercialNavigationBridge />
         <AdlerFinanceNavBridge />
         <IntegrationHealthBar />
