@@ -25,7 +25,8 @@ Deno.serve(async(req:Request)=>{
   if(!person||!(approvals||[]).length) return reply({error:"profile_locked"},403);
   const {data:roster}=await ops.from("team_roster").select("person,role,is_former").eq("person",person).maybeSingle();
   if(!roster||roster.is_former) return reply({error:"forbidden"},403);
-  if(person!=="Adler Furtado") return reply({error:"forbidden"},403);
+  const allowed = person==="Adler Furtado" || (person==="Leonardo Augusto" && roster.role==="COMMERCIAL");
+  if(!allowed) return reply({error:"forbidden"},403);
 
   const [liveRes,timelineRes,statusRes,tenureRes,auditRes,churnRes,survivalRes,gtRetentionRes,longRes,signalRes,walletRes,clientsRes,healthRes]=await Promise.all([
     ops.from("portfolio_live").select("*"),
