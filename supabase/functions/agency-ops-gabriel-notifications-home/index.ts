@@ -12,13 +12,14 @@ function isAiServiceEvent(row:any){
     row.type,row.source,row.title,row.description,row.next_action,row.owner,row.actor,
     meta.service,meta.product,meta.category,meta.workspace,meta.source,meta.type,meta.title,meta.description,meta.next_action
   ].filter(Boolean).join(" "));
-  const explicitTech=/\bn8n\b|agente de ia|agente virtual|chatbot|bot de atendimento|assistente virtual|\bllm\b|openai|prompt|webhook|fluxo de atendimento|integracao com whatsapp|whatsapp integrado|donnah/.test(combined);
+  const explicitTech=/\bn8n\b|agente de ia|agente virtual|chatbot|bot de atendimento|assistente virtual|\bllm\b|openai|prompt/.test(combined);
   const explicitAi=/\bia\b|inteligencia artificial/.test(combined);
-  const automationContext=/\bautomacao\b/.test(combined)&&/(n8n|\bia\b|inteligencia artificial|agente|chatbot|bot|assistente virtual|webhook|whatsapp|lead|atendimento|donnah)/.test(combined);
+  const automationContext=/\bautomacao\b/.test(combined)&&/(n8n|\bia\b|inteligencia artificial|agente|chatbot|bot|assistente virtual|webhook|whatsapp|lead|atendimento)/.test(combined);
+  const integrationContext=/(webhook|integracao com whatsapp|whatsapp integrado)/.test(combined)&&/(n8n|\bia\b|inteligencia artificial|agente|chatbot|bot|assistente virtual|automacao)/.test(combined);
   const trafficOrMedia=/campanha|campaign|meta ads|google ads|trafego|gestor de trafego|anuncio|ads\b|criativo|creative|cpl\b|cpm\b|ctr\b|cpc\b|orcamento de midia|saldo de conta|saldo meta|conta de anuncio|conjunto de anuncio|adset/.test(combined);
   if(strongAiOrigin)return true;
-  if(trafficOrMedia&&!(explicitTech||automationContext))return false;
-  return explicitTech||explicitAi||automationContext;
+  if(trafficOrMedia&&!(explicitTech||automationContext||integrationContext))return false;
+  return explicitTech||explicitAi||automationContext||integrationContext;
 }
 
 Deno.serve(async(req:Request)=>{
