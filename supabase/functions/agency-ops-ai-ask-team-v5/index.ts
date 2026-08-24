@@ -13,8 +13,9 @@ const CHAT_TIMEOUT_MS = 38_000;
 const CLEANUP_TIMEOUT_MS = 2_500;
 const CACHE_TTL_MS = 20 * 60_000;
 const STALE_PENDING_MS = 2 * 60_000;
-const ENGINE_SOURCE = "CLOUDFLARE_WORKERS_AI_FAST_V5_2";
-const CACHE_SOURCE = "OPSQUESTION_CACHE_V5_2";
+const ENGINE_SOURCE = "CLOUDFLARE_WORKERS_AI_FAST_V5_3";
+const CACHE_SOURCE = "OPSQUESTION_CACHE_V5_3";
+const CURRENT_LIFECYCLES = new Set(["ACTIVE", "ONBOARDING"]);
 
 const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -88,6 +89,26 @@ function resolvePrimaryClient(answer: string, clients: any[]) {
   return best;
 }
 
+function asksForHistorical(question: string) {
+  const q = norm(question);
+  return /\b(churned|churn|cliente antigo|clientes antigos|ex cliente|ex clientes|desligado|desligados|encerrado|encerrados|historico de cliente|historico dos clientes)\b/.test(q);
+}
+
+function asksWhichClient(question: string) {
+  const q = norm(question);
+  return /\b(qual cliente|quais clientes|cliente mais|mais preocupante|maior risco|quem precisa de atencao)\b/.test(q);
+}
+
+function requiresHealthyMetaPremise(question: string) {
+  const q = norm(question);
+  return /\b(meta)\b/.test(q) && /\b(saudavel|saudaveis|parece estar saudavel|parecem saudaveis|olhando apenas os numeros)\b/.test(q);
+}
+
+function violatesHealthyMetaPremise(answer: string) {
+  const q = norm(answer.slice(0, 3200));
+  return /\b(nao tem conta(?:s)? configurad(?:a|as) no meta|sem conta(?:s)? no meta|sem meta configurado|nao ha dados do meta|sem dados do meta|0 spend|0 gasto|0 impressions|0 impressoes|0 clicks|0 cliques)\b/.test(q);
+}
+
 function contextHints(question: string) {
   const q = norm(question);
   const hints = new Set<string>();
@@ -110,33 +131,103 @@ function contextHints(question: string) {
   return [...hints].join(", ");
 }
 
-function buildPrompt(question: string) {
+function eligibleNames(clients: any[]) {
+  return (clients ?? []).map((c: any) => String(c.display_name || "").trim()).filter(Boolean).slice(0, 140).join("; ");
+}
+
+function buildPrompt(question: string, permitted: any[], historicalAllowed: boolean) {
   const hints = contextHints(question);
+  const lifecycleRule = historicalAllowed
+    ? "A pergunta permite contexto histórico porque cita explicitamente cliente antigo/churned ou nomeia um cliente já desligado. Diferencie claramente situação histórica de situação atual."
+    : "REGRA CRÍTICA DE ESCOPO: para perguntas sobre hoje, risco atual, prioridade ou 'cliente mais preocupante', considere SOMENTE clientes ACTIVE ou ONBOARDING. Ignore completamente clientes CHURNED/desligados como candidatos, mesmo que apareçam no contexto recuperado.";
+  const metaPremise = requiresHealthyMetaPremise(question)
+    ? "REGRA CRÍTICA DA PREMISSA META: o cliente escolhido precisa realmente parecer saudável no Meta com evidência objetiva de entrega/desempenho. Cliente sem conta Meta, sem dados Meta ou com 0 gasto/0 impressões não satisfaz a premissa e NÃO pode ser escolhido."
+    : "";
+
   return [
     `PERGUNTA DO ADLER: ${question}`,
     hints ? `FONTES/ASSUNTOS A PRIORIZAR: ${hints}.` : "Use as fontes operacionais relevantes.",
+    lifecycleRule,
+    metaPremise,
+    `CLIENTES ELEGÍVEIS PARA ESTA RESPOSTA: ${eligibleNames(permitted) || "nenhum cliente elegível"}. Não escolha cliente fora desta lista.`,
     "Você é o copiloto operacional da Leonardo Imobi. Responda em português do Brasil, de forma direta e executiva.",
     "Cruze fontes; ausência em uma fonte nunca prova que o fato não aconteceu.",
     "Separe FATO CONFIRMADO, INDÍCIO FORTE e HIPÓTESE quando houver inferência. Não transforme hipótese em fato.",
-    "Se uma fonte está parcial ou tem corte de data diferente, cite o corte real. Nunca diga que um dado cobre até 21/08 se ele só existe até 20/08.",
+    "Se uma fonte está parcial ou tem corte de data diferente, cite o corte real. Nunca amplie o período além do que a fonte cobre.",
     "Zero vendas em um relatório significa zero vendas reportadas naquele relatório, não prova absoluta de zero vendas em todos os canais.",
     "Relatos de lead inválido/bot são sinais de possível problema de qualidade; não estime quantos leads são bots sem evidência individual.",
     "Venda confirmada não significa venda originada pelo tráfego sem evidência de origem.",
-    "Se a pergunta disser que alguém parece saudável no Meta, você só pode aceitar essa premissa se demonstrar saúde do Meta com pelo menos uma métrica ou tendência objetiva (ex.: CPL, leads, CTR, custo/tendência). Se não houver evidência, diga que a premissa não ficou demonstrada.",
-    "Se a pergunta pedir 'qual cliente' entre vários, compare os candidatos antes de escolher e mencione resumidamente por que o escolhido superou os demais sinais de risco.",
-    "Não exponha nomes de tabelas, campos ou códigos internos como client_health, external_summary, meta_cross_status. Use nomes amigáveis de fonte: Saúde do Cliente, Relatório Comercial, Meta Ads, WhatsApp, ClickUp, Onboarding.",
+    "Se a pergunta disser que alguém parece saudável no Meta, demonstre isso com pelo menos uma métrica ou tendência objetiva antes de selecionar o cliente.",
+    "Se a pergunta pedir 'qual cliente' entre vários, compare candidatos elegíveis antes de escolher e explique resumidamente por que o escolhido superou os demais sinais de risco.",
+    "NUNCA exponha nomes técnicos de tabelas, views, colunas, campos, códigos internos ou valores de banco. Use nomes amigáveis como Saúde do Cliente, Relatório Comercial, Meta Ads, WhatsApp, ClickUp e Onboarding.",
+    "Não use identificadores como dashboard_client_overview, client_service_overview, health_detail, client_health, external_summary, internal_score, external_health_status, meta_cross_status, NO_EXTERNAL ou null na resposta.",
     "Antes de recomendar pausar campanha/criativo, confirme se ainda está ativo. Se a situação atual não estiver disponível, recomende primeiro validar o status e só então pausar se ainda estiver ativo e o problema persistir.",
     "Quando houver divergência Meta x comercial, não conclua automaticamente que os leads são inválidos: considere também subnotificação, atraso de atualização e diferença de período.",
-    "Para perguntas de decisão, risco, gargalo ou diagnóstico, termine com 'Próximos passos' e no máximo 3 itens.",
-    "Cada próximo passo deve seguir EXATAMENTE o formato `<N>) <ÁREA> — <NOME EXATO DO CLIENTE> — <AÇÃO>`. Escolha a área correta para cada ação; pode haver mais de uma ação para a mesma área. Use Design somente para produção/revisão visual.",
+    "Para perguntas de decisão, risco, gargalo ou diagnóstico, termine com o título exato 'Próximos passos' e no máximo 3 itens numerados.",
+    "Cada próximo passo deve seguir EXATAMENTE o formato `<N>) <ÁREA> — <NOME EXATO DO CLIENTE> — <AÇÃO>`. Pode haver mais de uma ação para a mesma área. Use Design somente para produção/revisão visual.",
     "Regra de responsabilidade: Meta/campanha/auditoria/reconciliação de leads = GT; falar/retornar/fazer call com cliente = CS; criação/revisão visual = Design; processo/sistema/escalonamento interno = Operações.",
-    "Finalize com Confiança: alta/média/baixa e uma frase explicando o motivo quando não for totalmente factual.",
-  ].join("\n\n");
+    "Finalize com `Confiança: alta/média/baixa — motivo`. Não termine com avisos genéricos do tipo 'essas ações são apenas sugestões'.",
+  ].filter(Boolean).join("\n\n");
+}
+
+function sanitizeAnswer(value: string) {
+  return String(value || "")
+    .replace(/\bdashboard_client_overview\b/gi, "Visão Geral do Cliente")
+    .replace(/\bclient_service_overview\b/gi, "Acompanhamento do Cliente")
+    .replace(/\bhealth_detail\b/gi, "Saúde do Cliente")
+    .replace(/\bclient_health\b/gi, "Saúde do Cliente")
+    .replace(/\bexternal_summary\b/gi, "resumo externo")
+    .replace(/\binternal_score\b/gi, "pontuação interna")
+    .replace(/\bexternal_health_status\b/gi, "status externo de saúde")
+    .replace(/\bmeta_cross_status\b/gi, "status do cruzamento Meta × comercial")
+    .replace(/\bNO_EXTERNAL\b/g, "sem acompanhamento comercial externo")
+    .replace(/\bCHURNED\b/g, "desligado")
+    .replace(/\bnull\b/gi, "sem dado disponível")
+    .trim();
+}
+
+function validationIssue(answer: string, question: string, permitted: any[], allClients: any[], historicalAllowed: boolean) {
+  const activePermitted = (permitted ?? []).filter((c: any) => CURRENT_LIFECYCLES.has(String(c.lifecycle)));
+  if (!historicalAllowed) {
+    const churned = (allClients ?? []).filter((c: any) => String(c.lifecycle) === "CHURNED");
+    const churnedLead = resolvePrimaryClient(answer.slice(0, 1000), churned);
+    const activeLead = resolvePrimaryClient(answer.slice(0, 1000), activePermitted);
+    if (churnedLead && !activeLead) return `cliente desligado escolhido: ${churnedLead.display_name}`;
+    if (churnedLead && activeLead) {
+      const lead = norm(answer.slice(0, 1000));
+      const churnedIndex = lead.indexOf(norm(churnedLead.display_name));
+      const activeIndex = lead.indexOf(norm(activeLead.display_name));
+      if (churnedIndex >= 0 && (activeIndex < 0 || churnedIndex < activeIndex)) return `cliente desligado escolhido: ${churnedLead.display_name}`;
+    }
+  }
+  if (asksWhichClient(question) && !resolvePrimaryClient(answer, permitted)) return "nenhum cliente elegível foi escolhido";
+  if (requiresHealthyMetaPremise(question) && violatesHealthyMetaPremise(answer)) return "o candidato não satisfaz a premissa de parecer saudável no Meta";
+  return null;
+}
+
+function correctionPrompt(question: string, issue: string, permitted: any[], historicalAllowed: boolean) {
+  return [
+    "CORREÇÃO OBRIGATÓRIA DA RESPOSTA ANTERIOR.",
+    `Problema detectado automaticamente: ${issue}.`,
+    historicalAllowed
+      ? "Respeite o contexto histórico explicitamente solicitado."
+      : "Refaça do zero considerando somente clientes ACTIVE ou ONBOARDING. Clientes CHURNED/desligados não são candidatos a risco operacional atual.",
+    requiresHealthyMetaPremise(question)
+      ? "O cliente escolhido precisa ter evidência real de saúde/entrega no Meta; ausência de conta/dados ou entrega zerada elimina o candidato."
+      : "",
+    `Clientes elegíveis: ${eligibleNames(permitted)}.`,
+    "Não exponha nomes de tabelas, views, colunas, códigos ou campos internos.",
+    "Responda novamente à pergunta original, compare candidatos elegíveis e conclua com 'Próximos passos' em até 3 itens no formato exigido, seguido de Confiança.",
+    `Pergunta original: ${question}`,
+  ].filter(Boolean).join("\n\n");
 }
 
 function actionLines(answer: string) {
   const lower = answer.toLowerCase();
-  const markers = ["próximos passos", "proximos passos", "ações prioritárias", "acoes prioritarias", "3 ações prioritárias", "3 acoes prioritarias"];
+  const markers = [
+    "próximos passos", "proximos passos", "ações prioritárias", "acoes prioritarias",
+    "3 ações prioritárias", "3 acoes prioritarias", "ações a serem executadas", "acoes a serem executadas",
+  ];
   const marker = markers.reduce((best, item) => Math.max(best, lower.lastIndexOf(item)), -1);
   if (marker < 0) return [];
   const section = answer.slice(marker);
@@ -150,12 +241,10 @@ function actionLines(answer: string) {
 
 function inferRole(text: string) {
   const q = norm(text);
-  // A natureza da ação vence qualquer rótulo sugerido pelo modelo.
   if (/\b(comunicar|falar com o cliente|retornar ao cliente|retorno ao cliente|call com o cliente|ligar para o cliente|apresentar ao cliente|follow up com o cliente)\b/.test(q)) return "CS";
-  if (/\b(meta|campanha|campanhas|auditar campanha|auditoria de campanha|auditoria tecnica|pausar campanha|pausar criativo|cpl|ctr|cpm|publico|segmentacao|reconciliar leads|meta x comercial|leads meta)\b/.test(q)) return "GT";
+  if (/\b(meta|campanha|campanhas|auditar campanha|auditoria de campanha|auditoria tecnica|pausar campanha|pausar criativo|cpl|ctr|cpm|publico|segmentacao|reconciliar leads|meta x comercial|leads meta|qualidade dos leads|reavaliar a campanha)\b/.test(q)) return "GT";
   if (/\b(criar arte|criar criativo|produzir criativo|revisar layout|ajustar layout|logo|identidade visual|peca visual|design)\b/.test(q)) return "DESIGN";
-  if (/\b(process|sistema|integracao|banco de dados|escalar|escalon|operacao|gestao)\b/.test(q)) return "MGMT";
-  // Rótulo explícito é apenas fallback quando o conteúdo não determina a área.
+  if (/\b(process|sistema|integracao|banco de dados|escalar|escalon|operacao|gestao|atualizar as informacoes do cliente)\b/.test(q)) return "MGMT";
   if (/^(gt|gestor de trafego|trafego)\b/.test(q)) return "GT";
   if (/^(cs|customer success|atendimento|relacionamento)\b/.test(q)) return "CS";
   if (/^(design|designer)\b/.test(q)) return "DESIGN";
@@ -207,7 +296,7 @@ function buildActions(answer: string, requestId: string, questionClient: any, pe
       priority: inferPriority(text),
       type: inferType(text),
       create_clickup: /\b(clickup|task|tarefa)\b/.test(norm(text)),
-      source: "opsquestion_v5_2",
+      source: "opsquestion_v5_3",
       source_id: requestId,
       execution_mode: "CREATE_WORK_ITEM",
     };
@@ -249,11 +338,20 @@ Deno.serve(async (req: Request) => {
   const me = (roster ?? []).find((row: any) => row.person === person);
   if (!person || !me) return respond({ ok: false, error: "collaborator_required" }, 403);
 
+  const namedAnyClient = resolveExactNamed(question, clients ?? [], "display_name");
+  const explicitNamedChurned = namedAnyClient?.lifecycle === "CHURNED";
+  const broadHistorical = asksForHistorical(question);
+  const historicalAllowed = broadHistorical || explicitNamedChurned;
+
+  const lifecycleAllowed = (client: any) => historicalAllowed
+    ? (broadHistorical ? ["ACTIVE", "ONBOARDING", "CHURNED"].includes(String(client.lifecycle)) : CURRENT_LIFECYCLES.has(String(client.lifecycle)) || client.id === namedAnyClient?.id)
+    : CURRENT_LIFECYCLES.has(String(client.lifecycle));
+
   const permitted = me.role === "GT"
-    ? (clients ?? []).filter((client: any) => client.gt_owner === person && ["ACTIVE", "ONBOARDING"].includes(client.lifecycle))
+    ? (clients ?? []).filter((client: any) => client.gt_owner === person && lifecycleAllowed(client))
     : me.role === "DESIGN"
-      ? (clients ?? []).filter((client: any) => client.designer_owner === person && ["ACTIVE", "ONBOARDING"].includes(client.lifecycle))
-      : (clients ?? []);
+      ? (clients ?? []).filter((client: any) => client.designer_owner === person && lifecycleAllowed(client))
+      : (clients ?? []).filter(lifecycleAllowed);
 
   const questionClient = resolveExactNamed(question, permitted, "display_name");
   const requestId = crypto.randomUUID();
@@ -278,34 +376,37 @@ Deno.serve(async (req: Request) => {
 
   const cached = (recentSuccess ?? []).find((row: any) => norm(row.question) === norm(question) && String(row.answer || "").trim());
   if (cached) {
-    const answer = String(cached.answer).trim();
-    const primaryClient = questionClient || resolvePrimaryClient(answer, permitted);
-    const actions = buildActions(answer, requestId, primaryClient, permitted, roster ?? []);
-    const latency = Date.now() - startedAt;
-    await ops.from("opsquestion_interactions").insert({
-      user_key: userData.user.id,
-      person,
-      role: me.role,
-      access_level: me.access_level ?? null,
-      question,
-      answer: answer.slice(0, 30000),
-      status: "SUCCESS",
-      source: CACHE_SOURCE,
-      latency_ms: latency,
-      request_id: requestId,
-      answered_at: new Date().toISOString(),
-    });
-    return respond({
-      ok: true,
-      answer,
-      source: "Cache operacional validado",
-      latency_ms: latency,
-      request_id: requestId,
-      client: primaryClient?.display_name ?? null,
-      suggested_actions: actions,
-      cached: true,
-      cached_from: cached.created_at,
-    });
+    const sanitized = sanitizeAnswer(String(cached.answer).trim());
+    const cacheIssue = validationIssue(sanitized, question, permitted, clients ?? [], historicalAllowed);
+    if (!cacheIssue) {
+      const primaryClient = questionClient || resolvePrimaryClient(sanitized, permitted);
+      const actions = buildActions(sanitized, requestId, primaryClient, permitted, roster ?? []);
+      const latency = Date.now() - startedAt;
+      await ops.from("opsquestion_interactions").insert({
+        user_key: userData.user.id,
+        person,
+        role: me.role,
+        access_level: me.access_level ?? null,
+        question,
+        answer: sanitized.slice(0, 30000),
+        status: "SUCCESS",
+        source: CACHE_SOURCE,
+        latency_ms: latency,
+        request_id: requestId,
+        answered_at: new Date().toISOString(),
+      });
+      return respond({
+        ok: true,
+        answer: sanitized,
+        source: "Cache operacional validado",
+        latency_ms: latency,
+        request_id: requestId,
+        client: primaryClient?.display_name ?? null,
+        suggested_actions: actions,
+        cached: true,
+        cached_from: cached.created_at,
+      });
+    }
   }
 
   const { data: interaction } = await ops.from("opsquestion_interactions").insert({
@@ -328,16 +429,38 @@ Deno.serve(async (req: Request) => {
     conversationId = String(created?.conversation?.id || "");
     if (!conversationId) throw new Error("conversation_missing");
 
-    const completion = await timedPost(`${CLOUDFLARE_AI_BASE}/chat`, authorization, {
+    let completion = await timedPost(`${CLOUDFLARE_AI_BASE}/chat`, authorization, {
       conversation_id: conversationId,
-      message: buildPrompt(question),
+      message: buildPrompt(question, permitted, historicalAllowed),
       ops_fast: true,
     }, CHAT_TIMEOUT_MS);
 
-    const answer = String(completion?.assistant_message?.content || "").trim();
-    if (!answer) throw new Error("empty_answer");
+    let rawAnswer = String(completion?.assistant_message?.content || "").trim();
+    if (!rawAnswer) throw new Error("empty_answer");
+    let answer = sanitizeAnswer(rawAnswer);
+    let issue = validationIssue(answer, question, permitted, clients ?? [], historicalAllowed);
+
+    if (issue) {
+      completion = await timedPost(`${CLOUDFLARE_AI_BASE}/chat`, authorization, {
+        conversation_id: conversationId,
+        message: correctionPrompt(question, issue, permitted, historicalAllowed),
+        ops_fast: true,
+      }, CHAT_TIMEOUT_MS);
+      rawAnswer = String(completion?.assistant_message?.content || "").trim();
+      if (!rawAnswer) throw new Error("empty_corrected_answer");
+      answer = sanitizeAnswer(rawAnswer);
+      issue = validationIssue(answer, question, permitted, clients ?? [], historicalAllowed);
+    }
+
+    if (issue) {
+      const safe = requiresHealthyMetaPremise(question)
+        ? "Não encontrei evidência suficiente para apontar com segurança um cliente ativo que cumpra a premissa de parecer saudável no Meta e, ao mesmo tempo, seja o mais preocupante no cruzamento das demais fontes. Prefiro não escolher um cliente que não satisfaça a premissa.\n\nConfiança: alta — a validação automática rejeitou candidatos sem evidência Meta suficiente ou fora do escopo atual."
+        : "Não encontrei evidência suficiente para escolher com segurança um cliente elegível para esta pergunta sem violar o escopo operacional atual.\n\nConfiança: alta — a validação automática impediu a seleção de cliente fora do escopo ou sem suporte suficiente.";
+      answer = safe;
+    }
+
     const primaryClient = questionClient || resolvePrimaryClient(answer, permitted);
-    const actions = buildActions(answer, requestId, primaryClient, permitted, roster ?? []);
+    const actions = issue ? [] : buildActions(answer, requestId, primaryClient, permitted, roster ?? []);
     const latency = Date.now() - startedAt;
 
     if (interaction?.id) {
@@ -353,13 +476,14 @@ Deno.serve(async (req: Request) => {
     return respond({
       ok: true,
       answer,
-      source: "Workers AI rápido · base operacional validada",
+      source: issue ? "Validação operacional · resposta conservadora" : "Workers AI rápido · base operacional validada",
       latency_ms: latency,
       request_id: requestId,
       client: primaryClient?.display_name ?? null,
       suggested_actions: actions,
       model: completion?.model ?? null,
       timing: completion?.timing ?? null,
+      validation_guard: issue || null,
     });
   } catch (error) {
     const latency = Date.now() - startedAt;
