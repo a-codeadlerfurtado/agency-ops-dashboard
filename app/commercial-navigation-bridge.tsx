@@ -41,33 +41,20 @@ function makeSectionButton(label: string, href: string, active: boolean) {
   return button;
 }
 
-function installDashboardTab(role: string | null) {
+function installDashboardTab() {
   const container = document.querySelector<HTMLElement>(".side-nav-items");
-  if (!container) return;
-
-  const isCommercial = role === "COMMERCIAL";
-  const label = isCommercial ? "Direção Comercial" : "Funil comercial";
-  const href = isCommercial ? "/commercial-direction" : "/sales-funnel";
-  const existing = container.querySelector<HTMLButtonElement>("[data-commercial-funnel-nav]");
-  if (existing) {
-    if (existing.dataset.commercialMode === (isCommercial ? "direction" : "funnel")) return;
-    existing.remove();
-  }
-
+  if (!container || container.querySelector("[data-commercial-funnel-nav]")) return;
   const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
   const campaigns = buttons.find((button) => normalize(button.title || button.textContent || "").startsWith("campanhas"));
   const onboarding = buttons.find((button) => normalize(button.title || button.textContent || "").startsWith("onboarding"));
   const template = campaigns || onboarding || buttons[0];
-
   const button = document.createElement("button");
   button.type = "button";
   button.dataset.commercialFunnelNav = "true";
-  button.dataset.commercialMode = isCommercial ? "direction" : "funnel";
-  button.title = label;
+  button.title = "Funil comercial";
   if (template?.className) button.className = template.className.replace(/\bactive\b/g, "").trim();
-  button.textContent = label;
-  button.addEventListener("click", () => window.location.assign(href));
-
+  button.textContent = "Funil comercial";
+  button.addEventListener("click", () => window.location.assign("/sales-funnel"));
   if (campaigns) container.insertBefore(button, campaigns);
   else if (onboarding?.nextSibling) container.insertBefore(button, onboarding.nextSibling);
   else container.appendChild(button);
@@ -77,11 +64,9 @@ function installCommercialSubnav(path: string, fridayAllowed: boolean) {
   if (document.querySelector("[data-commercial-section-nav]")) return;
   const anchor = document.querySelector<HTMLElement>(path === "/sales-funnel" ? ".funnel-top" : ".fr-top");
   if (!anchor?.parentElement) return;
-
   const nav = document.createElement("nav");
   nav.className = "commercial-section-nav";
   nav.dataset.commercialSectionNav = "true";
-
   const label = document.createElement("span");
   label.className = "commercial-section-label";
   label.textContent = "Funil comercial";
@@ -108,38 +93,21 @@ export default function CommercialNavigationBridge() {
     if (!session?.access_token) { setProfileRole(null); return; }
     let active = true;
     loadProfileLite()
-      .then((body) => {
-        if (active) setProfileRole(String(body?.profile?.role || "") || null);
-      })
+      .then((body) => { if (active) setProfileRole(String(body?.profile?.role || "") || null); })
       .catch(() => { if (active) setProfileRole(null); });
     return () => { active = false; };
   }, [session?.access_token]);
 
   useEffect(() => {
-    if (profileRole === "COMMERCIAL" && window.location.pathname === "/") {
-      window.location.replace("/commercial-direction");
-      return;
-    }
-  }, [profileRole]);
-
-  useEffect(() => {
     if (profileRole !== "COMMERCIAL") return;
-    const routeClients = (event: MouseEvent) => {
-      if (window.location.pathname !== "/") return;
-      const button = event.target instanceof Element ? event.target.closest<HTMLButtonElement>(".side-nav-items button") : null;
-      if (!button) return;
-      const label = normalize(button.title || button.textContent || "");
-      if (label !== "clientes") return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      window.location.assign("/commercial-clients");
-    };
-    document.addEventListener("click", routeClients, true);
-    return () => document.removeEventListener("click", routeClients, true);
+    const path = window.location.pathname;
+    if (path === "/commercial-direction") return;
+    const tab = path === "/campaigns" ? "campaigns" : path === "/commercial-clients" ? "portfolio" : path === "/sales-funnel" || path === "/friday-report" ? "funnel" : "overview";
+    window.location.replace(`/commercial-direction${tab === "overview" ? "" : `?tab=${tab}`}`);
   }, [profileRole]);
 
   useEffect(() => {
-    if (!session?.access_token) { setFridayAllowed(false); return; }
+    if (profileRole === "COMMERCIAL" || !session?.access_token) { setFridayAllowed(false); return; }
     const path = window.location.pathname;
     if (path !== "/sales-funnel" && path !== "/friday-report") return;
     let active = true;
@@ -147,17 +115,17 @@ export default function CommercialNavigationBridge() {
       .then((response) => { if (active) setFridayAllowed(response.ok); })
       .catch(() => { if (active) setFridayAllowed(false); });
     return () => { active = false; };
-  }, [session?.access_token]);
+  }, [session?.access_token, profileRole]);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session || profileRole === "COMMERCIAL") return;
     let frame = 0;
     const apply = () => {
       window.cancelAnimationFrame(frame);
       frame = window.requestAnimationFrame(() => {
         const path = window.location.pathname;
         removeLegacyShortcuts();
-        if (path === "/") installDashboardTab(profileRole);
+        if (path === "/") installDashboardTab();
         if (path === "/sales-funnel" || path === "/friday-report") installCommercialSubnav(path, fridayAllowed);
       });
     };
