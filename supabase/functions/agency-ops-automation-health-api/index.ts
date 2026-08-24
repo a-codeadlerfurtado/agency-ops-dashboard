@@ -190,7 +190,10 @@ Deno.serve(async (req) => {
     });
     return respond({ error: "data_query_failed", request_id: requestId }, 500);
   }
-  if (resolutionsResult.error) return respond({ error: "resolutions_query_failed", detail: resolutionsResult.error.message }, 500);
+  if (resolutionsResult.error) {
+    console.error({ event: "resolutions_query_failed", request_id: requestId, error: resolutionsResult.error.message });
+    return respond({ error: "data_query_failed", request_id: requestId }, 500);
+  }
 
   const health = (healthResult.data || []) as Row[];
   const runs = (runsResult.data || []) as Row[];
