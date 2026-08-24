@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { SUPABASE_URL, authenticatedFetch } from "./shared";
 
 type Profile={person?:string|null;role?:string|null};
-const DASHBOARD_API=`${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api?view=home`;
+const PROFILE_API=`${SUPABASE_URL}/functions/v1/agency-ops-profile-lite`;
 
 function makeButton(label:string,href:string,key:string,template?:HTMLButtonElement|null){const b=document.createElement("button");b.type="button";b.dataset.leadershipNav=key;b.title=label;b.textContent=label;if(template?.className)b.className=template.className.replace(/\bactive\b/g,"").trim();b.addEventListener("click",()=>window.location.assign(href));return b;}
 function findButton(container:HTMLElement,label:string){return [...container.querySelectorAll<HTMLButtonElement>("button")].find(b=>String(b.title||b.textContent||"").trim().toLowerCase()===label.trim().toLowerCase());}
@@ -12,7 +12,7 @@ function ensure(container:HTMLElement,label:string,href:string,key:string,before
 
 export default function LeadershipNavigationBridge(){
  const [profile,setProfile]=useState<Profile>({});
- useEffect(()=>{let active=true;authenticatedFetch(DASHBOARD_API,{cache:"no-store"}).then(async r=>{if(!active||!r.ok)return;const b=await r.json().catch(()=>({}));if(active)setProfile(b?.profile||{});}).catch(()=>{});return()=>{active=false};},[]);
+ useEffect(()=>{let active=true;authenticatedFetch(PROFILE_API).then(async r=>{if(!active||!r.ok)return;const b=await r.json().catch(()=>({}));if(active)setProfile(b?.profile||{});}).catch(()=>{});return()=>{active=false};},[]);
  useEffect(()=>{
    const person=String(profile.person||"");
    if(person!=="Adler Furtado"){
