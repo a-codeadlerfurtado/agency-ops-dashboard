@@ -2,10 +2,8 @@
 
 import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
+import { loadProfileLite, supabase } from "./shared";
 import DashboardEnhancements from "./dashboard-enhancements";
-
-const PROFILE_API = `${SUPABASE_URL}/functions/v1/agency-ops-profile-lite`;
 
 /**
  * Design e Direção Comercial têm homes próprias e deliberadamente limitadas ao
@@ -25,10 +23,8 @@ export default function DashboardEnhancementsGate() {
   useEffect(() => {
     if (!session?.access_token) { setRole(null); return; }
     let active = true;
-    authenticatedFetch(PROFILE_API, { cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(String(response.status));
-        const payload = await response.json().catch(() => ({}));
+    loadProfileLite()
+      .then((payload) => {
         if (active) setRole(String(payload?.profile?.role || ""));
       })
       .catch(() => { if (active) setRole(null); });

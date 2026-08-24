@@ -80,6 +80,18 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const view = url.searchParams.get("view") ?? "home";
 
+  // Abas antigas continuavam abrindo home/work em paralelo mesmo depois do deploy,
+  // mantendo o Postgres saturado por minutos. O bundle atual marca suas chamadas;
+  // somente o navegador do dashboard recebe 409 quando ainda esta' desatualizado.
+  if (
+    req.method === "GET"
+    && origin === "https://agency-ops-dashboard.lakassessoriadigital.workers.dev"
+    && ["home", "work"].includes(view)
+    && url.searchParams.get("client") !== "hotfix-20260824"
+  ) {
+    return respond({ error: "client_update_required", reload: true }, 409);
+  }
+
   if (req.method === "GET" && view === "roster") {
     const [{ data: rosterRows }, { data: claimedRows }] = await Promise.all([
       ops.from("team_roster").select("person").eq("is_former", false).order("person"),
