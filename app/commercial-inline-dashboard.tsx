@@ -87,6 +87,7 @@ export default function CommercialInlineDashboard() {
   const [payload, setPayload] = useState<Row>({});
   const [loading, setLoading] = useState(false);
   const [mode, setMode] = useState<Mode>("home");
+  const [overviewActive, setOverviewActive] = useState(false);
   const handledQuery = useRef(false);
 
   useEffect(() => {
@@ -122,6 +123,7 @@ export default function CommercialInlineDashboard() {
   useEffect(() => {
     if (role !== "COMMERCIAL" || window.location.pathname !== "/") {
       document.documentElement.classList.remove("commercial-overview-active");
+      setOverviewActive(false);
       setSlot(null);
       return;
     }
@@ -130,7 +132,7 @@ export default function CommercialInlineDashboard() {
     let frame = 0;
     const cleanupNodes = () => document.querySelectorAll("[data-commercial-inline-item]").forEach((node) => node.remove());
     const nativeButton = (label: string) => Array.from(document.querySelectorAll<HTMLButtonElement>(".side-nav-items button"))
-      .find((button) => normalize(button.title || button.textContent || "").startsWith(normalize(label)));
+      .find((button) => !button.dataset.commercialInlineItem && normalize(button.title || button.textContent || "").startsWith(normalize(label)));
 
     const ensureHome = () => {
       const home = nativeButton("visão geral") || document.querySelector<HTMLButtonElement>("[data-commercial-native-home]");
@@ -150,7 +152,7 @@ export default function CommercialInlineDashboard() {
         if (topTitle && topTitle.textContent !== "Central Comercial") topTitle.textContent = "Central Comercial";
         if (topSubtitle && topSubtitle.textContent !== "Vendas, campanhas, clientes e oportunidades em um só lugar") topSubtitle.textContent = "Vendas, campanhas, clientes e oportunidades em um só lugar";
 
-        let home = nativeButton("visão geral") || document.querySelector<HTMLButtonElement>("[data-commercial-native-home]");
+        const home = nativeButton("visão geral") || document.querySelector<HTMLButtonElement>("[data-commercial-native-home]");
         if (home) {
           home.dataset.commercialNativeHome = "true";
           home.title = "Home Comercial";
@@ -177,14 +179,14 @@ export default function CommercialInlineDashboard() {
         add("portfolio", "Carteira Comercial", () => clients?.click(), preclients?.nextElementSibling || null);
         add("direction", "Direção Comercial", () => { setMode("direction"); ensureHome(); });
 
-        const activeButton = nav.querySelector<HTMLButtonElement>("button.active");
+        const activeButton = nav.querySelector<HTMLButtonElement>("button.active:not([data-commercial-inline-item])");
         const activeLabel = normalize(activeButton?.title || activeButton?.textContent || "");
         const homeActive = activeButton?.dataset.commercialNativeHome === "true" || activeLabel === "home comercial" || activeLabel === "visao geral";
         document.documentElement.classList.toggle("commercial-overview-active", Boolean(homeActive));
+        setOverviewActive(Boolean(homeActive));
 
         nav.querySelectorAll<HTMLButtonElement>("[data-commercial-inline-item]").forEach((button) => button.classList.remove("active"));
         if (homeActive && mode !== "home") nav.querySelector<HTMLButtonElement>(`[data-commercial-inline-item="${mode}"]`)?.classList.add("active");
-        if (homeActive && mode !== "home") home?.classList.remove("active");
 
         let target = document.getElementById("commercial-inline-home-slot") as HTMLElement | null;
         if (!target) {
@@ -232,10 +234,11 @@ export default function CommercialInlineDashboard() {
       cleanupNodes();
       document.getElementById("commercial-inline-home-slot")?.remove();
       document.documentElement.classList.remove("commercial-overview-active");
+      setOverviewActive(false);
     };
   }, [role, mode]);
 
-  if (role !== "COMMERCIAL" || !slot || !document.documentElement.classList.contains("commercial-overview-active")) return null;
+  if (role !== "COMMERCIAL" || !slot || !overviewActive) return null;
   return createPortal(<CommercialPanel payload={payload} mode={mode} loading={loading} reload={load} />, slot);
 }
 
