@@ -3,6 +3,7 @@ import handler from "vinext/server/fetch-handler";
 const SUPABASE = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const AI_WORKSPACE = `${SUPABASE}/functions/v1/agency-ops-ai-workspace`;
 const AI_MODEL = "@cf/zai-org/glm-4.7-flash";
+const OPS_FAST_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 
 type WorkerEnv = {
   AI?: {
@@ -91,6 +92,7 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
       service: "agency-ops-ai-cloudflare",
       runtime: "cloudflare-workers-ai+supabase-edge",
       model: AI_MODEL,
+      ops_fast_model: OPS_FAST_MODEL,
       easy_panel_required: false,
       data_backend: edgeBody,
     }, edge.ok ? 200 : 503);
@@ -127,19 +129,29 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
     })),
   ];
 
+  const useOpsFast = body.ops_fast === true;
+  const selectedModel = useOpsFast ? OPS_FAST_MODEL : AI_MODEL;
   const started = Date.now();
   let result: any;
   try {
     const answerBudget = Math.max(600, Math.min(1600, Number(prepared.answer_budget || 1000)));
-    const completionBudget = Math.max(1800, Math.min(3200, answerBudget * 2));
-    result = await env.AI.run(AI_MODEL, {
-      messages,
-      max_completion_tokens: completionBudget,
-      reasoning_effort: "low",
-      temperature: 0.2,
-    });
+    if (useOpsFast) {
+      result = await env.AI.run(selectedModel, {
+        messages,
+        max_tokens: Math.max(700, Math.min(1500, answerBudget + 300)),
+        temperature: 0.15,
+      });
+    } else {
+      const completionBudget = Math.max(1800, Math.min(3200, answerBudget * 2));
+      result = await env.AI.run(selectedModel, {
+        messages,
+        max_completion_tokens: completionBudget,
+        reasoning_effort: "low",
+        temperature: 0.2,
+      });
+    }
   } catch (error) {
-    return json({ ok: false, error: "workers_ai_failed", detail: error instanceof Error ? error.message : String(error) }, 502);
+    return json({ ok: false, error: "workers_ai_failed", detail: error instanceof Error ? error.message : String(error), model: selectedModel }, 502);
   }
 
   const modelLatency = Date.now() - started;
@@ -152,6 +164,7 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
       error: "empty_ai_answer",
       detail: finishReason ? `finish_reason:${finishReason}` : "workers_ai_returned_no_final_text",
       usage,
+      model: selectedModel,
     }, 502);
   }
 
@@ -161,7 +174,7 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
     request_id: prepared.request_id,
     answer,
     original_message: String(body.message || ""),
-    model: AI_MODEL,
+    model: selectedModel,
     latency_ms: modelLatency,
     input_tokens: Number(usage.prompt_tokens || usage.input_tokens || 0) || null,
     output_tokens: Number(usage.completion_tokens || usage.output_tokens || 0) || null,
@@ -181,8 +194,9 @@ async function handleAI(request: Request, env: WorkerEnv): Promise<Response> {
     user_message: prepared.user_message,
     assistant_message: completed.assistant_message,
     conversation: completed.conversation,
-    source: "workers_ai",
+    source: useOpsFast ? "workers_ai_ops_fast" : "workers_ai",
     provider_error: null,
+    model: selectedModel,
     context_sources: prepared.context_sources || [],
     context_client: prepared.context_client || null,
     timing: {
