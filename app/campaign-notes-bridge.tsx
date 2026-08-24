@@ -5,7 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, SUPABASE_ANON_KEY, authenticatedFetch, supabase } from "./shared";
 
 const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-campaign-notes-api`;
-const DASHBOARD_API = `${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api?view=home`;
+const PROFILE_API = `${SUPABASE_URL}/functions/v1/agency-ops-profile-lite`;
 
 type Selection = { clientName: string; campaignName: string; accountKey: string };
 type NoteRow = { id: string; note: string; author_person: string; created_at: string };
@@ -38,7 +38,7 @@ export default function CampaignNotesBridge() {
   useEffect(() => {
     if (!session?.access_token) { setRole(null); return; }
     let active = true;
-    authenticatedFetch(DASHBOARD_API, { cache: "no-store" })
+    authenticatedFetch(PROFILE_API, { cache: "no-store" })
       .then(async (response) => {
         if (!active || !response.ok) return;
         const body = await response.json().catch(() => ({}));

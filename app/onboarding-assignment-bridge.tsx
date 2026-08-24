@@ -68,11 +68,8 @@ export default function OnboardingAssignmentBridge() {
 
   useEffect(() => {
     if (!token) return;
-    load();
-    const timer = window.setInterval(load, 30_000);
-    const onVisible = () => { if (!document.hidden) load(); };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
+    const timer = window.setTimeout(load, 25_000);
+    return () => window.clearTimeout(timer);
   }, [token, load]);
 
   useEffect(() => {

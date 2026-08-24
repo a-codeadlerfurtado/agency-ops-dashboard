@@ -89,6 +89,7 @@ export default function Dashboard() {
   const [toastLeaving, setToastLeaving] = useState(false);
   const [win, setWin] = useState<Row | null>(null);
   const loadedRef = useRef(false);
+  const loadInFlightRef = useRef(false);
   const lastNotificationRef = useRef<string | null>(null);
   const preferencesRef = useRef<Row>({});
 
@@ -164,7 +165,8 @@ export default function Dashboard() {
   }, []);
 
   const load = useCallback(async () => {
-    if (!session?.access_token) return;
+    if (!session?.access_token || loadInFlightRef.current) return;
+    loadInFlightRef.current = true;
     if (!loadedRef.current) setLoading(true);
     setError("");
     try {
@@ -207,6 +209,7 @@ export default function Dashboard() {
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha desconhecida");
     } finally {
+      loadInFlightRef.current = false;
       setLoading(false);
     }
   }, [playTone, session?.access_token]);
@@ -214,15 +217,8 @@ export default function Dashboard() {
   useEffect(() => {
     if (!session?.access_token) return;
     load();
-    const timer = window.setInterval(load, 30_000);
-    const onVisibility = () => {
-      if (!document.hidden) load();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
+    const timer = window.setInterval(load, 120_000);
+    return () => window.clearInterval(timer);
   }, [load, session?.access_token]);
 
   useEffect(() => {
