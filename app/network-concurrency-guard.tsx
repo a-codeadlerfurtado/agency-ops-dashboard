@@ -3,12 +3,19 @@
 import { useEffect } from "react";
 
 const SUPABASE_FUNCTIONS_PREFIX = "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/";
+const PROFILE_API = `${SUPABASE_FUNCTIONS_PREFIX}agency-ops-profile-lite`;
 
 type StoredResponse = {
   body: ArrayBuffer;
   status: number;
   statusText: string;
   headers: [string, string][];
+};
+type LiteProfile = {
+  person?: string | null;
+  role?: string | null;
+  access_level?: string | null;
+  is_full?: boolean;
 };
 
 function requestUrl(input: RequestInfo | URL) {
@@ -23,11 +30,14 @@ function requestMethod(input: RequestInfo | URL, init?: RequestInit) {
   return "GET";
 }
 
-function authScope(input: RequestInfo | URL, init?: RequestInit) {
+function mergedHeaders(input: RequestInfo | URL, init?: RequestInit) {
   const headers = new Headers(typeof Request !== "undefined" && input instanceof Request ? input.headers : undefined);
   new Headers(init?.headers || {}).forEach((value, key) => headers.set(key, value));
-  const token = headers.get("authorization") || "anon";
-  return token;
+  return headers;
+}
+
+function authScope(input: RequestInfo | URL, init?: RequestInit) {
+  return mergedHeaders(input, init).get("authorization") || "anon";
 }
 
 function cloneStored(stored: StoredResponse) {
@@ -38,7 +48,14 @@ function cloneStored(stored: StoredResponse) {
   });
 }
 
-function rewriteProfileProbe(input: RequestInfo | URL, init?: RequestInit) {
+function localJson(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+}
+
+function rewriteProfileProbe(input: RequestInfo | URL) {
   const raw = requestUrl(input);
   if (window.location.pathname === "/") return { input, url: raw };
   if (!raw.includes("/agency-ops-dashboard-api") || !raw.includes("view=home")) return { input, url: raw };
@@ -48,9 +65,7 @@ function rewriteProfileProbe(input: RequestInfo | URL, init?: RequestInit) {
   target.searchParams.delete("view");
   const nextUrl = target.toString();
 
-  if (typeof Request !== "undefined" && input instanceof Request) {
-    return { input: new Request(nextUrl, input), url: nextUrl };
-  }
+  if (typeof Request !== "undefined" && input instanceof Request) return { input: new Request(nextUrl, input), url: nextUrl };
   return { input: nextUrl, url: nextUrl };
 }
 
@@ -64,8 +79,60 @@ export default function NetworkConcurrencyGuard() {
     w.__opsOriginalFetch = originalFetch;
     const inFlight = new Map<string, Promise<Response>>();
     const tinyCache = new Map<string, { expiresAt: number; response: StoredResponse }>();
+    const profileCache = new Map<string, { expiresAt: number; profile: LiteProfile }>();
+    const profileFlight = new Map<string, Promise<LiteProfile | null>>();
 
     const cacheTtl = (url: string) => url.includes("/agency-ops-profile-lite") ? 20_000 : 0;
+
+    async function getLiteProfile(rawInput: RequestInfo | URL, init?: RequestInit): Promise<LiteProfile | null> {
+      const scope = authScope(rawInput, init);
+      if (scope === "anon") return null;
+      const cached = profileCache.get(scope);
+      if (cached && cached.expiresAt > Date.now()) return cached.profile;
+      if (cached) profileCache.delete(scope);
+      const pending = profileFlight.get(scope);
+      if (pending) return pending;
+
+      const promise = originalFetch(PROFILE_API, {
+        headers: mergedHeaders(rawInput, init),
+        cache: "no-store",
+      }).then(async (response) => {
+        if (!response.ok) return null;
+        const body = await response.json().catch(() => null);
+        const profile = (body?.profile || null) as LiteProfile | null;
+        if (profile) profileCache.set(scope, { expiresAt: Date.now() + 20_000, profile });
+        return profile;
+      }).catch(() => null).finally(() => profileFlight.delete(scope));
+
+      profileFlight.set(scope, promise);
+      return promise;
+    }
+
+    async function localGate(rawInput: RequestInfo | URL, init: RequestInit | undefined, rawUrl: string) {
+      const needsProfile = rawUrl.includes("/agency-ops-integration-health")
+        || rawUrl.includes("/agency-ops-team-now-api")
+        || rawUrl.includes("/agency-ops-contracts-api")
+        || rawUrl.includes("/agency-ops-weekend-balance-api")
+        || rawUrl.includes("/agency-ops-lead-quality-api");
+      if (!needsProfile) return null;
+
+      const profile = await getLiteProfile(rawInput, init);
+      if (!profile) return null;
+
+      if (rawUrl.includes("/agency-ops-integration-health") && !profile.is_full) {
+        return localJson({ error: "forbidden" }, 403);
+      }
+      if ((rawUrl.includes("/agency-ops-team-now-api") || rawUrl.includes("/agency-ops-contracts-api")) && profile.person !== "Adler Furtado") {
+        return localJson({ error: "forbidden" }, 403);
+      }
+      if (rawUrl.includes("/agency-ops-weekend-balance-api") && profile.role !== "GT") {
+        return localJson({ eligible: false, alerts: [] });
+      }
+      if (rawUrl.includes("/agency-ops-lead-quality-api") && profile.role !== "GT") {
+        return localJson({ eligible: false, incidents: [] });
+      }
+      return null;
+    }
 
     window.fetch = (async (rawInput: RequestInfo | URL, init?: RequestInit) => {
       const method = requestMethod(rawInput, init);
@@ -75,16 +142,13 @@ export default function NetworkConcurrencyGuard() {
       }
 
       if (window.location.pathname === "/" && rawUrl.includes("/agency-ops-profile-data-api")) {
-        return new Response(JSON.stringify({ profile: {}, focus: null, client_gt: [] }), {
-          status: 200,
-          headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
-        });
+        return localJson({ profile: {}, focus: null, client_gt: [] });
       }
 
-      // Fora da Home, as bridges so usam view=home para descobrir perfil/permissao.
-      // Trocar automaticamente pelo endpoint leve evita remontar o dashboard inteiro
-      // quando o usuario esta em Agenda, Campanhas, Onboarding ou qualquer outra rota.
-      const rewritten = rewriteProfileProbe(rawInput, init);
+      const gated = await localGate(rawInput, init, rawUrl);
+      if (gated) return gated;
+
+      const rewritten = rewriteProfileProbe(rawInput);
       const input = rewritten.input;
       const url = rewritten.url;
 
@@ -112,8 +176,12 @@ export default function NetworkConcurrencyGuard() {
                   headers: Array.from(response.headers.entries()),
                 },
               });
+              if (url.includes("/agency-ops-profile-lite")) {
+                const parsed = JSON.parse(new TextDecoder().decode(body));
+                if (parsed?.profile) profileCache.set(authScope(rawInput, init), { expiresAt: Date.now() + ttl, profile: parsed.profile });
+              }
             } catch {
-              // Cache e otimista; qualquer falha deixa a resposta normal seguir.
+              // Cache e parse sao otimizacoes; falha nunca derruba a chamada real.
             }
           }
           return response;
@@ -131,6 +199,8 @@ export default function NetworkConcurrencyGuard() {
       }
       inFlight.clear();
       tinyCache.clear();
+      profileCache.clear();
+      profileFlight.clear();
     };
   }, []);
 
