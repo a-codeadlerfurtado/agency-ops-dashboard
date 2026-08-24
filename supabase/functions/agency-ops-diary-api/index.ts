@@ -43,8 +43,6 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   const view = url.searchParams.get("view") ?? "data";
 
-  // O ator nunca vem do body/querystring. Login: UUID extraido do JWT verificado.
-  // Chave legada: resolve exclusivamente o UUID previamente cadastrado como admin do Diario.
   let actorUserId: string | null = null;
   let viaLogin = false;
   const authHeader = req.headers.get("Authorization") ?? "";
@@ -73,7 +71,6 @@ Deno.serve(async (req: Request) => {
   const { data: adminRow } = await ops.from("diary_admin_users").select("user_id").eq("user_id", actorUserId).maybeSingle();
   const isDiaryAdmin = Boolean(adminRow?.user_id);
 
-  // Identidade operacional sempre deriva da sessao autenticada.
   const { data: pref } = await ops.from("user_preferences")
     .select("collaborator_person,name")
     .eq("user_key", actorUserId)
@@ -83,10 +80,8 @@ Deno.serve(async (req: Request) => {
     ? await ops.from("team_roster").select("person,role").eq("person", actorPerson).eq("is_former", false).maybeSingle()
     : { data: null } as any;
   const actorRole = String(roster?.role ?? "").toUpperCase() || null;
+  const gabrielTasklogOnly = actorPerson === "Gabriel Castro" && actorRole === "AI";
 
-  // Um JWT valido sozinho nao basta: colaborador comum precisa estar ativo, aprovado
-  // e possuir a aba Diario nas permissoes atuais. Adler continua identificado pelo UUID
-  // administrativo estavel de diary_admin_users.
   if (viaLogin && !isDiaryAdmin) {
     const { data: approvals } = await ops.from("access_requests")
       .select("kind,status")
@@ -139,7 +134,8 @@ Deno.serve(async (req: Request) => {
     }
 
     if (view !== "data") return reply({ error: "unknown_view" }, 404);
-    const scope = url.searchParams.get("scope") === "all" ? "all" : "mine";
+    const requestedScope = url.searchParams.get("scope") === "all" ? "all" : "mine";
+    const scope = gabrielTasklogOnly ? "mine" : requestedScope;
     if (scope === "all" && !isDiaryAdmin) return reply({ error: "forbidden" }, 403);
     const filterKeys = ["author_user_id", "client_id", "category_code", "subcategory_code", "responsible_area", "status", "since", "until"];
     const filters: Record<string, string> = {};
@@ -149,6 +145,27 @@ Deno.serve(async (req: Request) => {
     }
     const { data, error } = await ops.rpc("diary_get", { p_actor: actorUserId, p_scope: scope, p_filters: filters });
     if (error) return reply({ error: "diary_query_failed", detail: error.message }, errorStatus(error.message));
+
+    const base = data && typeof data === "object"
+      ? data as Record<string, any>
+      : { adjustments: [], task_log: [], counts: { adjustments: 0, tasks: 0 } };
+
+    if (gabrielTasklogOnly) {
+      const taskLog = Array.isArray(base.task_log) ? base.task_log : [];
+      return reply({
+        tasklog_only: true,
+        actor_role: actorRole,
+        adjustments: [],
+        task_log: taskLog,
+        daily_reports: [],
+        clients: [],
+        categories: [],
+        subcategories: [],
+        staff: [],
+        can_view_all: false,
+        counts: { adjustments: 0, tasks: Number(base.counts?.tasks ?? taskLog.length), reports: 0 },
+      });
+    }
 
     let dailyReports: any[] = [];
     if (actorRole === "DESIGN" || isDiaryAdmin) {
@@ -167,9 +184,6 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    const base = data && typeof data === "object"
-      ? data as Record<string, any>
-      : { adjustments: [], task_log: [], counts: { adjustments: 0, tasks: 0 } };
     return reply({
       ...base,
       daily_reports: dailyReports,
@@ -180,11 +194,13 @@ Deno.serve(async (req: Request) => {
 
   const body = await req.json().catch(() => ({}));
   if (view === "adjustment-create") {
+    if (gabrielTasklogOnly) return reply({ error: "forbidden_tasklog_only" }, 403);
     const { data, error } = await ops.rpc("diary_create_adjustment", { p_actor: actorUserId, p_payload: body });
     if (error) return reply({ error: "adjustment_create_failed", detail: error.message }, errorStatus(error.message));
     return reply({ ok: true, adjustment: data });
   }
   if (view === "adjustment-update") {
+    if (gabrielTasklogOnly) return reply({ error: "forbidden_tasklog_only" }, 403);
     const id = Number(body.id ?? 0);
     if (!Number.isFinite(id) || id <= 0) return reply({ error: "missing_fields", required: ["id"] }, 400);
     const patch = { ...body };
@@ -199,6 +215,7 @@ Deno.serve(async (req: Request) => {
     return reply({ ok: true, entry: data });
   }
   if (view === "daily-report-save") {
+    if (gabrielTasklogOnly) return reply({ error: "forbidden_tasklog_only" }, 403);
     if (actorRole !== "DESIGN" || !actorPerson) return reply({ error: "forbidden_designer_only" }, 403);
     const reportDate = String(body.report_date ?? "").trim();
     const reportText = String(body.report_text ?? "").trim();
