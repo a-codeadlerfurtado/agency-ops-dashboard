@@ -62,7 +62,7 @@ Deno.serve(async (req: Request) => {
 
   const [{ data: terms, error: termsError }, { data: evidence, error: evidenceError }] = await Promise.all([
     ops.from("client_commercial_terms")
-      .select("client_id,monthly_value,implementation_value,term_months,implementation_payment,implementation_installments,notes,source,updated_at")
+      .select("client_id,monthly_value,implementation_value,term_months,implementation_payment,implementation_installments,notes,source,source_crm_lead_id,updated_at")
       .in("client_id", ids),
     ops.from("client_commercial_term_evidence")
       .select("id,client_id,source_type,source_id,source_at,field_key,numeric_value,text_value,array_value,evidence_excerpt,confidence,verification_status,metadata,created_at,updated_at")
@@ -116,6 +116,7 @@ Deno.serve(async (req: Request) => {
       implementation_payment: term.implementation_payment,
       implementation_installments: term.implementation_installments,
       canonical_source: term.source,
+      canonical_crm_lead_id: term.source_crm_lead_id,
       commercial_notes: term.notes,
       commercial_updated_at: term.updated_at,
       monthly_evidence: monthlyEvidence,
@@ -149,7 +150,8 @@ Deno.serve(async (req: Request) => {
     policy: {
       totals_include_only_confirmed_values: true,
       provisional_values_are_review_candidates_only: true,
-      sources: ["BRIEFING", "MEETING", "CONTRACT"],
+      crm_requires_exact_client_link: true,
+      sources: ["CRM", "BRIEFING", "MEETING", "CONTRACT"],
     },
     generated_at: new Date().toISOString(),
   });
