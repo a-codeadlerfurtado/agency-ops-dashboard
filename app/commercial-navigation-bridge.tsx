@@ -5,7 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
 
 const FRIDAY_API = `${SUPABASE_URL}/functions/v1/agency-ops-friday-report-api`;
-const DASHBOARD_API = `${SUPABASE_URL}/functions/v1/agency-ops-dashboard-api?view=home`;
+const PROFILE_API = `${SUPABASE_URL}/functions/v1/agency-ops-profile-lite`;
 
 const normalize = (value: string) => value
   .normalize("NFD")
@@ -109,7 +109,7 @@ export default function CommercialNavigationBridge() {
   useEffect(() => {
     if (!session?.access_token) { setProfileRole(null); return; }
     let active = true;
-    authenticatedFetch(DASHBOARD_API, { cache: "no-store" })
+    authenticatedFetch(PROFILE_API, { cache: "no-store" })
       .then(async (response) => {
         if (!active || !response.ok) return;
         const body = await response.json().catch(() => ({}));
