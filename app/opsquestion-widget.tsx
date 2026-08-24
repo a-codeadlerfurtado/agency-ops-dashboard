@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, authenticatedFetch, isSessionExpiredError, supabase } from "./shared";
 
-const ASK_URL = `${SUPABASE_URL}/functions/v1/agency-ops-ai-ask-team-v2`;
+const ASK_URL = `${SUPABASE_URL}/functions/v1/agency-ops-ai-ask-team-v3`;
 
 type ChatMessage = {
   role: "user" | "ai";
@@ -49,8 +49,7 @@ export default function OpsQuestionWidget() {
 
     try {
       const controller = new AbortController();
-      // A rota principal pode usar até 55s e ainda acionar contingência.
-      // O front não deve matar uma recuperação válida no meio do caminho.
+      // A rota analítica cruza várias fontes e ainda possui contingência.
       const timeout = window.setTimeout(() => controller.abort(), 100_000);
       let response: Response;
       try {
