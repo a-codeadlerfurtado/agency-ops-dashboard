@@ -209,11 +209,8 @@ export default function IntegrationHealthBar() {
         if (active) setLoading(false);
       }
     }
-    load();
-    const timer = window.setInterval(load, 30_000);
-    const visibility = () => { if (!document.hidden) load(); };
-    document.addEventListener("visibilitychange", visibility);
-    return () => { active = false; window.clearInterval(timer); document.removeEventListener("visibilitychange", visibility); };
+    const timer = window.setTimeout(load, 45_000);
+    return () => { active = false; window.clearTimeout(timer); };
   }, [session?.access_token]);
 
   const integrations = data?.integrations || [];
