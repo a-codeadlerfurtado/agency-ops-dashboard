@@ -27,6 +27,7 @@ import HomeShortcut from "./home-shortcut";
 import LogoutShortcut from "./logout-shortcut";
 import ProfileMenuDismiss from "./profile-menu-dismiss";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
+import CockpitCollapseBridge from "./cockpit-collapse-bridge";
 import MotionSystem from "./motion-system";
 import GreetingAudioBridge from "./greeting-audio-bridge";
 import PreGreetingShield from "./pre-greeting-shield";
@@ -67,6 +68,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <CommercialNavigationBridge />
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
+        <CockpitCollapseBridge />
         <WeekendBalanceAlert />
         <LeadQualityAlert />
         <NotificationLeadDetailBridge />
