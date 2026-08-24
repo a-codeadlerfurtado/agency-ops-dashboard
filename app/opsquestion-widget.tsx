@@ -85,8 +85,7 @@ export default function OpsQuestionWidget() {
 
     try {
       const controller = new AbortController();
-      // A rota causal pode usar até 70s e ainda acionar contingência.
-      // O front não deve matar uma recuperação válida no meio do caminho.
+      // O backend possui limite próprio; este teto protege o navegador contra requests órfãos.
       const timeout = window.setTimeout(() => controller.abort(), 110_000);
       let response: Response;
       try {
@@ -158,8 +157,10 @@ export default function OpsQuestionWidget() {
 
     const destination = action.target_person || roleLabel[action.target_role || ""] || "Operações";
     const clientText = action.client_name ? ` para ${action.client_name}` : "";
-    const clickupText = action.create_clickup ? " e criar a task correspondente no ClickUp" : "";
-    const approved = window.confirm(`Executar este próximo passo${clientText}?\n\n${action.title}\n\nResponsável: ${destination}\nPrioridade: ${priorityLabel[action.priority] || action.priority}${clickupText}`);
+    const clickupText = action.create_clickup ? " Também será criada a task correspondente no ClickUp." : "";
+    const approved = window.confirm(
+      `Criar esta ação operacional${clientText}?\n\n${action.title}\n\nResponsável: ${destination}\nPrioridade: ${priorityLabel[action.priority] || action.priority}\n\nIsso cria uma solicitação interna para o responsável. Não pausa campanhas nem envia mensagens ao cliente automaticamente.${clickupText}`
+    );
     if (!approved) return;
 
     patchAction(messageIndex, actionIndex, { executing: true, error: null });
@@ -181,13 +182,14 @@ export default function OpsQuestionWidget() {
           target_role: action.target_role,
           target_person: action.target_person,
           create_clickup: Boolean(action.create_clickup),
-          source: "opsquestion_v5",
+          source: "opsquestion_v5_2",
           source_id: action.source_id || message.requestId || action.id,
           metadata: {
             opsquestion_action_id: action.id,
             opsquestion_request_id: message.requestId || null,
             original_question: message.originQuestion || null,
             generated_from_next_steps: true,
+            execution_mode: "CREATE_WORK_ITEM",
           },
         }),
         cache: "no-store",
@@ -196,7 +198,7 @@ export default function OpsQuestionWidget() {
       if (!response.ok || !result?.ok) throw new Error(String(result?.detail || result?.error || `Falha ${response.status}`));
       patchAction(messageIndex, actionIndex, { executing: false, executed: true, error: null });
     } catch (error) {
-      patchAction(messageIndex, actionIndex, { executing: false, error: error instanceof Error ? error.message : "Falha ao executar ação." });
+      patchAction(messageIndex, actionIndex, { executing: false, error: error instanceof Error ? error.message : "Falha ao criar ação." });
     }
   }
 
@@ -234,7 +236,7 @@ export default function OpsQuestionWidget() {
           <div style={{ flex: 1, overflowY: "auto", padding: 12, display: "flex", flexDirection: "column", gap: 9 }}>
             {!messages.length && (
               <div style={{ border: "1px solid rgba(115,167,255,.13)", background: "rgba(59,130,246,.055)", borderRadius: 12, padding: 11, color: "#a9b7ca", fontSize: 12, lineHeight: 1.5 }}>
-                Pergunte sobre clientes, campanhas, onboarding, WhatsApp, saúde, comercial, produtividade ou riscos. Quando houver um plano de ação, você poderá executá-lo pela própria resposta após confirmar.
+                Pergunte sobre clientes, campanhas, onboarding, WhatsApp, saúde, comercial, produtividade ou riscos. Quando houver um plano, você poderá criar a ação operacional pela própria resposta após confirmar.
                 <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 9 }}>
                   {["Quem precisa de atenção hoje?", "Se você fosse o Adler, quais decisões tomaria amanhã?", "Qual gargalo está piorando semana a semana?"].map((item) => (
                     <button key={item} onClick={() => setQuestion(item)} style={{ border: "1px solid rgba(148,163,184,.14)", background: "rgba(255,255,255,.025)", color: "#cbd5e1", borderRadius: 999, padding: "5px 8px", fontSize: 10.5, cursor: "pointer" }}>{item}</button>
@@ -263,7 +265,7 @@ export default function OpsQuestionWidget() {
                             disabled={action.executing || action.executed}
                             style={{ marginLeft: "auto", border: "1px solid rgba(96,165,250,.3)", background: action.executed ? "rgba(34,197,94,.12)" : "rgba(37,99,235,.18)", color: action.executed ? "#86efac" : "#bfdbfe", borderRadius: 8, padding: "5px 8px", fontSize: 10, fontWeight: 700, cursor: action.executing || action.executed ? "default" : "pointer", opacity: action.executing ? .65 : 1 }}
                           >
-                            {action.executed ? "Executado ✓" : action.executing ? "Executando…" : "Executar"}
+                            {action.executed ? "Ação criada ✓" : action.executing ? "Criando…" : "Criar ação"}
                           </button>
                         </div>
                         {action.error && <div style={{ marginTop: 5, color: "#fca5a5", fontSize: 9.5 }}>{action.error}</div>}
