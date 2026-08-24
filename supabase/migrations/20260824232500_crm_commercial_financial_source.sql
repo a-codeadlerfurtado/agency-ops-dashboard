@@ -15,17 +15,17 @@ select
   l.created_at,
   l.updated_at,
   l.closed_at,
+  extract(epoch from (now()-l.updated_at))/86400.0 as days_in_stage,
+  (select max(a.created_at) from crm.lead_activities a where a.lead_id=l.id) as last_interaction,
+  (select min(a.due_at) from crm.lead_activities a where a.lead_id=l.id and not a.done and a.due_at is not null) as next_action_at,
+  (select a.content from crm.lead_activities a where a.lead_id=l.id and not a.done order by a.due_at nulls last,a.created_at desc limit 1) as next_action,
   l.closed_monthly_value,
   l.closed_setup_value,
   l.closed_term_months,
   l.closed_monthly_first_month,
   l.closed_setup_first_month,
   l.closed_setup_payment,
-  l.closed_setup_installment_values,
-  extract(epoch from (now()-l.updated_at))/86400.0 as days_in_stage,
-  (select max(a.created_at) from crm.lead_activities a where a.lead_id=l.id) as last_interaction,
-  (select min(a.due_at) from crm.lead_activities a where a.lead_id=l.id and not a.done and a.due_at is not null) as next_action_at,
-  (select a.content from crm.lead_activities a where a.lead_id=l.id and not a.done order by a.due_at nulls last,a.created_at desc limit 1) as next_action
+  l.closed_setup_installment_values
 from crm.leads l
 where l.archived_at is null
   and lower(coalesce(l.stage,'')) in ('proposta','negociacao','pre-assinatura','pré-assinatura','contrato enviado','assinatura');
