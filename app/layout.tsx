@@ -19,6 +19,7 @@ import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
 import LeadQualityAlert from "./lead-quality-alert";
+import ChurnedClientMessageWarning from "./churned-client-message-warning";
 import NotificationLeadDetailBridge from "./notification-lead-detail-bridge";
 import NotificationLeadClickOverride from "./notification-lead-click-override";
 import ClientNotificationsBridge from "./client-notifications-bridge";
@@ -79,6 +80,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <CockpitCollapseBridge />
         <WeekendBalanceAlert />
         <LeadQualityAlert />
+        <ChurnedClientMessageWarning />
         <NotificationLeadDetailBridge />
         <NotificationLeadClickOverride />
         <ClientNotificationsBridge />
