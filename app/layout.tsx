@@ -5,6 +5,7 @@ import "./dashboard-enhancements.css";
 import "./onboarding-legacy.css";
 import "./motion-system.css";
 import "./contrast-tune.css";
+import "./leonardo-commercial-standard.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
