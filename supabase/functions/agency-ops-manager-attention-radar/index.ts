@@ -43,8 +43,8 @@ function actionable(m: any) {
 }
 function area(text: string) {
   const q = norm(text);
-  if (/(criativ|arte|video|layout|logo|foto|design)/.test(q)) return "DESIGN";
-  if (/(ia |inteligencia artificial|automacao|crm|dora|iara|webhook|make|integracao)/.test(q)) return "AI";
+  if (/(criativ|arte|video|layout|logo|foto|imagem|design)/.test(q)) return "DESIGN";
+  if (/(\bia\b|inteligencia artificial|automacao|crm|dora|iara|webhook|make|integracao)/.test(q)) return "AI";
   if (/(campanh|meta|lead|cpl|segment|formulario|anuncio|publico|orcamento|resultado|investid|metrica|saldo|cartao|cobrar)/.test(q)) return "GT";
   if (/(contrato|comercial|condicao comercial)/.test(q)) return "COMERCIAL";
   return "CS";
@@ -54,7 +54,7 @@ function msg(m: any) { return clip(m?.body || `[${m?.message_type || "mensagem"}
 function sameTopic(a: any, b: any) {
   if (overlap(a?.body, b?.body) >= 1) return true;
   const x = norm(a?.body), y = norm(b?.body);
-  const pairs = [[/(telefone|whats|numero)/,/(telefone|whats|numero)/],[/(campanh|anuncio|meta)/,/(campanh|anuncio|meta)/],[/(criativ|arte|video)/,/(criativ|arte|video)/],[/(formulario|cidade|segment)/,/(formulario|cidade|segment)/],[/(relatorio|previa|resultado|investid|metrica)/,/(relatorio|previa|resultado|investid|metrica|lead|cpl|campanh)/],[/(crm|dora|iara|ia|automacao|integracao)/,/(crm|dora|iara|ia|automacao|integracao|lead)/],[/(cobrar|cobranca|pagamento|saldo|cartao)/,/(cobrad|cobrar|pagamento|saldo|cartao|meta)/]];
+  const pairs = [[/(telefone|whats|numero)/,/(telefone|whats|numero)/],[/(campanh|anuncio|meta)/,/(campanh|anuncio|meta)/],[/(criativ|arte|video|imagem)/,/(criativ|arte|video|imagem)/],[/(formulario|cidade|segment)/,/(formulario|cidade|segment)/],[/(relatorio|previa|resultado|investid|metrica)/,/(relatorio|previa|resultado|investid|metrica|lead|cpl|campanh)/],[/(crm|dora|iara|ia|automacao|integracao)/,/(crm|dora|iara|ia|automacao|integracao|lead)/],[/(cobrar|cobranca|pagamento|saldo|cartao)/,/(cobrad|cobrar|pagamento|saldo|cartao|meta)/]];
   return pairs.some(([ra, rb]) => ra.test(x) && rb.test(y));
 }
 function futureDue(c: any, req: any, asOf: Date) {
@@ -77,7 +77,7 @@ function classify(c: any, asOf: Date) {
       const approval = client.find((m: any) => new Date(m.event_at) > new Date(done.event_at) && POSITIVE.test(norm(m.body)));
       return { kind: "NAO_COBRAR", reason: `Pedido de ${localDateTime(req.event_at)} teve execução/entrega compatível em ${localDateTime(done.event_at)}${approval ? ` e confirmação positiva do cliente em ${localDateTime(approval.event_at)}` : ""}.`, confidence: "ALTA" };
     }
-    const dependency = [...team].reverse().find((m: any) => NEED_CLIENT.test(norm(m.body)) && (sameTopic(req, m) || overlap(req.body, m.body) >= 1));
+    const dependency = [...team].reverse().find((m: any) => NEED_CLIENT.test(norm(m.body)) && (sameTopic(req, m) || overlap(req.body, m.body) >= 1 || /de uma olhada/.test(norm(req.body))));
     if (dependency && !client.some((m: any) => new Date(m.event_at) > new Date(dependency.event_at))) return { kind: "NAO_COBRAR", reason: `O último avanço no assunto foi uma dependência pedida ao cliente em ${localDateTime(dependency.event_at)}, sem resposta posterior localizada.`, confidence: "ALTA" };
 
     const a = area(`${req.body || ""} ${team.map((x: any) => x.body || "").join(" ")}`), who = owner(c, a), severe = SEVERE.test(norm(req.body));
@@ -85,15 +85,18 @@ function classify(c: any, asOf: Date) {
       const age = minutes(req.event_at, asOf), level = (severe && age >= 20) || age >= 60 ? "COBRAR_AGORA" : "ACOMPANHAR_HOJE";
       return { kind: level, priority: severe ? "CRITICAL" : "HIGH", owner_area: a, owner_person: who, context: `Em ${localDateTime(req.event_at)}, o cliente escreveu: “${msg(req)}”. Até ${localDateTime(asOf)}, não foi localizada mensagem posterior da equipe.`, situation: severe ? "Reclamação relevante ainda sem retorno posterior localizado." : "Solicitação recente ainda sem retorno posterior localizado.", charge_action: level === "COBRAR_AGORA" ? `Cobrar ${who || "o responsável"} por posicionamento e próximo passo agora.` : `Acompanhar ${who || "o responsável"} e garantir retorno dentro do dia.`, confidence: "ALTA" };
     }
-    const progress = [...team].reverse().find((m: any) => PROGRESS.test(norm(m.body)) && (sameTopic(req, m) || /ajust|verificar|averiguar|repass|solicitei/.test(norm(m.body))));
+
+    const substantive = [...team].reverse().find((m: any) => String(m.body || "").length >= 35 && sameTopic(req, m));
+    if (substantive && minutes(req.event_at, asOf) >= 720 && !client.some((m: any) => actionable(m))) return { kind: "NAO_COBRAR", reason: `A manifestação de ${localDateTime(req.event_at)} recebeu resposta substantiva no mesmo assunto em ${localDateTime(substantive.event_at)} e não houve nova cobrança do cliente nas 12h seguintes.`, confidence: "ALTA" };
+
+    const progress = [...team].reverse().find((m: any) => String(m.body || "").length <= 600 && PROGRESS.test(norm(m.body)) && (sameTopic(req, m) || /ajust|verificar|averiguar|repass|solicitei/.test(norm(m.body))));
     if (progress) {
       const due = futureDue(c, req, asOf), age = minutes(progress.event_at, asOf);
       let threshold = severe ? 60 : 120; if (/agora/.test(norm(progress.body))) threshold = Math.min(threshold, 45);
       const level = due ? "ACOMPANHAR_HOJE" : (age >= threshold ? "COBRAR_AGORA" : "ACOMPANHAR_HOJE");
       return { kind: level, priority: severe ? "CRITICAL" : "HIGH", owner_area: a, owner_person: who, context: `Cliente: ${localDateTime(req.event_at)} — “${msg(req)}”. Equipe: ${localDateTime(progress.event_at)} — “${msg(progress)}”. Não foi localizada confirmação posterior de execução no mesmo assunto${due ? `; há prazo futuro relacionado em ${localDateTime(due)}` : ""}.`, situation: due ? "Pedido reconhecido e em andamento dentro de prazo futuro." : "Pedido reconhecido, ainda sem evidência de fechamento.", charge_action: level === "COBRAR_AGORA" ? `Cobrar ${who || "o responsável"} pela execução/retorno final agora.` : `Acompanhar ${who || "o responsável"} até concluir e devolver ao cliente.`, confidence: "ALTA" };
     }
-    const response = [...team].reverse().find((m: any) => String(m.body || "").length >= 35 && sameTopic(req, m));
-    if (response) return { kind: "NAO_COBRAR", reason: `O pedido de ${localDateTime(req.event_at)} recebeu resposta substantiva sobre o mesmo assunto em ${localDateTime(response.event_at)}; não há prova suficiente de obrigação aberta.`, confidence: "ALTA" };
+    if (substantive) return { kind: "NAO_COBRAR", reason: `O pedido de ${localDateTime(req.event_at)} recebeu resposta substantiva sobre o mesmo assunto em ${localDateTime(substantive.event_at)}; não há prova suficiente de obrigação aberta.`, confidence: "ALTA" };
     const age = minutes(req.event_at, asOf), level = age >= 120 ? "COBRAR_AGORA" : "ACOMPANHAR_HOJE";
     return { kind: level, priority: severe ? "CRITICAL" : "HIGH", owner_area: a, owner_person: who, context: `Há pedido de ${localDateTime(req.event_at)} com atividade posterior no grupo, mas sem fechamento claramente ligado ao mesmo assunto.`, situation: "Risco de pedido sem fechamento.", charge_action: `${level === "COBRAR_AGORA" ? "Cobrar" : "Acompanhar"} ${who || "o responsável"} para conferir e fechar o retorno.`, confidence: "MEDIA" };
   }
@@ -111,11 +114,12 @@ function analyze(ctx: any, asOf: Date) {
   const allItems: any[] = [], allNot: any[] = [];
   for (const c of ctx.clients || []) {
     const r: any = classify(c, asOf);
-    if (r.kind === "NAO_COBRAR") allNot.push({ client_id: c.client_id, client_name: c.display_name, reason: r.reason, confidence: r.confidence, candidate_score: c.candidate_score || 0 });
-    else allItems.push({ client_id: c.client_id, client_name: c.display_name, level: r.kind, priority: r.priority || "MEDIUM", owner_area: r.owner_area || "OPERACOES", owner_person: r.owner_person || "", context: r.context, situation: r.situation, charge_action: r.charge_action, confidence: r.confidence || "MEDIA", candidate_score: c.candidate_score || 0 });
+    if (r.kind === "NAO_COBRAR") allNot.push({ client_id: c.client_id, client_name: c.display_name, reason: r.reason, confidence: r.confidence, candidate_score: c.candidate_score || 0, last_signal_at: c.last_signal_at || null });
+    else allItems.push({ client_id: c.client_id, client_name: c.display_name, level: r.kind, priority: r.priority || "MEDIUM", owner_area: r.owner_area || "OPERACOES", owner_person: r.owner_person || "", context: r.context, situation: r.situation, charge_action: r.charge_action, confidence: r.confidence || "MEDIA", candidate_score: c.candidate_score || 0, last_signal_at: c.last_signal_at || null });
   }
   const order: any = { COBRAR_AGORA: 0, ACOMPANHAR_HOJE: 1, VERIFICAR_INTERNO: 2 }, prio: any = { CRITICAL: 0, HIGH: 1, MEDIUM: 2 };
-  allItems.sort((a, b) => (order[a.level] - order[b.level]) || (prio[a.priority] - prio[b.priority]) || (b.candidate_score - a.candidate_score)); allNot.sort((a, b) => b.candidate_score - a.candidate_score);
+  allItems.sort((a, b) => (order[a.level] - order[b.level]) || (prio[a.priority] - prio[b.priority]) || (new Date(b.last_signal_at || 0).getTime() - new Date(a.last_signal_at || 0).getTime()));
+  allNot.sort((a, b) => new Date(b.last_signal_at || 0).getTime() - new Date(a.last_signal_at || 0).getTime());
   const red = allItems.filter((x) => x.level === "COBRAR_AGORA").length, orange = allItems.filter((x) => x.level === "ACOMPANHAR_HOJE").length;
   return { allItems, allNot, items: allItems.slice(0, 8), not_charge: allNot.slice(0, 5), manager_summary: red ? `${red} cliente(s) com cobrança imediata e ${orange} para acompanhamento.` : orange ? `${orange} cliente(s) para acompanhamento hoje; nenhuma cobrança imediata confirmada.` : "Nenhuma cobrança imediata confirmada neste corte." };
 }
@@ -131,7 +135,7 @@ async function sha256(v: string) { const d = await crypto.subtle.digest("SHA-256
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
-  if (url.searchParams.get("health") === "1") return json({ ok: true, service: "agency-ops-manager-attention-radar", version: 7, engine: "deterministic-temporal-v3", ai_required: false, candidate_limit: MAX_CANDIDATES });
+  if (url.searchParams.get("health") === "1") return json({ ok: true, service: "agency-ops-manager-attention-radar", version: 8, engine: "deterministic-temporal-v4", ai_required: false, candidate_limit: MAX_CANDIDATES });
   if (req.method !== "POST" && req.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
   const expected = await setting("MANAGER_RADAR_CRON_SECRET"), given = req.headers.get("x-manager-radar-key") || url.searchParams.get("key"); if (!expected || given !== expected) return json({ ok: false, error: "unauthorized" }, 401);
   const slot = clip(url.searchParams.get("slot") || "manual", 40), validating = url.searchParams.get("validate") === "1", dryRun = validating || url.searchParams.get("dry_run") === "1";
@@ -141,13 +145,13 @@ Deno.serve(async (req) => {
   const a = analyze(ctx || { clients: [] }, asOf), summary = format(slot, a, Number(ctx?.candidate_count || 0)), fingerprint = await sha256(JSON.stringify(a.allItems.map((x: any) => [x.client_id, x.level, norm(x.charge_action)])));
   const storedAnalysis = { items: a.items, not_charge: a.not_charge, manager_summary: a.manager_summary };
   const { data: old } = await ops.from("manager_attention_digest_runs").select("id").eq("run_date", runDate).eq("slot", slot).maybeSingle(); let runId = old?.id || null;
-  if (!runId) { const { data, error } = await ops.from("manager_attention_digest_runs").insert({ run_date: runDate, slot, status: "RUNNING", provider: "DETERMINISTIC_V7", fingerprint, context_stats: { candidate_count: Number(ctx?.candidate_count || 0), dry_run: dryRun } }).select("id").single(); if (error) return json({ ok: false, error: `run_insert:${error.message}` }, 500); runId = data.id; }
-  else await ops.from("manager_attention_digest_runs").update({ status: "RUNNING", provider: "DETERMINISTIC_V7", fingerprint, error: null, context_stats: { candidate_count: Number(ctx?.candidate_count || 0), dry_run: dryRun }, started_at: new Date().toISOString(), finished_at: null }).eq("id", runId);
+  if (!runId) { const { data, error } = await ops.from("manager_attention_digest_runs").insert({ run_date: runDate, slot, status: "RUNNING", provider: "DETERMINISTIC_V8", fingerprint, context_stats: { candidate_count: Number(ctx?.candidate_count || 0), dry_run: dryRun } }).select("id").single(); if (error) return json({ ok: false, error: `run_insert:${error.message}` }, 500); runId = data.id; }
+  else await ops.from("manager_attention_digest_runs").update({ status: "RUNNING", provider: "DETERMINISTIC_V8", fingerprint, error: null, context_stats: { candidate_count: Number(ctx?.candidate_count || 0), dry_run: dryRun }, started_at: new Date().toISOString(), finished_at: null }).eq("id", runId);
 
   if (validating) {
     const { data: cases } = await ops.from("manager_attention_radar_validation_cases").select("case_key,client_id,expected,rationale").eq("active", true).order("id");
-    const actual = new Map<string, string>(); for (const x of a.allItems) actual.set(String(x.client_id), String(x.level)); for (const x of a.allNot) actual.set(String(x.client_id), "NAO_COBRAR");
-    const results = (cases || []).map((c: any) => ({ case_key: c.case_key, expected: c.expected, actual: actual.get(String(c.client_id)) || "NOT_EVALUATED", pass: actual.get(String(c.client_id)) === c.expected, rationale: c.rationale }));
+    const actualMap = new Map<string, string>(); for (const x of a.allItems) actualMap.set(String(x.client_id), String(x.level)); for (const x of a.allNot) actualMap.set(String(x.client_id), "NAO_COBRAR");
+    const results = (cases || []).map((c: any) => { const actual = actualMap.get(String(c.client_id)) || "NAO_COBRAR"; return { case_key: c.case_key, expected: c.expected, actual, pass: actual === c.expected, rationale: c.rationale }; });
     const passed = results.filter((x: any) => x.pass).length, failed = results.length - passed;
     await ops.from("manager_attention_digest_runs").update({ status: failed ? "ERROR" : "DONE", summary_text: summary, analysis: { ...storedAnalysis, validation: results }, context_stats: { candidate_count: Number(ctx?.candidate_count || 0), dry_run: true, validation_total: results.length, validation_passed: passed, validation_failed: failed }, error: failed ? `validation_failed:${failed}` : null, finished_at: new Date().toISOString(), delivery_status: "DRY_RUN" }).eq("id", runId);
     return json({ ok: failed === 0, validation: { total: results.length, passed, failed, results }, analysis: storedAnalysis, summary });
@@ -155,7 +159,7 @@ Deno.serve(async (req) => {
 
   let notificationId: number | null = null;
   if (!dryRun) {
-    const { data, error } = await ops.rpc("enqueue_notification", { p_notification_key: `manager-radar:${runDate}:${slot}`, p_client_id: null, p_case_id: null, p_category: "MANAGER_RADAR", p_event_type: "MANAGER_ATTENTION_DIGEST", p_severity: a.allItems.some((x: any) => x.level === "COBRAR_AGORA") ? "HIGH" : "INFO", p_title: `Radar Gerencial ${slot}`, p_message: summary, p_destination_key: "OPS_INTERNAL", p_metadata: { slot, run_date: runDate, fingerprint, candidate_count: Number(ctx?.candidate_count || 0), engine: "deterministic-v7" } });
+    const { data, error } = await ops.rpc("enqueue_notification", { p_notification_key: `manager-radar:${runDate}:${slot}`, p_client_id: null, p_case_id: null, p_category: "MANAGER_RADAR", p_event_type: "MANAGER_ATTENTION_DIGEST", p_severity: a.allItems.some((x: any) => x.level === "COBRAR_AGORA") ? "HIGH" : "INFO", p_title: `Radar Gerencial ${slot}`, p_message: summary, p_destination_key: "OPS_INTERNAL", p_metadata: { slot, run_date: runDate, fingerprint, candidate_count: Number(ctx?.candidate_count || 0), engine: "deterministic-v8" } });
     if (error) { await ops.from("manager_attention_digest_runs").update({ status: "ERROR", summary_text: summary, analysis: storedAnalysis, error: `enqueue:${error.message}`, finished_at: new Date().toISOString() }).eq("id", runId); return json({ ok: false, error: `enqueue:${error.message}` }, 500); }
     notificationId = data == null ? null : Number(data);
   }
