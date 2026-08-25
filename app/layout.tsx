@@ -5,7 +5,6 @@ import "./dashboard-enhancements.css";
 import "./onboarding-legacy.css";
 import "./motion-system.css";
 import "./contrast-tune.css";
-import "./leonardo-commercial-standard.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -13,10 +12,9 @@ import OnboardingNavBridge from "./onboarding-nav-bridge";
 import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OnboardingRequiredAlerts from "./onboarding-required-alerts";
 import OnboardingRoleRouter from "./onboarding-role-router";
-import CommercialProfileShell from "./commercial-profile-shell";
 import LeonardoScopeNetwork from "./leonardo-scope-network";
 import LeonardoExpandedAccess from "./leonardo-expanded-access";
-import LeonardoStandardHeaderBridge from "./leonardo-standard-header-bridge";
+import LeonardoUnifiedShell from "./leonardo-unified-shell";
 import AdlerFinanceNavBridge from "./adler-finance-nav-bridge";
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
@@ -66,11 +64,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <GabrielScopeNetwork />
         <LeonardoScopeNetwork />
         <LeonardoExpandedAccess />
-        <LeonardoStandardHeaderBridge />
         <GreetingAudioBridge />
         <PreGreetingShield />
         {children}
-        <CommercialProfileShell />
+        <LeonardoUnifiedShell />
         <PreclientsKanbanBridge />
         <MotionSystem />
         <AIHeadRouter />
