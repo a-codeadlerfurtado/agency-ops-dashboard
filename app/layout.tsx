@@ -41,6 +41,7 @@ import DailyGreeting from "./daily-greeting-v3";
 import TeamAccessAdmin from "./team-access-admin";
 import GabrielTasklogMode from "./gabriel-tasklog-mode";
 import GabrielScopeNetwork from "./gabriel-scope-network";
+import PreclientsKanbanBridge from "./preclients-kanban-bridge";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -67,6 +68,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <PreGreetingShield />
         {children}
         <CommercialProfileShell />
+        <PreclientsKanbanBridge />
         <MotionSystem />
         <AIHeadRouter />
         <CampaignsNavBridge />
