@@ -190,9 +190,9 @@ Deno.serve(async (req) => {
   const isFull = accessLevel === "FULL" || elevated;
   const isWalletOnly = accessLevel === "WALLET_ONLY" && !elevated;
   const isGtScoped = role === "GT" && !elevated;
+  // COMMERCIAL pode ler métricas de campanhas, mas não recebe contexto operacional.
   const trafficContextEnabled = role === "GT" || role === "MGMT" || elevated;
   if (!accountApproved || (!person && !elevated)) return reply({ error: "forbidden" }, 403);
-  if (role === "COMMERCIAL") return reply({ error: "commercial_route_only" }, 403);
 
   const url = new URL(req.url);
   const lifecycle = (url.searchParams.get("lifecycle") ?? "ACTIVE").toUpperCase();
