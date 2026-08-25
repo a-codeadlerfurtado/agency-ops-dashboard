@@ -29,6 +29,15 @@ function json(body: unknown, status = 200) {
 
 function rewrite(raw: string) {
   if (raw.includes("/functions/v1/agency-ops-dashboard-api")) {
+    try {
+      const url = new URL(raw);
+      // Central Criativa e' a excecao deliberada: Leonardo deve usar exatamente
+      // a mesma view e o mesmo payload autorizado que o Adler usa. O backend
+      // continua validando dashboard_allowed_views antes de entregar os dados.
+      if (url.searchParams.get("view") === "creative") return raw;
+    } catch {
+      // Se a URL nao puder ser interpretada, mantemos a protecao padrao abaixo.
+    }
     return raw.replace("/functions/v1/agency-ops-dashboard-api", "/functions/v1/agency-ops-leonardo-dashboard-safe");
   }
   return raw;
