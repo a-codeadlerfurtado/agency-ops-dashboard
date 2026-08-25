@@ -53,7 +53,9 @@ Deno.serve(async (req: Request) => {
   if (!roster) return respond({ error: "forbidden" }, 403);
   const role = String(roster.role || "");
   const isAdler = person === "Adler Furtado";
-  if (!isAdler && role !== "CS") return respond({ error: "forbidden", detail: "Visão geral disponível para Operações e CS." }, 403);
+  const isLeonardo = person === "Leonardo Augusto" && role === "COMMERCIAL";
+  const canManage = isAdler || isLeonardo;
+  if (!canManage && role !== "CS") return respond({ error: "forbidden", detail: "Visão geral disponível para Direção e CS." }, 403);
 
   const [{ data: definitions, error: defError }, { data: cases, error: caseError }] = await Promise.all([
     ops.from("onboarding_stage_definitions").select("code,label,ordem,is_parallel,default_sla_hours").order("ordem", { ascending: true }),
@@ -65,7 +67,8 @@ Deno.serve(async (req: Request) => {
   const caseRows = cases || [];
   const caseIds = caseRows.map((row: Row) => row.id);
   const clientIds = Array.from(new Set(caseRows.map((row: Row) => String(row.client_id)).filter(Boolean)));
-  if (!caseIds.length) return respond({ profile: { person, role, is_adler: isAdler }, definitions: definitions || [], clients: [], summary: { clients: 0 }, generated_at: new Date().toISOString() });
+  const profile = { person, role, access_level: canManage ? "DIRECTION_MANAGER" : roster.access_level, is_adler: isAdler, is_leonardo: isLeonardo, can_edit: canManage };
+  if (!caseIds.length) return respond({ profile, definitions: definitions || [], clients: [], summary: { clients: 0 }, generated_at: new Date().toISOString() });
 
   const [clientResult, stageResult, linkResult, attemptResult] = await Promise.all([
     ops.from("clients").select("id,display_name,entrada,cs_owner,gt_owner,designer_owner,lifecycle").in("id", clientIds),
@@ -80,10 +83,7 @@ Deno.serve(async (req: Request) => {
   const linkMap = new Map<string, Row>();
   for (const row of linkResult.data || []) linkMap.set(`${row.case_id}:${row.stage_code}`, row);
   const attemptMap = new Map<string, Row>();
-  for (const row of attemptResult.data || []) {
-    const key = `${row.case_id}:${row.stage_code}`;
-    if (!attemptMap.has(key)) attemptMap.set(key, row);
-  }
+  for (const row of attemptResult.data || []) { const key = `${row.case_id}:${row.stage_code}`; if (!attemptMap.has(key)) attemptMap.set(key, row); }
   const stageByCase = new Map<number, Row[]>();
   for (const row of stageResult.data || []) stageByCase.set(Number(row.case_id), [...(stageByCase.get(Number(row.case_id)) || []), row]);
 
@@ -95,40 +95,10 @@ Deno.serve(async (req: Request) => {
       const link = linkMap.get(`${item.id}:${stage.stage_code}`) || {};
       const attempt = attemptMap.get(`${item.id}:${stage.stage_code}`) || null;
       const overdue = !DONE.has(String(stage.status)) && stage.due_at && new Date(String(stage.due_at)).getTime() < now;
-      return {
-        ...stage,
-        label: def.label || stage.stage_code,
-        ordem: def.ordem ?? 999,
-        is_parallel: Boolean(def.is_parallel),
-        owner: ownerFor(String(stage.stage_code), client),
-        meet_url: link.url || null,
-        scheduled_for: link.scheduled_for || null,
-        meet_provider: link.provider || null,
-        last_attempt: attempt,
-        overdue,
-        is_meeting: MEETINGS.has(String(stage.stage_code)),
-      };
+      return { ...stage, label: def.label || stage.stage_code, ordem: def.ordem ?? 999, is_parallel: Boolean(def.is_parallel), owner: ownerFor(String(stage.stage_code), client), meet_url: link.url || null, scheduled_for: link.scheduled_for || null, meet_provider: link.provider || null, last_attempt: attempt, overdue, is_meeting: MEETINGS.has(String(stage.stage_code)) };
     }).sort((a: Row, b: Row) => Number(a.ordem) - Number(b.ordem));
     const currentDef = defMap.get(String(item.current_stage)) || {};
-    return {
-      case_id: item.id,
-      client_id: item.client_id,
-      display_name: client.display_name || "Cliente",
-      entrada: client.entrada || null,
-      cs_owner: client.cs_owner || null,
-      gt_owner: client.gt_owner || null,
-      designer_owner: client.designer_owner || null,
-      lifecycle: client.lifecycle || null,
-      onboarding_risk: item.onboarding_risk || "OK",
-      blocked_by: item.blocked_by || null,
-      current_stage: item.current_stage,
-      current_stage_label: currentDef.label || item.current_stage,
-      next_action: item.next_action || null,
-      next_action_due: item.next_action_due || null,
-      opened_at: item.opened_at,
-      updated_at: item.updated_at,
-      stages,
-    };
+    return { case_id: item.id, client_id: item.client_id, display_name: client.display_name || "Cliente", entrada: client.entrada || null, cs_owner: client.cs_owner || null, gt_owner: client.gt_owner || null, designer_owner: client.designer_owner || null, lifecycle: client.lifecycle || null, onboarding_risk: item.onboarding_risk || "OK", blocked_by: item.blocked_by || null, current_stage: item.current_stage, current_stage_label: currentDef.label || item.current_stage, next_action: item.next_action || null, next_action_due: item.next_action_due || null, opened_at: item.opened_at, updated_at: item.updated_at, stages };
   });
 
   const allStages = clients.flatMap((client: Row) => client.stages || []);
@@ -143,5 +113,5 @@ Deno.serve(async (req: Request) => {
     integration_open: meetingStages.filter((stage: Row) => stage.stage_code === "INTEGRATION_MEETING" && !DONE.has(String(stage.status))).length,
   };
 
-  return respond({ profile: { person, role, access_level: roster.access_level, is_adler: isAdler }, definitions: definitions || [], clients, summary, generated_at: new Date().toISOString() });
+  return respond({ profile, definitions: definitions || [], clients, summary, generated_at: new Date().toISOString() });
 });
