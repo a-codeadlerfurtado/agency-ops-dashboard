@@ -14,6 +14,7 @@ type Warning = {
   message_at: string;
   churned_at?: string | null;
   is_good_morning: boolean;
+  acknowledged_at?: string | null;
 };
 
 const ENDPOINT = `${SUPABASE_URL}/functions/v1/agency-ops-churned-client-message-warning`;
@@ -34,12 +35,13 @@ function when(value: string | null | undefined) {
 export default function ChurnedClientMessageWarning() {
   const [warning, setWarning] = useState<Warning | null>(null);
   const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const loadingRef = useRef(false);
 
   const claim = useCallback(async () => {
-    if (loadingRef.current || enabled === false) return;
+    if (loadingRef.current) return;
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.access_token) {
       setWarning(null);
@@ -58,41 +60,67 @@ export default function ChurnedClientMessageWarning() {
       const body = await response.json().catch(() => null);
       if (!response.ok || !body?.ok) return;
       setEnabled(body.enabled !== false);
-      if (body.alert) setWarning(body.alert as Warning);
+      if (body.alert) setWarning((current) => current ?? (body.alert as Warning));
     } catch {
-      // O aviso não deve derrubar o dashboard em caso de indisponibilidade momentânea.
+      // A conexão realtime segue independente de uma falha pontual no bootstrap.
     } finally {
       loadingRef.current = false;
     }
-  }, [enabled]);
+  }, []);
 
   useEffect(() => {
-    void claim();
-    if (enabled === false) return;
-    const timer = window.setInterval(() => void claim(), 5000);
-    const onFocus = () => void claim();
-    const onVisible = () => { if (document.visibilityState === "visible") void claim(); };
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [claim, enabled]);
-
-  useEffect(() => {
+    let active = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!active) return;
+      setSessionUserId(data.session?.user?.id || null);
+    });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSessionUserId(session?.user?.id || null);
       if (!session) {
         setWarning(null);
         setEnabled(null);
+        setError("");
       } else {
         setEnabled(null);
-        window.setTimeout(() => void claim(), 250);
       }
     });
-    return () => subscription.unsubscribe();
-  }, [claim]);
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sessionUserId) return;
+    let disposed = false;
+    const channel = supabase
+      .channel(`churned-client-message-warning:${sessionUserId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "agency_ops",
+          table: "churned_client_message_warnings",
+        },
+        (payload) => {
+          if (disposed) return;
+          const next = payload.new as Warning;
+          if (!next?.id || next.acknowledged_at) return;
+          setWarning((current) => current ?? next);
+        },
+      )
+      .subscribe((status) => {
+        if (!disposed && status === "SUBSCRIBED") {
+          // Uma única leitura ao conectar cobre avisos pendentes criados enquanto o dashboard estava fechado.
+          void claim();
+        }
+      });
+
+    return () => {
+      disposed = true;
+      void supabase.removeChannel(channel);
+    };
+  }, [sessionUserId, claim]);
 
   useEffect(() => {
     if (!warning) return;
@@ -130,7 +158,8 @@ export default function ChurnedClientMessageWarning() {
       const body = await response.json().catch(() => null);
       if (!response.ok || !body?.ok) throw new Error(body?.error || `HTTP ${response.status}`);
       setWarning(null);
-      window.setTimeout(() => void claim(), 180);
+      // Não é polling: esta leitura só acontece depois da confirmação para puxar outro aviso já pendente, se existir.
+      void claim();
     } catch {
       setError("Não consegui registrar sua confirmação. Tente novamente.");
     } finally {
@@ -138,7 +167,7 @@ export default function ChurnedClientMessageWarning() {
     }
   }
 
-  if (!warning) return null;
+  if (!warning || enabled === false) return null;
 
   const goodMorning = Boolean(warning.is_good_morning);
   return (
