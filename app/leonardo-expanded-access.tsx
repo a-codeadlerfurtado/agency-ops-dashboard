@@ -15,7 +15,6 @@ const ITEMS = [
 function clearInjected() {
   document.querySelectorAll("[data-leonardo-expanded-nav]").forEach((node) => node.remove());
 }
-
 function injectNav() {
   const nav = document.querySelector<HTMLElement>(".lc-sidebar nav");
   if (!nav) return;
@@ -23,10 +22,7 @@ function injectNav() {
   for (const [label, href] of ITEMS) {
     if (nav.querySelector(`[data-leonardo-expanded-nav="${label}"]`)) continue;
     const button = document.createElement("button");
-    button.type = "button";
-    button.textContent = label;
-    button.title = label;
-    button.dataset.leonardoExpandedNav = label;
+    button.type = "button"; button.textContent = label; button.title = label; button.dataset.leonardoExpandedNav = label;
     if (template?.className) button.className = template.className.replace(/\bactive\b/g, "").trim();
     button.addEventListener("click", () => window.location.assign(href));
     nav.appendChild(button);
@@ -37,7 +33,6 @@ function injectNav() {
 
 export default function LeonardoExpandedAccess() {
   const [isCommercial, setIsCommercial] = useState(false);
-
   useEffect(() => {
     let active = true;
     const detect = async () => {
@@ -57,12 +52,15 @@ export default function LeonardoExpandedAccess() {
     if (!isCommercial) { clearInjected(); document.documentElement.classList.remove("leonardo-external-module"); return; }
     const external = window.location.pathname !== "/";
     document.documentElement.classList.toggle("leonardo-external-module", external);
-    if (external) { clearInjected(); return; }
+    if (external) {
+      clearInjected();
+      const forceScroll = () => { document.body.style.overflow = "auto"; document.documentElement.style.overflow = "auto"; };
+      forceScroll();
+      const timer = window.setInterval(forceScroll, 600);
+      return () => { window.clearInterval(timer); document.documentElement.classList.remove("leonardo-external-module"); };
+    }
     let frame = 0;
-    const apply = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(injectNav);
-    };
+    const apply = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(injectNav); };
     apply();
     const observer = new MutationObserver(apply);
     observer.observe(document.body, { childList: true, subtree: true });
