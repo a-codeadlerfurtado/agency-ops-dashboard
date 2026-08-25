@@ -11,13 +11,11 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
 });
 const notFound = () => json({ error: "not_found" }, 404);
-
 type Row = Record<string, any>;
 
 function evidenceRank(row: Row) {
   const status = String(row.verification_status || "").toUpperCase();
-  const statusRank = status === "CONFIRMED" ? 0 : 1;
-  return [statusRank, -(Number(row.confidence || 0)), -(new Date(String(row.source_at || row.updated_at || row.created_at || 0)).getTime() || 0)];
+  return [status === "CONFIRMED" ? 0 : 1, -(Number(row.confidence || 0)), -(new Date(String(row.source_at || row.updated_at || row.created_at || 0)).getTime() || 0)];
 }
 function compareEvidence(a: Row, b: Row) {
   const ar = evidenceRank(a), br = evidenceRank(b);
@@ -87,14 +85,16 @@ Deno.serve(async (req: Request) => {
         implementation_value: nullableMoney(body?.implementation_value),
         term_months: nullableInt(body?.term_months),
         implementation_payment: nullableText(body?.implementation_payment, 120),
-        implementation_installments: Array.isArray(body?.implementation_installments)
-          ? body.implementation_installments.map((value: unknown) => nullableMoney(value)).filter((value: unknown) => value !== null)
-          : null,
         notes: nullableText(body?.notes, 3000),
         source: "MANUAL",
         updated_by: person,
         updated_at: new Date().toISOString(),
       };
+      if (Array.isArray(body?.implementation_installments)) {
+        payload.implementation_installments = body.implementation_installments
+          .map((value: unknown) => nullableMoney(value))
+          .filter((value: unknown) => value !== null);
+      }
     } catch (error) {
       return json({ error: error instanceof Error ? error.message : "invalid_payload" }, 400);
     }
