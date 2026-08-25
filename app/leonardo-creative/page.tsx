@@ -1,25 +1,45 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { SUPABASE_URL, authenticatedFetch, supabase } from "../shared";
+import { BrandMark, loadProfileLite, supabase } from "../shared";
+import { CreativeCenter } from "../views/creative";
 
-type Row=Record<string,any>;
-const API=`${SUPABASE_URL}/functions/v1/agency-ops-commercial-direction-api`;
-function text(value:unknown,fallback="—"){const rendered=String(value??"").trim();return rendered||fallback}
-function fmt(value:unknown){if(!value)return"—";const d=new Date(String(value));return Number.isNaN(d.getTime())?String(value):new Intl.DateTimeFormat("pt-BR",{timeZone:"America/Sao_Paulo",dateStyle:"short",timeStyle:"short"}).format(d)}
-function list(value:unknown):string[]{if(Array.isArray(value))return value.map(String).filter(Boolean);if(value&&typeof value==="object")return Object.values(value as Record<string,unknown>).flatMap(list);if(typeof value==="string")return value.split(/[,;|]/).map(v=>v.trim()).filter(Boolean);return[]}
-export default function LeonardoCreativePage(){
- const[session,setSession]=useState<Session|null>(null),[data,setData]=useState<Row>({}),[loading,setLoading]=useState(true),[error,setError]=useState(""),[query,setQuery]=useState(""),[selected,setSelected]=useState<Row|null>(null);
- useEffect(()=>{supabase.auth.getSession().then(({data})=>setSession(data.session));const{data:{subscription}}=supabase.auth.onAuthStateChange((_e,n)=>setSession(n));return()=>subscription.unsubscribe()},[]);
- const load=useCallback(async()=>{if(!session?.access_token)return;setLoading(true);setError("");try{const r=await authenticatedFetch(API,{cache:"no-store"}),b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.detail||b.error||`API ${r.status}`);if(String(b?.profile?.person||"")!=="Leonardo Augusto")throw new Error("Área restrita à Direção Comercial.");setData(b)}catch(e){setError(e instanceof Error?e.message:"Falha ao carregar a Central Criativa.")}finally{setLoading(false)}},[session?.access_token]);
- useEffect(()=>{if(!session?.access_token)return;load();const t=window.setInterval(load,60000);return()=>clearInterval(t)},[session?.access_token,load]);
- const assigned:Row[]=data.my_work||[];
- const creativeAssigned=useMemo(()=>assigned.filter(row=>/criativ|design|arte|video|vídeo|identidade/i.test(`${row.title||""} ${row.description||""}`)),[assigned]);
- const allowedIds=new Set(creativeAssigned.map(row=>String(row.client_id||"")).filter(Boolean));
- const clients:Row[]=(data.creative_clients||[]).filter((row:Row)=>allowedIds.has(String(row.client_id)));
- const visible=clients.filter(row=>!query.trim()||String(row.display_name||"").toLowerCase().includes(query.trim().toLowerCase()));
- if(!session)return <main className="lcx-loading">Carregando…</main>;
- return <main className="lcx-root"><style>{styles}</style><header><div><button onClick={()=>window.location.assign("/")}>← Central Comercial</button><span>DIREÇÃO COMERCIAL</span><h1>Central Criativa</h1><p>Somente clientes com demanda criativa atribuída diretamente ao Leonardo. Nenhuma carteira criativa geral da operação é exibida.</p></div><small>{loading?"Sincronizando…":`${visible.length} cliente(s) no escopo`}</small></header>{error&&<div className="lcx-error">{error}</div>}<section className="lcx-tools"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar cliente"/><button onClick={load}>Atualizar</button></section><section className="lcx-grid">{visible.map(client=>{const brand=client.brand||{},learning=client.learning||{},rules:Row[]=client.rules||[],demands=creativeAssigned.filter(row=>String(row.client_id)===String(client.client_id));return <article key={client.client_id} onClick={()=>setSelected({...client,demands})}><div className="lcx-card-top"><div><span>CLIENTE</span><h2>{client.display_name}</h2></div><b>{learning.profile_status||brand.status||"Em aprendizado"}</b></div><div className="lcx-stats"><div><small>Cobertura</small><strong>{Number(learning.coverage_pct||0)}%</strong></div><div><small>Regras</small><strong>{rules.length}</strong></div><div><small>Demandas para você</small><strong>{demands.length}</strong></div></div><p>{text(brand.visual_direction,"Direção visual ainda não consolidada.")}</p><footer><small>{brand.updated_at?`Atualizado ${fmt(brand.updated_at)}`:"Sem atualização consolidada"}</small><button>Abrir contexto →</button></footer></article>})}{!visible.length&&<div className="lcx-empty">Nenhuma demanda criativa está atribuída ao Leonardo agora.</div>}</section>{selected&&<div className="lcx-modal-bg" onMouseDown={e=>{if(e.currentTarget===e.target)setSelected(null)}}><section className="lcx-modal"><header><div><span>CONTEXTO CRIATIVO ATRIBUÍDO</span><h2>{selected.display_name}</h2><p>Informações criativas liberadas porque existe demanda atribuída ao Leonardo para este cliente.</p></div><button onClick={()=>setSelected(null)}>×</button></header><div className="lcx-body"><section><h3>Identidade</h3><div className="lcx-info"><article><small>Direção visual</small><b>{text(selected.brand?.visual_direction)}</b></article><article><small>Logo</small><b>{text(selected.brand?.logo_rules)}</b></article><article><small>Paleta</small><b>{list(selected.brand?.color_palette).join(" · ")||"—"}</b></article><article><small>Fontes</small><b>{list(selected.brand?.fonts).join(" · ")||"—"}</b></article></div></section><section><h3>Demandas atribuídas</h3>{(selected.demands||[]).map((item:Row)=><article className="lcx-demand" key={item.id}><div><b>{item.title}</b><small>{item.status} · {item.priority||"prioridade normal"}</small></div><p>{item.description||"Sem descrição adicional."}</p></article>)}</section><section><h3>Regras criativas</h3>{(selected.rules||[]).slice(0,30).map((rule:Row)=><article className="lcx-rule" key={rule.id}><b>{text(rule.rule_kind,"Diretriz")}</b><span>{text(rule.rule_text)}</span><small>{text(rule.product_scope,"Escopo geral")} · {text(rule.status)}</small></article>)}{!(selected.rules||[]).length&&<div className="lcx-empty">Sem regras criativas consolidadas.</div>}</section></div></section></div>}</main>
+export default function LeonardoCreativePage() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [ready, setReady] = useState(false);
+  const [allowed, setAllowed] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => setSession(next));
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session?.access_token) { setAllowed(false); setReady(Boolean(session === null)); return; }
+    let active = true;
+    loadProfileLite()
+      .then((body) => {
+        if (!active) return;
+        setAllowed(String(body?.profile?.person || "") === "Leonardo Augusto" && String(body?.profile?.role || "").toUpperCase() === "COMMERCIAL");
+        setReady(true);
+      })
+      .catch(() => { if (active) { setAllowed(false); setReady(true); } });
+    return () => { active = false; };
+  }, [session?.access_token]);
+
+  if (!session || !ready) return <main className="shell"><div className="empty">Carregando Central Criativa…</div></main>;
+  if (!allowed) return <main className="shell"><div className="error-box">Área restrita à Direção Comercial.</div></main>;
+
+  return <main className="shell">
+    <header className="top">
+      <div className="brand">
+        <div className="logo"><BrandMark /></div>
+        <div><span className="brand-name">Leonardo Imobi</span><h1>Central Criativa</h1><div className="subtitle">A mesma base, clientes, regras, materiais, histórico e aprendizado disponíveis ao Adler.</div></div>
+      </div>
+      <div className="live"><button className="btn" onClick={() => window.location.assign("/")}>← Home Comercial</button></div>
+    </header>
+    <CreativeCenter token={session.access_token} />
+  </main>;
 }
-const styles=`.lcx-root{min-height:100vh;background:#071015;color:#e8f2ef;font-family:Inter,system-ui;padding-bottom:50px}.lcx-loading{min-height:100vh;display:grid;place-items:center;background:#071015;color:#c9d8d4}.lcx-root>header{padding:24px 28px;border-bottom:1px solid #203237;background:#081317;display:flex;justify-content:space-between;gap:20px;align-items:flex-end}.lcx-root header button,.lcx-tools button{border:1px solid #2a4940;background:#10231f;color:#cce8df;border-radius:9px;padding:8px 10px;cursor:pointer}.lcx-root header span{display:block;color:#62cca0;font-size:9px;font-weight:900;letter-spacing:.12em;margin-top:12px}.lcx-root h1{margin:4px 0;font-size:28px}.lcx-root header p{margin:0;color:#76918a;font-size:11px}.lcx-root header>small{color:#708984}.lcx-error{margin:14px 28px;border:1px solid #713f3b;background:#2a1514;color:#f0a097;border-radius:10px;padding:10px}.lcx-tools{display:flex;gap:8px;padding:20px 28px 10px}.lcx-tools input{min-width:320px;border:1px solid #2a4145;background:#091519;color:#dce9e5;border-radius:9px;padding:9px 10px}.lcx-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px;padding:0 28px}.lcx-grid>article{border:1px solid #203338;background:#0b171b;border-radius:13px;padding:15px;cursor:pointer}.lcx-card-top{display:flex;justify-content:space-between;gap:12px}.lcx-card-top span{font-size:8px;color:#62cca0;font-weight:900}.lcx-card-top h2{font-size:14px;margin:4px 0}.lcx-card-top>b{font-size:8px;height:max-content;border:1px solid #36534c;border-radius:999px;padding:5px 7px;color:#a8c8bf}.lcx-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin:12px 0}.lcx-stats div{border:1px solid #1c3033;background:#081317;border-radius:9px;padding:9px}.lcx-stats small{display:block;color:#687f7a;font-size:7px;text-transform:uppercase}.lcx-stats strong{display:block;margin-top:4px;font-size:13px}.lcx-grid article>p{font-size:9.5px;color:#849b95;line-height:1.5;min-height:42px}.lcx-grid article>footer{display:flex;justify-content:space-between;gap:8px;border-top:1px solid #17292d;padding-top:10px}.lcx-grid footer small{font-size:8px;color:#687f7a}.lcx-grid footer button{border:0;background:transparent;color:#69cba4;font:800 9px Inter}.lcx-empty{padding:40px;text-align:center;color:#667f79;border:1px dashed #29403f;border-radius:12px}.lcx-modal-bg{position:fixed;inset:0;z-index:10000;background:#020709cc;display:grid;place-items:center;padding:20px;backdrop-filter:blur(7px)}.lcx-modal{width:min(960px,96vw);max-height:90vh;overflow:auto;background:#0a1519;border:1px solid #29413f;border-radius:15px}.lcx-modal>header{position:sticky;top:0;background:#0a1519;z-index:2;display:flex;justify-content:space-between;gap:14px;padding:18px;border-bottom:1px solid #1c2e32}.lcx-modal h2{margin:4px 0;font-size:21px}.lcx-modal header p{font-size:9px;color:#718983}.lcx-modal header button{width:34px;height:34px}.lcx-body{padding:18px;display:grid;gap:20px}.lcx-body h3{font-size:12px}.lcx-info{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.lcx-info article{border:1px solid #1c3033;background:#081317;border-radius:9px;padding:10px}.lcx-info small{display:block;color:#687f7a;font-size:8px}.lcx-info b{display:block;font-size:10px;margin-top:5px}.lcx-demand,.lcx-rule{border-bottom:1px solid #17292d;padding:10px 0}.lcx-demand div{display:flex;justify-content:space-between;gap:12px}.lcx-demand b,.lcx-rule b{font-size:10px}.lcx-demand small,.lcx-rule small{font-size:8px;color:#687f7a}.lcx-demand p,.lcx-rule span{display:block;font-size:9.5px;color:#849b95;line-height:1.45;margin-top:5px}@media(max-width:720px){.lcx-root>header{flex-direction:column;align-items:flex-start}.lcx-tools{flex-direction:column}.lcx-tools input{min-width:0;width:100%}.lcx-info{grid-template-columns:1fr}}`;
