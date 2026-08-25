@@ -8,7 +8,7 @@ type Row=Record<string,any>;
 const API=`${SUPABASE_URL}/functions/v1/agency-ops-commercial-direction-api`;
 function text(value:unknown,fallback="—"){const rendered=String(value??"").trim();return rendered||fallback}
 function fmt(value:unknown){if(!value)return"—";const d=new Date(String(value));return Number.isNaN(d.getTime())?String(value):new Intl.DateTimeFormat("pt-BR",{timeZone:"America/Sao_Paulo",dateStyle:"short",timeStyle:"short"}).format(d)}
-function list(value:unknown){if(Array.isArray(value))return value.map(String).filter(Boolean);if(value&&typeof value==="object")return Object.values(value as Record<string,unknown>).flatMap(list);if(typeof value==="string")return value.split(/[,;|]/).map(v=>v.trim()).filter(Boolean);return[]}
+function list(value:unknown):string[]{if(Array.isArray(value))return value.map(String).filter(Boolean);if(value&&typeof value==="object")return Object.values(value as Record<string,unknown>).flatMap(list);if(typeof value==="string")return value.split(/[,;|]/).map(v=>v.trim()).filter(Boolean);return[]}
 export default function LeonardoCreativePage(){
  const[session,setSession]=useState<Session|null>(null),[data,setData]=useState<Row>({}),[loading,setLoading]=useState(true),[error,setError]=useState(""),[query,setQuery]=useState(""),[selected,setSelected]=useState<Row|null>(null);
  useEffect(()=>{supabase.auth.getSession().then(({data})=>setSession(data.session));const{data:{subscription}}=supabase.auth.onAuthStateChange((_e,n)=>setSession(n));return()=>subscription.unsubscribe()},[]);
