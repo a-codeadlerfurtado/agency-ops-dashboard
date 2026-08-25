@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, authenticatedFetch, initials, loadProfileLite, supabase, text, useDialogFocus } from "./shared";
@@ -13,7 +13,7 @@ const PREF_KEYS = ["theme", "sounds_enabled", "win_sound_enabled", "win_celebrat
 function ProfileMenu({ preferences, openSettings, close }: { preferences: Row; openSettings: () => void; close: () => void }) {
   const dialogRef = useDialogFocus(close);
   const name = text(preferences.name || "Leonardo Augusto");
-  return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Menu do perfil" className="leo-profile-menu">
+  return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Menu do perfil" className="profile-menu leo-profile-menu">
     <div className="leo-profile-card"><span className="avatar">{initials(name)}</span><div><b>{name}</b><small>{text(preferences.role || "Direção Comercial")}</small></div></div>
     <button onClick={openSettings}>Meu perfil</button>
     <button onClick={openSettings}>Configurações</button>
@@ -87,11 +87,8 @@ export default function LeonardoStandardHeaderBridge() {
   }, [isLeonardo]);
 
   useEffect(() => {
-    const theme = preferences.theme === "light" ? "light" : "dark";
-    document.documentElement.setAttribute("data-theme", theme);
+    document.documentElement.setAttribute("data-theme", preferences.theme === "light" ? "light" : "dark");
   }, [preferences.theme]);
-
-  const payload = useMemo(() => Object.fromEntries(PREF_KEYS.filter((key) => preferences[key] !== undefined).map((key) => [key, preferences[key]])), [preferences]);
 
   async function save(next: Row) {
     const nextPayload = Object.fromEntries(PREF_KEYS.filter((key) => next[key] !== undefined).map((key) => [key, next[key]]));
