@@ -7,10 +7,12 @@ const CORS = {
   "access-control-allow-methods": "GET,POST,OPTIONS",
   "access-control-max-age": "86400",
 };
+
 const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
   headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
 });
+
 const norm = (value: unknown) => String(value ?? "")
   .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
   .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -22,8 +24,8 @@ function isAiDomainTask(name: unknown, listName: unknown) {
   const obviouslyOtherTeam = /criativ|design|arte|video|copy|campanh|trafego pago|gestor de trafego/.test(list)
     || /- criativ|- campanha|- ajuste na campanha/.test(title);
 
-  if (/\bagente\b|\bn8n\b|chatbot|bot de atendimento|automacao|webhook/.test(combined)) return true;
-  if (/\bia\b.{0,60}(lead|atendimento|agente|fluxo|whatsapp|automacao|integracao)|(?:lead|atendimento|agente|fluxo|whatsapp|automacao|integracao).{0,60}\bia\b/.test(combined)) return true;
+  if (/\bagente\b|\bn8n\b|chatbot|bot de atendimento|inteligencia artificial/.test(combined)) return true;
+  if (/\bia\b.{0,60}(lead|atendimento|agente|fluxo|whatsapp|automacao|integracao|follow up)|(?:lead|atendimento|agente|fluxo|whatsapp|automacao|integracao|follow up).{0,60}\bia\b/.test(combined)) return true;
   return !obviouslyOtherTeam && /(^| )ia( |$)/.test(combined);
 }
 
@@ -49,6 +51,7 @@ Deno.serve(async (req: Request) => {
 
   const auth = req.headers.get("Authorization") ?? "";
   if (!auth.startsWith("Bearer ")) return reply({ error: "unauthorized" }, 401);
+
   const authClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: auth } } });
   const { data: userData } = await authClient.auth.getUser();
   const user = userData?.user;
@@ -56,53 +59,116 @@ Deno.serve(async (req: Request) => {
 
   const db = createClient(supabaseUrl, serviceRole, { auth: { persistSession: false, autoRefreshToken: false } });
   const ops = db.schema("agency_ops");
+
   const [{ data: pref }, { data: approvals }] = await Promise.all([
     ops.from("user_preferences").select("collaborator_person").eq("user_key", user.id).maybeSingle(),
     ops.from("access_requests").select("id").eq("user_key", user.id).eq("kind", "SIGNUP").eq("status", "APPROVED"),
   ]);
+
   const person = String(pref?.collaborator_person ?? "");
   if (!person || !(approvals ?? []).length) return reply({ error: "forbidden" }, 403);
-  const { data: roster } = await ops.from("team_roster").select("person,role").eq("person", person).eq("is_former", false).maybeSingle();
-  if (!roster || roster.person !== "Gabriel Castro" || roster.role !== "AI") return reply({ error: "forbidden" }, 403);
+
+  const { data: roster } = await ops.from("team_roster")
+    .select("person,role")
+    .eq("person", person)
+    .eq("is_former", false)
+    .maybeSingle();
+
+  if (!roster || roster.person !== "Gabriel Castro" || roster.role !== "AI") {
+    return reply({ error: "forbidden" }, 403);
+  }
 
   const [{ data: serviceRows, error: serviceError }, { data: n8nRows, error: n8nError }] = await Promise.all([
-    ops.from("client_services").select("client_id,service_status,agent_name,last_evidence_at").eq("service_key", "IA").eq("owner_key", "OURS").in("service_status", ["ACTIVE", "BUILDING"]),
-    ops.from("ai_source_registry").select("client_id,source_key,updated_at").eq("source_type", "N8N_CHAT").eq("owner_hint", "OURS").eq("active", true),
+    ops.from("client_services")
+      .select("client_id,service_status,agent_name,last_evidence_at")
+      .eq("service_key", "IA")
+      .eq("owner_key", "OURS")
+      .in("service_status", ["ACTIVE", "BUILDING"]),
+    ops.from("ai_source_registry")
+      .select("client_id,source_key,updated_at")
+      .eq("source_type", "N8N_CHAT")
+      .eq("owner_hint", "OURS")
+      .eq("active", true),
   ]);
-  if (serviceError || n8nError) return reply({ error: "query_failed", detail: serviceError?.message ?? n8nError?.message }, 500);
+
+  if (serviceError || n8nError) {
+    return reply({ error: "query_failed", detail: serviceError?.message ?? n8nError?.message }, 500);
+  }
 
   const n8nIds = new Set((n8nRows ?? []).map((row: any) => String(row.client_id)).filter(Boolean));
   const serviceByClient = new Map((serviceRows ?? []).map((row: any) => [String(row.client_id), row]));
-  const aiIds = [...serviceByClient.keys()].filter((id) => n8nIds.has(id));
-  if (!aiIds.length) return reply({ profile: { person, role: roster.role }, clients: [], items: [], summary: { total: 0, open: 0, in_progress: 0, waiting: 0, overdue: 0, completed: 0 }, generated_at: new Date().toISOString() });
+
+  // OURS + ACTIVE/BUILDING defines the Castro workspace.
+  // n8n is evidence of implementation stage, not a prerequisite to see BUILDING clients.
+  const aiIds = [...serviceByClient.keys()];
+  if (!aiIds.length) {
+    return reply({
+      profile: { person, role: roster.role },
+      clients: [],
+      items: [],
+      summary: { total: 0, open: 0, in_progress: 0, waiting: 0, overdue: 0, completed: 0 },
+      generated_at: new Date().toISOString(),
+    });
+  }
 
   const { data: clients, error: clientsError } = await ops.from("clients")
     .select("id,display_name,lifecycle,cs_owner,gt_owner")
     .in("id", aiIds)
     .in("lifecycle", ["ACTIVE", "ONBOARDING"])
     .order("display_name");
+
   if (clientsError) return reply({ error: "query_failed", detail: clientsError.message }, 500);
+
   const clientById = new Map((clients ?? []).map((row: any) => [String(row.id), row]));
   const activeIds = [...clientById.keys()];
-  if (!activeIds.length) return reply({ profile: { person, role: roster.role }, clients: [], items: [], summary: { total: 0, open: 0, in_progress: 0, waiting: 0, overdue: 0, completed: 0 }, generated_at: new Date().toISOString() });
+
+  if (!activeIds.length) {
+    return reply({
+      profile: { person, role: roster.role },
+      clients: [],
+      items: [],
+      summary: { total: 0, open: 0, in_progress: 0, waiting: 0, overdue: 0, completed: 0 },
+      generated_at: new Date().toISOString(),
+    });
+  }
+
+  const isScopedWorkItem = (row: any) => {
+    const metadata = row?.metadata ?? {};
+    return row?.target_person === "Gabriel Castro"
+      || row?.target_role === "AI"
+      || metadata.ai_workspace === true
+      || metadata.ai_service_owned === true
+      || metadata.n8n_verified === true;
+  };
 
   async function visibleWorkItem(id: string) {
     const { data } = await ops.from("work_items").select("*").eq("id", id).maybeSingle();
     if (!data || !clientById.has(String(data.client_id))) return null;
-    const metadata = data.metadata ?? {};
-    const aiScoped = data.target_person === "Gabriel Castro" || data.target_role === "AI" || metadata.ai_workspace === true || metadata.n8n_verified === true || isAiDomainTask(`${data.title} ${data.description ?? ""}`, "");
-    return aiScoped ? data : null;
+    return isScopedWorkItem(data) ? data : null;
   }
 
   async function materializeClickup(taskId: string) {
     const sourceId = `clickup:${taskId}`;
-    const { data: existing } = await ops.from("work_items").select("*").eq("source", "ai_clickup_mirror").eq("source_id", sourceId).maybeSingle();
+    const { data: existing } = await ops.from("work_items")
+      .select("*")
+      .eq("source", "ai_clickup_mirror")
+      .eq("source_id", sourceId)
+      .maybeSingle();
+
     if (existing) return existing;
 
     const { data: task, error: taskError } = await ops.from("clickup_tasks")
       .select("task_id,client_id,name,status,is_closed,due_date,url,assignee_names,date_created,date_updated,list_name")
-      .eq("task_id", taskId).maybeSingle();
-    if (taskError || !task || task.is_closed || !clientById.has(String(task.client_id)) || !isAiDomainTask(task.name, task.list_name)) return null;
+      .eq("task_id", taskId)
+      .maybeSingle();
+
+    if (
+      taskError
+      || !task
+      || task.is_closed
+      || !clientById.has(String(task.client_id))
+      || !isAiDomainTask(task.name, task.list_name)
+    ) return null;
 
     const { data: created, error: createError } = await ops.from("work_items").insert({
       client_id: task.client_id,
@@ -120,7 +186,8 @@ Deno.serve(async (req: Request) => {
       due_at: task.due_date ?? null,
       metadata: {
         ai_workspace: true,
-        n8n_verified: true,
+        ai_service_owned: true,
+        n8n_verified: n8nIds.has(String(task.client_id)),
         imported_from_clickup: true,
         clickup_task_id: task.task_id,
         clickup_url: task.url ?? null,
@@ -128,11 +195,17 @@ Deno.serve(async (req: Request) => {
         clickup_list_name: task.list_name ?? null,
       },
     }).select("*").single();
+
     if (createError) {
-      const { data: retry } = await ops.from("work_items").select("*").eq("source", "ai_clickup_mirror").eq("source_id", sourceId).maybeSingle();
+      const { data: retry } = await ops.from("work_items")
+        .select("*")
+        .eq("source", "ai_clickup_mirror")
+        .eq("source_id", sourceId)
+        .maybeSingle();
       if (retry) return retry;
       throw new Error(`mirror_create:${createError.message}`);
     }
+
     return created;
   }
 
@@ -144,7 +217,11 @@ Deno.serve(async (req: Request) => {
       const clientId = String(body.client_id ?? "");
       const title = String(body.title ?? "").trim();
       if (!clientById.has(clientId) || !title) return reply({ error: "missing_or_invalid_fields" }, 400);
-      const priority = ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(String(body.priority)) ? String(body.priority) : "MEDIUM";
+
+      const priority = ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(String(body.priority))
+        ? String(body.priority)
+        : "MEDIUM";
+
       const { data, error } = await ops.from("work_items").insert({
         client_id: clientId,
         type: "TECHNICAL",
@@ -159,8 +236,14 @@ Deno.serve(async (req: Request) => {
         target_role: "AI",
         target_person: "Gabriel Castro",
         due_at: body.due_at || null,
-        metadata: { ai_workspace: true, n8n_verified: true, created_inside_ai_work_center: true },
+        metadata: {
+          ai_workspace: true,
+          ai_service_owned: true,
+          n8n_verified: n8nIds.has(clientId),
+          created_inside_ai_work_center: true,
+        },
       }).select("*").single();
+
       if (error) return reply({ error: "query_failed", detail: error.message }, 500);
       return reply({ ok: true, item: data });
     }
@@ -173,9 +256,11 @@ Deno.serve(async (req: Request) => {
       if (!item) return reply({ error: "not_found_or_forbidden" }, 404);
 
       const patch: Record<string, unknown> = {};
+
       if (body.status && ["OPEN", "IN_PROGRESS", "WAITING", "SNOOZED", "COMPLETED", "DISMISSED"].includes(String(body.status))) {
         patch.status = String(body.status);
         if (body.status === "IN_PROGRESS" && !item.started_at) patch.started_at = new Date().toISOString();
+
         if (body.status === "COMPLETED") {
           const resolution = String(body.resolution ?? "").trim();
           if (!resolution) return reply({ error: "resolution_required" }, 400);
@@ -183,17 +268,29 @@ Deno.serve(async (req: Request) => {
           patch.completed_by = person;
           patch.resolution = resolution.slice(0, 6000);
         }
+
         if (body.status !== "COMPLETED" && item.status === "COMPLETED") {
-          patch.completed_at = null; patch.completed_by = null; patch.resolution = null;
+          patch.completed_at = null;
+          patch.completed_by = null;
+          patch.resolution = null;
         }
       }
-      if (body.priority && ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(String(body.priority))) patch.priority = String(body.priority);
+
+      if (body.priority && ["CRITICAL", "HIGH", "MEDIUM", "LOW"].includes(String(body.priority))) {
+        patch.priority = String(body.priority);
+      }
       if (Object.prototype.hasOwnProperty.call(body, "due_at")) patch.due_at = body.due_at || null;
       if (typeof body.title === "string" && body.title.trim()) patch.title = body.title.trim().slice(0, 240);
       if (typeof body.description === "string") patch.description = body.description.trim().slice(0, 6000) || null;
+
       if (!Object.keys(patch).length) return reply({ error: "nothing_to_update" }, 400);
 
-      const { data, error } = await ops.from("work_items").update(patch).eq("id", item.id).select("*").single();
+      const { data, error } = await ops.from("work_items")
+        .update(patch)
+        .eq("id", item.id)
+        .select("*")
+        .single();
+
       if (error) return reply({ error: "query_failed", detail: error.message }, 500);
       return reply({ ok: true, item: data });
     }
@@ -201,11 +298,13 @@ Deno.serve(async (req: Request) => {
     if (action === "comment") {
       const comment = String(body.comment ?? "").trim();
       if (!comment) return reply({ error: "comment_required" }, 400);
+
       let item = null as any;
       const rawId = String(body.id ?? "");
       if (rawId.startsWith("clickup:")) item = await materializeClickup(rawId.slice(8));
       else item = await visibleWorkItem(rawId.replace(/^work:/, ""));
       if (!item) return reply({ error: "not_found_or_forbidden" }, 404);
+
       const { data, error } = await ops.from("work_item_events").insert({
         work_item_id: item.id,
         event_type: "COMMENT",
@@ -216,6 +315,7 @@ Deno.serve(async (req: Request) => {
         detail: comment.slice(0, 6000),
         metadata: { origin: "ai_work_center" },
       }).select("*").single();
+
       if (error) return reply({ error: "query_failed", detail: error.message }, 500);
       return reply({ ok: true, event: data, work_item_id: item.id });
     }
@@ -224,20 +324,40 @@ Deno.serve(async (req: Request) => {
   }
 
   const [workRes, clickupRes] = await Promise.all([
-    ops.from("work_items").select("*").in("client_id", activeIds).order("updated_at", { ascending: false }).limit(1000),
-    ops.from("clickup_tasks").select("task_id,client_id,name,status,is_closed,due_date,url,assignee_names,date_created,date_updated,list_name").in("client_id", activeIds).eq("is_closed", false).order("date_updated", { ascending: false }).limit(1000),
+    ops.from("work_items")
+      .select("*")
+      .in("client_id", activeIds)
+      .order("updated_at", { ascending: false })
+      .limit(1000),
+    ops.from("clickup_tasks")
+      .select("task_id,client_id,name,status,is_closed,due_date,url,assignee_names,date_created,date_updated,list_name")
+      .in("client_id", activeIds)
+      .eq("is_closed", false)
+      .order("date_updated", { ascending: false })
+      .limit(1000),
   ]);
-  if (workRes.error || clickupRes.error) return reply({ error: "query_failed", detail: workRes.error?.message ?? clickupRes.error?.message }, 500);
 
-  const allWork = (workRes.data ?? []).filter((row: any) => {
-    const metadata = row.metadata ?? {};
-    return row.target_person === "Gabriel Castro" || row.target_role === "AI" || metadata.ai_workspace === true || metadata.n8n_verified === true || isAiDomainTask(`${row.title} ${row.description ?? ""}`, "");
-  });
-  const mirroredClickup = new Set(allWork.filter((row: any) => row.source === "ai_clickup_mirror" && String(row.source_id ?? "").startsWith("clickup:")).map((row: any) => String(row.source_id).slice(8)));
+  if (workRes.error || clickupRes.error) {
+    return reply({ error: "query_failed", detail: workRes.error?.message ?? clickupRes.error?.message }, 500);
+  }
+
+  const allWork = (workRes.data ?? []).filter(isScopedWorkItem);
+  const mirroredClickup = new Set(
+    allWork
+      .filter((row: any) => row.source === "ai_clickup_mirror" && String(row.source_id ?? "").startsWith("clickup:"))
+      .map((row: any) => String(row.source_id).slice(8)),
+  );
+
   const workIds = allWork.map((row: any) => row.id);
   const eventsByWork = new Map<string, any[]>();
+
   if (workIds.length) {
-    const { data: events } = await ops.from("work_item_events").select("*").in("work_item_id", workIds).order("occurred_at", { ascending: false }).limit(3000);
+    const { data: events } = await ops.from("work_item_events")
+      .select("*")
+      .in("work_item_id", workIds)
+      .order("occurred_at", { ascending: false })
+      .limit(3000);
+
     for (const event of events ?? []) {
       const key = String(event.work_item_id);
       const bucket = eventsByWork.get(key) ?? [];
@@ -297,11 +417,14 @@ Deno.serve(async (req: Request) => {
   const items = [...workItems, ...clickupItems].sort((a: any, b: any) => {
     const statusRank: Record<string, number> = { IN_PROGRESS: 0, OPEN: 1, WAITING: 2, SNOOZED: 3, COMPLETED: 4, DISMISSED: 5 };
     return (statusRank[a.status] ?? 9) - (statusRank[b.status] ?? 9)
+      || String(a.display_name ?? "").localeCompare(String(b.display_name ?? ""), "pt-BR")
       || priorityRank(a.priority) - priorityRank(b.priority)
       || String(a.due_at ?? "9999").localeCompare(String(b.due_at ?? "9999"));
   });
+
   const now = Date.now();
   const openItems = items.filter((item: any) => !["COMPLETED", "DISMISSED"].includes(item.status));
+
   const summary = {
     total: items.length,
     open: openItems.filter((item: any) => item.status === "OPEN").length,
@@ -313,7 +436,11 @@ Deno.serve(async (req: Request) => {
 
   return reply({
     profile: { person, role: roster.role },
-    clients: (clients ?? []).map((client: any) => ({ ...client, service: serviceByClient.get(String(client.id)) ?? null, n8n_verified: true })),
+    clients: (clients ?? []).map((client: any) => ({
+      ...client,
+      service: serviceByClient.get(String(client.id)) ?? null,
+      n8n_verified: n8nIds.has(String(client.id)),
+    })),
     items,
     summary,
     generated_at: new Date().toISOString(),
