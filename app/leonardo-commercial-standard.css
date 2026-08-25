@@ -1,70 +1,121 @@
-html.leonardo-commercial-profile .lc-root{grid-template-columns:224px minmax(0,1fr)!important;background:var(--bg)!important;color:var(--text)!important;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important}
-html.leonardo-commercial-profile .lc-sidebar{background:var(--panel2)!important;border-right:1px solid var(--line)!important;padding:18px 10px!important}
-html.leonardo-commercial-profile .lc-logo{padding:6px 8px 20px!important;gap:12px!important}
-html.leonardo-commercial-profile .lc-logo svg{color:var(--accent)!important;width:32px!important;height:38px!important}
-html.leonardo-commercial-profile .lc-logo b{color:var(--text)!important;font-size:13px!important}
-html.leonardo-commercial-profile .lc-logo span{color:var(--muted)!important}
-html.leonardo-commercial-profile .lc-sidebar nav{gap:4px!important}
-html.leonardo-commercial-profile .lc-sidebar nav button{color:var(--muted)!important;border:0!important;border-radius:8px!important;padding:10px 12px!important;font-size:13px!important;font-weight:600!important}
-html.leonardo-commercial-profile .lc-sidebar nav button:hover{color:var(--text)!important;background:rgba(62,146,220,.07)!important}
-html.leonardo-commercial-profile .lc-sidebar nav button.active{background:rgba(3,89,166,.24)!important;color:var(--text)!important;box-shadow:inset 3px 0 var(--accent)!important}
-html.leonardo-commercial-profile .lc-side-foot{border-top:1px solid var(--line)!important;padding:15px 10px 4px!important}
-html.leonardo-commercial-profile .lc-side-foot span,html.leonardo-commercial-profile .lc-side-foot small{color:var(--muted)!important}
-html.leonardo-commercial-profile .lc-side-foot b{color:var(--text)!important}
-html.leonardo-commercial-profile .lc-side-foot small{font-size:0!important}
-html.leonardo-commercial-profile .lc-side-foot small::after{content:"Comercial · gestão ativa";font-size:9px;color:var(--muted)}
-html.leonardo-commercial-profile .lc-main{background:radial-gradient(circle at 12% -10%,rgba(3,89,166,.34),transparent 30rem),radial-gradient(circle at 92% 2%,rgba(242,107,33,.09),transparent 26rem),var(--bg)!important}
-html.leonardo-commercial-profile .lc-top{padding:22px 26px!important;border-bottom:1px solid var(--line)!important;background:color-mix(in srgb,var(--bg) 94%,transparent)!important}
-html.leonardo-commercial-profile .lc-top>div:first-child>span,html.leonardo-commercial-profile .lc-view-head span,html.leonardo-commercial-profile .lc-card-head span,html.leonardo-commercial-profile .lc-modal header span{color:var(--brand)!important}
-html.leonardo-commercial-profile .lc-top h1,html.leonardo-commercial-profile .lc-view-head h2,html.leonardo-commercial-profile .lc-card-head h3{color:var(--text)!important}
-html.leonardo-commercial-profile .lc-top p,html.leonardo-commercial-profile .lc-view-head p{color:var(--muted)!important}
-html.leonardo-commercial-profile .lc-top-actions button{border:1px solid var(--line)!important;background:#132640!important;color:var(--text)!important;border-radius:10px!important}
-html.leonardo-commercial-profile .lc-top-actions button:hover{border-color:var(--blue)!important}
-html.leonardo-commercial-profile .lc-top-actions button.ghost{background:var(--panel)!important;color:var(--muted)!important;border-color:var(--line)!important}
-html.leonardo-commercial-profile .lc-sync{color:var(--muted)!important}
-html.leonardo-commercial-profile .lc-sync i{background:var(--green)!important;box-shadow:0 0 0 4px color-mix(in srgb,var(--green) 14%,transparent)!important}
+/* Leonardo usa a mesma estrutura visual do dashboard principal; só o conteúdo/permissões mudam. */
+html.leonardo-commercial-profile .lc-root{
+  position:fixed!important;inset:0!important;z-index:9000!important;display:block!important;
+  overflow:auto!important;background:
+  radial-gradient(circle at 10% -8%,rgba(118,198,255,.10),transparent 29rem),
+  radial-gradient(circle at 92% 1%,rgba(255,122,47,.13),transparent 27rem),var(--bg)!important;
+  color:var(--text)!important;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;
+}
+html.leonardo-commercial-profile .lc-sidebar{
+  position:fixed!important;top:0!important;left:0!important;right:auto!important;bottom:0!important;
+  width:224px!important;height:100vh!important;display:flex!important;flex-direction:column!important;
+  padding:18px 10px!important;background:#0c1115!important;border-right:1px solid rgba(96,117,132,.36)!important;
+  overflow-y:auto!important;overflow-x:hidden!important;z-index:40!important;
+}
+html.leonardo-commercial-profile .lc-logo{display:none!important}
+html.leonardo-commercial-profile .lc-sidebar nav{display:flex!important;flex-direction:column!important;gap:4px!important;margin-top:50px!important}
+html.leonardo-commercial-profile .lc-sidebar nav::before{
+  content:"‹";position:absolute;top:18px;right:10px;width:32px;height:32px;display:grid;place-items:center;
+  border:1px solid var(--line);border-radius:8px;color:var(--muted);font-size:20px;font-weight:400;
+}
+html.leonardo-commercial-profile .lc-sidebar nav button{
+  display:block!important;width:100%!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;
+  border:0!important;background:transparent!important;color:var(--muted)!important;padding:10px 12px!important;
+  border-radius:8px!important;cursor:pointer!important;text-align:left!important;font-size:13px!important;font-weight:500!important;
+  transition:background .17s,border-color .17s,color .17s!important;
+}
+html.leonardo-commercial-profile .lc-sidebar nav button:hover{background:rgba(118,198,255,.10)!important;color:#bfe5ff!important}
+html.leonardo-commercial-profile .lc-sidebar nav button.active{
+  background:linear-gradient(90deg,rgba(255,122,47,.28),rgba(255,122,47,.07))!important;
+  color:#fff3ec!important;box-shadow:inset 3px 0 #ff7a2f!important;
+}
+html.leonardo-commercial-profile .lc-side-foot{display:none!important}
+html.leonardo-commercial-profile .lc-main{
+  margin-left:224px!important;width:calc(100% - 224px)!important;height:auto!important;min-height:100vh!important;
+  overflow:visible!important;background:transparent!important;padding:26px!important;
+}
+html.leonardo-commercial-profile .lc-top{
+  position:relative!important;top:auto!important;z-index:20!important;display:flex!important;align-items:center!important;
+  justify-content:space-between!important;gap:18px!important;padding:10px 12px 10px 68px!important;margin:-8px -10px 22px!important;
+  min-height:98px!important;border:1px solid rgba(118,198,255,.10)!important;border-radius:14px!important;
+  background:linear-gradient(100deg,rgba(118,198,255,.045),rgba(255,122,47,.035) 55%,rgba(255,255,255,.012))!important;
+  box-shadow:0 8px 22px rgba(0,0,0,.16)!important;backdrop-filter:none!important;
+}
+html.leonardo-commercial-profile .lc-top::before{
+  content:"▱";position:absolute;left:14px;top:50%;transform:translateY(-50%);width:42px;height:42px;
+  display:grid;place-items:center;border-radius:12px;background:linear-gradient(135deg,#214f70 0%,#327eb0 48%,#ff7a2f 145%);
+  color:#fff;font-size:24px;box-shadow:0 10px 28px rgba(118,198,255,.13),0 0 0 1px rgba(255,122,47,.16);
+}
+html.leonardo-commercial-profile .lc-top::after{
+  content:"";position:absolute;left:16px;right:16px;bottom:-1px;height:1px;
+  background:linear-gradient(90deg,rgba(255,122,47,.55),rgba(118,198,255,.28),transparent 72%);pointer-events:none;
+}
+html.leonardo-commercial-profile .lc-top>div:first-child>span{display:block!important;color:#ff9a61!important;font-size:9.5px!important;font-weight:800!important;letter-spacing:.16em!important;text-transform:uppercase!important}
+html.leonardo-commercial-profile .lc-top h1{color:var(--text)!important;font-size:21px!important;line-height:1.1!important;margin:3px 0 0!important;letter-spacing:-.02em!important}
+html.leonardo-commercial-profile .lc-top p{color:var(--muted)!important;font-size:13px!important;margin:4px 0 0!important}
+html.leonardo-commercial-profile .lc-top-actions{display:flex!important;align-items:center!important;gap:10px!important;flex-wrap:wrap!important;justify-content:flex-end!important}
+html.leonardo-commercial-profile .lc-sync{display:flex!important;align-items:center!important;gap:9px!important;color:var(--muted)!important;font-size:13px!important;margin-right:2px!important}
+html.leonardo-commercial-profile .lc-sync i{width:9px!important;height:9px!important;border-radius:50%!important;background:var(--green)!important;box-shadow:0 0 0 5px rgba(49,212,155,.12)!important}
 html.leonardo-commercial-profile .lc-sync.loading i{background:var(--yellow)!important}
 html.leonardo-commercial-profile .lc-sync.error i{background:var(--red)!important}
-html.leonardo-commercial-profile .lc-content{max-width:1480px!important;padding:26px 26px 60px!important}
-html.leonardo-commercial-profile .lc-kpi,html.leonardo-commercial-profile .lc-card,html.leonardo-commercial-profile .lc-source{background:var(--panel)!important;border:1px solid var(--line)!important;border-radius:17px!important;box-shadow:var(--shadow)!important}
-html.leonardo-commercial-profile .lc-kpi{padding:17px!important}
-html.leonardo-commercial-profile .lc-kpi span,html.leonardo-commercial-profile .lc-kpi small,html.leonardo-commercial-profile .lc-source small,html.leonardo-commercial-profile .lc-stage small,html.leonardo-commercial-profile .lc-owner small{color:var(--muted)!important}
-html.leonardo-commercial-profile .lc-kpi b{color:var(--text)!important;font-size:29px!important}
+html.leonardo-commercial-profile .lc-top-actions button{
+  border:1px solid rgba(99,119,134,.56)!important;background:linear-gradient(135deg,#1a2127,#141b20)!important;
+  color:var(--text)!important;border-radius:10px!important;padding:9px 12px!important;font-size:13px!important;font-weight:600!important;cursor:pointer!important;
+}
+html.leonardo-commercial-profile .lc-top-actions button:hover{border-color:#76c6ff!important;box-shadow:0 0 0 1px rgba(118,198,255,.12)!important}
+html.leonardo-commercial-profile .lc-top-actions button.ghost{background:var(--panel)!important;color:var(--muted)!important;border-color:var(--line)!important}
+html.leonardo-commercial-profile .lc-content{max-width:none!important;margin:0!important;padding:0 0 60px!important}
+html.leonardo-commercial-profile .lc-stack{gap:14px!important}
+html.leonardo-commercial-profile .lc-kpis{gap:14px!important;margin-bottom:0!important}
+html.leonardo-commercial-profile .lc-kpi,html.leonardo-commercial-profile .lc-card,html.leonardo-commercial-profile .lc-source,html.leonardo-commercial-profile .lc-meeting{
+  background:linear-gradient(180deg,#171d22 0%,#14191e 100%)!important;border:1px solid rgba(96,117,132,.42)!important;
+  border-radius:17px!important;box-shadow:var(--shadow)!important;color:var(--text)!important;
+}
+html.leonardo-commercial-profile .lc-kpi{padding:17px!important;position:relative!important;overflow:hidden!important}
+html.leonardo-commercial-profile .lc-kpi::after{content:"";position:absolute;right:-25px;bottom:-35px;width:75px;height:75px;border-radius:50%;background:var(--wash)!important}
+html.leonardo-commercial-profile .lc-kpi:nth-child(odd){border-top:2px solid rgba(255,122,47,.78)!important;background:linear-gradient(155deg,rgba(255,122,47,.075),transparent 42%),var(--panel)!important}
+html.leonardo-commercial-profile .lc-kpi:nth-child(even){border-top:2px solid rgba(118,198,255,.74)!important;background:linear-gradient(155deg,rgba(118,198,255,.07),transparent 42%),var(--panel)!important}
+html.leonardo-commercial-profile .lc-kpi span{color:var(--muted)!important;font-size:11px!important;text-transform:uppercase!important;letter-spacing:.08em!important}
+html.leonardo-commercial-profile .lc-kpi b{font-size:29px!important;font-weight:800!important;margin-top:6px!important;color:var(--text)!important;letter-spacing:-.04em!important}
+html.leonardo-commercial-profile .lc-kpi:nth-child(odd) b{color:#ff9a61!important}
+html.leonardo-commercial-profile .lc-kpi:nth-child(even) b{color:#8fd2ff!important}
+html.leonardo-commercial-profile .lc-kpi small,html.leonardo-commercial-profile .lc-source small,html.leonardo-commercial-profile .lc-stage small,html.leonardo-commercial-profile .lc-owner small{color:var(--muted)!important;font-size:12px!important}
+html.leonardo-commercial-profile .lc-sources{gap:14px!important}
+html.leonardo-commercial-profile .lc-source{padding:14px 16px!important;background:var(--panel)!important}
 html.leonardo-commercial-profile .lc-source i{background:var(--green)!important}
 html.leonardo-commercial-profile .lc-source.stale i{background:var(--yellow)!important}
 html.leonardo-commercial-profile .lc-source strong{color:var(--green)!important}
 html.leonardo-commercial-profile .lc-source.stale strong{color:var(--yellow)!important}
-html.leonardo-commercial-profile .lc-stage,html.leonardo-commercial-profile .lc-owner{border-bottom:1px solid var(--line)!important}
+html.leonardo-commercial-profile .lc-grid2{gap:14px!important}
+html.leonardo-commercial-profile .lc-card{padding:18px!important}
+html.leonardo-commercial-profile .lc-card-head span,html.leonardo-commercial-profile .lc-view-head span,html.leonardo-commercial-profile .lc-modal header span{color:#ff9a61!important}
+html.leonardo-commercial-profile .lc-card-head h3,html.leonardo-commercial-profile .lc-view-head h2{color:var(--text)!important}
+html.leonardo-commercial-profile .lc-view-head p{color:var(--muted)!important}
+html.leonardo-commercial-profile .lc-stage,html.leonardo-commercial-profile .lc-owner{border-bottom:1px solid rgba(91,109,122,.28)!important}
 html.leonardo-commercial-profile .lc-stage b,html.leonardo-commercial-profile .lc-owner b,html.leonardo-commercial-profile .lc-stage strong,html.leonardo-commercial-profile .lc-owner strong{color:var(--text)!important}
 html.leonardo-commercial-profile .lc-view-head>b{color:var(--muted)!important;background:var(--panel2)!important;border:1px solid var(--line)!important}
 html.leonardo-commercial-profile .lc-filters input,html.leonardo-commercial-profile .lc-filters select{background:var(--panel2)!important;color:var(--text)!important;border:1px solid var(--line)!important;border-radius:10px!important}
-html.leonardo-commercial-profile .lc-filters input:focus,html.leonardo-commercial-profile .lc-filters select:focus{border-color:var(--blue)!important;outline:none!important}
+html.leonardo-commercial-profile .lc-filters input:focus,html.leonardo-commercial-profile .lc-filters select:focus{border-color:#76c6ff!important;outline:none!important;box-shadow:0 0 0 2px rgba(118,198,255,.10)!important}
 html.leonardo-commercial-profile .lc-table-wrap{border:1px solid var(--line)!important;border-radius:12px!important}
-html.leonardo-commercial-profile .lc-table-wrap th{background:var(--panel2)!important;color:var(--muted)!important;border-bottom:1px solid var(--line)!important}
-html.leonardo-commercial-profile .lc-table-wrap td{color:var(--muted)!important;border-top:1px solid var(--line)!important}
+html.leonardo-commercial-profile .lc-table-wrap th{background:#151c22!important;color:var(--muted)!important;border-bottom:1px solid var(--line)!important}
+html.leonardo-commercial-profile .lc-table-wrap td{color:var(--muted)!important;border-top:1px solid rgba(91,109,122,.28)!important}
 html.leonardo-commercial-profile .lc-table-wrap td b{color:var(--text)!important}
-html.leonardo-commercial-profile .lc-table-wrap td small{color:var(--muted)!important}
-html.leonardo-commercial-profile .lc-table-wrap tr.clickable:hover td{background:var(--wash)!important}
+html.leonardo-commercial-profile .lc-table-wrap tr.clickable:hover td{background:rgba(118,198,255,.075)!important}
 html.leonardo-commercial-profile .lc-pill{border:1px solid var(--line)!important;background:var(--panel2)!important;color:var(--muted)!important}
-html.leonardo-commercial-profile .lc-pill.negociacao,html.leonardo-commercial-profile .lc-pill.proposta{color:var(--yellow)!important;background:color-mix(in srgb,var(--yellow) 9%,var(--panel))!important;border-color:color-mix(in srgb,var(--yellow) 28%,var(--line))!important}
-html.leonardo-commercial-profile .lc-pill.fechado,html.leonardo-commercial-profile .lc-pill.active{color:var(--green)!important;background:color-mix(in srgb,var(--green) 9%,var(--panel))!important;border-color:color-mix(in srgb,var(--green) 28%,var(--line))!important}
-html.leonardo-commercial-profile .lc-pill.perdido,html.leonardo-commercial-profile .lc-pill.churned{color:var(--red)!important;background:color-mix(in srgb,var(--red) 9%,var(--panel))!important;border-color:color-mix(in srgb,var(--red) 28%,var(--line))!important}
-html.leonardo-commercial-profile .lc-empty{color:var(--muted)!important}
-html.leonardo-commercial-profile .lc-meeting{background:var(--panel)!important;border:1px solid var(--line)!important;border-radius:17px!important;box-shadow:var(--shadow)!important}
-html.leonardo-commercial-profile .lc-meeting-top span{color:var(--brand)!important}
+html.leonardo-commercial-profile .lc-pill.negociacao,html.leonardo-commercial-profile .lc-pill.proposta{color:var(--yellow)!important}
+html.leonardo-commercial-profile .lc-pill.fechado,html.leonardo-commercial-profile .lc-pill.active{color:var(--green)!important}
+html.leonardo-commercial-profile .lc-pill.perdido,html.leonardo-commercial-profile .lc-pill.churned{color:var(--red)!important}
+html.leonardo-commercial-profile .lc-meeting{padding:14px!important}
+html.leonardo-commercial-profile .lc-meeting-top span{color:#ff9a61!important}
 html.leonardo-commercial-profile .lc-meeting h3{color:var(--text)!important}
 html.leonardo-commercial-profile .lc-meeting time,html.leonardo-commercial-profile .lc-meeting p,html.leonardo-commercial-profile .lc-meeting footer>*{color:var(--muted)!important}
 html.leonardo-commercial-profile .lc-meeting footer{border-top:1px solid var(--line)!important}
 html.leonardo-commercial-profile .lc-meeting footer b{color:var(--text)!important}
-html.leonardo-commercial-profile .lc-modal-backdrop{background:rgba(1,10,20,.72)!important}
-html.leonardo-commercial-profile .lc-modal{background:var(--panel)!important;border:1px solid var(--line)!important;border-radius:17px!important;box-shadow:var(--shadow)!important;color:var(--text)!important}
+html.leonardo-commercial-profile .lc-modal{background:var(--panel)!important;border:1px solid var(--line)!important;border-radius:17px!important;color:var(--text)!important}
 html.leonardo-commercial-profile .lc-modal header{background:var(--panel)!important;border-bottom:1px solid var(--line)!important}
-html.leonardo-commercial-profile .lc-modal header p,html.leonardo-commercial-profile .lc-meeting-mini small,html.leonardo-commercial-profile .lc-meeting-mini p{color:var(--muted)!important}
-html.leonardo-commercial-profile .lc-modal header button{background:var(--panel2)!important;color:var(--text)!important;border:1px solid var(--line)!important}
 html.leonardo-commercial-profile .lc-detail-grid article{background:var(--panel2)!important;border:1px solid var(--line)!important;border-radius:12px!important}
-html.leonardo-commercial-profile .lc-detail-grid span{color:var(--muted)!important}
+html.leonardo-commercial-profile .lc-detail-grid span,html.leonardo-commercial-profile .lc-modal header p,html.leonardo-commercial-profile .lc-meeting-mini small,html.leonardo-commercial-profile .lc-meeting-mini p{color:var(--muted)!important}
 html.leonardo-commercial-profile .lc-detail-grid b{color:var(--text)!important}
-html.leonardo-commercial-profile .lc-meeting-mini{border-bottom:1px solid var(--line)!important}
-html.leonardo-commercial-profile .lc-error{border:1px solid color-mix(in srgb,var(--red) 35%,var(--line))!important;background:color-mix(in srgb,var(--red) 10%,var(--panel))!important;color:var(--red)!important}
-@media(max-width:1100px){html.leonardo-commercial-profile .lc-root{grid-template-columns:190px minmax(0,1fr)!important}}
-@media(max-width:720px){html.leonardo-commercial-profile .lc-root{display:block!important}html.leonardo-commercial-profile .lc-sidebar{padding:8px!important}}
+html.leonardo-commercial-profile .lc-error{border:1px solid rgba(255,107,117,.3)!important;background:rgba(255,107,117,.1)!important;color:#ffb0b6!important}
+@media(max-width:1100px){html.leonardo-commercial-profile .lc-sidebar{width:190px!important}html.leonardo-commercial-profile .lc-main{margin-left:190px!important;width:calc(100% - 190px)!important}html.leonardo-commercial-profile .lc-kpis{grid-template-columns:repeat(3,1fr)!important}}
+@media(max-width:720px){html.leonardo-commercial-profile .lc-sidebar{position:relative!important;width:100%!important;height:auto!important;min-height:0!important;padding:8px!important}html.leonardo-commercial-profile .lc-sidebar nav{margin-top:0!important;display:flex!important;flex-direction:row!important;overflow:auto!important}html.leonardo-commercial-profile .lc-sidebar nav::before{display:none!important}html.leonardo-commercial-profile .lc-sidebar nav button{width:auto!important;flex:0 0 auto!important}html.leonardo-commercial-profile .lc-main{margin-left:0!important;width:100%!important;padding:14px 12px!important}html.leonardo-commercial-profile .lc-top{margin:0 0 14px!important;padding-left:64px!important;align-items:flex-start!important;flex-direction:column!important}html.leonardo-commercial-profile .lc-kpis{grid-template-columns:repeat(2,1fr)!important}}
