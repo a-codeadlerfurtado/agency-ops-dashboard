@@ -16,6 +16,7 @@ import OnboardingRoleRouter from "./onboarding-role-router";
 import CommercialProfileShell from "./commercial-profile-shell";
 import LeonardoScopeNetwork from "./leonardo-scope-network";
 import LeonardoExpandedAccess from "./leonardo-expanded-access";
+import LeonardoStandardHeaderBridge from "./leonardo-standard-header-bridge";
 import AdlerFinanceNavBridge from "./adler-finance-nav-bridge";
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
@@ -65,6 +66,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <GabrielScopeNetwork />
         <LeonardoScopeNetwork />
         <LeonardoExpandedAccess />
+        <LeonardoStandardHeaderBridge />
         <GreetingAudioBridge />
         <PreGreetingShield />
         {children}
