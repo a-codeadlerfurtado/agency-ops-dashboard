@@ -24,9 +24,9 @@ async function setting(name: string): Promise<string | null> {
 
 const SEVERE = /(nao entra|nao chega|nao vai|sem lead|sem leads|erro|problema|urgente|complicado|parado|nao funciona|nao esta funcionando|nada|perdendo tempo)/;
 const PROGRESS = /(vou |vamos |iremos |irei |podemos enviar|assim que|solicitei|repass|vou pedir|irei solicitar|estamos resolvendo|faremos|ajustaremos|vamos ajustar|vamos subir|irei trazer|vamos trazer|vou enviar|iremos enviar|vou analisar|vou verificar|iremos fazer|esta resolvendo|estamos verificando|irei averiguar)/;
-const CLOSED = /(feito|feita|corrig|ajustad|alterad|subid|publicad|ativad|conectad|enviad|finalizad|resolvid|realizad|cobrad|ja esta|ja foi|campanha .* no ar|numero conectado|segue o relatorio|segue a previa|segue os criativos|foi subido|foi alterado|foi corrigido|esta no ar|estao no ar)/;
+const CLOSED = /(feit|corrig|ajust|alter|subid|public|ativ|conect|envi|finaliz|resol|realiz|otimiz|cobrad|ja esta|ja foi|campanha .* no ar|numero conectado|segue o relatorio|segue a previa|segue os criativos|esta no ar|estao no ar)/;
 const NEED_CLIENT = /(preencher|nos enviar|me enviar|pode enviar|precisamos de|aguardando|assim que receber|quando enviar|falta .* cliente|depende .* cliente|retorno de voces|pagamento|abastecimento|aprovar|aprovacao|poderia checar|poderia confirmar|consegue checar|consegue confirmar|confirma para mim|checar para mim)/;
-const POSITIVE = /(^| )(ok|obrigad|perfeito|show|boa|maravilha|aprovad|pode subir|valeu|deu certo|ficou bom|ficou certo)( |$)/;
+const POSITIVE = /(^| )(ok|obrigad|perfeito|show|boa|maravilha|aprovad|pode subir|valeu|deu certo|ficou bom|ficou certo|claro|top|tks)( |$)/;
 const LINK = /(https?:\/\/|drive\.google\.com)/;
 const STOP = new Set(["para","com","sem","uma","umas","uns","que","quem","qual","quais","como","onde","quando","isso","essa","esse","esta","este","aqui","hoje","ontem","sobre","cliente","clientes","time","equipe","pessoal","agora","depois","antes","fazer","fazendo","feito","faremos","vamos","iremos","irei","vou","pedido","preciso","podem","poderia","consegue","quero","favor","obrigado","obrigada"]);
 function toks(v: unknown) { return [...new Set(norm(v).split(" ").filter((x) => x.length >= 4 && !STOP.has(x)))]; }
@@ -77,8 +77,17 @@ function classify(c: any, asOf: Date) {
       const approval = client.find((m: any) => new Date(m.event_at) > new Date(done.event_at) && POSITIVE.test(norm(m.body)));
       return { kind: "NAO_COBRAR", reason: `Pedido de ${localDateTime(req.event_at)} teve execução/entrega compatível em ${localDateTime(done.event_at)}${approval ? ` e confirmação positiva do cliente em ${localDateTime(approval.event_at)}` : ""}.`, confidence: "ALTA" };
     }
+
+    const positiveAfterTeam = client.find((m: any) => team.some((t: any) => new Date(t.event_at) < new Date(m.event_at)) && POSITIVE.test(norm(m.body)));
+    if (positiveAfterTeam) return { kind: "NAO_COBRAR", reason: `Após o pedido de ${localDateTime(req.event_at)}, houve interação da equipe e o próprio cliente confirmou positivamente em ${localDateTime(positiveAfterTeam.event_at)}: “${msg(positiveAfterTeam)}”.`, confidence: "ALTA" };
+
     const dependency = [...team].reverse().find((m: any) => NEED_CLIENT.test(norm(m.body)) && (sameTopic(req, m) || overlap(req.body, m.body) >= 1 || /de uma olhada/.test(norm(req.body))));
-    if (dependency && !client.some((m: any) => new Date(m.event_at) > new Date(dependency.event_at))) return { kind: "NAO_COBRAR", reason: `O último avanço no assunto foi uma dependência pedida ao cliente em ${localDateTime(dependency.event_at)}, sem resposta posterior localizada.`, confidence: "ALTA" };
+    if (dependency) {
+      const replies = client.filter((m: any) => new Date(m.event_at) > new Date(dependency.event_at));
+      const fulfilled = replies.some((m: any) => ["image","video","document","audio"].includes(String(m.message_type || "")) || LINK.test(String(m.body || "")));
+      const ackOnly = replies.length > 0 && replies.every((m: any) => POSITIVE.test(norm(m.body)) || /(vou enviar|irei enviar|envio em seguida|vou subir|irei subir)/.test(norm(m.body)));
+      if (!replies.length || (!fulfilled && ackOnly)) return { kind: "NAO_COBRAR", reason: `O último avanço no assunto foi uma dependência pedida ao cliente em ${localDateTime(dependency.event_at)}; não foi localizada evidência posterior de que essa dependência tenha sido entregue.`, confidence: "ALTA" };
+    }
 
     const a = area(`${req.body || ""} ${team.map((x: any) => x.body || "").join(" ")}`), who = owner(c, a), severe = SEVERE.test(norm(req.body));
     if (!team.length) {
@@ -135,7 +144,7 @@ async function sha256(v: string) { const d = await crypto.subtle.digest("SHA-256
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
-  if (url.searchParams.get("health") === "1") return json({ ok: true, service: "agency-ops-manager-attention-radar", version: 8, engine: "deterministic-temporal-v4", ai_required: false, candidate_limit: MAX_CANDIDATES });
+  if (url.searchParams.get("health") === "1") return json({ ok: true, service: "agency-ops-manager-attention-radar", version: 9, engine: "deterministic-temporal-v5", ai_required: false, candidate_limit: MAX_CANDIDATES });
   if (req.method !== "POST" && req.method !== "GET") return json({ ok: false, error: "method_not_allowed" }, 405);
   const expected = await setting("MANAGER_RADAR_CRON_SECRET"), given = req.headers.get("x-manager-radar-key") || url.searchParams.get("key"); if (!expected || given !== expected) return json({ ok: false, error: "unauthorized" }, 401);
   const slot = clip(url.searchParams.get("slot") || "manual", 40), validating = url.searchParams.get("validate") === "1", dryRun = validating || url.searchParams.get("dry_run") === "1";
@@ -145,8 +154,8 @@ Deno.serve(async (req) => {
   const a = analyze(ctx || { clients: [] }, asOf), summary = format(slot, a, Number(ctx?.candidate_count || 0)), fingerprint = await sha256(JSON.stringify(a.allItems.map((x: any) => [x.client_id, x.level, norm(x.charge_action)])));
   const storedAnalysis = { items: a.items, not_charge: a.not_charge, manager_summary: a.manager_summary };
   const { data: old } = await ops.from("manager_attention_digest_runs").select("id").eq("run_date", runDate).eq("slot", slot).maybeSingle(); let runId = old?.id || null;
-  if (!runId) { const { data, error } = await ops.from("manager_attention_digest_runs").insert({ run_date: runDate, slot, status: "RUNNING", provider: "DETERMINISTIC_V8", fingerprint, context_stats: { candidate_count: Number(ctx?.candidate_count || 0), dry_run: dryRun } }).select("id").single(); if (error) return json({ ok: false, error: `run_insert:${error.message}` }, 500); runId = data.id; }
-  else await ops.from("manager_attention_digest_runs").update({ status: "RUNNING", provider: "DETERMINISTIC_V8", fingerprint, error: null, context_stats: { candidate_count: Number(ctx?.candidate_count || 0), dry_run: dryRun }, started_at: new Date().toISOString(), finished_at: null }).eq("id", runId);
+  if (!runId) { const { data, error } = await ops.from("manager_attention_digest_runs").insert({ run_date: runDate, slot, status: "RUNNING", provider: "DETERMINISTIC_V9", fingerprint, context_stats: { candidate_count: Number(ctx?.candidate_count || 0), dry_run: dryRun } }).select("id").single(); if (error) return json({ ok: false, error: `run_insert:${error.message}` }, 500); runId = data.id; }
+  else await ops.from("manager_attention_digest_runs").update({ status: "RUNNING", provider: "DETERMINISTIC_V9", fingerprint, error: null, context_stats: { candidate_count: Number(ctx?.candidate_count || 0), dry_run: dryRun }, started_at: new Date().toISOString(), finished_at: null }).eq("id", runId);
 
   if (validating) {
     const { data: cases } = await ops.from("manager_attention_radar_validation_cases").select("case_key,client_id,expected,rationale").eq("active", true).order("id");
@@ -159,7 +168,7 @@ Deno.serve(async (req) => {
 
   let notificationId: number | null = null;
   if (!dryRun) {
-    const { data, error } = await ops.rpc("enqueue_notification", { p_notification_key: `manager-radar:${runDate}:${slot}`, p_client_id: null, p_case_id: null, p_category: "MANAGER_RADAR", p_event_type: "MANAGER_ATTENTION_DIGEST", p_severity: a.allItems.some((x: any) => x.level === "COBRAR_AGORA") ? "HIGH" : "INFO", p_title: `Radar Gerencial ${slot}`, p_message: summary, p_destination_key: "OPS_INTERNAL", p_metadata: { slot, run_date: runDate, fingerprint, candidate_count: Number(ctx?.candidate_count || 0), engine: "deterministic-v8" } });
+    const { data, error } = await ops.rpc("enqueue_notification", { p_notification_key: `manager-radar:${runDate}:${slot}`, p_client_id: null, p_case_id: null, p_category: "MANAGER_RADAR", p_event_type: "MANAGER_ATTENTION_DIGEST", p_severity: a.allItems.some((x: any) => x.level === "COBRAR_AGORA") ? "HIGH" : "INFO", p_title: `Radar Gerencial ${slot}`, p_message: summary, p_destination_key: "OPS_INTERNAL", p_metadata: { slot, run_date: runDate, fingerprint, candidate_count: Number(ctx?.candidate_count || 0), engine: "deterministic-v9" } });
     if (error) { await ops.from("manager_attention_digest_runs").update({ status: "ERROR", summary_text: summary, analysis: storedAnalysis, error: `enqueue:${error.message}`, finished_at: new Date().toISOString() }).eq("id", runId); return json({ ok: false, error: `enqueue:${error.message}` }, 500); }
     notificationId = data == null ? null : Number(data);
   }
