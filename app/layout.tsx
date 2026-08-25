@@ -13,8 +13,6 @@ import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OnboardingRequiredAlerts from "./onboarding-required-alerts";
 import OnboardingRoleRouter from "./onboarding-role-router";
 import LeonardoScopeNetwork from "./leonardo-scope-network";
-import LeonardoExpandedAccess from "./leonardo-expanded-access";
-import LeonardoUnifiedShell from "./leonardo-unified-shell";
 import AdlerFinanceNavBridge from "./adler-finance-nav-bridge";
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
@@ -63,11 +61,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         <GabrielScopeNetwork />
         <LeonardoScopeNetwork />
-        <LeonardoExpandedAccess />
         <GreetingAudioBridge />
         <PreGreetingShield />
         {children}
-        <LeonardoUnifiedShell />
         <PreclientsKanbanBridge />
         <MotionSystem />
         <AIHeadRouter />
