@@ -4,6 +4,8 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 const CORS={"access-control-allow-origin":"*","access-control-allow-headers":"authorization,apikey,content-type","access-control-allow-methods":"GET,POST,OPTIONS"};
 const respond=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...CORS,"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 
+type MissingExtra={question?:string;line?:number};
+
 Deno.serve(async(req)=>{
   if(req.method==="OPTIONS") return new Response(null,{status:204,headers:CORS});
   if(!["GET","POST"].includes(req.method)) return respond({error:"method_not_allowed"},405);
@@ -32,13 +34,85 @@ Deno.serve(async(req)=>{
   if(req.method==="POST"){
     const body=await req.json().catch(()=>({}));
     const incidentId=String(body?.incident_id??"").trim();
+    const action=String(body?.action??"acknowledge").trim();
     if(!incidentId) return respond({error:"incident_id_required"},400);
+
     const {data:incident,error:incidentError}=await ops.from("lead_dispatch_quality_incidents")
-      .select("id,target_gt,status,notification_id,occurrence_no")
+      .select("id,target_gt,status,notification_id,occurrence_no,client_id,client_name,product_label,product_key,missing_required,missing_extra_questions")
       .eq("id",incidentId).maybeSingle();
     if(incidentError) return respond({error:"query_failed",detail:incidentError.message},500);
     if(!incident) return respond({error:"not_found"},404);
     if(incident.target_gt!==person) return respond({error:"forbidden"},403);
+
+    if(action==="suppress_field"){
+      const fieldKind=String(body?.field_kind??"").trim();
+      const fieldLabel=String(body?.field_label??"").trim();
+      if(!incident.client_id) return respond({error:"client_required_for_exemption"},400);
+      if(!["required","extra"].includes(fieldKind)) return respond({error:"invalid_field_kind"},400);
+      if(!fieldLabel) return respond({error:"field_label_required"},400);
+
+      const required=Array.isArray(incident.missing_required)?incident.missing_required.map(String):[];
+      const extras=Array.isArray(incident.missing_extra_questions)?incident.missing_extra_questions as MissingExtra[]:[];
+      const belongsToIncident=fieldKind==="required"
+        ? required.includes(fieldLabel)
+        : extras.some((item)=>String(item?.question??"")===fieldLabel);
+      if(!belongsToIncident) return respond({error:"field_not_in_incident"},400);
+
+      const now=new Date().toISOString();
+      const {error:exemptionError}=await ops.from("lead_dispatch_quality_field_exemptions").upsert({
+        client_id:incident.client_id,
+        product_key:incident.product_key,
+        product_label:incident.product_label,
+        field_kind:fieldKind,
+        field_label:fieldLabel,
+        reason:"CLIENT_REQUEST",
+        active:true,
+        created_by_user_key:userKey,
+        created_by_person:person,
+        updated_at:now,
+      },{onConflict:"client_id,product_key,field_kind,field_label"});
+      if(exemptionError) return respond({error:"exemption_failed",detail:exemptionError.message},500);
+
+      const {data:related,error:relatedError}=await ops.from("lead_dispatch_quality_incidents")
+        .select("id,notification_id,missing_required,missing_extra_questions")
+        .eq("client_id",incident.client_id).eq("product_key",incident.product_key).eq("status","OPEN");
+      if(relatedError) return respond({error:"related_query_failed",detail:relatedError.message},500);
+
+      for(const row of related??[]){
+        const nextRequired=(Array.isArray(row.missing_required)?row.missing_required.map(String):[])
+          .filter((field)=>!(fieldKind==="required"&&field===fieldLabel));
+        const nextExtras=(Array.isArray(row.missing_extra_questions)?row.missing_extra_questions as MissingExtra[]:[])
+          .filter((item)=>!(fieldKind==="extra"&&String(item?.question??"")===fieldLabel));
+        const resolved=nextRequired.length===0&&nextExtras.length===0;
+        const patch:Record<string,unknown>={
+          missing_required:nextRequired,
+          missing_extra_questions:nextExtras,
+          updated_at:now,
+        };
+        if(resolved){
+          patch.status="RESOLVED";
+          patch.resolved_at=now;
+        }
+        await ops.from("lead_dispatch_quality_incidents").update(patch).eq("id",row.id);
+        if(resolved&&row.notification_id){
+          await ops.from("platform_notification_reads").upsert({notification_id:row.notification_id,user_key:userKey,read_at:now},{onConflict:"notification_id,user_key"});
+        }
+      }
+
+      return respond({
+        ok:true,
+        exemption_saved:true,
+        incident_id:incidentId,
+        client_id:incident.client_id,
+        product_key:incident.product_key,
+        field_kind:fieldKind,
+        field_label:fieldLabel,
+        person,
+      });
+    }
+
+    if(action!=="acknowledge") return respond({error:"invalid_action"},400);
+
     if(incident.status==="OPEN"){
       const {error:updateError}=await ops.from("lead_dispatch_quality_incidents").update({
         status:"ACKNOWLEDGED",
