@@ -1,1 +1,5 @@
-export { default } from "../commercial-direction/page";
+import { redirect } from "next/navigation";
+
+export default function LegacyCommercialHome() {
+  redirect("/");
+}

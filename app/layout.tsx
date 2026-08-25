@@ -12,9 +12,8 @@ import OnboardingNavBridge from "./onboarding-nav-bridge";
 import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OnboardingRequiredAlerts from "./onboarding-required-alerts";
 import OnboardingRoleRouter from "./onboarding-role-router";
-import CommercialNavigationBridge from "./commercial-navigation-bridge";
-import CommercialHomeGuard from "./commercial-home-guard";
-import CommercialInlineDashboard from "./commercial-inline-dashboard";
+import CommercialProfileShell from "./commercial-profile-shell";
+import LeonardoScopeNetwork from "./leonardo-scope-network";
 import AdlerFinanceNavBridge from "./adler-finance-nav-bridge";
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
@@ -52,9 +51,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="pt-BR">
       <head>
-        {/* A folha de estilo pedia Inter desde sempre, mas a fonte nunca era
-            carregada — o app caía no system-ui. Inter Tight entra só nos títulos,
-            onde o aperto de tracking faz diferença. */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
@@ -64,9 +60,11 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       </head>
       <body>
         <GabrielScopeNetwork />
+        <LeonardoScopeNetwork />
         <GreetingAudioBridge />
         <PreGreetingShield />
         {children}
+        <CommercialProfileShell />
         <MotionSystem />
         <AIHeadRouter />
         <CampaignsNavBridge />
@@ -75,9 +73,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OnboardingAssignmentBridge />
         <OnboardingRequiredAlerts />
         <OnboardingRoleRouter />
-        <CommercialHomeGuard />
-        <CommercialInlineDashboard />
-        <CommercialNavigationBridge />
         <AdlerFinanceNavBridge />
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
