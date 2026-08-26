@@ -83,11 +83,13 @@ function identifyTeam(row: any, identities: any[]) {
 }
 
 async function loadSnapshot(ops: any, candidates: string[]): Promise<LoadRow[]> {
-  const { data: clients } = await ops.from("clients").select("id,gt_owner,lifecycle").in("lifecycle", ["ACTIVE", "ONBOARDING"]).in("gt_owner", candidates);
+  const { data: clients, error: clientsError } = await ops.from("clients").select("id,gt_owner,lifecycle").in("lifecycle", ["ACTIVE", "ONBOARDING"]).in("gt_owner", candidates);
+  if (clientsError) throw new Error(`load_clients_failed:${clientsError.message}`);
   const ids = (clients ?? []).map((row: any) => row.id);
   let healthRows: any[] = [];
   if (ids.length) {
-    const { data } = await ops.from("client_health_scores").select("client_id,date,score").in("client_id", ids).order("date", { ascending: false }).limit(1000);
+    const { data, error } = await ops.from("client_health_scores").select("client_id,date,score").in("client_id", ids).order("date", { ascending: false }).limit(1000);
+    if (error) throw new Error(`load_health_failed:${error.message}`);
     healthRows = data ?? [];
   }
   const latest = new Map<string, number>();
@@ -112,7 +114,11 @@ async function loadSnapshot(ops: any, candidates: string[]): Promise<LoadRow[]> 
 
 async function buildRecommendation(ops: any, request: any, clientName: string, gtOptions: any[]) {
   const clientId = String(request.client_id);
-  const candidates = gtOptions.map((row: any) => String(row.person)).filter((name: string) => GT_PROFILES[name]);
+  const candidates = gtOptions
+    .map((row: any) => String(row.gt_owner ?? row.person ?? "").trim())
+    .filter((name: string) => Boolean(GT_PROFILES[name]));
+  if (!candidates.length) throw new Error("no_valid_gt_candidates");
+
   const [formsR, briefsR, meetingsR, opsNotesR, campaignNotesR, groupsR, identitiesR] = await Promise.all([
     ops.from("form_responses").select("form_type,product_name,answers,submitted_at").eq("client_id", clientId).order("submitted_at", { ascending: false }).limit(12),
     ops.from("notion_briefing_pages").select("title,content_markdown,extracted_profile,notion_last_edited_at").eq("client_id", clientId).order("notion_last_edited_at", { ascending: false }).limit(4),
@@ -142,14 +148,13 @@ async function buildRecommendation(ops: any, request: any, clientName: string, g
 
   let complexity = 22;
   const evidence: Evidence[] = [];
-  const scored = [
+  for (const item of [
     scoreSignals("REUNIÃO", meetingText, 1.15),
     scoreSignals("BRIEFING", briefingText, 1.0),
     scoreSignals("FORMULÁRIO", formText, .9),
     scoreSignals("WHATSAPP_CLIENTE", whatsappText, .85),
     scoreSignals("NOTAS_INTERNAS", notesText, .9),
-  ];
-  for (const item of scored) { complexity += item.points; evidence.push(...item.evidence); }
+  ]) { complexity += item.points; evidence.push(...item.evidence); }
   const products = new Set(forms.map((row: any) => norm(row.product_name)).filter(Boolean));
   if (products.size >= 3) { complexity += 8; evidence.push({ source: "FORMULÁRIO", label: "múltiplos produtos", excerpt: `${products.size} produtos identificados nos formulários`, weight: 8 }); }
   if (clientMessages.length >= 35) { complexity += 5; evidence.push({ source: "WHATSAPP_CLIENTE", label: "alto volume inicial de interação", excerpt: `${clientMessages.length} mensagens externas recentes no(s) grupo(s)`, weight: 5 }); }
@@ -158,15 +163,8 @@ async function buildRecommendation(ops: any, request: any, clientName: string, g
   complexity = Math.max(0, Math.min(100, complexity));
   const complexityBand = complexity >= 72 ? "ALTA" : complexity >= 50 ? "MÉDIA" : complexity >= 32 ? "BAIXA" : "MUITO BAIXA";
 
-  const strongText = `${briefingText}\n${meetingText}\n${formText}`;
-  const relationship = detectRelationship(clientMessages, strongText);
-  const sourceCoverage = {
-    forms: forms.length,
-    briefings: briefs.length,
-    meeting_transcripts: meetings.length,
-    client_whatsapp_messages: clientMessages.length,
-    internal_notes: opsNotes.length + campaignNotes.length,
-  };
+  const relationship = detectRelationship(clientMessages, `${briefingText}\n${meetingText}\n${formText}`);
+  const sourceCoverage = { forms: forms.length, briefings: briefs.length, meeting_transcripts: meetings.length, client_whatsapp_messages: clientMessages.length, internal_notes: opsNotes.length + campaignNotes.length };
   let confidence = 18;
   if (forms.length) confidence += 14;
   if (briefs.length) confidence += 18;
@@ -175,12 +173,12 @@ async function buildRecommendation(ops: any, request: any, clientName: string, g
   if (opsNotes.length + campaignNotes.length) confidence += 8;
   confidence = Math.min(96, confidence);
 
-  const loadSnapshot = await loadSnapshot(ops, candidates);
-  const loads = loadSnapshot.map((row) => row.weighted_load);
+  const loadRows = await loadSnapshot(ops, candidates);
+  const loads = loadRows.map((row) => row.weighted_load);
   const minLoad = Math.min(...loads), maxLoad = Math.max(...loads);
   const scores = candidates.map((person) => {
     const profile = GT_PROFILES[person];
-    const load = loadSnapshot.find((row) => row.person === person)?.weighted_load ?? maxLoad;
+    const load = loadRows.find((row) => row.person === person)?.weighted_load ?? maxLoad;
     const loadPenalty = maxLoad > minLoad ? ((load - minLoad) / (maxLoad - minLoad)) * 30 : 0;
     let score = 68 + profile.balanceBias - loadPenalty;
     if (complexity >= 72) score += person === "Felipe Oliveira" ? 34 : person === "Yuri Melo" ? 2 : -10;
@@ -190,10 +188,11 @@ async function buildRecommendation(ops: any, request: any, clientName: string, g
     if (relationship.profile === "RELACIONAL / EXPANSIVO") score += person === "Rodrigo Cavalheiro" ? 14 : person === "Felipe Oliveira" ? 8 : 2;
     if (relationship.profile === "OBJETIVO / DIRETO") score += person === "Yuri Melo" ? 9 : person === "Felipe Oliveira" ? 6 : 5;
     score = Math.max(0, Math.min(100, Math.round(score)));
-    return { person, score, weighted_load: load, clients: loadSnapshot.find((row) => row.person === person)?.clients ?? 0, profile: profile.description };
+    return { person, score, weighted_load: load, clients: loadRows.find((row) => row.person === person)?.clients ?? 0, profile: profile.description };
   }).sort((a, b) => b.score - a.score);
 
   const recommended = scores[0]?.person ?? null;
+  if (!recommended) throw new Error("recommendation_without_gt");
   const recommendedLoad = scores[0]?.weighted_load ?? 0;
   const why: string[] = [];
   if (complexity >= 72 && recommended === "Felipe Oliveira") why.push("A complexidade identificada supera a prioridade de equalização e justifica usar o GT mais experiente.");
@@ -202,7 +201,6 @@ async function buildRecommendation(ops: any, request: any, clientName: string, g
   if (relationship.profile !== "AINDA NÃO DETERMINADO") why.push(`Perfil de relacionamento estimado: ${relationship.profile.toLowerCase()}.`);
   why.push(`Carga ponderada do recomendado: ${recommendedLoad.toFixed(1)}. Complexidade: ${complexityBand.toLowerCase()} (${complexity}/100).`);
   if (confidence < 55) why.push("Há pouca evidência disponível; trate a recomendação como provisória e use a leitura humana da reunião.");
-  const rationale = why.join(" ");
 
   const payload = {
     request_id: request.id,
@@ -214,11 +212,11 @@ async function buildRecommendation(ops: any, request: any, clientName: string, g
     relationship_profile: relationship.profile,
     relationship_detail: relationship,
     gt_scores: scores,
-    rationale,
+    rationale: why.join(" "),
     evidence: evidence.sort((a, b) => b.weight - a.weight).slice(0, 8),
     source_coverage: sourceCoverage,
-    load_snapshot: loadSnapshot,
-    engine_version: "gt-fit-v1.1",
+    load_snapshot: loadRows,
+    engine_version: "gt-fit-v1.2",
     updated_at: new Date().toISOString(),
   };
   const { error } = await ops.from("onboarding_gt_recommendations").upsert(payload, { onConflict: "request_id" });
@@ -262,13 +260,16 @@ Deno.serve(async (req: Request) => {
   const { data: existing } = await ops.from("onboarding_gt_recommendations").select("*").eq("request_id", requestId).maybeSingle();
   if (existing && !force) {
     const age = Date.now() - new Date(existing.updated_at).getTime();
-    if (age < 10 * 60_000) return respond({ ok: true, recommendation: { ...existing, client_name: client.display_name, decision_mode: "HUMAN_REQUIRED" }, cached: true });
+    const validCachedRecommendation = Boolean(existing.recommended_gt) && Array.isArray(existing.gt_scores) && existing.gt_scores.length > 0;
+    if (age < 10 * 60_000 && validCachedRecommendation) return respond({ ok: true, recommendation: { ...existing, client_name: client.display_name, decision_mode: "HUMAN_REQUIRED" }, cached: true });
   }
 
-  const [{ data: walletRows }, { data: activeGts }] = await Promise.all([
+  const [{ data: walletRows, error: walletError }, { data: activeGts, error: rosterError }] = await Promise.all([
     ops.from("wallet_registry").select("gt_owner,carteira,ordem").order("ordem"),
     ops.from("team_roster").select("person").eq("role", "GT").eq("is_former", false),
   ]);
+  if (walletError) return respond({ error: "wallet_registry_failed", detail: walletError.message }, 500);
+  if (rosterError) return respond({ error: "team_roster_failed", detail: rosterError.message }, 500);
   const active = new Set((activeGts ?? []).map((row: any) => String(row.person)));
   const gtOptions = (walletRows ?? []).filter((row: any) => active.has(String(row.gt_owner)) && GT_PROFILES[String(row.gt_owner)]).slice(0, 3);
   try {
