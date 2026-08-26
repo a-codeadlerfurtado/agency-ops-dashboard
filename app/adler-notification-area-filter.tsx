@@ -32,8 +32,8 @@ function norm(value: unknown) {
 function classify(raw: unknown): Exclude<Area, "ALL"> {
   const t = norm(raw);
 
-  // Ordem intencional: o assunto da demanda vale mais que a tecnologia/origem usada
-  // para gera-la. Ex.: "retorno ao cliente sobre qualificacao de leads" e CS, nao trafego.
+  // O assunto da demanda vale mais que a tecnologia/origem usada para gera-la.
+  // Ex.: "retorno ao cliente sobre qualificacao de leads" e CS, nao trafego.
   if (/(retorno ao cliente|cliente aguard|sem resposta|bom dia|feedback|qualificacao dos leads|atendimento|follow up|reuniao de apresentacao|produto persona|onboarding|sucesso do cliente|\bcs\b|joel antoniete|\bjoel\b|gustavo lima|\bgustavo\b)/.test(t)) return "CS";
   if (/(criativ|designer|\bdesign\b|\barte\b|carrossel|\bstory\b|stories|\bfeed\b|\bvideo\b|estatico|nycollas|filipe azevedo|davi henrique|aprovacao interna)/.test(t)) return "DESIGN";
   if (/(inteligencia artificial|\bia\b|\bcrm\b|automacao|webhook|supabase|\bapi\b|donnah|agente de ia|integracao ia|castro|gabriel castro|\btech\b)/.test(t)) return "IA_TECH";
@@ -124,7 +124,8 @@ function buildFilterBar(host: Element, marker: string, getNodes: () => HTMLEleme
     button.classList.toggle("active", area === current());
     button.setAttribute("aria-pressed", area === current() ? "true" : "false");
     const count = button.querySelector("b");
-    if (count) count.textContent = String(counts[area] ?? 0);
+    const nextCount = String(counts[area] ?? 0);
+    if (count && count.textContent !== nextCount) count.textContent = nextCount;
   });
 
   let empty = host.querySelector<HTMLElement>(`[data-adler-notification-area-empty=\"${marker}\"]`);
@@ -136,7 +137,8 @@ function buildFilterBar(host: Element, marker: string, getNodes: () => HTMLEleme
       empty.dataset.adlerNotificationAreaEmpty = marker;
       host.appendChild(empty);
     }
-    empty.textContent = "Nenhuma notificação desta área neste recorte.";
+    const message = "Nenhuma notificação desta área neste recorte.";
+    if (empty.textContent !== message) empty.textContent = message;
   } else empty?.remove();
 }
 
@@ -181,17 +183,6 @@ export default function AdlerNotificationAreaFilter() {
           const panel = document.querySelector<HTMLElement>(".notification-panel");
           const list = panel?.querySelector<HTMLElement>(".notification-list");
           if (panel && list) {
-            const host = panel;
-            let bar = host.querySelector<HTMLElement>("[data-adler-notification-area-filter=\"panel\"]");
-            if (!bar) {
-              bar = document.createElement("div");
-              bar.dataset.adlerNotificationAreaFilter = "panel";
-              // buildFilterBar cria o conteudo; este placeholder so' garante a posicao correta.
-              const markRead = panel.querySelector(".mark-read");
-              if (markRead?.nextSibling) panel.insertBefore(bar, markRead.nextSibling);
-              else panel.insertBefore(bar, list);
-              bar.remove();
-            }
             buildFilterBar(panel, "panel", () => Array.from(list.children).filter((node): node is HTMLElement => node instanceof HTMLElement && !node.hasAttribute("data-adler-notification-area-empty")), () => filter, setFilter);
             const built = panel.querySelector<HTMLElement>("[data-adler-notification-area-filter=\"panel\"]");
             if (built && built.nextElementSibling !== list) panel.insertBefore(built, list);
@@ -216,7 +207,7 @@ export default function AdlerNotificationAreaFilter() {
       if (mutations.some((mutation) => Array.from(mutation.addedNodes).some((node) => node instanceof HTMLElement && node.hasAttribute("data-adler-notification-area-filter")))) return;
       apply();
     });
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+    observer.observe(document.body, { childList: true, subtree: true });
     return () => {
       observer.disconnect();
       window.cancelAnimationFrame(frame);
