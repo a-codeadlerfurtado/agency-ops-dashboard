@@ -7,7 +7,7 @@ import "./motion-system.css";
 import "./contrast-tune.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
-import CampaignNotesBridge from "./campaign-notes-bridge";
+import CampaignNotesBridge from "./campaign-nototes-bridge";
 import OnboardingNavBridge from "./onboarding-nav-bridge";
 import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OnboardingRequiredAlerts from "./onboarding-required-alerts";
@@ -28,6 +28,7 @@ import NotificationLeadDetailBridge from "./notification-lead-detail-bridge";
 import NotificationLeadClickOverride from "./notification-lead-click-override";
 import ClientNotificationsBridge from "./client-notifications-bridge";
 import LeonardoMeetingNotificationBridge from "./leonardo-meeting-notification-bridge";
+import LeonardoActionWarning from "./leonardo-action-warning";
 import NotificationsHomeLink from "./notifications-home-link";
 import AutomationNavBridge from "./automation-nav-bridge";
 import DonnahNavBridge from "./donnah-nav-bridge";
@@ -93,6 +94,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <NotificationLeadClickOverride />
         <ClientNotificationsBridge />
         <LeonardoMeetingNotificationBridge />
+        <LeonardoActionWarning />
         <NotificationsHomeLink />
         <AutomationNavBridge />
         <DonnahNavBridge />
