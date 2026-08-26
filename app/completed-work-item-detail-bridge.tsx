@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { api, formatDate, supabase, text } from "./shared";
+import { SUPABASE_ANON_KEY, SUPABASE_URL, api, formatDate, supabase, text } from "./shared";
 
 type Row = Record<string, any>;
+
+const NOTIFICATIONS_API = `${SUPABASE_URL}/functions/v1/agency-ops-notifications-home`;
 
 const norm = (value: unknown) => String(value ?? "")
   .normalize("NFD")
@@ -17,8 +19,27 @@ function person(value: unknown) {
   return raw || "Não identificado";
 }
 
+function clickupTaskName(item: Row | null) {
+  if (!item) return "Tarefa concluída";
+  const metadataName = String(item?.metadata?.task_name || "").trim();
+  if (metadataName) return metadataName;
+  const description = String(item?.description || "").trim();
+  return description.split(" · Responsável pela task:")[0]?.trim() || "Tarefa concluída";
+}
+
+function notificationMatchesButton(item: Row, visibleText: string) {
+  const taskName = norm(clickupTaskName(item));
+  const description = norm(item?.description || "");
+  const clientName = norm(item?.client_name || "");
+  if (taskName && visibleText.includes(taskName)) return true;
+  if (description && visibleText.includes(description.slice(0, Math.min(90, description.length)))) return true;
+  if (taskName && clientName && visibleText.includes(taskName) && visibleText.includes(clientName)) return true;
+  return false;
+}
+
 export default function CompletedWorkItemDetailBridge() {
   const [item, setItem] = useState<Row | null>(null);
+  const [clickupNotification, setClickupNotification] = useState<Row | null>(null);
   const [loadingTitle, setLoadingTitle] = useState("");
   const [error, setError] = useState("");
 
@@ -27,20 +48,58 @@ export default function CompletedWorkItemDetailBridge() {
 
     const onClick = async (event: MouseEvent) => {
       const target = event.target as Element | null;
+      if (target?.closest?.("[data-notification-resolve]")) return;
+
       const button = target?.closest?.(".notification-panel .notification-list > button") as HTMLButtonElement | null;
       if (!button) return;
-      const title = button.querySelector("b")?.textContent?.trim() || "";
-      if (!/^demanda conclu[ií]da\s*:/i.test(title)) return;
 
-      const taskName = title.replace(/^demanda conclu[ií]da\s*:\s*/i, "").trim();
-      if (!taskName) return;
-      const visibleText = norm(button.textContent || "");
-      setLoadingTitle(taskName);
+      const title = button.querySelector("b")?.textContent?.trim() || "";
+      const isWorkCompletion = /^demanda conclu[ií]da\s*:/i.test(title);
+      const isClickupCompletion = /^tarefa conclu[ií]da\s*$/i.test(title);
+      if (!isWorkCompletion && !isClickupCompletion) return;
+
+      // A notificação é um atalho para a própria tarefa/demanda. O clique não pode
+      // continuar até o handler genérico do dashboard, que abre a visão do cliente.
+      event.preventDefault();
+      event.stopPropagation();
+      (event as any).stopImmediatePropagation?.();
+
+      setItem(null);
+      setClickupNotification(null);
       setError("");
 
       try {
         const { data: { session } } = await supabase.auth.getSession();
         if (!session?.access_token) throw new Error("Sessão indisponível");
+
+        if (isClickupCompletion) {
+          const visibleText = norm(button.textContent || "");
+          setLoadingTitle("tarefa do ClickUp");
+          const response = await fetch(NOTIFICATIONS_API, {
+            headers: {
+              Authorization: `Bearer ${session.access_token}`,
+              apikey: SUPABASE_ANON_KEY,
+            },
+            cache: "no-store",
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok || !payload?.ok) throw new Error(payload?.error || "Não consegui carregar os detalhes da tarefa.");
+          if (disposed) return;
+
+          const candidates: Row[] = (Array.isArray(payload?.items) ? payload.items : [])
+            .filter((row: Row) => row.kind === "NOTIFICATION" && String(row.type || "").toUpperCase() === "TASK_COMPLETED")
+            .sort((a: Row, b: Row) => new Date(String(b.occurred_at || 0)).getTime() - new Date(String(a.occurred_at || 0)).getTime());
+          const found = candidates.find((row) => notificationMatchesButton(row, visibleText));
+          if (!found) throw new Error("Não encontrei esta tarefa concluída na Central de Notificações.");
+          setClickupNotification(found);
+          return;
+        }
+
+        const taskName = title.replace(/^demanda conclu[ií]da\s*:\s*/i, "").trim();
+        if (!taskName) throw new Error("Não consegui identificar a demanda concluída.");
+        const visibleText = norm(button.textContent || "");
+        setLoadingTitle(taskName);
+
         const payload = await api("work", session.access_token);
         if (disposed) return;
         const rows: Row[] = Array.isArray(payload?.items) ? payload.items : [];
@@ -58,7 +117,7 @@ export default function CompletedWorkItemDetailBridge() {
         if (!found) throw new Error("Não encontrei os detalhes desta demanda na Central de Trabalho.");
         setItem(found);
       } catch (caught) {
-        if (!disposed) setError(caught instanceof Error ? caught.message : "Não consegui carregar os detalhes desta demanda.");
+        if (!disposed) setError(caught instanceof Error ? caught.message : "Não consegui carregar os detalhes desta tarefa.");
       } finally {
         if (!disposed) setLoadingTitle("");
       }
@@ -69,30 +128,74 @@ export default function CompletedWorkItemDetailBridge() {
   }, []);
 
   useEffect(() => {
-    if (!item && !error && !loadingTitle) return;
+    if (!item && !clickupNotification && !error && !loadingTitle) return;
     const previous = document.body.style.overflow;
-    if (item || error) document.body.style.overflow = "hidden";
+    if (item || clickupNotification || error) document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previous; };
-  }, [item, error, loadingTitle]);
+  }, [item, clickupNotification, error, loadingTitle]);
 
   const client = item?.clients || {};
   const routedTo = useMemo(() => person(item?.target_person || item?.target_role), [item]);
+  const clickupMeta = clickupNotification?.metadata || {};
+  const clickupCompletedBy = person(clickupMeta.completed_by || clickupNotification?.actor);
+  const clickupAssignees = person(clickupMeta.assignee_names);
 
-  if (loadingTitle && !item && !error) {
+  const close = () => {
+    setItem(null);
+    setClickupNotification(null);
+    setError("");
+    setLoadingTitle("");
+  };
+
+  if (loadingTitle && !item && !clickupNotification && !error) {
     return <div className="cw-detail-loading" role="status"><style>{styles}</style><span /> Carregando detalhes de <b>{loadingTitle}</b>…</div>;
   }
-  if (!item && !error) return null;
+  if (!item && !clickupNotification && !error) return null;
+
+  const isClickup = Boolean(clickupNotification);
+  const modalTitle = isClickup ? clickupTaskName(clickupNotification) : item ? text(item.title) : "Não foi possível abrir a tarefa";
 
   return (
     <div className="cw-detail-shield" role="dialog" aria-modal="true" aria-labelledby="cw-detail-title">
       <style>{styles}</style>
       <section className="cw-detail-card">
         <header>
-          <div><span className="eyebrow">Demanda concluída · detalhes</span><h2 id="cw-detail-title">{item ? text(item.title) : "Não foi possível abrir a demanda"}</h2></div>
-          <button type="button" className="cw-close" onClick={() => { setItem(null); setError(""); }}>×</button>
+          <div>
+            <span className="eyebrow">{isClickup ? "Tarefa concluída · ClickUp" : "Demanda concluída · detalhes"}</span>
+            <h2 id="cw-detail-title">{modalTitle}</h2>
+          </div>
+          <button type="button" className="cw-close" onClick={close}>×</button>
         </header>
 
-        {error ? <div className="cw-error">{error}</div> : <>
+        {error ? <div className="cw-error">{error}</div> : isClickup ? <>
+          <div className="cw-people">
+            <div><small>RESPONSÁVEL</small><b>{clickupAssignees}</b></div>
+            <div className="done"><small>FINALIZADA POR</small><b>{clickupCompletedBy}</b></div>
+            <div><small>STATUS</small><b>{text(clickupMeta.status || "Concluída")}</b></div>
+            <div><small>LISTA</small><b>{text(clickupMeta.list || "—")}</b></div>
+          </div>
+
+          <section className="cw-block original">
+            <small>TAREFA</small>
+            <p>{clickupTaskName(clickupNotification)}</p>
+          </section>
+
+          {String(clickupMeta.completion_actor_source || "").toUpperCase() === "NOT_IDENTIFIED" && (
+            <section className="cw-block history">
+              <small>QUEM CONCLUIU</small>
+              <p>O ClickUp não entregou um evento de conclusão com autor identificável para esta tarefa. O responsável pela tarefa continua registrado acima.</p>
+            </section>
+          )}
+
+          <div className="cw-meta">
+            <span><small>CLIENTE</small><b>{text(clickupNotification?.client_name || "Não vinculado")}</b></span>
+            <span><small>ID DA TAREFA</small><b>{text(clickupNotification?.task_id || "—")}</b></span>
+            <span><small>CONCLUÍDA EM</small><b>{clickupNotification?.occurred_at ? formatDate(clickupNotification.occurred_at) : "—"}</b></span>
+            <span><small>ORIGEM</small><b>{text(clickupNotification?.source || "ClickUp")}</b></span>
+          </div>
+
+          {clickupMeta.url && <a className="cw-clickup" href={String(clickupMeta.url)} target="_blank" rel="noreferrer">Abrir tarefa no ClickUp ↗</a>}
+        </> : <>
           <div className="cw-people">
             <div><small>CRIADA POR</small><b>{person(item?.created_by_person)}</b></div>
             <div><small>ENCAMINHADA PARA</small><b>{routedTo}</b></div>
@@ -123,7 +226,7 @@ export default function CompletedWorkItemDetailBridge() {
           {item?.metadata?.clickup_url && <a className="cw-clickup" href={item.metadata.clickup_url} target="_blank" rel="noreferrer">Abrir tarefa no ClickUp ↗</a>}
         </>}
 
-        <button type="button" className="cw-ok" onClick={() => { setItem(null); setError(""); }}>Fechar detalhes</button>
+        <button type="button" className="cw-ok" onClick={close}>Fechar detalhes</button>
       </section>
     </div>
   );
@@ -136,7 +239,7 @@ const styles = `
 .cw-detail-card header{display:flex;align-items:flex-start;justify-content:space-between;gap:18px}.cw-detail-card .eyebrow{color:#72c8ff;font-size:10px;font-weight:900;letter-spacing:.13em;text-transform:uppercase}.cw-detail-card h2{margin:8px 0 0;font:800 clamp(28px,4vw,44px)/1.03 "Inter Tight",Inter,sans-serif;letter-spacing:-.035em}.cw-close{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:#c9d8e6;border-radius:10px;width:38px;height:38px;font-size:24px;cursor:pointer}
 .cw-people{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:22px}.cw-people>div{padding:13px;border:1px solid rgba(255,255,255,.08);border-radius:11px;background:rgba(255,255,255,.025)}.cw-people>div.done{border-color:rgba(74,203,143,.25);background:rgba(44,170,111,.07)}.cw-people small,.cw-block small,.cw-meta small{display:block;color:#7992a9;font-size:9px;font-weight:900;letter-spacing:.11em}.cw-people b{display:block;margin-top:5px;font-size:12px;color:#edf5fc}
 .cw-block{margin-top:12px;padding:16px 18px;border:1px solid rgba(255,255,255,.08);border-radius:13px;background:rgba(0,0,0,.15)}.cw-block p{margin:8px 0 0;white-space:pre-wrap;font-size:14px;line-height:1.58;color:#d9e6f2}.cw-block.resolution{border-color:rgba(63,207,140,.27);background:linear-gradient(180deg,rgba(35,148,96,.1),rgba(17,70,53,.08))}.cw-block.resolution small{color:#6ddca8}.cw-block.history{border-color:rgba(242,179,67,.2)}.cw-author{margin-top:10px;color:#8ca4b8;font-size:11px}.cw-author b{color:#d5e8f5}
-.cw-meta{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}.cw-meta span{padding:12px 13px;border-radius:10px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.06)}.cw-meta b{display:block;margin-top:5px;font-size:11px;color:#d8e8f5}
+.cw-meta{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px}.cw-meta span{padding:12px 13px;border-radius:10px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.06)}.cw-meta b{display:block;margin-top:5px;font-size:11px;color:#d8e8f5;word-break:break-word}
 .cw-clickup{display:inline-flex;margin-top:13px;color:#72c8ff;font-size:12px;font-weight:800;text-decoration:none}.cw-ok{width:100%;margin-top:19px;border:0;border-radius:11px;padding:14px 18px;background:#67c7ff;color:#07121b;font-weight:900;cursor:pointer}.cw-error{margin:22px 0;padding:15px;border-radius:12px;background:rgba(230,80,75,.12);border:1px solid rgba(230,80,75,.25);color:#ffb9b3;font-size:13px}
 @media(max-width:760px){.cw-detail-shield{padding:10px}.cw-detail-card{padding:20px}.cw-people,.cw-meta{grid-template-columns:1fr 1fr}.cw-detail-card h2{font-size:30px}}
 `;
