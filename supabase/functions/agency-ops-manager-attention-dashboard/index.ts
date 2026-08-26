@@ -17,7 +17,7 @@ async function setting(name: string): Promise<string | null> {
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
-  if (url.searchParams.get("health") === "1") return json({ ok: true, service: "agency-ops-manager-attention-dashboard", version: 1, channel: "DASHBOARD_ONLY" });
+  if (url.searchParams.get("health") === "1") return json({ ok: true, service: "agency-ops-manager-attention-dashboard", version: 2, channel: "DASHBOARD_ONLY" });
   if (req.method !== "GET" && req.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
 
   const expected = await setting("MANAGER_RADAR_CRON_SECRET");
@@ -25,24 +25,24 @@ Deno.serve(async (req) => {
   if (!expected || expected !== given) return json({ ok: false, error: "unauthorized" }, 401);
 
   const slot = String(url.searchParams.get("slot") || "manual").slice(0, 40);
+  const dryRun = url.searchParams.get("dry_run") === "1";
   const radarUrl = new URL(`${SUPABASE_URL}/functions/v1/agency-ops-manager-attention-radar`);
   radarUrl.searchParams.set("slot", slot);
   radarUrl.searchParams.set("dry_run", "1");
 
-  const radarResponse = await fetch(radarUrl, {
-    headers: { "x-manager-radar-key": expected },
-  });
+  const radarResponse = await fetch(radarUrl, { headers: { "x-manager-radar-key": expected } });
   const radar = await radarResponse.json().catch(() => null);
   if (!radarResponse.ok || !radar?.ok) return json({ ok: false, error: "radar_failed", details: radar?.error || `HTTP ${radarResponse.status}` }, 502);
 
   const runId = Number(radar.run_id || 0) || null;
   const runDate = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   const items = Array.isArray(radar?.analysis?.items) ? radar.analysis.items : [];
-  const alertIds: string[] = [];
+  const actionable = items.filter((item: any) => ['COBRAR_AGORA','ACOMPANHAR_HOJE','VERIFICAR_INTERNO'].includes(String(item?.level || "")));
 
-  for (const item of items) {
-    const level = String(item?.level || "");
-    if (!['COBRAR_AGORA','ACOMPANHAR_HOJE','VERIFICAR_INTERNO'].includes(level)) continue;
+  if (dryRun) return json({ ok: true, dry_run: true, channel: "DASHBOARD_ONLY", slot, run_id: runId, alert_count: actionable.length });
+
+  const alertIds: string[] = [];
+  for (const item of actionable) {
     const { data, error } = await ops.rpc("upsert_manager_attention_alert", {
       p_run_id: runId,
       p_run_date: runDate,
