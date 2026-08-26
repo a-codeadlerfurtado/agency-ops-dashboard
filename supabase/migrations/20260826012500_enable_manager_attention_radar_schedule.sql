@@ -47,23 +47,25 @@ begin
   end loop;
 end $$;
 
+-- cron.timezone is GMT in this project. Schedules below are UTC equivalents
+-- for America/Sao_Paulo (UTC-03): 11:00, 15:00, 17:00 and 18:40 local.
 select cron.schedule(
   'agency_ops_manager_radar_1100',
-  '0 11 * * *',
+  '0 14 * * *',
   $$select agency_ops.invoke_manager_attention_radar('11:00');$$
 );
 select cron.schedule(
   'agency_ops_manager_radar_1500',
-  '0 15 * * *',
+  '0 18 * * *',
   $$select agency_ops.invoke_manager_attention_radar('15:00');$$
 );
 select cron.schedule(
   'agency_ops_manager_radar_1700',
-  '0 17 * * *',
+  '0 20 * * *',
   $$select agency_ops.invoke_manager_attention_radar('17:00');$$
 );
 select cron.schedule(
   'agency_ops_manager_radar_1840',
-  '40 18 * * *',
+  '40 21 * * *',
   $$select agency_ops.invoke_manager_attention_radar('18:40');$$
 );
