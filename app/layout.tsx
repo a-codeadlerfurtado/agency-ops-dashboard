@@ -21,6 +21,7 @@ import WeekendBalanceAlert from "./weekend-balance-alert";
 import LeadQualityAlert from "./lead-quality-alert";
 import ChurnedClientMessageWarning from "./churned-client-message-warning";
 import ManagerAttentionRadarWarning from "./manager-attention-radar-warning";
+import ManagerAttentionContextBridge from "./manager-attention-context-bridge";
 import CompletedWorkItemDetailBridge from "./completed-work-item-detail-bridge";
 import NotificationLeadDetailBridge from "./notification-lead-detail-bridge";
 import NotificationLeadClickOverride from "./notification-lead-click-override";
@@ -84,6 +85,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <LeadQualityAlert />
         <ChurnedClientMessageWarning />
         <ManagerAttentionRadarWarning />
+        <ManagerAttentionContextBridge />
         <CompletedWorkItemDetailBridge />
         <NotificationLeadDetailBridge />
         <NotificationLeadClickOverride />
