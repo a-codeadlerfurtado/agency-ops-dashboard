@@ -7,7 +7,7 @@ import "./motion-system.css";
 import "./contrast-tune.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
-import CampaignNotesBridge from "./campaign-nototes-bridge";
+import CampaignNotesBridge from "./campaign-notes-bridge";
 import OnboardingNavBridge from "./onboarding-nav-bridge";
 import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OnboardingRequiredAlerts from "./onboarding-required-alerts";
