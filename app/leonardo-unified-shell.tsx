@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Session } from "@supabase/supabase-js";
 import { CreativeCenter } from "./views/creative";
+import LeonardoClientsTab from "./leonardo-clients-tab";
 import { Metric, SUPABASE_URL, authenticatedFetch, loadProfileLite, supabase, text } from "./shared";
 
 type Row = Record<string, any>;
@@ -53,7 +54,7 @@ function Direction({ data }: { data: Row }) { const s=data.summary||{}; const pe
 function Content({ tab, data, token }: { tab:Tab; data:Row; token:string }) {
   if (tab === "creative") return <CreativeCenter token={token}/>;
   if (tab === "funnel") return <DataTable title="Funil Comercial" subtitle="Oportunidades e evolução do pipeline." rows={data.leads||[]} kind="funnel"/>;
-  if (tab === "clients") return <DataTable title="Clientes" subtitle="Visão comercial da carteira." rows={data.portfolio_clients||[]} kind="clients"/>;
+  if (tab === "clients") return <LeonardoClientsTab rows={data.portfolio_clients||[]}/>;
   if (tab === "campaigns") return <DataTable title="Campanhas" subtitle="Performance das campanhas para contexto comercial." rows={data.campaigns||[]} kind="campaigns"/>;
   if (tab === "meetings") return <Meetings data={data}/>;
   if (tab === "direction") return <Direction data={data}/>;
