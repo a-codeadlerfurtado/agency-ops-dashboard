@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import NativeDashboard from "./dashboard-native";
 import LeonardoNativeDashboard from "./leonardo-native-dashboard";
+import WorkReassignmentBridge from "./work-reassignment-bridge";
 import { loadProfileLite, supabase } from "./shared";
 
 type RouteState = "loading" | "native" | "leonardo" | "error";
@@ -56,5 +57,8 @@ export default function DashboardRouter() {
   }
 
   if (route === "leonardo" && session) return <LeonardoNativeDashboard session={session} />;
-  return <NativeDashboard />;
+  return <>
+    <NativeDashboard />
+    {session && <WorkReassignmentBridge session={session} />}
+  </>;
 }
