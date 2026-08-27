@@ -94,9 +94,9 @@ function inferredOwner(item: Row, client: Row) {
   return "Operação";
 }
 
-function ClientNotificationsPane({ clientName, body, initialNotifications, highlightTitle }: { clientName: string; body: HTMLElement; initialNotifications: boolean; highlightTitle: string | null }) {
+function ClientNotificationsPane({ clientName, body, initialNotifications, highlightId, highlightTitle }: { clientName: string; body: HTMLElement; initialNotifications: boolean; highlightId: string | null; highlightTitle: string | null }) {
   const [active, setActive] = useState(initialNotifications ? "NOTIFICATIONS" : "OVERVIEW");
-  const [filter, setFilter] = useState<Filter>("OPEN");
+  const [filter, setFilter] = useState<Filter>(initialNotifications ? "ALL" : "OPEN");
   const [payload, setPayload] = useState<Row>({ summary: {}, client: {}, items: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -138,7 +138,12 @@ function ClientNotificationsPane({ clientName, body, initialNotifications, highl
     if (filter === "CRITICAL") return critical;
     if (filter === "RESOLVED") return resolved;
     return true;
-  }), [items, filter]);
+  }).sort((a, b) => {
+    const aHighlighted = highlightId ? String(a.id) === highlightId : (!!highlightTitle && norm(a.title) === norm(highlightTitle));
+    const bHighlighted = highlightId ? String(b.id) === highlightId : (!!highlightTitle && norm(b.title) === norm(highlightTitle));
+    if (aHighlighted !== bHighlighted) return aHighlighted ? -1 : 1;
+    return new Date(String(b.occurred_at || 0)).getTime() - new Date(String(a.occurred_at || 0)).getTime();
+  }), [items, filter, highlightId, highlightTitle]);
 
   async function markRead(item: Row) {
     if (item.kind !== "NOTIFICATION" || item.read_at) return;
@@ -186,7 +191,7 @@ function ClientNotificationsPane({ clientName, body, initialNotifications, highl
       {!loading && !visible.length && !error && <div className="cn-empty">Nenhum item neste filtro.</div>}
 
       <div className="cn-list">{visible.map((item) => {
-        const highlighted = !!highlightTitle && norm(item.title) === norm(highlightTitle);
+        const highlighted = highlightId ? String(item.id) === highlightId : (!!highlightTitle && norm(item.title) === norm(highlightTitle));
         const tone = severityClass(item.level);
         const metadata: Row = item.metadata || {};
         const responseSummary = metadata.response_summary ? text(metadata.response_summary) : "";
@@ -229,7 +234,7 @@ export default function ClientNotificationsBridge() {
     let currentName = "";
     let host: HTMLDivElement | null = null;
     let root: Root | null = null;
-    let pending: { title: string; at: number } | null = null;
+    let pending: { id: string; title: string; at: number } | null = null;
 
     const cleanup = () => {
       try { root?.unmount(); } catch {}
@@ -256,7 +261,7 @@ export default function ClientNotificationsBridge() {
       body.parentElement?.insertBefore(host, body);
       const freshPending = pending && Date.now() - pending.at < 8000 ? pending : null;
       root = createRoot(host);
-      root.render(<ClientNotificationsPane clientName={name} body={body} initialNotifications={!!freshPending} highlightTitle={freshPending?.title || null} />);
+      root.render(<ClientNotificationsPane clientName={name} body={body} initialNotifications={!!freshPending} highlightId={freshPending?.id || null} highlightTitle={freshPending?.title || null} />);
       if (freshPending) pending = null;
     };
 
@@ -264,9 +269,10 @@ export default function ClientNotificationsBridge() {
       const target = event.target as Element | null;
       const button = target?.closest?.(".notification-panel .notification-list > button") as HTMLButtonElement | null;
       if (!button) return;
+      const id = button.dataset.notificationId || "";
       const title = button.querySelector("b")?.textContent?.trim() || "";
       if (!title || isLeadDiagnostic(title)) return; // o bridge de diagnóstico de lead continua dono desse fluxo.
-      pending = { title, at: Date.now() };
+      pending = { id, title, at: Date.now() };
       window.setTimeout(mount, 80);
       window.setTimeout(mount, 350);
       window.setTimeout(mount, 900);
