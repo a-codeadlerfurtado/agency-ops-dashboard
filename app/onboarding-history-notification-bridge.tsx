@@ -11,43 +11,6 @@ function isCompletionTitle(value: unknown) {
   return String(value || "").trim().toLocaleLowerCase("pt-BR").startsWith("onboarding finalizado");
 }
 
-function applyHistorySlaLabels() {
-  if (window.location.pathname !== "/onboarding-overview/history") return;
-  const root = document.querySelector<HTMLElement>(".oh-shell");
-  if (!root) return;
-
-  root.querySelectorAll<HTMLElement>(".oh-kpis article").forEach((article) => {
-    const label = article.querySelector<HTMLElement>("small");
-    const hint = article.querySelector<HTMLElement>("span");
-    if (label?.textContent?.trim() === "HISTÓRICOS") label.textContent = "FINALIZADOS";
-    if (hint?.textContent?.trim() === "ciclos auditáveis") hint.textContent = "onboardings encerrados";
-  });
-
-  root.querySelectorAll<HTMLTableCellElement>("th").forEach((cell) => {
-    if (cell.textContent?.trim() === "Avaliação") cell.textContent = "SLA";
-  });
-
-  root.querySelectorAll<HTMLOptionElement>("select option").forEach((option) => {
-    if (option.textContent?.trim() === "Qualquer avaliação") option.textContent = "Qualquer SLA";
-    if (option.value === "EXPECTED") option.textContent = "Dentro do SLA";
-    if (option.value === "ATTENTION") option.textContent = "SLA estourado";
-    if (option.value === "CRITICAL") option.remove();
-  });
-
-  root.querySelectorAll<HTMLElement>(".oh-pill, .oh-eval > b").forEach((node) => {
-    const value = node.textContent?.trim();
-    if (value === "Dentro do esperado") node.textContent = "Dentro do SLA";
-    if (value === "Atenção" || value === "Onboarding crítico") node.textContent = "SLA estourado";
-  });
-
-  root.querySelectorAll<HTMLTableRowElement>(".oh-table tbody tr").forEach((row) => {
-    const marker = row.querySelector<HTMLElement>("td:first-child small");
-    if (!marker) return;
-    const current = marker.textContent?.trim() || "";
-    if (current && !current.startsWith("Finalizado ·")) marker.textContent = `Finalizado · ${current}`;
-  });
-}
-
 export default function OnboardingHistoryNotificationBridge() {
   const [session, setSession] = useState<Session | null>(null);
   const cache = useRef<{ at: number; rows: Row[] }>({ at: 0, rows: [] });
@@ -59,18 +22,6 @@ export default function OnboardingHistoryNotificationBridge() {
       if (!next) cache.current = { at: 0, rows: [] };
     });
     return () => subscription.unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    const apply = () => applyHistorySlaLabels();
-    apply();
-    const observer = new MutationObserver(apply);
-    observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
-    window.addEventListener("popstate", apply);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("popstate", apply);
-    };
   }, []);
 
   const loadRows = useCallback(async () => {
