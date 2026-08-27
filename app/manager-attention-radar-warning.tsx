@@ -24,6 +24,10 @@ type AlertRow = {
 
 type ActionMode = "AGUARDANDO_CLIENTE" | "PRAZO_COMBINADO" | "FALSO_POSITIVO" | null;
 
+// Exceção deliberadamente limitada ao perfil do Adler. ESC só fecha a tela
+// localmente: não grava COBRADO/RESOLVIDO, não snooza e não altera o alerta.
+const ADLER_USER_ID = "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
+
 const rank = (row: AlertRow) => {
   const level = row.level === "COBRAR_AGORA" ? 0 : row.level === "ACOMPANHAR_HOJE" ? 1 : 2;
   const priority = row.priority === "CRITICAL" ? 0 : row.priority === "HIGH" ? 1 : 2;
@@ -103,12 +107,25 @@ export default function ManagerAttentionRadarWarning() {
     if (!alerts.length) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const blockEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); }
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (sessionUserId === ADLER_USER_ID) {
+        // Fecha somente a interface. Os registros continuam OPEN no banco e
+        // nenhuma ação gerencial é registrada.
+        setAlerts([]);
+        setIndex(0);
+        setActionMode(null);
+        setNote("");
+        setUntil("");
+        setError("");
+      }
     };
-    window.addEventListener("keydown", blockEscape, true);
-    return () => { document.body.style.overflow = previous; window.removeEventListener("keydown", blockEscape, true); };
-  }, [alerts.length]);
+    window.addEventListener("keydown", handleEscape, true);
+    return () => { document.body.style.overflow = previous; window.removeEventListener("keydown", handleEscape, true); };
+  }, [alerts.length, sessionUserId]);
 
   useEffect(() => {
     if (index >= alerts.length) setIndex(Math.max(0, alerts.length - 1));
@@ -154,6 +171,7 @@ export default function ManagerAttentionRadarWarning() {
 
   if (!current) return null;
   const repeated = Number(current.occurrence_count || 1) > 1;
+  const adlerCanDismiss = sessionUserId === ADLER_USER_ID;
 
   return (
     <div className="mgr-radar-shield" role="alertdialog" aria-modal="true" aria-labelledby="mgr-radar-title">
@@ -187,6 +205,7 @@ export default function ManagerAttentionRadarWarning() {
           <span>Confiança: <b>{String(current.confidence || "MEDIA").toLowerCase()}</b></span>
           <span>Primeiro sinal: <b>{fmt(current.first_seen_at)}</b></span>
           <span>Último corte: <b>{current.last_seen_slot}</b></span>
+          {adlerCanDismiss && <span className="mgr-radar-esc-hint"><b>ESC</b> fecha sem registrar ação</span>}
         </div>
 
         {actionMode && (
@@ -210,7 +229,7 @@ export default function ManagerAttentionRadarWarning() {
 
         {alerts.length > 1 && <footer className="mgr-radar-nav">
           <button onClick={() => setIndex((i) => (i - 1 + alerts.length) % alerts.length)}>← anterior</button>
-          <span>A tela só sai quando cada item recebe uma ação.</span>
+          <span>{adlerCanDismiss ? "ESC fecha a tela sem alterar o status dos alertas." : "A tela só sai quando cada item recebe uma ação."}</span>
           <button onClick={() => setIndex((i) => (i + 1) % alerts.length)}>próximo →</button>
         </footer>}
       </section>
@@ -227,9 +246,9 @@ const styles = `
 .mgr-radar-summary{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:18px 0 12px}.mgr-radar-summary span{padding:6px 9px;border-radius:8px;background:rgba(255,255,255,.06);font-size:12px}.mgr-radar-summary b{margin-left:auto;color:#ff8c8c;font-size:12px;letter-spacing:.04em}
 .mgr-radar-client{padding:17px 18px;border:1px solid rgba(255,255,255,.10);border-radius:13px;background:rgba(255,255,255,.035)}.mgr-radar-client small,.mgr-radar-block small,.mgr-radar-grid small{display:block;color:#8194b1;font-size:9px;font-weight:850;letter-spacing:.13em}.mgr-radar-client strong{display:block;margin-top:5px;font-size:25px}.mgr-radar-client span{display:block;margin-top:4px;color:#98a9c1;font-size:13px}
 .mgr-radar-block{margin-top:11px;padding:17px 18px;border-radius:13px;background:#0c1422;border:1px solid rgba(255,255,255,.08)}.mgr-radar-block p,.mgr-radar-grid p{margin:8px 0 0;font-size:14px;line-height:1.55;color:#dce5f2}.mgr-radar-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.mgr-radar-grid>div{padding:17px 18px;border-radius:13px;background:#0c1422;border:1px solid rgba(255,255,255,.08)}.mgr-radar-grid .action{border-color:rgba(85,160,255,.25);background:rgba(35,99,185,.10)}
-.mgr-radar-meta{display:flex;gap:16px;flex-wrap:wrap;margin-top:11px;color:#7689a7;font-size:11px}.mgr-radar-meta b{color:#aec0d9}
+.mgr-radar-meta{display:flex;gap:16px;flex-wrap:wrap;margin-top:11px;color:#7689a7;font-size:11px}.mgr-radar-meta b{color:#aec0d9}.mgr-radar-esc-hint{margin-left:auto;color:#90a4bf}.mgr-radar-esc-hint b{display:inline-flex;align-items:center;justify-content:center;min-width:30px;padding:2px 6px;margin-right:3px;border:1px solid rgba(255,255,255,.14);border-radius:5px;background:rgba(255,255,255,.05);color:#dbe7f7;font-size:9px;letter-spacing:.06em}
 .mgr-radar-actions{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:20px}.mgr-radar-actions button,.mgr-radar-form-actions button,.mgr-radar-nav button{border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:12px 10px;background:#111d2e;color:#dbe7f7;font-weight:800;font-size:11px;cursor:pointer}.mgr-radar-actions .charge{background:#1c5fbd;border-color:#337bd8}.mgr-radar-actions .resolve{background:#176b4c;border-color:#298564}.mgr-radar-actions .false{color:#b7c2d2}.mgr-radar-actions button:hover,.mgr-radar-form-actions button:hover,.mgr-radar-nav button:hover{filter:brightness(1.13)}
 .mgr-radar-form{margin-top:18px;padding:16px;border:1px solid rgba(255,255,255,.12);border-radius:13px;background:#0b1421}.mgr-radar-form strong{display:block;margin-bottom:9px}.mgr-radar-form textarea{width:100%;min-height:90px;resize:vertical;border:1px solid rgba(255,255,255,.13);border-radius:10px;background:#07101c;color:#eef4ff;padding:11px;font:inherit}.mgr-radar-form input{width:100%;margin-top:9px;border:1px solid rgba(255,255,255,.13);border-radius:10px;background:#07101c;color:#eef4ff;padding:11px}.mgr-radar-form-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}.mgr-radar-form-actions .primary{background:#246dcc}.mgr-radar-error{margin-top:12px;padding:10px 12px;border-radius:9px;background:rgba(255,90,90,.12);color:#ffadad;font-size:12px}
 .mgr-radar-nav{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:15px;padding-top:13px;border-top:1px solid rgba(255,255,255,.08)}.mgr-radar-nav span{font-size:10px;color:#7587a1;text-align:center}.mgr-radar-nav button{padding:8px 10px;background:transparent}
-@media(max-width:760px){.mgr-radar-shield{padding:10px}.mgr-radar-card{padding:20px}.mgr-radar-grid{grid-template-columns:1fr}.mgr-radar-actions{grid-template-columns:1fr 1fr}.mgr-radar-actions .false{grid-column:1/-1}.mgr-radar-head h1{font-size:34px}.mgr-radar-nav span{display:none}}
+@media(max-width:760px){.mgr-radar-shield{padding:10px}.mgr-radar-card{padding:20px}.mgr-radar-grid{grid-template-columns:1fr}.mgr-radar-actions{grid-template-columns:1fr 1fr}.mgr-radar-actions .false{grid-column:1/-1}.mgr-radar-head h1{font-size:34px}.mgr-radar-nav span{display:none}.mgr-radar-esc-hint{margin-left:0;width:100%}}
 `;
