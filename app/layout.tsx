@@ -32,6 +32,7 @@ import LeonardoMeetingNotificationBridge from "./leonardo-meeting-notification-b
 import LeonardoActionWarning from "./leonardo-action-warning";
 import NotificationsHomeLink from "./notifications-home-link";
 import NotificationDetailBridge from "./notification-detail-bridge";
+import WorkCenterScopeNetwork from "./work-center-scope-network";
 import AutomationNavBridge from "./automation-nav-bridge";
 import DonnahNavBridge from "./donnah-nav-bridge";
 import LearningShortcut from "./learning-shortcut";
@@ -69,6 +70,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <body>
         <GabrielScopeNetwork />
         <LeonardoScopeNetwork />
+        <WorkCenterScopeNetwork />
         <GreetingAudioBridge />
         <PreGreetingShield />
         {children}
