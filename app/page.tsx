@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import NativeDashboard from "./dashboard-native";
 import LeonardoNativeDashboard from "./leonardo-native-dashboard";
 import WorkReassignmentBridge from "./work-reassignment-bridge";
+import WorkReassignmentAwayBridge from "./work-reassignment-away-bridge";
 import { loadProfileLite, supabase } from "./shared";
 
 type RouteState = "loading" | "native" | "leonardo" | "error";
@@ -60,5 +61,6 @@ export default function DashboardRouter() {
   return <>
     <NativeDashboard />
     {session && <WorkReassignmentBridge session={session} />}
+    {session && <WorkReassignmentAwayBridge session={session} />}
   </>;
 }
