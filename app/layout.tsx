@@ -13,6 +13,7 @@ import OnboardingAssignmentBridge from "./onboarding-assignment-bridge";
 import OnboardingRequiredAlerts from "./onboarding-required-alerts";
 import OnboardingRoleRouter from "./onboarding-role-router";
 import OnboardingHistoryNotificationBridge from "./onboarding-history-notification-bridge";
+import OnboardingHistoryPrecisionBridge from "./onboarding-history-precision-bridge";
 import LeonardoScopeNetwork from "./leonardo-scope-network";
 import AdlerFinanceNavBridge from "./adler-finance-nav-bridge";
 import AdlerNotificationAreaFilter from "./adler-notification-area-filter";
@@ -101,6 +102,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <LeonardoActionWarning />
         <NotificationsHomeLink />
         <OnboardingHistoryNotificationBridge />
+        <OnboardingHistoryPrecisionBridge />
         <NotificationDetailBridge />
         <AutomationNavBridge />
         <DonnahNavBridge />
