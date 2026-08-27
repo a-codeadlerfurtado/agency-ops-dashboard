@@ -8,6 +8,7 @@ import "./client-balances.css";
 type Row = Record<string, any>;
 type Payload = { ok?: boolean; profile?: Row; rows?: Row[]; summary?: Row; sync?: Row; generated_at?: string };
 type Segment = "PIX" | "CARD" | "NONE" | "ALL";
+type Wallet = "ALL" | "Alfa" | "Bravo" | "Charlie";
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-client-balances-api`;
 
 function numberValue(value: unknown) {
@@ -60,6 +61,24 @@ function runwayLabel(row: Row) {
   if (days < 1) return "< 1 dia";
   return `${days.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} dias`;
 }
+function reportStatus(row: Row) {
+  const type = method(row);
+  if (type === "PIX") {
+    const balance = numberValue(row.available_balance);
+    const days = row.days_remaining == null ? null : numberValue(row.days_remaining);
+    if (balance <= 0) return "RECARREGAR AGORA";
+    if (days !== null && days <= 2) return "URGENTE";
+    if (days !== null && days <= 5) return "ATENÇÃO";
+    return "OK";
+  }
+  if (type === "CARD") return cardStatus(row).label;
+  if (type === "NONE") return "Sem conta Meta vinculada";
+  return String(row.run_status || "Não confirmado");
+}
+function csvCell(value: unknown) {
+  const text = value == null ? "" : String(value);
+  return `"${text.replace(/"/g, '""')}"`;
+}
 
 export default function ClientBalancesPage() {
   const [session, setSession] = useState<Session | null>(null);
@@ -72,6 +91,7 @@ export default function ClientBalancesPage() {
   const [query, setQuery] = useState("");
   const [segment, setSegment] = useState<Segment>("PIX");
   const [urgency, setUrgency] = useState("ALL");
+  const [wallet, setWallet] = useState<Wallet>("ALL");
   const autoRefreshAttempted = useRef(false);
 
   useEffect(() => {
@@ -115,9 +135,10 @@ export default function ClientBalancesPage() {
   useEffect(() => { if (ready && session?.access_token) void load(); }, [ready, session?.access_token]);
 
   const allRows = payload.rows || [];
-  const pixRows = useMemo(() => allRows.filter((row) => method(row) === "PIX"), [allRows]);
-  const cardRows = useMemo(() => allRows.filter((row) => method(row) === "CARD"), [allRows]);
-  const noAccountRows = useMemo(() => allRows.filter((row) => method(row) === "NONE"), [allRows]);
+  const walletRows = useMemo(() => allRows.filter((row) => wallet === "ALL" || String(row.carteira || "") === wallet), [allRows, wallet]);
+  const pixRows = useMemo(() => walletRows.filter((row) => method(row) === "PIX"), [walletRows]);
+  const cardRows = useMemo(() => walletRows.filter((row) => method(row) === "CARD"), [walletRows]);
+  const noAccountRows = useMemo(() => walletRows.filter((row) => method(row) === "NONE"), [walletRows]);
 
   const portfolio = useMemo(() => {
     const totalBalance = pixRows.reduce((sum, row) => sum + numberValue(row.available_balance), 0);
@@ -131,10 +152,10 @@ export default function ClientBalancesPage() {
 
   const rows = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("pt-BR");
-    return allRows
+    return walletRows
       .filter((row) => {
         const type = method(row);
-        const queryOk = !needle || [row.display_name,row.account_key,row.gt_owner,row.cs_owner,row.payment_display].join(" ").toLocaleLowerCase("pt-BR").includes(needle);
+        const queryOk = !needle || [row.display_name,row.account_key,row.gt_owner,row.cs_owner,row.payment_display,row.carteira].join(" ").toLocaleLowerCase("pt-BR").includes(needle);
         const segmentOk = segment === "ALL" || type === segment;
         let urgencyOk = true;
         if (urgency !== "ALL") {
@@ -159,7 +180,55 @@ export default function ClientBalancesPage() {
         const order: Record<string, number> = { PIX: 0, CARD: 1, OTHER: 2, NONE: 3 };
         return (order[ta] ?? 9) - (order[tb] ?? 9);
       });
-  }, [allRows, query, segment, urgency]);
+  }, [walletRows, query, segment, urgency]);
+
+  const exportReport = useCallback(() => {
+    const reportRows = [...walletRows].sort((a, b) => {
+      const walletCompare = String(a.carteira || "").localeCompare(String(b.carteira || ""), "pt-BR");
+      if (walletCompare) return walletCompare;
+      const gtCompare = String(a.gt_owner || "").localeCompare(String(b.gt_owner || ""), "pt-BR");
+      if (gtCompare) return gtCompare;
+      if (method(a) === "PIX" && method(b) === "PIX") {
+        const da = a.days_remaining == null ? Number.POSITIVE_INFINITY : numberValue(a.days_remaining);
+        const db = b.days_remaining == null ? Number.POSITIVE_INFINITY : numberValue(b.days_remaining);
+        if (da !== db) return da - db;
+      }
+      return String(a.display_name || "").localeCompare(String(b.display_name || ""), "pt-BR");
+    });
+    const headers = ["Carteira","GT","CS","Cliente","Pagamento","Saldo atual","Média/dia","Dias restantes","Gasto 7d","Situação","Conta Meta","Última leitura","Link cobrança"];
+    const lines = reportRows.map((row) => {
+      const type = method(row);
+      const billingUrl = type === "PIX" ? metaBillingUrl(row) || "" : "";
+      const payment = type === "PIX" ? "PIX / pré-pago" : type === "CARD" ? "Cartão / pós-pago" : type === "NONE" ? "Sem conta" : "Outro";
+      return [
+        row.carteira || "Sem carteira",
+        row.gt_owner || "",
+        row.cs_owner || "",
+        row.display_name || "",
+        payment,
+        type === "PIX" ? numberValue(row.available_balance).toFixed(2).replace(".",",") : "",
+        numberValue(row.avg_daily_spend).toFixed(2).replace(".",","),
+        row.days_remaining == null ? "" : numberValue(row.days_remaining).toFixed(1).replace(".",","),
+        numberValue(row.spend_7d).toFixed(2).replace(".",","),
+        reportStatus(row),
+        row.account_key || "",
+        dateTime(row.checked_at),
+        billingUrl,
+      ].map(csvCell).join(";");
+    });
+    const csv = `\uFEFF${headers.map(csvCell).join(";")}\n${lines.join("\n")}`;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const href = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const scope = wallet === "ALL" ? "geral" : wallet.toLocaleLowerCase("pt-BR");
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo" }).format(new Date());
+    link.href = href;
+    link.download = `saldo-clientes-${scope}-${today}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(href);
+  }, [walletRows, wallet]);
 
   useEffect(() => { setUrgency("ALL"); }, [segment]);
 
@@ -170,7 +239,7 @@ export default function ClientBalancesPage() {
     <header className="cb-top">
       <button className="cb-back" onClick={() => window.location.assign("/")}>← Central de Operações</button>
       <div className="cb-title"><small>OPERAÇÃO · SALDO DE MÍDIA</small><h1>Saldo Clientes</h1><p>Quanto resta, quanto o cliente costuma gastar por dia e quantos dias de mídia ainda existem.</p></div>
-      <div className="cb-meta"><b>{payload.profile?.scope === "ALL" ? "Carteira completa" : "Sua carteira"}</b><br/>Última leitura: {dateTime(sync.last_success_at)}</div>
+      <div className="cb-meta"><b>{wallet === "ALL" ? (payload.profile?.scope === "ALL" ? "Carteira completa" : "Sua carteira") : `Carteira ${wallet}`}</b><br/>Última leitura: {dateTime(sync.last_success_at)}</div>
     </header>
 
     {error && <div className="cb-error">{error}</div>}
@@ -195,8 +264,15 @@ export default function ClientBalancesPage() {
 
       <div className="cb-toolbar">
         <input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="Buscar cliente, GT, CS ou conta Meta…" />
+        <select value={wallet} onChange={(e)=>setWallet(e.target.value as Wallet)} aria-label="Filtrar por carteira">
+          <option value="ALL">Geral · todas as carteiras</option>
+          <option value="Alfa">Alfa · Rodrigo Cavalheiro</option>
+          <option value="Bravo">Bravo · Felipe Oliveira</option>
+          <option value="Charlie">Charlie · Yuri Melo</option>
+        </select>
         {segment === "PIX" && <select value={urgency} onChange={(e)=>setUrgency(e.target.value)}><option value="ALL">Todas as autonomias</option><option value="ZERO">Saldo zerado</option><option value="UP_TO_2">Até 2 dias</option><option value="UP_TO_5">3 a 5 dias</option><option value="HEALTHY">Mais de 5 dias / sem média</option></select>}
         {segment === "CARD" && <select value={urgency} onChange={(e)=>setUrgency(e.target.value)}><option value="ALL">Todos os cartões</option><option value="PROBLEM">Com atenção</option><option value="HEALTHY">Aptos</option></select>}
+        <button className="cb-refresh" onClick={exportReport}>Extrair relatório</button>
         <button className="cb-refresh" onClick={()=>requestRefresh(false)} disabled={refreshing}>{refreshing ? "Solicitando…" : "Atualizar leitura"}</button>
         <button className="cb-refresh secondary" onClick={load} disabled={loading}>{loading ? "Carregando…" : "Recarregar tela"}</button>
         <span className="cb-count">{rows.length} resultado(s)</span>
@@ -213,7 +289,7 @@ export default function ClientBalancesPage() {
           if(type === "PIX") {
             const tone=runwayTone(row), billingUrl=metaBillingUrl(row), emptyBalance=numberValue(row.available_balance)<=0;
             return <tr key={`${row.client_id}:${row.account_key}:${index}`} className={`cb-runway-row ${tone}`}>
-              <td className="cb-client"><b>{row.display_name}</b><small>GT: {row.gt_owner || "—"} · CS: {row.cs_owner || "—"}</small></td>
+              <td className="cb-client"><b>{row.display_name}</b><small>{row.carteira ? `${row.carteira} · ` : ""}GT: {row.gt_owner || "—"} · CS: {row.cs_owner || "—"}</small></td>
               <td className="cb-balance"><strong>{money(row.available_balance)}</strong><small>disponível agora</small></td>
               <td className="cb-daily"><strong>{money(row.avg_daily_spend)}</strong><small>por dia · {row.spend_window_days || 7}d</small></td>
               <td className="cb-days"><strong>{runwayLabel(row)}</strong>{emptyBalance && billingUrl ? <a className={`cb-status ${tone} cb-recharge-link`} href={billingUrl} target="_blank" rel="noopener noreferrer" title={`Abrir cobrança da conta ${row.account_key} na Meta`}>Recarregar agora ↗</a> : <span className={`cb-status ${tone}`}>{emptyBalance ? "Recarga indisponível" : row.days_remaining != null && numberValue(row.days_remaining)<=2 ? "Urgente" : row.days_remaining != null && numberValue(row.days_remaining)<=5 ? "Atenção" : "OK"}</span>}</td>
@@ -223,7 +299,7 @@ export default function ClientBalancesPage() {
             </tr>;
           }
           if(type === "CARD") { const info=cardStatus(row); return <tr key={`${row.client_id}:${row.account_key}:${index}`}>
-            <td className="cb-client"><b>{row.display_name}</b><small>GT: {row.gt_owner || "—"} · CS: {row.cs_owner || "—"}</small></td>
+            <td className="cb-client"><b>{row.display_name}</b><small>{row.carteira ? `${row.carteira} · ` : ""}GT: {row.gt_owner || "—"} · CS: {row.cs_owner || "—"}</small></td>
             <td><span className={`cb-status ${info.tone}`}>{info.label}</span></td>
             <td className="cb-daily"><strong>{money(row.avg_daily_spend)}</strong><small>por dia · {row.spend_window_days || 7}d</small></td>
             <td className="cb-money"><strong>{money(row.spend_7d)}</strong><small>últimos 7 dias</small></td>
@@ -231,7 +307,7 @@ export default function ClientBalancesPage() {
             <td className="cb-account"><b>{row.account_key}</b><small>{row.payment_display || "Cartão / pós-pago"}</small></td>
             <td><b>{dateTime(row.checked_at)}</b></td>
           </tr>; }
-          return <tr key={`${row.client_id}:none:${index}`}><td className="cb-client"><b>{row.display_name}</b></td><td>{row.gt_owner || "—"}</td><td>{row.cs_owner || "—"}</td><td><span className="cb-status neutral">Sem conta Meta vinculada</span></td></tr>;
+          return <tr key={`${row.client_id}:none:${index}`}><td className="cb-client"><b>{row.display_name}</b><small>{row.carteira || "Sem carteira"}</small></td><td>{row.gt_owner || "—"}</td><td>{row.cs_owner || "—"}</td><td><span className="cb-status neutral">Sem conta Meta vinculada</span></td></tr>;
         })}
         {!rows.length && <tr><td colSpan={7} className="cb-empty">Nenhum cliente nesse filtro.</td></tr>}
       </tbody></table></div>
