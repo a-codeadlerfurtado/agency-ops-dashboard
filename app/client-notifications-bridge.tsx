@@ -64,6 +64,27 @@ function ageLabel(value: unknown) {
   return `${days}d`;
 }
 
+function safeHttpsUrl(value: unknown) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "https:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function meetingStatusLabel(value: unknown) {
+  const raw = String(value || "").toUpperCase();
+  const labels: Record<string, string> = {
+    IN_PROGRESS: "Em andamento",
+    CONTEXT_AVAILABLE: "Contexto disponível",
+    FINISHED: "Finalizada",
+    ENDED: "Finalizada",
+    SCHEDULED: "Agendada",
+  };
+  return labels[raw] || text(value || "");
+}
+
 function inferredOwner(item: Row, client: Row) {
   if (item.actor) return text(item.actor);
   const haystack = norm(`${item.type || ""} ${item.source || ""} ${item.title || ""} ${item.next_action || ""}`);
@@ -167,6 +188,15 @@ function ClientNotificationsPane({ clientName, body, initialNotifications, highl
       <div className="cn-list">{visible.map((item) => {
         const highlighted = !!highlightTitle && norm(item.title) === norm(highlightTitle);
         const tone = severityClass(item.level);
+        const metadata: Row = item.metadata || {};
+        const responseSummary = metadata.response_summary ? text(metadata.response_summary) : "";
+        const subject = metadata.subject ? text(metadata.subject) : "";
+        const waitingSince = metadata.waiting_since ? formatDate(metadata.waiting_since) : "";
+        const meetingTitle = metadata.meeting_title || metadata.topic ? text(metadata.meeting_title || metadata.topic) : "";
+        const participants = metadata.participant_names ? text(metadata.participant_names) : "";
+        const meetingStatus = metadata.meeting_status ? meetingStatusLabel(metadata.meeting_status) : "";
+        const meetingUrl = safeHttpsUrl(metadata.meet_url);
+        const hasContext = Boolean(responseSummary || subject || waitingSince || meetingTitle || participants || meetingStatus || meetingUrl);
         return <article key={`${item.kind}:${item.id}`} className={`cn-item ${tone}${highlighted ? " highlighted" : ""}`}>
           <div className="cn-item-top">
             <div className="cn-badges"><span className={`cn-status ${tone}`}>{statusLabel(item)}</span><span className="cn-source">{sourceLabel(item.source)}</span></div>
@@ -174,6 +204,15 @@ function ClientNotificationsPane({ clientName, body, initialNotifications, highl
           </div>
           <h4>{text(item.title)}</h4>
           <p className="cn-description">{text(item.description)}</p>
+          {hasContext && <div className="cn-context" aria-label="Contexto da notificação">
+            {responseSummary && <div><b>Resposta aguardada</b><span>{responseSummary}</span></div>}
+            {subject && <div><b>Assunto da conversa</b><span>{subject}</span></div>}
+            {waitingSince && <div><b>Aguardando desde</b><span>{waitingSince}</span></div>}
+            {meetingTitle && <div><b>Título da reunião</b><span>{meetingTitle}</span></div>}
+            {participants && <div><b>Com quem está</b><span>{participants}</span></div>}
+            {meetingStatus && <div><b>Status da reunião</b><span>{meetingStatus}</span></div>}
+            {meetingUrl && <a href={meetingUrl} target="_blank" rel="noreferrer">Abrir Google Meet ↗</a>}
+          </div>}
           <div className="cn-meta"><span><b>Responsável:</b> {inferredOwner(item, client)}</span>{item.kind === "ALERT" && item.first_detected_at && <span><b>Detectado:</b> {formatDate(item.first_detected_at)}</span>}</div>
           {item.next_action && <div className="cn-next"><b>Próxima ação</b><span>{text(item.next_action)}</span></div>}
           {item.kind === "ALERT" && String(item.status || "").toUpperCase() === "RESOLVED" && item.resolved_at && <div className="cn-resolved">Resolvido em {formatDate(item.resolved_at)}</div>}
@@ -253,6 +292,6 @@ const styles = `
 .cn-panel{padding:22px 26px 34px;min-height:420px;background:linear-gradient(180deg,rgba(7,17,30,.97),rgba(6,14,25,.99))}.cn-panel-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:16px}.cn-panel-head .eyebrow{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:#6f8aa4}.cn-panel-head h3{font:700 18px/1.2 'Inter Tight',Inter,sans-serif;color:#f2f7fb;margin:5px 0}.cn-panel-head p{font-size:11px;color:#7690a8;margin:0}.cn-refresh{border:1px solid rgba(135,166,198,.18);background:rgba(18,39,60,.62);color:#bcd0e1;border-radius:9px;padding:8px 11px;font-size:10px;cursor:pointer}.cn-refresh:disabled{opacity:.55}
 .cn-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:0 0 14px}.cn-kpis article{padding:12px 13px;border:1px solid rgba(135,166,198,.13);border-radius:11px;background:rgba(17,36,55,.62)}.cn-kpis article.danger{border-color:rgba(239,91,64,.26);background:rgba(84,30,24,.2)}.cn-kpis small{display:block;font-size:8px;letter-spacing:.1em;color:#71899f}.cn-kpis b{display:block;font:700 22px/1.15 'Inter Tight',Inter,sans-serif;color:#edf6fd;margin:4px 0 1px}.cn-kpis span{font-size:9px;color:#6e879d}
 .cn-filters{display:flex;gap:4px;padding:4px;border:1px solid rgba(135,166,198,.1);border-radius:11px;width:max-content;background:rgba(7,17,29,.7);margin-bottom:13px}.cn-filters button{padding:7px 10px;font-size:10px}
-.cn-list{display:grid;gap:9px}.cn-item{position:relative;padding:14px 15px 13px;border:1px solid rgba(135,166,198,.13);border-left:3px solid #4c83ad;border-radius:11px;background:rgba(16,34,52,.62);transition:.16s ease}.cn-item.attention{border-left-color:#d8a73a}.cn-item.critical{border-left-color:#ec684f;background:rgba(57,27,29,.24)}.cn-item.ok{border-left-color:#3ebd91}.cn-item.highlighted{outline:2px solid rgba(80,172,246,.68);box-shadow:0 0 0 5px rgba(80,172,246,.08)}.cn-item-top{display:flex;justify-content:space-between;gap:10px;align-items:center}.cn-badges{display:flex;gap:6px;align-items:center}.cn-status,.cn-source{display:inline-flex;align-items:center;border-radius:999px;padding:4px 7px;font-size:8px;font-weight:700;letter-spacing:.03em}.cn-status{background:rgba(74,131,173,.13);color:#8fc3e9}.cn-status.attention{background:rgba(216,167,58,.12);color:#e5c36d}.cn-status.critical{background:rgba(236,104,79,.13);color:#f19987}.cn-status.ok{background:rgba(62,189,145,.12);color:#78d6b5}.cn-source{background:rgba(135,166,198,.08);color:#7792aa}.cn-item time{font-size:9px;color:#657f96}.cn-item h4{font:650 13px/1.35 Inter,sans-serif;color:#e7f0f8;margin:10px 0 4px}.cn-description{font-size:10.5px;line-height:1.5;color:#98adbf;margin:0}.cn-meta{display:flex;gap:14px;flex-wrap:wrap;margin-top:9px;font-size:9px;color:#6f889f}.cn-meta b{color:#93a9bc}.cn-next{display:grid;gap:3px;margin-top:10px;padding:9px 10px;border-radius:8px;background:rgba(62,146,220,.07);border:1px solid rgba(62,146,220,.11)}.cn-next b{font-size:8px;color:#6e9fc7;text-transform:uppercase;letter-spacing:.08em}.cn-next span{font-size:10px;color:#b2c7d8}.cn-resolved{margin-top:9px;font-size:9px;color:#69bc9d}.cn-actions{display:flex;justify-content:flex-end;margin-top:10px}.cn-actions button{border:1px solid rgba(62,146,220,.2);background:rgba(62,146,220,.11);color:#9bc8ea;border-radius:8px;padding:6px 9px;font-size:9px;cursor:pointer}.cn-error,.cn-empty{padding:28px;text-align:center;border:1px dashed rgba(135,166,198,.16);border-radius:10px;color:#7791a8;font-size:11px}.cn-error{color:#e99a86;border-color:rgba(233,105,78,.2)}
-@media(max-width:760px){.cn-tabbar{padding:9px 14px;align-items:flex-start;flex-direction:column}.cn-panel{padding:16px 14px 28px}.cn-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.cn-panel-head{flex-direction:column}.cn-summary{white-space:normal}}
+.cn-list{display:grid;gap:9px}.cn-item{position:relative;padding:14px 15px 13px;border:1px solid rgba(135,166,198,.13);border-left:3px solid #4c83ad;border-radius:11px;background:rgba(16,34,52,.62);transition:.16s ease}.cn-item.attention{border-left-color:#d8a73a}.cn-item.critical{border-left-color:#ec684f;background:rgba(57,27,29,.24)}.cn-item.ok{border-left-color:#3ebd91}.cn-item.highlighted{outline:2px solid rgba(80,172,246,.68);box-shadow:0 0 0 5px rgba(80,172,246,.08)}.cn-item-top{display:flex;justify-content:space-between;gap:10px;align-items:center}.cn-badges{display:flex;gap:6px;align-items:center}.cn-status,.cn-source{display:inline-flex;align-items:center;border-radius:999px;padding:4px 7px;font-size:8px;font-weight:700;letter-spacing:.03em}.cn-status{background:rgba(74,131,173,.13);color:#8fc3e9}.cn-status.attention{background:rgba(216,167,58,.12);color:#e5c36d}.cn-status.critical{background:rgba(236,104,79,.13);color:#f19987}.cn-status.ok{background:rgba(62,189,145,.12);color:#78d6b5}.cn-source{background:rgba(135,166,198,.08);color:#7792aa}.cn-item time{font-size:9px;color:#657f96}.cn-item h4{font:650 13px/1.35 Inter,sans-serif;color:#e7f0f8;margin:10px 0 4px}.cn-description{font-size:10.5px;line-height:1.5;color:#98adbf;margin:0}.cn-context{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:11px;padding:11px;border:1px solid rgba(80,172,246,.18);border-radius:9px;background:rgba(30,79,120,.12)}.cn-context div{display:grid;gap:3px;min-width:0}.cn-context b{font-size:8px;line-height:1.2;text-transform:uppercase;letter-spacing:.08em;color:#6fa9d5}.cn-context span{font-size:10px;line-height:1.45;color:#c0d2df;white-space:pre-line}.cn-context a{grid-column:1/-1;width:max-content;color:#91caf3;text-decoration:none;font-size:9px;font-weight:700}.cn-context a:hover{text-decoration:underline}.cn-meta{display:flex;gap:14px;flex-wrap:wrap;margin-top:9px;font-size:9px;color:#6f889f}.cn-meta b{color:#93a9bc}.cn-next{display:grid;gap:3px;margin-top:10px;padding:9px 10px;border-radius:8px;background:rgba(62,146,220,.07);border:1px solid rgba(62,146,220,.11)}.cn-next b{font-size:8px;color:#6e9fc7;text-transform:uppercase;letter-spacing:.08em}.cn-next span{font-size:10px;color:#b2c7d8}.cn-resolved{margin-top:9px;font-size:9px;color:#69bc9d}.cn-actions{display:flex;justify-content:flex-end;margin-top:10px}.cn-actions button{border:1px solid rgba(62,146,220,.2);background:rgba(62,146,220,.11);color:#9bc8ea;border-radius:8px;padding:6px 9px;font-size:9px;cursor:pointer}.cn-error,.cn-empty{padding:28px;text-align:center;border:1px dashed rgba(135,166,198,.16);border-radius:10px;color:#7791a8;font-size:11px}.cn-error{color:#e99a86;border-color:rgba(233,105,78,.2)}
+@media(max-width:760px){.cn-context{grid-template-columns:1fr}.cn-tabbar{padding:9px 14px;align-items:flex-start;flex-direction:column}.cn-panel{padding:16px 14px 28px}.cn-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.cn-panel-head{flex-direction:column}.cn-summary{white-space:normal}}
 `;

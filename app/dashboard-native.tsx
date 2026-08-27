@@ -1750,7 +1750,12 @@ function NotificationCenter({items,close,refresh,openClient,openWork,token,pendi
     const requestId=item.metadata?.access_request_id?String(item.metadata.access_request_id):null;
     if(canDecide&&requestId&&pendingIds.has(requestId)) return <div className={`notification-action${item.read_at?"":" unread"}`} key={item.id}><Chip value={item.level}/><span><b>{text(item.title)}</b><small>{text(item.description)} · {formatDate(item.occurred_at)}</small></span><span className="access-request-actions"><button disabled={deciding===requestId} onClick={()=>act(requestId,"APPROVED")}>Aprovar</button><button className="muted" disabled={deciding===requestId} onClick={()=>act(requestId,"DENIED")}>Recusar</button></span></div>;
     const conclusao=taskCompletion(item);
-    return <button className={item.read_at?"":"unread"} key={item.id} onClick={()=>{read(item.id);const workId=item.metadata?.work_item_id;if(workId)openWork(String(workId));else if(item.client_id)openClient(item.client_id);}}><Chip value={item.level}/><span><b>{item.title}</b>{conclusao
+    const hasOperationalContext=Boolean(item.client_id)&&(
+      item.metadata?.context_available===true||
+      item.metadata?.alert_type==="CLIENT_WAITING_SLA"||
+      item.type==="COLLABORATOR_MEETING_STARTED"
+    );
+    return <button className={item.read_at?"":"unread"} key={item.id} onClick={()=>{read(item.id);const workId=item.metadata?.work_item_id;if(hasOperationalContext&&item.client_id)openClient(String(item.client_id));else if(workId)openWork(String(workId));else if(item.client_id)openClient(String(item.client_id));}}><Chip value={item.level}/><span><b>{item.title}</b>{conclusao
       ? <><small>{text(conclusao.tarefa)}</small><small className="notification-owner">Concluída por: {conclusao.concluidaPor || "não identificado"}</small><small className="notification-owner">Responsável: {text(conclusao.responsavel)}</small><small>{formatDate(item.occurred_at)}</small></>
       : <small>{text(item.actor ? `${item.actor}: ${item.description}` : item.description)} · {formatDate(item.occurred_at)}</small>}{(item.gestor || item.carteira) && <small className="notification-owner">{text(item.carteira ? `Carteira ${item.carteira}` : (item.gestor ? `Gestor: ${item.gestor}` : ""))}</small>}</span></button>;
   })}{!items.length&&<div className="empty">Nenhuma notificação.</div>}</div></div>;
