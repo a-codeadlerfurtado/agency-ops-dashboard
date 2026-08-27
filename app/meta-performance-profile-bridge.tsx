@@ -18,7 +18,7 @@ function number(value: unknown) {
   const n = Number(value); return Number.isFinite(n) ? n.toLocaleString("pt-BR", { maximumFractionDigits: 1 }) : "—";
 }
 function status(value: unknown) {
-  return ({ OK:"OK",PARTIAL_PERIOD:"Período parcial",NO_META_ACCOUNT:"Sem conta Meta",NO_DELIVERY:"Sem entrega",API_ERROR:"Erro na API",API_PARTIAL:"API parcial" } as Row)[String(value)] || String(value || "—").replaceAll("_"," ");
+  return ({ OK:"OK",PARTIAL_PERIOD:"Período parcial",NO_META_ACCOUNT:"Sem conta Meta",NO_CAMPAIGNS:"Sem campanha",NO_DELIVERY:"Sem entrega",API_ERROR:"Erro na API",API_PARTIAL:"API parcial" } as Row)[String(value)] || String(value || "—").replaceAll("_"," ");
 }
 function removeInjected() {
   document.querySelectorAll("[data-meta-performance-nav],[data-meta-performance-client]").forEach(node => node.remove());
@@ -44,7 +44,7 @@ function renderClientCard(root: HTMLElement, snapshots: Row[], clientId: string)
   section.className = "detail-card full";
   const title = document.createElement("h3"); title.textContent = "Meta · Histórico de Performance"; section.appendChild(title);
   if (!latest.length) {
-    const p = document.createElement("p"); p.className = "small"; p.textContent = "O primeiro snapshot semanal ainda não foi concluído para este cliente."; section.appendChild(p);
+    const p = document.createElement("p"); p.className = "small"; p.textContent = "Ainda não há snapshot semanal salvo para este cliente."; section.appendChild(p);
   } else {
     const dateLine = document.createElement("p"); dateLine.className = "small"; dateLine.textContent = `Último snapshot: ${new Intl.DateTimeFormat("pt-BR").format(new Date(`${latestDate}T12:00:00`))}`; section.appendChild(dateLine);
     const grid = document.createElement("div"); grid.style.cssText = "display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin:9px 0";
@@ -69,22 +69,23 @@ function renderClientCard(root: HTMLElement, snapshots: Row[], clientId: string)
 export default function MetaPerformanceProfileBridge() {
   const [session, setSession] = useState<Session | null>(null);
   const [allowed, setAllowed] = useState(false);
-  const cache = useRef<{ at:number; payload:Row|null }>({ at:0, payload:null });
+  const clientCache = useRef(new Map<string,{at:number;body:Row}>());
   const notifications = useRef<{ at:number; rows:Row[] }>({ at:0, rows:[] });
 
   useEffect(() => {
     supabase.auth.getSession().then(({data}) => setSession(data.session));
-    const { data:{subscription} } = supabase.auth.onAuthStateChange((_e,next) => { setSession(next); if(!next){setAllowed(false);cache.current={at:0,payload:null};removeInjected();} });
+    const { data:{subscription} } = supabase.auth.onAuthStateChange((_e,next) => { setSession(next); if(!next){setAllowed(false);clientCache.current.clear();removeInjected();} });
     return () => subscription.unsubscribe();
   }, []);
 
   const headers = useCallback(() => session?.access_token ? { Authorization:`Bearer ${session.access_token}`, apikey:SUPABASE_ANON_KEY } : null, [session?.access_token]);
-  const loadPayload = useCallback(async () => {
+  const loadClient = useCallback(async (name:string) => {
     const h=headers(); if(!h)return null;
-    if(cache.current.payload && Date.now()-cache.current.at<15000)return cache.current.payload;
-    const response=await fetch(API,{headers:h,cache:"no-store"});
+    const key=norm(name),cached=clientCache.current.get(key);
+    if(cached&&Date.now()-cached.at<30000)return cached.body;
+    const response=await fetch(`${API}?client_name=${encodeURIComponent(name)}`,{headers:h,cache:"no-store"});
     if(!response.ok)return null;
-    const body=await response.json().catch(()=>null); cache.current={at:Date.now(),payload:body}; return body;
+    const body=await response.json().catch(()=>null);if(body)clientCache.current.set(key,{at:Date.now(),body});return body;
   },[headers]);
   const loadNotifications = useCallback(async () => {
     const h=headers(); if(!h)return [] as Row[];
@@ -96,7 +97,7 @@ export default function MetaPerformanceProfileBridge() {
   useEffect(() => {
     const h=headers(); if(!h){setAllowed(false);removeInjected();return;}
     let alive=true;
-    fetch(API,{headers:h,cache:"no-store"}).then(async response=>{if(!alive)return;if(response.ok){const body=await response.json().catch(()=>null);cache.current={at:Date.now(),payload:body};setAllowed(true);}else setAllowed(false);}).catch(()=>{if(alive)setAllowed(false);});
+    fetch(`${API}?probe=1`,{headers:h,cache:"no-store"}).then(response=>{if(alive)setAllowed(response.ok);}).catch(()=>{if(alive)setAllowed(false);});
     return()=>{alive=false;};
   },[headers]);
 
@@ -116,11 +117,10 @@ export default function MetaPerformanceProfileBridge() {
           if(!drawer||!grid||grid.querySelector("[data-meta-performance-client]"))return;
           const name=drawer.querySelector<HTMLElement>(".drawer-head h2")?.textContent?.trim();
           if(!name)return;
-          const payload=await loadPayload(); const snaps:Row[]=payload?.snapshots||[];
-          const matches=[...new Set(snaps.filter(row=>norm(row.client_name)===norm(name)).map(row=>String(row.client_id)))];
-          if(matches.length!==1)return;
-          const clientSnaps=snaps.filter(row=>String(row.client_id)===matches[0]).sort((a,b)=>String(b.snapshot_date).localeCompare(String(a.snapshot_date))||Number(a.period_days)-Number(b.period_days));
-          renderClientCard(grid,clientSnaps,matches[0]);
+          const detail=await loadClient(name),clientId=String(detail?.client?.id||"");
+          if(!clientId)return;
+          const snaps:Row[]=(detail?.snapshots||[]).sort((a:Row,b:Row)=>String(b.snapshot_date).localeCompare(String(a.snapshot_date))||Number(a.period_days)-Number(b.period_days));
+          renderClientCard(grid,snaps,clientId);
         }finally{applying=false;}
       });
     };
@@ -128,7 +128,7 @@ export default function MetaPerformanceProfileBridge() {
     const observer=new MutationObserver(apply); observer.observe(document.body,{childList:true,subtree:true});
     const interval=window.setInterval(apply,1500);
     return()=>{observer.disconnect();clearInterval(interval);cancelAnimationFrame(frame);removeInjected();};
-  },[allowed,loadPayload]);
+  },[allowed,loadClient]);
 
   useEffect(() => {
     if(!allowed)return;
