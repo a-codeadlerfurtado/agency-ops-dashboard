@@ -4,7 +4,6 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 const CORS={"access-control-allow-origin":"*","access-control-allow-headers":"authorization,apikey,content-type","access-control-allow-methods":"GET,POST,OPTIONS"};
 const reply=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{...CORS,"content-type":"application/json; charset=utf-8","cache-control":"no-store"}});
 type Row=Record<string,any>;
-const ALLOWED=new Set(["inadimplente","juridico"]);
 
 Deno.serve(async(req:Request)=>{
   if(req.method==="OPTIONS")return new Response(null,{status:204,headers:CORS});
@@ -31,8 +30,7 @@ Deno.serve(async(req:Request)=>{
     ]);
     if(clientsError)throw clientsError;if(eventsError)throw eventsError;
     const byClient=new Map<string,Row[]>();for(const e of events||[]){const key=String(e.client_id);const arr=byClient.get(key)||[];arr.push(e);byClient.set(key,arr);}
-    const items=(clients||[]).map((c:Row)=>{const history=byClient.get(String(c.id))||[];const active=history.filter((e:Row)=>e.active);const inad=active.find((e:Row)=>e.status==="inadimplente")||null;const jur=active.find((e:Row)=>e.status==="juridico")||null;return{client_id:c.id,display_name:c.display_name,lifecycle:c.lifecycle,service:c.service,entrada:c.entrada,saida:c.saida,inadimplente:Boolean(inad),juridico:Boolean(jur),inadimplente_record:inad,juridico_record:jur,history:history.slice(0,20)};});
-    return items;
+    return (clients||[]).map((c:Row)=>{const history=byClient.get(String(c.id))||[];const active=history.filter((e:Row)=>e.active);const inad=active.find((e:Row)=>e.status==="inadimplente")||null;const jur=active.find((e:Row)=>e.status==="juridico")||null;return{client_id:c.id,display_name:c.display_name,lifecycle:c.lifecycle,service:c.service,entrada:c.entrada,saida:c.saida,inadimplente:Boolean(inad),juridico:Boolean(jur),inadimplente_record:inad,juridico_record:jur,history:history.slice(0,20)};});
   }
 
   if(req.method==="GET"){
@@ -43,21 +41,11 @@ Deno.serve(async(req:Request)=>{
   const body=await req.json().catch(()=>({}));if(String(body?.action||"")!=="save_client_financial_legal")return reply({error:"unknown_action"},400);
   const clientId=String(body?.client_id||"").trim(),note=String(body?.note||"").trim().slice(0,2000),sinceRaw=String(body?.since||"").trim();
   if(!clientId)return reply({error:"invalid_client"},400);
-  const desired:Record<string,boolean>={inadimplente:Boolean(body?.inadimplente),juridico:Boolean(body?.juridico)};
-  const since=sinceRaw&&/^\d{4}-\d{2}-\d{2}$/.test(sinceRaw)?sinceRaw:new Date().toISOString().slice(0,10);
+  const since=sinceRaw&&/^\d{4}-\d{2}-\d{2}$/.test(sinceRaw)?sinceRaw:null;
   const{data:client}=await ops.from("clients").select("id,display_name").eq("id",clientId).maybeSingle();if(!client)return reply({error:"client_not_found"},404);
-  const now=new Date().toISOString();
   try{
-    for(const status of ALLOWED){
-      const{data:current,error:currentError}=await ops.from("client_operational_status").select("id,status,note,since,active").eq("client_id",clientId).eq("status",status).eq("active",true).maybeSingle();
-      if(currentError)throw currentError;
-      const wants=desired[status];
-      if(!wants&&current){const{error}=await ops.from("client_operational_status").update({active:false,resolved_at:now,resolved_by:person}).eq("id",current.id);if(error)throw error;continue;}
-      if(!wants)continue;
-      const same=current&&String(current.note||"")===note&&String(current.since||"")===since;if(same)continue;
-      if(current){const{error}=await ops.from("client_operational_status").update({active:false,resolved_at:now,resolved_by:person}).eq("id",current.id);if(error)throw error;}
-      const{error}=await ops.from("client_operational_status").insert({client_id:clientId,status,note:note||null,active:true,created_at:now,created_by:person,since});if(error)throw error;
-    }
-    const items=await load();return reply({ok:true,client:items.find((x:Row)=>String(x.client_id)===clientId)||null,updated_by:person,updated_at:now});
+    const{data:result,error:saveError}=await ops.rpc("set_client_financial_legal_status",{p_client_id:clientId,p_inadimplente:Boolean(body?.inadimplente),p_juridico:Boolean(body?.juridico),p_note:note||null,p_since:since,p_actor:person});
+    if(saveError)throw saveError;
+    const items=await load();return reply({ok:true,result,client:items.find((x:Row)=>String(x.client_id)===clientId)||null,updated_by:person,updated_at:new Date().toISOString()});
   }catch(error){return reply({error:"save_failed",detail:error instanceof Error?error.message:String(error)},500);}
 });
