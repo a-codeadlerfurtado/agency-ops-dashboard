@@ -29,6 +29,12 @@ function method(row: Row): Segment | "OTHER" {
   if (Number(row.funding_type) === 1) return "CARD";
   return "OTHER";
 }
+function metaBillingUrl(row: Row) {
+  const id = String(row.meta_ad_account_id || "").replace(/^act_/i, "").trim();
+  if (!/^\d+$/.test(id)) return null;
+  const encoded = encodeURIComponent(id);
+  return `https://business.facebook.com/billing_hub/accounts/details?asset_id=${encoded}&placement=ads_manager&payment_account_id=${encoded}`;
+}
 function cardStatus(row: Row) {
   const status = String(row.run_status || "UNKNOWN");
   if (status === "OK") return { tone: "ok", label: "Apto para rodar" };
@@ -204,15 +210,18 @@ export default function ClientBalancesPage() {
       </thead><tbody>
         {rows.map((row,index)=>{
           const type=method(row);
-          if(type === "PIX") { const tone=runwayTone(row); return <tr key={`${row.client_id}:${row.account_key}:${index}`} className={`cb-runway-row ${tone}`}>
-            <td className="cb-client"><b>{row.display_name}</b><small>GT: {row.gt_owner || "—"} · CS: {row.cs_owner || "—"}</small></td>
-            <td className="cb-balance"><strong>{money(row.available_balance)}</strong><small>disponível agora</small></td>
-            <td className="cb-daily"><strong>{money(row.avg_daily_spend)}</strong><small>por dia · {row.spend_window_days || 7}d</small></td>
-            <td className="cb-days"><strong>{runwayLabel(row)}</strong><span className={`cb-status ${tone}`}>{numberValue(row.available_balance)<=0 ? "Recarregar agora" : row.days_remaining != null && numberValue(row.days_remaining)<=2 ? "Urgente" : row.days_remaining != null && numberValue(row.days_remaining)<=5 ? "Atenção" : "OK"}</span></td>
-            <td className="cb-money"><strong>{money(row.spend_7d)}</strong><small>últimos 7 dias</small></td>
-            <td className="cb-account"><b>{row.account_key}</b><small>{row.payment_display || "PIX / pré-pago"}</small></td>
-            <td><b>{dateTime(row.checked_at)}</b><small>{row.latest_spend_date ? `mídia até ${String(row.latest_spend_date).slice(0,10).split("-").reverse().join("/")}` : "sem mídia recente"}</small></td>
-          </tr>; }
+          if(type === "PIX") {
+            const tone=runwayTone(row), billingUrl=metaBillingUrl(row), emptyBalance=numberValue(row.available_balance)<=0;
+            return <tr key={`${row.client_id}:${row.account_key}:${index}`} className={`cb-runway-row ${tone}`}>
+              <td className="cb-client"><b>{row.display_name}</b><small>GT: {row.gt_owner || "—"} · CS: {row.cs_owner || "—"}</small></td>
+              <td className="cb-balance"><strong>{money(row.available_balance)}</strong><small>disponível agora</small></td>
+              <td className="cb-daily"><strong>{money(row.avg_daily_spend)}</strong><small>por dia · {row.spend_window_days || 7}d</small></td>
+              <td className="cb-days"><strong>{runwayLabel(row)}</strong>{emptyBalance && billingUrl ? <a className={`cb-status ${tone} cb-recharge-link`} href={billingUrl} target="_blank" rel="noopener noreferrer" title={`Abrir cobrança da conta ${row.account_key} na Meta`}>Recarregar agora ↗</a> : <span className={`cb-status ${tone}`}>{emptyBalance ? "Recarga indisponível" : row.days_remaining != null && numberValue(row.days_remaining)<=2 ? "Urgente" : row.days_remaining != null && numberValue(row.days_remaining)<=5 ? "Atenção" : "OK"}</span>}</td>
+              <td className="cb-money"><strong>{money(row.spend_7d)}</strong><small>últimos 7 dias</small></td>
+              <td className="cb-account"><b>{row.account_key}</b><small>{row.payment_display || "PIX / pré-pago"}</small></td>
+              <td><b>{dateTime(row.checked_at)}</b><small>{row.latest_spend_date ? `mídia até ${String(row.latest_spend_date).slice(0,10).split("-").reverse().join("/")}` : "sem mídia recente"}</small></td>
+            </tr>;
+          }
           if(type === "CARD") { const info=cardStatus(row); return <tr key={`${row.client_id}:${row.account_key}:${index}`}>
             <td className="cb-client"><b>{row.display_name}</b><small>GT: {row.gt_owner || "—"} · CS: {row.cs_owner || "—"}</small></td>
             <td><span className={`cb-status ${info.tone}`}>{info.label}</span></td>
