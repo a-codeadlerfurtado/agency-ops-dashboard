@@ -30,6 +30,7 @@ import ClientNotificationsBridge from "./client-notifications-bridge";
 import LeonardoMeetingNotificationBridge from "./leonardo-meeting-notification-bridge";
 import LeonardoActionWarning from "./leonardo-action-warning";
 import NotificationsHomeLink from "./notifications-home-link";
+import NotificationDetailBridge from "./notification-detail-bridge";
 import AutomationNavBridge from "./automation-nav-bridge";
 import DonnahNavBridge from "./donnah-nav-bridge";
 import LearningShortcut from "./learning-shortcut";
@@ -96,6 +97,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <LeonardoMeetingNotificationBridge />
         <LeonardoActionWarning />
         <NotificationsHomeLink />
+        <NotificationDetailBridge />
         <AutomationNavBridge />
         <DonnahNavBridge />
         <TeamAccessAdmin />
