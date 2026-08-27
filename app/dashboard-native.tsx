@@ -1755,7 +1755,7 @@ function NotificationCenter({items,close,refresh,openClient,openWork,token,pendi
       item.metadata?.alert_type==="CLIENT_WAITING_SLA"||
       item.type==="COLLABORATOR_MEETING_STARTED"
     );
-    return <button className={item.read_at?"":"unread"} key={item.id} onClick={()=>{read(item.id);const workId=item.metadata?.work_item_id;if(hasOperationalContext&&item.client_id)openClient(String(item.client_id));else if(workId)openWork(String(workId));else if(item.client_id)openClient(String(item.client_id));}}><Chip value={item.level}/><span><b>{item.title}</b>{conclusao
+    return <button className={item.read_at?"":"unread"} data-notification-id={String(item.id)} key={item.id} onClick={()=>{read(item.id);const workId=item.metadata?.work_item_id;if(hasOperationalContext&&item.client_id)openClient(String(item.client_id));else if(workId)openWork(String(workId));else if(item.client_id)openClient(String(item.client_id));}}><Chip value={item.level}/><span><b>{item.title}</b>{conclusao
       ? <><small>{text(conclusao.tarefa)}</small><small className="notification-owner">Concluída por: {conclusao.concluidaPor || "não identificado"}</small><small className="notification-owner">Responsável: {text(conclusao.responsavel)}</small><small>{formatDate(item.occurred_at)}</small></>
       : <small>{text(item.actor ? `${item.actor}: ${item.description}` : item.description)} · {formatDate(item.occurred_at)}</small>}{(item.gestor || item.carteira) && <small className="notification-owner">{text(item.carteira ? `Carteira ${item.carteira}` : (item.gestor ? `Gestor: ${item.gestor}` : ""))}</small>}</span></button>;
   })}{!items.length&&<div className="empty">Nenhuma notificação.</div>}</div></div>;
