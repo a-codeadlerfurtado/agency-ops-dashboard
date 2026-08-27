@@ -16,6 +16,7 @@ import OnboardingHistoryNotificationBridge from "./onboarding-history-notificati
 import OnboardingHistoryPrecisionBridge from "./onboarding-history-precision-bridge";
 import LeonardoScopeNetwork from "./leonardo-scope-network";
 import AdlerFinanceNavBridge from "./adler-finance-nav-bridge";
+import ClientBalancesNavBridge from "./client-balances-nav-bridge";
 import AdlerNotificationAreaFilter from "./adler-notification-area-filter";
 import MetaPerformanceProfileBridge from "./meta-performance-profile-bridge";
 import AIHeadRouter from "./ai-head-router";
@@ -86,6 +87,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OnboardingRequiredAlerts />
         <OnboardingRoleRouter />
         <AdlerFinanceNavBridge />
+        <ClientBalancesNavBridge />
         <AdlerNotificationAreaFilter />
         <MetaPerformanceProfileBridge />
         <IntegrationHealthBar />
