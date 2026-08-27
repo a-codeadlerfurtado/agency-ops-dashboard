@@ -7,40 +7,52 @@ import "./client-balances.css";
 
 type Row = Record<string, any>;
 type Payload = { ok?: boolean; profile?: Row; rows?: Row[]; summary?: Row; sync?: Row; generated_at?: string };
+type Segment = "PIX" | "CARD" | "NONE" | "ALL";
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-client-balances-api`;
 
+function numberValue(value: unknown) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
 function money(value: unknown) {
   const n = Number(value);
-  return Number.isFinite(n) ? n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" }) : "—";
+  return Number.isFinite(n) ? n.toLocaleString("pt-BR", { style: "currency", currency: "BRL", maximumFractionDigits: 2 }) : "—";
 }
 function dateTime(value: unknown) {
   if (!value) return "—";
   const d = new Date(String(value));
   return Number.isNaN(d.getTime()) ? String(value) : new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short", timeZone: "America/Sao_Paulo" }).format(d);
 }
-function method(row: Row) {
+function method(row: Row): Segment | "OTHER" {
   if (!row.account_key) return "NONE";
   if (Number(row.funding_type) === 20) return "PIX";
   if (Number(row.funding_type) === 1) return "CARD";
   return "OTHER";
 }
-function methodLabel(row: Row) {
-  const type = method(row);
-  if (type === "PIX") return "PIX / pré-pago";
-  if (type === "CARD") return "Cartão / pós-pago";
-  if (type === "NONE") return "Sem conta Meta";
-  return row.funding_type_label || "Forma não identificada";
-}
-function statusInfo(row: Row) {
+function cardStatus(row: Row) {
   const status = String(row.run_status || "UNKNOWN");
-  if (status === "OK") return { tone: "ok", label: method(row) === "CARD" ? "Apto para rodar" : "Saldo OK" };
-  if (status === "NO_BALANCE") return { tone: "bad", label: "Saldo zerado" };
-  if (status === "LOW_BALANCE") return { tone: "warn", label: "Saldo baixo" };
+  if (status === "OK") return { tone: "ok", label: "Apto para rodar" };
   if (status === "BLOCKED") return { tone: "bad", label: "Conta bloqueada" };
   if (status === "ATTENTION") return { tone: "warn", label: "Verificar veiculação" };
   if (status === "NO_ACTIVE_CAMPAIGN") return { tone: "neutral", label: "Sem campanha ativa" };
-  if (status === "NO_ACCOUNT") return { tone: "neutral", label: "Sem conta Meta" };
   return { tone: "warn", label: "Não confirmado" };
+}
+function runwayTone(row: Row) {
+  const balance = numberValue(row.available_balance);
+  const days = row.days_remaining == null ? null : numberValue(row.days_remaining);
+  if (balance <= 0) return "bad";
+  if (days !== null && days <= 2) return "bad";
+  if (days !== null && days <= 5) return "warn";
+  return "ok";
+}
+function runwayLabel(row: Row) {
+  const balance = numberValue(row.available_balance);
+  const avg = numberValue(row.avg_daily_spend);
+  const days = row.days_remaining == null ? null : numberValue(row.days_remaining);
+  if (balance <= 0) return "0 dias";
+  if (avg <= 0 || days === null) return "Sem média recente";
+  if (days < 1) return "< 1 dia";
+  return `${days.toLocaleString("pt-BR", { maximumFractionDigits: 1 })} dias`;
 }
 
 export default function ClientBalancesPage() {
@@ -52,8 +64,8 @@ export default function ClientBalancesPage() {
   const [refreshMessage, setRefreshMessage] = useState("");
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
-  const [payment, setPayment] = useState("ALL");
-  const [status, setStatus] = useState("ALL");
+  const [segment, setSegment] = useState<Segment>("PIX");
+  const [urgency, setUrgency] = useState("ALL");
   const autoRefreshAttempted = useRef(false);
 
   useEffect(() => {
@@ -70,8 +82,8 @@ export default function ClientBalancesPage() {
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body?.detail || body?.error || `API ${response.status}`);
       const result = body?.refresh || {};
-      if (result.queued) setRefreshMessage("Nova leitura da Meta foi disparada por evento. A tela continua mostrando o último valor confirmado até a coleta concluir.");
-      else if (result.reason === "cooldown") setRefreshMessage("A coleta recente ainda está dentro do cooldown de 60 minutos; não foi criado outro processamento.");
+      if (result.queued) setRefreshMessage("Nova leitura da Meta disparada. Até concluir, os números abaixo continuam mostrando a última leitura confirmada.");
+      else if (result.reason === "cooldown") setRefreshMessage("A leitura é recente. O cooldown de 60 minutos evitou uma coleta duplicada.");
       else setRefreshMessage("Já existe uma atualização em andamento; nenhuma execução duplicada foi criada.");
     } catch (caught) { if (!automatic) setError(caught instanceof Error ? caught.message : "Falha ao solicitar atualização."); }
     finally { setRefreshing(false); }
@@ -96,62 +108,125 @@ export default function ClientBalancesPage() {
 
   useEffect(() => { if (ready && session?.access_token) void load(); }, [ready, session?.access_token]);
 
+  const allRows = payload.rows || [];
+  const pixRows = useMemo(() => allRows.filter((row) => method(row) === "PIX"), [allRows]);
+  const cardRows = useMemo(() => allRows.filter((row) => method(row) === "CARD"), [allRows]);
+  const noAccountRows = useMemo(() => allRows.filter((row) => method(row) === "NONE"), [allRows]);
+
+  const portfolio = useMemo(() => {
+    const totalBalance = pixRows.reduce((sum, row) => sum + numberValue(row.available_balance), 0);
+    const avgPerDay = pixRows.reduce((sum, row) => sum + numberValue(row.avg_daily_spend), 0);
+    const zero = pixRows.filter((row) => numberValue(row.available_balance) <= 0).length;
+    const upTo2 = pixRows.filter((row) => numberValue(row.available_balance) > 0 && row.days_remaining != null && numberValue(row.days_remaining) <= 2).length;
+    const threeTo5 = pixRows.filter((row) => row.days_remaining != null && numberValue(row.days_remaining) > 2 && numberValue(row.days_remaining) <= 5).length;
+    const cardsOk = cardRows.filter((row) => String(row.run_status) === "OK").length;
+    return { totalBalance, avgPerDay, zero, upTo2, threeTo5, cardsOk };
+  }, [pixRows, cardRows]);
+
   const rows = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("pt-BR");
-    return (payload.rows || []).filter((row) => {
-      const type = method(row);
-      const s = String(row.run_status || "UNKNOWN");
-      const queryOk = !needle || [row.display_name,row.account_key,row.gt_owner,row.cs_owner,row.payment_display].join(" ").toLocaleLowerCase("pt-BR").includes(needle);
-      const paymentOk = payment === "ALL" || type === payment;
-      const statusOk = status === "ALL" || s === status || (status === "ATTENTION_GROUP" && ["LOW_BALANCE","ATTENTION","UNKNOWN"].includes(s)) || (status === "CRITICAL_GROUP" && ["NO_BALANCE","BLOCKED"].includes(s));
-      return queryOk && paymentOk && statusOk;
-    });
-  }, [payload.rows, query, payment, status]);
+    return allRows
+      .filter((row) => {
+        const type = method(row);
+        const queryOk = !needle || [row.display_name,row.account_key,row.gt_owner,row.cs_owner,row.payment_display].join(" ").toLocaleLowerCase("pt-BR").includes(needle);
+        const segmentOk = segment === "ALL" || type === segment;
+        let urgencyOk = true;
+        if (urgency !== "ALL") {
+          if (type === "PIX") {
+            const balance = numberValue(row.available_balance), days = row.days_remaining == null ? null : numberValue(row.days_remaining);
+            urgencyOk = urgency === "ZERO" ? balance <= 0 : urgency === "UP_TO_2" ? balance > 0 && days !== null && days <= 2 : urgency === "UP_TO_5" ? balance > 0 && days !== null && days > 2 && days <= 5 : urgency === "HEALTHY" ? balance > 0 && (days === null || days > 5) : true;
+          } else if (type === "CARD") urgencyOk = urgency === "HEALTHY" ? String(row.run_status) === "OK" : urgency === "PROBLEM" ? ["BLOCKED","ATTENTION","UNKNOWN"].includes(String(row.run_status)) : true;
+        }
+        return queryOk && segmentOk && urgencyOk;
+      })
+      .sort((a, b) => {
+        const ta = method(a), tb = method(b);
+        if (ta === "PIX" && tb === "PIX") {
+          const da = a.days_remaining == null ? Number.POSITIVE_INFINITY : numberValue(a.days_remaining);
+          const db = b.days_remaining == null ? Number.POSITIVE_INFINITY : numberValue(b.days_remaining);
+          return da - db || numberValue(a.available_balance) - numberValue(b.available_balance) || String(a.display_name).localeCompare(String(b.display_name), "pt-BR");
+        }
+        if (ta === "CARD" && tb === "CARD") {
+          const rank = (row: Row) => String(row.run_status) === "BLOCKED" ? 0 : String(row.run_status) === "ATTENTION" ? 1 : String(row.run_status) === "UNKNOWN" ? 2 : String(row.run_status) === "NO_ACTIVE_CAMPAIGN" ? 3 : 4;
+          return rank(a) - rank(b) || numberValue(b.spend_7d) - numberValue(a.spend_7d);
+        }
+        const order: Record<string, number> = { PIX: 0, CARD: 1, OTHER: 2, NONE: 3 };
+        return (order[ta] ?? 9) - (order[tb] ?? 9);
+      });
+  }, [allRows, query, segment, urgency]);
+
+  useEffect(() => { setUrgency("ALL"); }, [segment]);
 
   if (!ready || !session) return <main className="cb-shell">Validando sessão…</main>;
-  const summary = payload.summary || {}, sync = payload.sync || {};
+  const sync = payload.sync || {};
 
   return <main className="cb-shell">
     <header className="cb-top">
       <button className="cb-back" onClick={() => window.location.assign("/")}>← Central de Operações</button>
-      <div className="cb-title"><small>OPERAÇÃO · MÍDIA</small><h1>Saldo Clientes</h1><p>PIX mostra saldo real. Cartão mostra se a conta está apta a continuar veiculando, sem inventar um “saldo” que a Meta não fornece.</p></div>
-      <div className="cb-meta"><b>{payload.profile?.scope === "ALL" ? "Carteira completa" : "Sua carteira"}</b><br/>Última coleta: {dateTime(sync.last_success_at)}</div>
+      <div className="cb-title"><small>OPERAÇÃO · SALDO DE MÍDIA</small><h1>Saldo Clientes</h1><p>Quanto resta, quanto o cliente costuma gastar por dia e quantos dias de mídia ainda existem.</p></div>
+      <div className="cb-meta"><b>{payload.profile?.scope === "ALL" ? "Carteira completa" : "Sua carteira"}</b><br/>Última leitura: {dateTime(sync.last_success_at)}</div>
     </header>
 
     {error && <div className="cb-error">{error}</div>}
     {refreshMessage && <div className="cb-banner">{refreshMessage}</div>}
-    {sync.age_minutes != null && Number(sync.age_minutes) >= 60 && <div className="cb-banner warn">A leitura tem {sync.age_minutes} min. Ao abrir esta aba, o sistema tenta disparar uma atualização por evento, respeitando o cooldown global de 60 min.</div>}
+    {sync.age_minutes != null && Number(sync.age_minutes) >= 60 && <div className="cb-banner warn">Leitura com {sync.age_minutes} min. A abertura da aba já tenta atualizar por evento, respeitando o cooldown para não pesar o banco.</div>}
 
-    <section className="cb-kpis">
-      <article><small>CLIENTES</small><b>{summary.clients || 0}</b><span>{payload.profile?.scope === "ALL" ? "carteira visível" : "na sua carteira"}</span></article>
-      <article><small>CONTAS PIX</small><b>{summary.prepaid || 0}</b><span>saldo disponível real</span></article>
-      <article><small>CONTAS CARTÃO</small><b>{summary.cards || 0}</b><span>condição de veiculação</span></article>
-      <article><small>CRÍTICOS</small><b>{summary.critical || 0}</b><span>zerado ou bloqueado</span></article>
-      <article><small>SEM CONTA META</small><b>{summary.no_account || 0}</b><span>integração ausente</span></article>
+    <section className="cb-kpis cb-kpis-focus">
+      <article className="primary"><small>SALDO PIX DISPONÍVEL</small><b>{money(portfolio.totalBalance)}</b><span>soma das contas pré-pagas visíveis</span></article>
+      <article><small>RITMO MÉDIO / DIA</small><b>{money(portfolio.avgPerDay)}</b><span>média dos últimos 7 dias</span></article>
+      <article className={portfolio.zero ? "danger" : ""}><small>SALDO ZERADO</small><b>{portfolio.zero}</b><span>precisam de recarga</span></article>
+      <article className={portfolio.upTo2 ? "danger" : ""}><small>ATÉ 2 DIAS</small><b>{portfolio.upTo2}</b><span>risco imediato</span></article>
+      <article className={portfolio.threeTo5 ? "warning" : ""}><small>3 A 5 DIAS</small><b>{portfolio.threeTo5}</b><span>planejar reposição</span></article>
     </section>
 
     <section className="cb-panel">
-      <div className="cb-toolbar">
-        <input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="Buscar cliente, conta, GT ou CS…" />
-        <select value={payment} onChange={(e)=>setPayment(e.target.value)}><option value="ALL">Todas as formas</option><option value="PIX">PIX / pré-pago</option><option value="CARD">Cartão</option><option value="NONE">Sem conta Meta</option></select>
-        <select value={status} onChange={(e)=>setStatus(e.target.value)}><option value="ALL">Todos os status</option><option value="CRITICAL_GROUP">Críticos</option><option value="ATTENTION_GROUP">Atenção</option><option value="OK">OK / apto</option><option value="NO_ACTIVE_CAMPAIGN">Sem campanha ativa</option><option value="NO_ACCOUNT">Sem conta Meta</option></select>
-        <button className="cb-refresh" onClick={()=>requestRefresh(false)} disabled={refreshing}>{refreshing ? "Solicitando…" : "Atualizar saldos"}</button>
-        <button className="cb-refresh" onClick={load} disabled={loading}>{loading ? "Carregando…" : "Recarregar tela"}</button>
-        <span className="cb-count">{rows.length} conta(s)/linha(s)</span>
+      <div className="cb-segments">
+        <button className={segment === "PIX" ? "active" : ""} onClick={()=>setSegment("PIX")}>Saldo PIX <b>{pixRows.length}</b></button>
+        <button className={segment === "CARD" ? "active" : ""} onClick={()=>setSegment("CARD")}>Cartão <b>{cardRows.length}</b></button>
+        <button className={segment === "NONE" ? "active" : ""} onClick={()=>setSegment("NONE")}>Sem conta <b>{noAccountRows.length}</b></button>
+        <button className={segment === "ALL" ? "active" : ""} onClick={()=>setSegment("ALL")}>Todos</button>
       </div>
-      <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Cliente</th><th>Conta Meta</th><th>Forma</th><th>Saldo / condição</th><th>Gasto 7d</th><th>Autonomia / sinal</th><th>Última leitura</th></tr></thead><tbody>
-        {rows.map((row,index)=>{ const type=method(row), info=statusInfo(row); return <tr key={`${row.client_id}:${row.account_key||"none"}:${index}`}>
-          <td className="cb-client"><b>{row.display_name}</b><small>GT: {row.gt_owner || "—"}</small><small>CS: {row.cs_owner || "—"}</small></td>
-          <td className="cb-account"><b>{row.account_key || "—"}</b><small>{row.payment_display || (row.account_key ? "Método não detalhado" : "Nenhuma conta vinculada")}</small></td>
-          <td><span className={`cb-pill ${type === "PIX" ? "pix" : type === "CARD" ? "card" : "none"}`}>{methodLabel(row)}</span></td>
-          <td className="cb-money">{type === "PIX" ? <><strong>{money(row.available_balance)}</strong><small>saldo disponível na Meta</small></> : type === "CARD" ? <><span className={`cb-status ${info.tone}`}>{info.label}</span><small>pós-pago: saldo bancário não é exposto pela Meta</small></> : <span className={`cb-status ${info.tone}`}>{info.label}</span>}</td>
-          <td className="cb-money"><strong>{money(row.spend_7d)}</strong><small>média {money(row.avg_daily_spend)}/dia</small></td>
-          <td className="cb-signal">{type === "PIX" ? <><span className={`cb-status ${info.tone}`}>{info.label}</span><small>{row.days_remaining != null ? `~${row.days_remaining} dia(s) no ritmo recente` : "sem gasto suficiente para estimar"}</small></> : type === "CARD" ? <><span className={`cb-status ${info.tone}`}>{info.label}</span><small>{Number(row.latest_day_spend||0)>0 ? `último dia com ${money(row.latest_day_spend)} de gasto` : `${row.active_campaigns||0} campanha(s) ativa(s) na última leitura de mídia`}</small></> : <span className={`cb-status ${info.tone}`}>{info.label}</span>}</td>
-          <td><b>{dateTime(row.checked_at)}</b><small>{row.latest_spend_date ? `mídia até ${new Intl.DateTimeFormat("pt-BR").format(new Date(`${String(row.latest_spend_date).slice(0,10)}T12:00:00`))}` : "sem gasto recente estruturado"}</small></td>
-        </tr>; })}
+
+      <div className="cb-toolbar">
+        <input value={query} onChange={(e)=>setQuery(e.target.value)} placeholder="Buscar cliente, GT, CS ou conta Meta…" />
+        {segment === "PIX" && <select value={urgency} onChange={(e)=>setUrgency(e.target.value)}><option value="ALL">Todas as autonomias</option><option value="ZERO">Saldo zerado</option><option value="UP_TO_2">Até 2 dias</option><option value="UP_TO_5">3 a 5 dias</option><option value="HEALTHY">Mais de 5 dias / sem média</option></select>}
+        {segment === "CARD" && <select value={urgency} onChange={(e)=>setUrgency(e.target.value)}><option value="ALL">Todos os cartões</option><option value="PROBLEM">Com atenção</option><option value="HEALTHY">Aptos</option></select>}
+        <button className="cb-refresh" onClick={()=>requestRefresh(false)} disabled={refreshing}>{refreshing ? "Solicitando…" : "Atualizar leitura"}</button>
+        <button className="cb-refresh secondary" onClick={load} disabled={loading}>{loading ? "Carregando…" : "Recarregar tela"}</button>
+        <span className="cb-count">{rows.length} resultado(s)</span>
+      </div>
+
+      {segment === "PIX" && <div className="cb-explain">Ordenado automaticamente por <b>menor autonomia primeiro</b>. A média diária é o gasto dos últimos 7 dias dividido pelos dias do período disponível.</div>}
+      {segment === "CARD" && <div className="cb-explain">Cartão não possui saldo disponível exposto pela Meta. Aqui mostramos apenas <b>capacidade de veiculação + ritmo de gasto</b>, sem inventar limite restante.</div>}
+
+      <div className="cb-table-wrap"><table className="cb-table cb-table-focus"><thead>
+        {segment === "CARD" ? <tr><th>Cliente</th><th>Situação</th><th>Média / dia</th><th>Gasto 7d</th><th>Último sinal</th><th>Conta</th><th>Leitura</th></tr> : segment === "NONE" ? <tr><th>Cliente</th><th>GT</th><th>CS</th><th>Situação</th></tr> : <tr><th>Cliente</th><th>Saldo agora</th><th>Média / dia</th><th>Dias restantes</th><th>Gasto 7d</th><th>Conta</th><th>Leitura</th></tr>}
+      </thead><tbody>
+        {rows.map((row,index)=>{
+          const type=method(row);
+          if(type === "PIX") { const tone=runwayTone(row); return <tr key={`${row.client_id}:${row.account_key}:${index}`} className={`cb-runway-row ${tone}`}>
+            <td className="cb-client"><b>{row.display_name}</b><small>GT: {row.gt_owner || "—"} · CS: {row.cs_owner || "—"}</small></td>
+            <td className="cb-balance"><strong>{money(row.available_balance)}</strong><small>disponível agora</small></td>
+            <td className="cb-daily"><strong>{money(row.avg_daily_spend)}</strong><small>por dia · {row.spend_window_days || 7}d</small></td>
+            <td className="cb-days"><strong>{runwayLabel(row)}</strong><span className={`cb-status ${tone}`}>{numberValue(row.available_balance)<=0 ? "Recarregar agora" : row.days_remaining != null && numberValue(row.days_remaining)<=2 ? "Urgente" : row.days_remaining != null && numberValue(row.days_remaining)<=5 ? "Atenção" : "OK"}</span></td>
+            <td className="cb-money"><strong>{money(row.spend_7d)}</strong><small>últimos 7 dias</small></td>
+            <td className="cb-account"><b>{row.account_key}</b><small>{row.payment_display || "PIX / pré-pago"}</small></td>
+            <td><b>{dateTime(row.checked_at)}</b><small>{row.latest_spend_date ? `mídia até ${String(row.latest_spend_date).slice(0,10).split("-").reverse().join("/")}` : "sem mídia recente"}</small></td>
+          </tr>; }
+          if(type === "CARD") { const info=cardStatus(row); return <tr key={`${row.client_id}:${row.account_key}:${index}`}>
+            <td className="cb-client"><b>{row.display_name}</b><small>GT: {row.gt_owner || "—"} · CS: {row.cs_owner || "—"}</small></td>
+            <td><span className={`cb-status ${info.tone}`}>{info.label}</span></td>
+            <td className="cb-daily"><strong>{money(row.avg_daily_spend)}</strong><small>por dia · {row.spend_window_days || 7}d</small></td>
+            <td className="cb-money"><strong>{money(row.spend_7d)}</strong><small>últimos 7 dias</small></td>
+            <td className="cb-signal"><strong>{numberValue(row.latest_day_spend)>0 ? money(row.latest_day_spend) : "—"}</strong><small>{numberValue(row.latest_day_spend)>0 ? "no último dia com mídia" : `${row.active_campaigns||0} campanha(s) ativa(s)`}</small></td>
+            <td className="cb-account"><b>{row.account_key}</b><small>{row.payment_display || "Cartão / pós-pago"}</small></td>
+            <td><b>{dateTime(row.checked_at)}</b></td>
+          </tr>; }
+          return <tr key={`${row.client_id}:none:${index}`}><td className="cb-client"><b>{row.display_name}</b></td><td>{row.gt_owner || "—"}</td><td>{row.cs_owner || "—"}</td><td><span className="cb-status neutral">Sem conta Meta vinculada</span></td></tr>;
+        })}
         {!rows.length && <tr><td colSpan={7} className="cb-empty">Nenhum cliente nesse filtro.</td></tr>}
       </tbody></table></div>
-      <div className="cb-footer">Atualização por evento ao acessar a aba, com cooldown global de 60 minutos. O cron de segurança roda a cada 3 horas; não existe polling de 5 em 5 minutos.</div>
+      <div className="cb-footer">Atualização por evento ao acessar a aba, cooldown global de 60 min e cron de segurança a cada 3 horas.</div>
     </section>
   </main>;
 }
