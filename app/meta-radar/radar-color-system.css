@@ -1,0 +1,404 @@
+/* Color system for /meta-radar: keep the deep-blue base, add light-blue depth and orange separation. */
+
+:root {
+  --radar-bg: #06131f;
+  --radar-panel: #0a1c2a;
+  --radar-panel-2: #0c2233;
+  --radar-blue: #2ea8ff;
+  --radar-blue-soft: #72c7ff;
+  --radar-orange: #ff8a3d;
+  --radar-orange-soft: #ffb35c;
+  --radar-text: #eef6fb;
+  --radar-muted: #8ba8bd;
+}
+
+body .mr-shell.mr-shell {
+  background:
+    radial-gradient(circle at 12% -8%, rgba(46,168,255,.16), transparent 30%),
+    radial-gradient(circle at 88% 2%, rgba(255,138,61,.12), transparent 28%),
+    linear-gradient(180deg, #06131f 0%, #071724 46%, #06131f 100%) !important;
+}
+
+body .mr-head.mr-head {
+  border-bottom-color: rgba(114,199,255,.18) !important;
+}
+body .mr-head span,
+body .mr-section-title span,
+body .mrd-creative-head span,
+body .mrd-brief span {
+  color: var(--radar-blue-soft) !important;
+}
+body .mr-head h1,
+body .mr-section-title h2,
+body .mrd-head h2,
+body .mrd-next h3,
+body .mrd-creative-head h3,
+body .mrd-brief h3 {
+  color: var(--radar-text) !important;
+}
+body .mr-head-actions a {
+  background:
+    linear-gradient(180deg, rgba(12,40,58,.92), rgba(8,27,41,.92)) !important;
+  border-color: rgba(114,199,255,.25) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035), 0 6px 22px rgba(0,0,0,.1) !important;
+}
+body .mr-head-actions a:hover {
+  border-color: rgba(114,199,255,.46) !important;
+  background:
+    radial-gradient(circle at top right, rgba(46,168,255,.16), transparent 45%),
+    linear-gradient(180deg, rgba(13,44,64,.96), rgba(8,28,42,.96)) !important;
+}
+
+/* First fold: each state gets a distinct visual temperature. */
+body .mr-summary > button,
+body .mr-summary > article {
+  border-color: rgba(114,199,255,.15) !important;
+  background:
+    linear-gradient(180deg, rgba(11,31,46,.96), rgba(7,23,35,.96)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.035),
+    0 10px 28px rgba(0,0,0,.11) !important;
+}
+body .mr-summary > button.bad {
+  border-color: rgba(255,138,61,.35) !important;
+  background:
+    radial-gradient(circle at 88% 15%, rgba(255,138,61,.20), transparent 35%),
+    linear-gradient(135deg, rgba(14,34,48,.98), rgba(24,27,29,.94)) !important;
+}
+body .mr-summary > button.warn {
+  border-color: rgba(255,179,92,.30) !important;
+  background:
+    radial-gradient(circle at 88% 15%, rgba(255,179,92,.16), transparent 36%),
+    linear-gradient(135deg, rgba(13,34,49,.98), rgba(23,30,32,.94)) !important;
+}
+body .mr-summary > button.good {
+  border-color: rgba(114,199,255,.32) !important;
+  background:
+    radial-gradient(circle at 88% 15%, rgba(114,199,255,.20), transparent 38%),
+    linear-gradient(135deg, rgba(11,35,52,.98), rgba(8,29,44,.94)) !important;
+}
+body .mr-summary > article {
+  border-color: rgba(46,168,255,.20) !important;
+  background:
+    radial-gradient(circle at 85% 12%, rgba(46,168,255,.16), transparent 40%),
+    linear-gradient(180deg, rgba(10,30,45,.95), rgba(7,23,35,.95)) !important;
+  opacity: 1 !important;
+}
+body .mr-summary > button.bad small,
+body .mr-summary > button.bad b { color: #ffd1b2 !important; }
+body .mr-summary > button.warn small,
+body .mr-summary > button.warn b { color: #ffdaa0 !important; }
+body .mr-summary > button.good small,
+body .mr-summary > button.good b,
+body .mr-summary > article small { color: #a7dcff !important; }
+body .mr-summary > button.active.bad {
+  box-shadow: inset 0 0 0 1px rgba(255,138,61,.44), 0 12px 34px rgba(255,112,43,.10) !important;
+}
+body .mr-summary > button.active.warn {
+  box-shadow: inset 0 0 0 1px rgba(255,179,92,.42), 0 12px 34px rgba(255,179,92,.08) !important;
+}
+body .mr-summary > button.active.good {
+  box-shadow: inset 0 0 0 1px rgba(114,199,255,.46), 0 12px 34px rgba(46,168,255,.10) !important;
+}
+
+/* Cockpit controls. */
+body .mr-toolbar.mr-toolbar {
+  background:
+    linear-gradient(180deg, rgba(6,19,31,.96), rgba(6,19,31,.88)) !important;
+  border-bottom-color: rgba(114,199,255,.14) !important;
+}
+body .mr-toolbar nav {
+  border-color: rgba(114,199,255,.18) !important;
+  background: rgba(4,15,24,.76) !important;
+}
+body .mr-toolbar nav button.active {
+  background:
+    linear-gradient(135deg, rgba(46,168,255,.34), rgba(255,138,61,.17)) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.08),
+    0 6px 20px rgba(46,168,255,.08) !important;
+  color: #fff !important;
+}
+body .mr-toolbar button,
+body .mr-toolbar select,
+body .mr-toolbar input {
+  border-color: rgba(114,199,255,.18) !important;
+  background:
+    linear-gradient(180deg, rgba(11,34,51,.96), rgba(8,25,38,.96)) !important;
+}
+body .mr-toolbar > div > button:last-child {
+  border-color: rgba(255,138,61,.26) !important;
+  background:
+    linear-gradient(135deg, rgba(18,57,82,.95), rgba(89,49,25,.72)) !important;
+  color: #ffe1cd !important;
+}
+
+/* Radar cards: blue base, orange / light-blue signatures by state. */
+body .mr-card.mr-card {
+  background:
+    radial-gradient(circle at 98% 8%, rgba(46,168,255,.075), transparent 28%),
+    linear-gradient(180deg, rgba(9,27,41,.96), rgba(7,22,34,.96)) !important;
+  border-color: rgba(114,199,255,.15) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.025),
+    0 8px 28px rgba(0,0,0,.09) !important;
+}
+body .mr-card.bad {
+  border-left-color: var(--radar-orange) !important;
+  background:
+    radial-gradient(circle at 94% 4%, rgba(255,138,61,.12), transparent 29%),
+    radial-gradient(circle at 20% 100%, rgba(46,168,255,.05), transparent 34%),
+    linear-gradient(180deg, rgba(10,28,41,.98), rgba(8,23,34,.98)) !important;
+}
+body .mr-card.warn {
+  border-left-color: var(--radar-orange-soft) !important;
+  background:
+    radial-gradient(circle at 94% 4%, rgba(255,179,92,.10), transparent 30%),
+    radial-gradient(circle at 20% 100%, rgba(46,168,255,.05), transparent 34%),
+    linear-gradient(180deg, rgba(10,28,41,.98), rgba(8,23,34,.98)) !important;
+}
+body .mr-card.good {
+  border-left-color: var(--radar-blue-soft) !important;
+  background:
+    radial-gradient(circle at 94% 4%, rgba(114,199,255,.13), transparent 31%),
+    linear-gradient(180deg, rgba(8,29,43,.96), rgba(7,23,34,.96)) !important;
+}
+body .mr-card:hover {
+  border-color: rgba(114,199,255,.32) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.035),
+    0 14px 38px rgba(0,0,0,.16) !important;
+}
+body .mr-card.bad:hover { border-color: rgba(255,138,61,.34) !important; }
+body .mr-card.warn:hover { border-color: rgba(255,179,92,.31) !important; }
+body .mr-card.good:hover { border-color: rgba(114,199,255,.36) !important; }
+body .mr-card-state {
+  background: rgba(3,14,22,.18) !important;
+  border-right-color: rgba(114,199,255,.11) !important;
+}
+body .mr-card.bad .mr-card-state b { color: #ffc29b !important; }
+body .mr-card.warn .mr-card-state b { color: #ffd396 !important; }
+body .mr-card.good .mr-card-state b { color: #9ed8ff !important; }
+body .mr-card-name h3 { color: #f3f8fc !important; }
+body .mr-card-name span,
+body .mr-card-metrics small { color: #7f9db3 !important; }
+body .mr-card-metrics b { color: #d9ebf7 !important; }
+
+body .mr-reasons span,
+body .mrd-next span,
+body .mrd-changes span {
+  background: rgba(255,255,255,.028) !important;
+  border-color: rgba(114,199,255,.16) !important;
+  color: #b8d1e1 !important;
+}
+body .mr-reasons .bad,
+body .mrd-next .bad,
+body .mrd-changes .bad {
+  border-color: rgba(255,138,61,.38) !important;
+  background: rgba(255,138,61,.095) !important;
+  color: #ffc39f !important;
+}
+body .mr-reasons .warn,
+body .mrd-next .warn,
+body .mrd-changes .warn {
+  border-color: rgba(255,179,92,.32) !important;
+  background: rgba(255,179,92,.075) !important;
+  color: #ffd792 !important;
+}
+body .mr-reasons .good,
+body .mrd-next .good,
+body .mrd-changes .good,
+body .mr-reasons .info,
+body .mrd-next .info,
+body .mrd-changes .info {
+  border-color: rgba(114,199,255,.30) !important;
+  background: rgba(46,168,255,.075) !important;
+  color: #a6ddff !important;
+}
+body .mr-next {
+  border-color: rgba(114,199,255,.20) !important;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(46,168,255,.10), transparent 44%),
+    linear-gradient(135deg, rgba(10,37,55,.92), rgba(8,28,42,.92)) !important;
+}
+body .mr-card.bad .mr-next {
+  border-color: rgba(255,138,61,.20) !important;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255,138,61,.09), transparent 45%),
+    linear-gradient(135deg, rgba(10,37,55,.93), rgba(12,29,38,.93)) !important;
+}
+body .mr-next small { color: #87ccf8 !important; }
+body .mr-card.bad .mr-next small { color: #ffb885 !important; }
+body .mr-card.warn .mr-next small { color: #ffd08a !important; }
+body .mr-open { color: #82ceff !important; }
+
+/* Change cards use the tone as a visual lane. */
+body .mr-change {
+  background:
+    linear-gradient(180deg, rgba(10,29,44,.93), rgba(7,23,35,.93)) !important;
+  border-color: rgba(114,199,255,.14) !important;
+}
+body .mr-change.bad {
+  border-left-color: var(--radar-orange) !important;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255,138,61,.11), transparent 32%),
+    linear-gradient(180deg, rgba(10,29,44,.95), rgba(8,23,34,.95)) !important;
+}
+body .mr-change.warn {
+  border-left-color: var(--radar-orange-soft) !important;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255,179,92,.09), transparent 32%),
+    linear-gradient(180deg, rgba(10,29,44,.95), rgba(8,23,34,.95)) !important;
+}
+body .mr-change.good,
+body .mr-change.info {
+  border-left-color: var(--radar-blue-soft) !important;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(114,199,255,.11), transparent 32%),
+    linear-gradient(180deg, rgba(10,29,44,.95), rgba(8,23,34,.95)) !important;
+}
+body .mr-change > span { color: #8bd0ff !important; }
+body .mr-change.bad > span { color: #ffb17a !important; }
+body .mr-change.warn > span { color: #ffd08a !important; }
+
+/* Creative map and image cards get a clearer blue/orange visual rhythm. */
+body .mr-creative-overview button,
+body .mrd-creatives article,
+body .mdi-grid > article {
+  border-color: rgba(114,199,255,.15) !important;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(46,168,255,.09), transparent 35%),
+    linear-gradient(180deg, rgba(9,28,42,.96), rgba(7,23,35,.96)) !important;
+  box-shadow: 0 10px 30px rgba(0,0,0,.10) !important;
+}
+body .mr-creative-overview button:nth-child(3n+2),
+body .mrd-creatives article:nth-child(3n+2),
+body .mdi-grid > article:nth-child(3n+2) {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255,138,61,.085), transparent 35%),
+    linear-gradient(180deg, rgba(9,28,42,.96), rgba(7,23,35,.96)) !important;
+}
+body .mr-creative-overview button:hover,
+body .mrd-creatives article:hover,
+body .mdi-grid > article:hover {
+  border-color: rgba(114,199,255,.34) !important;
+}
+body .mrd-img,
+body .mdi-img {
+  background:
+    linear-gradient(135deg, rgba(5,18,29,.98), rgba(9,31,46,.98)) !important;
+}
+
+/* Drawer: keep it blue, make each evidence block visually distinct. */
+body .mr-drawer.mr-drawer {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(46,168,255,.07), transparent 30%),
+    linear-gradient(180deg, #071520 0%, #06131f 100%) !important;
+}
+body .mrd-head.mrd-head {
+  background:
+    linear-gradient(180deg, rgba(7,25,38,.98), rgba(7,22,34,.96)) !important;
+  border-bottom-color: rgba(114,199,255,.15) !important;
+}
+body .mrd-next.mrd-next {
+  border-color: rgba(114,199,255,.28) !important;
+  background:
+    radial-gradient(circle at 96% 0%, rgba(255,138,61,.10), transparent 36%),
+    radial-gradient(circle at 0% 100%, rgba(46,168,255,.12), transparent 40%),
+    linear-gradient(135deg, rgba(12,43,64,.98), rgba(8,29,44,.96)) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035) !important;
+}
+body .mrd-info {
+  border-color: rgba(114,199,255,.15) !important;
+  background:
+    linear-gradient(180deg, rgba(9,29,43,.94), rgba(7,23,35,.94)) !important;
+}
+body .mrd-info:nth-child(1),
+body .mrd-info:nth-child(4) {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(114,199,255,.12), transparent 38%),
+    linear-gradient(180deg, rgba(9,29,43,.95), rgba(7,23,35,.95)) !important;
+}
+body .mrd-info:nth-child(2),
+body .mrd-info:nth-child(5) {
+  border-color: rgba(255,138,61,.18) !important;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255,138,61,.105), transparent 38%),
+    linear-gradient(180deg, rgba(9,29,43,.95), rgba(7,23,35,.95)) !important;
+}
+body .mrd-info:nth-child(3) {
+  background:
+    radial-gradient(circle at 100% 0%, rgba(46,168,255,.095), transparent 38%),
+    linear-gradient(180deg, rgba(9,29,43,.95), rgba(7,23,35,.95)) !important;
+}
+body .mrd-info > span { color: #82cbfb !important; }
+body .mrd-info:nth-child(2) > span,
+body .mrd-info:nth-child(5) > span { color: #ffb27e !important; }
+body .mrd-info p {
+  border-top-color: rgba(114,199,255,.10) !important;
+  color: #abc2d2 !important;
+}
+
+body .mrd-brief {
+  border-color: rgba(114,199,255,.20) !important;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(46,168,255,.09), transparent 38%),
+    linear-gradient(135deg, rgba(9,31,46,.96), rgba(7,24,36,.96)) !important;
+}
+body .mrd-brief.needed {
+  border-color: rgba(255,138,61,.34) !important;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(255,138,61,.15), transparent 38%),
+    radial-gradient(circle at 0% 100%, rgba(46,168,255,.07), transparent 40%),
+    linear-gradient(135deg, rgba(18,33,40,.98), rgba(10,27,39,.98)) !important;
+}
+body .mrd-brief button,
+body .mrd-creative-head button {
+  border-color: rgba(114,199,255,.28) !important;
+  background:
+    linear-gradient(135deg, rgba(15,58,84,.96), rgba(19,46,63,.96)) !important;
+  color: #c8eaff !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04) !important;
+}
+body .mrd-brief.needed button {
+  border-color: rgba(255,138,61,.40) !important;
+  background:
+    linear-gradient(135deg, #164b6d 0%, #8d4d28 115%) !important;
+  color: #fff4ec !important;
+  box-shadow: 0 8px 24px rgba(255,112,43,.10) !important;
+}
+body .mrd-brief.needed button:hover {
+  background:
+    linear-gradient(135deg, #195779 0%, #a65a2c 115%) !important;
+}
+
+body .mrd-tasks a {
+  border-top-color: rgba(114,199,255,.11) !important;
+}
+body .mrd-tasks a:hover {
+  background: rgba(46,168,255,.045) !important;
+}
+
+/* Designer intelligence: image-first, but not monochrome. */
+body .mdi-grid > article:nth-child(4n+1) {
+  border-color: rgba(114,199,255,.20) !important;
+}
+body .mdi-grid > article:nth-child(4n+2) {
+  border-color: rgba(255,138,61,.20) !important;
+}
+body .mdi-grid span { color: #78c9fb !important; }
+body .mdi-grid > article:nth-child(4n+2) span { color: #ffb47f !important; }
+
+@media (max-width: 760px) {
+  body .mr-shell.mr-shell {
+    background:
+      radial-gradient(circle at 18% -3%, rgba(46,168,255,.13), transparent 26%),
+      radial-gradient(circle at 90% 3%, rgba(255,138,61,.085), transparent 24%),
+      #06131f !important;
+  }
+  body .mr-summary > button.bad,
+  body .mr-summary > button.warn,
+  body .mr-summary > button.good {
+    background-size: 100% 100% !important;
+  }
+}
