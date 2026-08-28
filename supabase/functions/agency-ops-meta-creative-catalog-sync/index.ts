@@ -114,20 +114,26 @@ Deno.serve(async(req:Request)=>{
   const body=await req.json().catch(()=>({})); const clientId=String(body?.client_id||"").trim(); if(!clientId)return json({ok:false,error:"client_id_required"},400);
   const started=new Date().toISOString();
   await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"RUNNING",started_at:started,finished_at:null,last_error:null,updated_at:started},{onConflict:"client_id"});
+  let stage="client";
   try {
     const {data:client,error:clientError}=await ops.from("clients").select("id,display_name,lifecycle").eq("id",clientId).maybeSingle(); if(clientError)throw clientError; if(!client)throw new Error("client_not_found");
+    stage="integrations";
     const {data:integrations,error:intError}=await ops.from("client_integrations").select("meta_ad_account_id").eq("client_id",clientId).eq("system","META_BM").not("meta_ad_account_id","is",null); if(intError)throw intError;
     const accounts:string[]=[...new Set<string>((integrations||[]).map((x:Row)=>String(x.meta_ad_account_id||"").trim()).filter(Boolean))];
     const collected:Row[]=[];
     for(const accountId of accounts) {
+      stage=`ads:${accountId}`;
       const adFields="id,name,status,effective_status,campaign{id,name,status,effective_status},adset{id,name},creative{id,name}";
       const ads=await paged(`${GRAPH_ROOT}/act_${accountId}/ads?limit=200&fields=${encodeURIComponent(adFields)}&access_token=${encodeURIComponent(token)}`,5000);
+      stage=`insights:${accountId}`;
       const insightMap=await insights(accountId,token).catch(()=>new Map<string,Row>());
+      stage=`creatives:${accountId}`;
       const creativeIds:string[]=[...new Set<string>(ads.map((a:Row)=>String(a.creative?.id||"")).filter(Boolean))];
       const creativeFields="id,name,thumbnail_url,image_url,effective_object_story_id,object_type,object_story_spec,asset_feed_spec";
       const paths=creativeIds.map(id=>`${id}?thumbnail_width=600&thumbnail_height=600&fields=${encodeURIComponent(creativeFields)}`);
       const batch=paths.length?await batchGet(paths,token).catch(()=>new Map<string,Row>()):new Map<string,Row>();
       const creativeMap=new Map<string,Row>(); paths.forEach((p,i)=>{const v=batch.get(p);if(v)creativeMap.set(creativeIds[i],v);});
+      stage=`previews:${accountId}`;
       const rows=await mapConcurrent(ads,async(a:Row)=>{
         const adId=String(a.id||"");const creativeId=String(a.creative?.id||"");const creative=creativeMap.get(creativeId)||a.creative||{};const metrics=insightMap.get(adId)||{};
         const previewPath=await mirrorPreview(db,clientId,adId,[creative.thumbnail_url,creative.image_url]);
@@ -135,13 +141,15 @@ Deno.serve(async(req:Request)=>{
       });
       collected.push(...rows.filter((r:Row)=>r.ad_id));
     }
+    stage="catalog_mark_current";
     await ops.from("meta_creative_catalog").update({is_current:false,last_synced_at:new Date().toISOString()}).eq("client_id",clientId);
+    stage="catalog_upsert";
     for(let offset=0;offset<collected.length;offset+=500){const chunk=collected.slice(offset,offset+500);if(!chunk.length)continue;const {error}=await ops.from("meta_creative_catalog").upsert(chunk,{onConflict:"client_id,meta_ad_account_id,ad_id"});if(error)throw error;}
     const finished=new Date().toISOString();
     await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"OK",ad_count:collected.length,account_count:accounts.length,last_error:null,finished_at:finished,updated_at:finished,metadata:{lifecycle:client.lifecycle}},{onConflict:"client_id"});
     return json({ok:true,client_id:clientId,client_name:client.display_name,accounts:accounts.length,ads:collected.length});
   } catch(error) {
-    const message=String(error instanceof Error?error.message:error).slice(0,900);const finished=new Date().toISOString();
+    let raw=""; try{raw=error instanceof Error?error.message:JSON.stringify(error);}catch{raw=String(error);} const message=`${stage}: ${raw}`.slice(0,900);const finished=new Date().toISOString();
     await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"ERROR",last_error:message,finished_at:finished,updated_at:finished},{onConflict:"client_id"});
     return json({ok:false,error:"catalog_sync_failed",detail:message},500);
   }
