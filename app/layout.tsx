@@ -36,6 +36,7 @@ import LeonardoMeetingNotificationBridge from "./leonardo-meeting-notification-b
 import LeonardoActionWarning from "./leonardo-action-warning";
 import NotificationsHomeLink from "./notifications-home-link";
 import NotificationDetailBridge from "./notification-detail-bridge";
+import NotificationReadOnClick from "./notification-read-on-click";
 import WorkCenterScopeNetwork from "./work-center-scope-network";
 import AutomationNavBridge from "./automation-nav-bridge";
 import DonnahNavBridge from "./donnah-nav-bridge";
@@ -111,6 +112,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <OnboardingHistoryNotificationBridge />
         <OnboardingHistoryPrecisionBridge />
         <NotificationDetailBridge />
+        <NotificationReadOnClick />
         <AutomationNavBridge />
         <DonnahNavBridge />
         <TeamAccessAdmin />
