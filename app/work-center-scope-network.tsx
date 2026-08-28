@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { SUPABASE_URL } from "./shared";
+import WorkCenterPlaybooks from "./work-center-playbooks";
 
 const CORE_PATH = "/functions/v1/agency-ops-dashboard-api";
 const WORK_API = `${SUPABASE_URL}/functions/v1/agency-ops-work-center-api`;
@@ -30,6 +31,11 @@ function redirectedUrl(input: RequestInfo | URL) {
  * - target_person preenchido => somente aquela pessoa;
  * - sem target_person => somente colaboradores do target_role;
  * - created_by_person nunca concede visibilidade nem permissão de ação.
+ *
+ * A camada WorkCenterPlaybooks monta, na mesma tela, os novos recursos de Projetos,
+ * Modelos/Playbooks e Anotações por cliente. Ela usa a mesma sessão autenticada e
+ * nunca acessa as tabelas diretamente: toda autorização continua no endpoint da
+ * Central de Trabalho.
  */
 export default function WorkCenterScopeNetwork() {
   useEffect(() => {
@@ -52,5 +58,5 @@ export default function WorkCenterScopeNetwork() {
     };
   }, []);
 
-  return null;
+  return <WorkCenterPlaybooks />;
 }
