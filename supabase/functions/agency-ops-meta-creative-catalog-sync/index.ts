@@ -9,6 +9,7 @@ const GRAPH_ROOT = `https://graph.facebook.com/${GRAPH_VERSION}`;
 const BUCKET = "agency-meta-creative-previews";
 const MAX_PREVIEW_BYTES = 5 * 1024 * 1024;
 const PREVIEW_CONCURRENCY = 4;
+const MAX_PREVIEWS_PER_SYNC = 60;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 const num = (v: unknown) => { const n = Number(v ?? 0); return Number.isFinite(n) ? n : 0; };
 const div = (a: number, b: number) => b > 0 ? a / b : null;
@@ -102,6 +103,17 @@ async function mirrorPreview(db:any,clientId:string,adId:string,sources:string[]
   return null;
 }
 async function mapConcurrent<T,R>(values:T[],worker:(value:T,index:number)=>Promise<R>,concurrency=PREVIEW_CONCURRENCY){const out=new Array<R>(values.length);let cursor=0;const runners=Array.from({length:Math.min(concurrency,Math.max(1,values.length))},async()=>{while(true){const i=cursor++;if(i>=values.length)return;out[i]=await worker(values[i],i);}});await Promise.all(runners);return out;}
+async function existingPreviews(ops:any,clientId:string) {
+  const map=new Map<string,string>();
+  for(let from=0;from<5000;from+=1000){
+    const {data,error}=await ops.from("meta_creative_catalog").select("meta_ad_account_id,ad_id,preview_storage_path").eq("client_id",clientId).not("preview_storage_path","is",null).range(from,from+999);
+    if(error)throw error;
+    const rows=data||[];
+    for(const row of rows){const path=String(row.preview_storage_path||"");if(path)map.set(`${row.meta_ad_account_id}:${row.ad_id}`,path);}
+    if(rows.length<1000)break;
+  }
+  return map;
+}
 
 Deno.serve(async(req:Request)=>{
   if(req.method!=="POST")return json({ok:false,error:"method_not_allowed"},405);
@@ -117,6 +129,9 @@ Deno.serve(async(req:Request)=>{
   let stage="client";
   try {
     const {data:client,error:clientError}=await ops.from("clients").select("id,display_name,lifecycle").eq("id",clientId).maybeSingle(); if(clientError)throw clientError; if(!client)throw new Error("client_not_found");
+    stage="existing_previews";
+    const existingPreviewMap=await existingPreviews(ops,clientId);
+    let previewBudget=MAX_PREVIEWS_PER_SYNC;
     stage="integrations";
     const {data:integrations,error:intError}=await ops.from("client_integrations").select("meta_ad_account_id").eq("client_id",clientId).eq("system","META_BM").not("meta_ad_account_id","is",null); if(intError)throw intError;
     const accounts:string[]=[...new Set<string>((integrations||[]).map((x:Row)=>String(x.meta_ad_account_id||"").trim()).filter(Boolean))];
@@ -133,11 +148,14 @@ Deno.serve(async(req:Request)=>{
       const paths=creativeIds.map(id=>`${id}?thumbnail_width=600&thumbnail_height=600&fields=${encodeURIComponent(creativeFields)}`);
       const batch=paths.length?await batchGet(paths,token).catch(()=>new Map<string,Row>()):new Map<string,Row>();
       const creativeMap=new Map<string,Row>(); paths.forEach((p,i)=>{const v=batch.get(p);if(v)creativeMap.set(creativeIds[i],v);});
-      stage=`previews:${accountId}`;
+      stage=`catalog_rows:${accountId}`;
       const rows=await mapConcurrent(ads,async(a:Row)=>{
         const adId=String(a.id||"");const creativeId=String(a.creative?.id||"");const creative=creativeMap.get(creativeId)||a.creative||{};const metrics=insightMap.get(adId)||{};
-        const previewPath=await mirrorPreview(db,clientId,adId,[creative.thumbnail_url,creative.image_url]);
-        return {client_id:clientId,client_name:client.display_name,lifecycle:client.lifecycle,meta_ad_account_id:accountId,ad_id:adId,ad_name:a.name||null,ad_status:a.effective_status||a.status||null,adset_id:a.adset?.id||null,adset_name:a.adset?.name||null,campaign_id:a.campaign?.id||null,campaign_name:a.campaign?.name||null,campaign_status:a.campaign?.effective_status||a.campaign?.status||null,creative_id:creativeId||null,creative_name:creative.name||a.creative?.name||null,creative_format:creativeFormat(creative,a.name),effective_object_story_id:creative.effective_object_story_id||null,preview_storage_path:previewPath,thumbnail_url:creative.thumbnail_url||null,image_url:creative.image_url||null,...metrics,last_seen_at:new Date().toISOString(),last_synced_at:new Date().toISOString(),is_current:true,metadata:{graph_api_version:GRAPH_VERSION,object_type:creative.object_type||null,preview_mirror_status:previewPath?"STORED":(creative.thumbnail_url||creative.image_url?"FAILED":"UNAVAILABLE")}};
+        const remotePreview=String(creative.thumbnail_url||creative.image_url||"");
+        let previewPath=existingPreviewMap.get(`${accountId}:${adId}`)||null;
+        const hasRecentDelivery=num(metrics.spend_7d)>0||num(metrics.results_7d)>0||num(metrics.impressions_7d)>0;
+        if(!previewPath&&remotePreview&&hasRecentDelivery&&previewBudget>0){previewBudget-=1;previewPath=await mirrorPreview(db,clientId,adId,[creative.thumbnail_url,creative.image_url]);}
+        return {client_id:clientId,client_name:client.display_name,lifecycle:client.lifecycle,meta_ad_account_id:accountId,ad_id:adId,ad_name:a.name||null,ad_status:a.effective_status||a.status||null,adset_id:a.adset?.id||null,adset_name:a.adset?.name||null,campaign_id:a.campaign?.id||null,campaign_name:a.campaign?.name||null,campaign_status:a.campaign?.effective_status||a.campaign?.status||null,creative_id:creativeId||null,creative_name:creative.name||a.creative?.name||null,creative_format:creativeFormat(creative,a.name),effective_object_story_id:creative.effective_object_story_id||null,preview_storage_path:previewPath,thumbnail_url:creative.thumbnail_url||null,image_url:creative.image_url||null,...metrics,last_seen_at:new Date().toISOString(),last_synced_at:new Date().toISOString(),is_current:true,metadata:{graph_api_version:GRAPH_VERSION,object_type:creative.object_type||null,preview_mirror_status:previewPath?"STORED":remotePreview?"REMOTE_ONLY":"UNAVAILABLE"}};
       });
       collected.push(...rows.filter((r:Row)=>r.ad_id));
     }
@@ -146,8 +164,9 @@ Deno.serve(async(req:Request)=>{
     stage="catalog_upsert";
     for(let offset=0;offset<collected.length;offset+=500){const chunk=collected.slice(offset,offset+500);if(!chunk.length)continue;const {error}=await ops.from("meta_creative_catalog").upsert(chunk,{onConflict:"client_id,meta_ad_account_id,ad_id"});if(error)throw error;}
     const finished=new Date().toISOString();
-    await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"OK",ad_count:collected.length,account_count:accounts.length,last_error:null,finished_at:finished,updated_at:finished,metadata:{lifecycle:client.lifecycle}},{onConflict:"client_id"});
-    return json({ok:true,client_id:clientId,client_name:client.display_name,accounts:accounts.length,ads:collected.length});
+    const mirroredThisSync=MAX_PREVIEWS_PER_SYNC-previewBudget;
+    await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"OK",ad_count:collected.length,account_count:accounts.length,last_error:null,finished_at:finished,updated_at:finished,metadata:{lifecycle:client.lifecycle,preview_mirror_limit:MAX_PREVIEWS_PER_SYNC,preview_mirrored_this_sync:mirroredThisSync}},{onConflict:"client_id"});
+    return json({ok:true,client_id:clientId,client_name:client.display_name,accounts:accounts.length,ads:collected.length,previews_mirrored:mirroredThisSync});
   } catch(error) {
     let raw=""; try{raw=error instanceof Error?error.message:JSON.stringify(error);}catch{raw=String(error);} const message=`${stage}: ${raw}`.slice(0,900);const finished=new Date().toISOString();
     await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"ERROR",last_error:message,finished_at:finished,updated_at:finished},{onConflict:"client_id"});
