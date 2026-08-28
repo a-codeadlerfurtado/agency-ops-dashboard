@@ -10,7 +10,7 @@ function install(label:string){
   if(window.location.pathname!=="/")return;
   const container=document.querySelector<HTMLElement>(".side-nav-items");
   if(!container||container.querySelector("[data-meta-radar-nav]"))return;
-  const link=document.createElement("a");link.dataset.metaRadarNav="true";link.href="/meta-radar";link.title=label;link.textContent=label;
+  const link=document.createElement("a");link.dataset.metaRadarNav="true";link.href="/creative-intelligence";link.title=label;link.textContent=label;
   const performance=Array.from(container.querySelectorAll<HTMLAnchorElement>("a")).find(n=>String(n.getAttribute("href")||"")==="/meta-performance");
   if(performance)container.insertBefore(link,performance);else{
     const ia=Array.from(container.querySelectorAll<HTMLElement>("a,button")).find(n=>String(n.textContent||"").trim().toLowerCase().startsWith("ia"));
