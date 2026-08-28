@@ -44,6 +44,7 @@ import ClientNotificationsBridge from "./client-notifications-bridge";
 import ClientCommercialProfileBridge from "./client-commercial-profile-bridge";
 import ClientContextUploadBridge from "./client-context-upload-bridge";
 import CreativeManualEditBridge from "./creative-manual-edit-bridge";
+import CreativeIntelligenceBridge from "./creative-intelligence-bridge";
 import LeonardoMeetingNotificationBridge from "./leonardo-meeting-notification-bridge";
 import LeonardoActionWarning from "./leonardo-action-warning";
 import NotificationsHomeLink from "./notifications-home-link";
@@ -116,6 +117,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <ClientCommercialProfileBridge />
         <ClientContextUploadBridge />
         <CreativeManualEditBridge />
+        <CreativeIntelligenceBridge />
         <CockpitCollapseBridge />
         <WeekendBalanceAlert />
         <LeadQualityAlert />
