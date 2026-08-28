@@ -5,75 +5,412 @@ import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from "../shared";
 
 type Row = Record<string, any>;
-type Tab = "radar" | "changes" | "creatives";
+type Band = "ALL" | "ACTION_NOW" | "FOLLOW_UP" | "HEALTHY";
+
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-meta-radar-api`;
 const CREATIVE_API = `${SUPABASE_URL}/functions/v1/agency-ops-meta-creatives-api`;
 const WORK_API = `${SUPABASE_URL}/functions/v1/agency-ops-work-item-create-api`;
-const BAND: Row = {
-  ACTION_NOW: { label: "Ação agora", icon: "🔴", cls: "bad" },
-  FOLLOW_UP: { label: "Acompanhar", icon: "🟡", cls: "warn" },
-  HEALTHY: { label: "Saudável", icon: "🟢", cls: "good" },
-};
-function finite(v: unknown){if(v===null||v===undefined||v==="")return null;const n=Number(v);return Number.isFinite(n)?n:null;}
-function money(v: unknown){const n=finite(v);return n===null?"—":n.toLocaleString("pt-BR",{style:"currency",currency:"BRL"});}
-function num(v: unknown,d=0){const n=finite(v);return n===null?"—":n.toLocaleString("pt-BR",{minimumFractionDigits:d,maximumFractionDigits:d});}
-function dt(v: unknown){if(!v)return"—";const d=new Date(String(v));return Number.isNaN(d.getTime())?String(v):new Intl.DateTimeFormat("pt-BR",{dateStyle:"short",timeStyle:"short"}).format(d);}
-function waiting(v: unknown){return ({CLIENT_WAITING_AGENCY:"Cliente → agência",AGENCY_WAITING_CLIENT:"Agência → cliente",BOTH_HAVE_ACTIONS:"Ambos têm ação",NO_ONE_WAITING:"Sem espera",UNKNOWN:"Indefinido"} as Row)[String(v)]||String(v||"—");}
-function toneClass(t: unknown){return ["bad","warn","good","info"].includes(String(t))?String(t):"info";}
 
-export default function MetaRadarPage(){
-  const[session,setSession]=useState<Session|null>(null),[ready,setReady]=useState(false),[loading,setLoading]=useState(true),[error,setError]=useState("");
-  const[payload,setPayload]=useState<Row>({}),[tab,setTab]=useState<Tab>("radar"),[gt,setGt]=useState(""),[band,setBand]=useState("ALL"),[query,setQuery]=useState("");
-  const[detail,setDetail]=useState<Row|null>(null),[detailLoading,setDetailLoading]=useState(false),[busy,setBusy]=useState(""),[notice,setNotice]=useState("");
-  useEffect(()=>{supabase.auth.getSession().then(({data})=>{setSession(data.session);setReady(true);if(!data.session)window.location.replace("/");});const{data:{subscription}}=supabase.auth.onAuthStateChange((_e,next)=>{setSession(next);if(!next)window.location.replace("/");});return()=>subscription.unsubscribe();},[]);
-  const headers=useMemo(()=>session?.access_token?{Authorization:`Bearer ${session.access_token}`,apikey:SUPABASE_ANON_KEY}:null,[session?.access_token]);
-  const load=useCallback(async(selectedGt?:string)=>{if(!headers)return;setLoading(true);setError("");try{const p=new URLSearchParams();if(selectedGt)p.set("gt",selectedGt);const r=await fetch(`${API}?${p}`,{headers,cache:"no-store"});if(r.status===404){window.location.replace("/");return;}const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.detail||b.error||`API ${r.status}`);setPayload(b);if(!selectedGt&&b.selected_gt)setGt(String(b.selected_gt));}catch(e){setError(e instanceof Error?e.message:"Falha ao carregar o Radar.");}finally{setLoading(false);}},[headers]);
-  useEffect(()=>{if(headers)void load();},[headers,load]);
-  const role=String(payload.profile?.role||"");
-  const isDesigner=role==="DESIGN";
-  const clients:Row[]=payload.clients||[];
-  const visible=useMemo(()=>{const n=query.trim().toLocaleLowerCase("pt-BR");return clients.filter(c=>(band==="ALL"||c.evaluation?.band===band)&&(!n||[c.client_name,c.gt_owner,c.cs_owner].join(" ").toLocaleLowerCase("pt-BR").includes(n)));},[clients,band,query]);
-  const openClient=useCallback(async(id:string)=>{if(!headers)return;setDetailLoading(true);setDetail(null);setNotice("");try{const p=new URLSearchParams({client_id:id});if(gt&&role==="MGMT")p.set("gt",gt);const r=await fetch(`${API}?${p}`,{headers,cache:"no-store"});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.detail||b.error||`API ${r.status}`);setDetail(b);}catch(e){setError(e instanceof Error?e.message:"Falha ao abrir cliente.");}finally{setDetailLoading(false);}},[headers,gt,role]);
-  async function refreshCreatives(){if(!headers||!detail?.client?.client_id)return;setBusy("refresh");setNotice("");try{const id=String(detail.client.client_id);const r=await fetch(`${CREATIVE_API}?client_id=${encodeURIComponent(id)}&period_days=7`,{method:"POST",headers:{...headers,"content-type":"application/json"},body:JSON.stringify({client_id:id,period_days:7,force:true}),cache:"no-store"});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.detail||b.error||`API ${r.status}`);await openClient(id);await load(gt);setNotice("Criativos atualizados e memória registrada.");}catch(e){setNotice(e instanceof Error?e.message:"Falha ao atualizar criativos.");}finally{setBusy("");}}
-  async function requestCreatives(){if(!headers||!detail?.client?.client_id)return;setBusy("request");setNotice("");try{const c=detail.client,b=detail.briefing||{},ev=detail.evaluation||{};const evidence=(ev.reasons||[]).slice(0,4).map((x:Row)=>`- ${x.text}`).join("\n");const description=[`Motivo detectado pelo Radar: ${b.reason||"renovação de criativos"}.`,evidence?`\nEvidências:\n${evidence}`:"",b.best_creative?.ad_name?`\nMelhor criativo atual: ${b.best_creative.ad_name} — ${num(b.best_creative.results)} resultados · CPR ${money(b.best_creative.cost_per_result)}.`:"",`\nDireção sugerida: ${b.suggestion||"Criar novas variações."}`,`\nPróxima ação do Radar: ${ev.next_action||"—"}`].join("");const r=await fetch(WORK_API,{method:"POST",headers:{...headers,"content-type":"application/json"},body:JSON.stringify({title:b.title||`Novos criativos — ${c.display_name}`,description,client_id:c.client_id,type:"CREATIVE_REQUEST",priority:b.needed?"HIGH":"MEDIUM",target_role:"DESIGN",target_person:b.target_person||null,create_clickup:true,source:"meta_radar",source_id:`meta-radar:${c.client_id}:${new Date().toISOString().slice(0,10)}`,metadata:{radar:true,briefing:b,evaluation_band:ev.band,score:ev.score}})});const out=await r.json().catch(()=>({}));if(!r.ok)throw new Error(out.detail||out.error||`API ${r.status}`);setNotice(`Demanda criada na Central${out.clickup?.id?" e no ClickUp":""}.`);}catch(e){setNotice(e instanceof Error?e.message:"Falha ao solicitar criativos.");}finally{setBusy("");}}
-  function changeGt(v:string){setGt(v);setDetail(null);void load(v);}
-  if(!ready)return <main className="mr-loading">Validando sessão…</main>;
-  if(isDesigner)return <DesignerView payload={payload} loading={loading} error={error}/>;
-  const s=payload.summary||{};
-  return <main className="mr-shell"><style>{styles}</style>
-    <header className="mr-head"><div><a href="/">← Voltar</a><span>INTELIGÊNCIA OPERACIONAL</span><h1>Radar da Carteira</h1><p>Meta + criativos + WhatsApp + ClickUp + saldo em uma fila de decisão.</p></div><div className="mr-head-actions"><a href="/meta-performance">Performance Meta</a><a href="/meta-analysis">Análise semanal</a></div></header>
-    {error&&<div className="mr-error">{error}</div>}
-    <section className="mr-summary">
-      <button className={band==="ACTION_NOW"?"active bad":"bad"} onClick={()=>setBand(band==="ACTION_NOW"?"ALL":"ACTION_NOW")}><small>🔴 AÇÃO AGORA</small><b>{s.action_now??0}</b><span>precisam de intervenção</span></button>
-      <button className={band==="FOLLOW_UP"?"active warn":"warn"} onClick={()=>setBand(band==="FOLLOW_UP"?"ALL":"FOLLOW_UP")}><small>🟡 ACOMPANHAR</small><b>{s.follow_up??0}</b><span>merecem monitoramento</span></button>
-      <button className={band==="HEALTHY"?"active good":"good"} onClick={()=>setBand(band==="HEALTHY"?"ALL":"HEALTHY")}><small>🟢 SAUDÁVEIS</small><b>{s.healthy??0}</b><span>sem ação urgente</span></button>
-      <article><small>CRIATIVOS MAPEADOS</small><b>{s.creative_covered??0}<i>/{s.total??0}</i></b><span>clientes com captura por anúncio</span></article>
-    </section>
-    <section className="mr-toolbar"><nav><button className={tab==="radar"?"active":""} onClick={()=>setTab("radar")}>Radar</button><button className={tab==="changes"?"active":""} onClick={()=>setTab("changes")}>O que mudou</button><button className={tab==="creatives"?"active":""} onClick={()=>setTab("creatives")}>Criativos</button></nav><div>{role==="MGMT"&&<select value={gt} onChange={e=>changeGt(e.target.value)}><option value="">Todos os GTs</option>{(payload.gt_options||[]).map((x:string)=><option key={x}>{x}</option>)}</select>}<input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar cliente…"/><button onClick={()=>load(gt)} disabled={loading}>{loading?"Atualizando…":"Atualizar"}</button></div></section>
-    {tab==="radar"&&<><section className="mr-section-title"><div><span>PRIORIDADE OPERACIONAL</span><h2>{band==="ALL"?"Carteira inteira":BAND[band]?.label}</h2></div><p>Ordenado por risco real, não por ordem alfabética.</p></section><section className="mr-list">{visible.map(c=><RadarCard key={c.client_id} c={c} onOpen={()=>openClient(String(c.client_id))}/>)}</section></>}
-    {tab==="changes"&&<ChangesView rows={(payload.changes||[]).filter((x:Row)=>!query||String(x.client_name||"").toLocaleLowerCase("pt-BR").includes(query.toLocaleLowerCase("pt-BR")))} onOpen={openClient}/>} 
-    {tab==="creatives"&&<CreativeOverview clients={visible} onOpen={openClient}/>} 
-    {!loading&&!visible.length&&tab==="radar"&&<div className="mr-empty">Nenhum cliente nesse filtro.</div>}
-    {(detailLoading||detail)&&<aside className="mr-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setDetail(null);}}><section className="mr-drawer">{detailLoading?<div className="mr-loading">Cruzando Meta, operação, saldo e ClickUp…</div>:detail&&<ClientDetail data={detail} notice={notice} busy={busy} onClose={()=>setDetail(null)} onRefresh={refreshCreatives} onRequest={requestCreatives}/>}</section></aside>}
-  </main>;
+const BAND: Record<string, { label: string; short: string; cls: string; glyph: string }> = {
+  ACTION_NOW: { label: "Ação agora", short: "Crítico", cls: "danger", glyph: "!" },
+  FOLLOW_UP: { label: "Acompanhar", short: "Atenção", cls: "warning", glyph: "~" },
+  HEALTHY: { label: "Saudável", short: "Saudável", cls: "healthy", glyph: "✓" },
+};
+
+function finite(v: unknown) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function money(v: unknown) {
+  const n = finite(v);
+  return n === null ? "—" : n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+}
+function num(v: unknown, digits = 0) {
+  const n = finite(v);
+  return n === null ? "—" : n.toLocaleString("pt-BR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+function pct(v: unknown, digits = 0) {
+  const n = finite(v);
+  return n === null ? "—" : `${num(n, digits)}%`;
+}
+function when(v: unknown) {
+  if (!v) return "agora";
+  const d = new Date(String(v));
+  if (Number.isNaN(d.getTime())) return "agora";
+  return new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(d);
+}
+function initials(name: unknown) {
+  return String(name || "?")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((x) => x[0]?.toUpperCase())
+    .join("") || "?";
+}
+function toneClass(t: unknown) {
+  return ["bad", "warn", "good", "info"].includes(String(t)) ? String(t) : "info";
+}
+function reasonHas(client: Row, codes: string[]) {
+  return (client.evaluation?.reasons || []).some((r: Row) => codes.includes(String(r.code || "")));
 }
 
-function RadarCard({c,onOpen}:{c:Row,onOpen:()=>void}){const e=c.evaluation||{},b=BAND[e.band]||BAND.HEALTHY;return <article className={`mr-card ${b.cls}`} onClick={onOpen}><div className="mr-card-state"><span>{b.icon}</span><b>{b.label}</b><small>score {e.score??0}</small></div><div className="mr-card-main"><div className="mr-card-name"><h3>{c.client_name}</h3><span>GT {c.gt_owner||"—"} · CS {c.cs_owner||"—"}</span></div><div className="mr-card-metrics"><span><small>Gasto 7d</small><b>{money(c.meta?.spend)}</b></span><span><small>Resultados</small><b>{num(c.meta?.results)}</b></span><span><small>CPL / CPR</small><b>{money(c.meta?.cpl)}</b></span><span><small>Freq.</small><b>{num(c.meta?.frequency,2)}</b></span></div><div className="mr-reasons">{(e.reasons||[]).slice(0,3).map((r:Row,i:number)=><span className={toneClass(r.tone)} key={`${r.code}-${i}`}>{r.text}</span>)}{!c.creative_coverage&&<span className="muted">Criativos ainda sem captura</span>}</div><div className="mr-next"><small>PRÓXIMA AÇÃO</small><p>{e.next_action}</p></div></div><button className="mr-open">→</button></article>}
-function ChangesView({rows,onOpen}:{rows:Row[],onOpen:(id:string)=>void}){return <section><div className="mr-section-title"><div><span>DETECÇÃO AUTOMÁTICA</span><h2>O que mudou?</h2></div><p>Variações que merecem interpretação — sem precisar caçar gráfico.</p></div><div className="mr-change-list">{rows.map((x,i)=><button onClick={()=>onOpen(String(x.client_id))} className={`mr-change ${toneClass(x.tone)}`} key={`${x.client_id}-${x.kind}-${i}`}><span>{x.kind}</span><div><b>{x.client_name}</b><p>{x.text}</p></div><small>{x.gt_owner}</small></button>)}</div>{!rows.length&&<div className="mr-empty">Nenhuma mudança relevante detectada no filtro atual.</div>}</section>}
-function CreativeOverview({clients,onOpen}:{clients:Row[],onOpen:(id:string)=>void}){const rows=clients.filter(c=>c.creative_coverage>0);return <section><div className="mr-section-title"><div><span>LEITURA POR ANÚNCIO</span><h2>Mapa de criativos</h2></div><p>Abra o cliente para ver as imagens e o histórico visual.</p></div><div className="mr-creative-overview">{rows.map(c=>{const s=c.evaluation?.creative_signals||{};return <button key={c.client_id} onClick={()=>onOpen(String(c.client_id))}><div><span>{c.client_name}</span><small>{c.creative_coverage} anúncios capturados</small></div><dl><div><dt>Campeão</dt><dd>{s.best?.ad_name||"—"}</dd></div><div><dt>Sem resultado</dt><dd className={s.waste?.length?"bad-text":""}>{s.waste?.length||0}</dd></div><div><dt>Fadiga</dt><dd>{s.fatigue?.length||0}</dd></div><div><dt>Escala</dt><dd>{s.scale?.length||0}</dd></div></dl></button>})}</div>{!rows.length&&<div className="mr-empty">Ainda não há criativos capturados nessa carteira. Abra um cliente em Performance Meta ou use “Atualizar criativos” no detalhe.</div>}</section>}
+export default function MetaRadarPage() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [ready, setReady] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [payload, setPayload] = useState<Row>({});
+  const [gt, setGt] = useState("");
+  const [band, setBand] = useState<Band>("ALL");
+  const [query, setQuery] = useState("");
+  const [detail, setDetail] = useState<Row | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [busy, setBusy] = useState("");
+  const [notice, setNotice] = useState("");
+  const [featured, setFeatured] = useState<Row[]>([]);
 
-function ClientDetail({data,notice,busy,onClose,onRefresh,onRequest}:{data:Row,notice:string,busy:string,onClose:()=>void,onRefresh:()=>void,onRequest:()=>void}){const c=data.client||{},e=data.evaluation||{},w=data.windows||{},s=e.creative_signals||{},bal=e.balance||{},tasks=e.tasks||{};return <><header className="mrd-head"><button onClick={onClose}>×</button><div><span>{BAND[e.band]?.icon} {BAND[e.band]?.label} · score {e.score??0}</span><h2>{c.display_name}</h2><p>GT {c.gt_owner||"—"} · CS {c.cs_owner||"—"} · Design {c.designer_owner||"—"}</p></div><a href={`/meta-performance?client=${encodeURIComponent(c.client_id)}`}>Abrir Performance Meta</a></header><div className="mrd-body"><section className="mrd-next"><small>PRÓXIMA AÇÃO RECOMENDADA</small><h3>{e.next_action}</h3><div>{(e.reasons||[]).map((r:Row,i:number)=><span key={i} className={toneClass(r.tone)}>{r.text}</span>)}</div></section><section className="mrd-grid"><Info title="TRÁFEGO" items={[`7d: ${money(w[7]?.spend)} · ${num(w[7]?.results)} resultados`, `CPL/CPR ${money(w[7]?.cpl)} · CTR ${num(w[7]?.ctr,2)}%`, `Frequência ${num(w[7]?.frequency,2)} · ${w[7]?.active_campaigns??0} campanhas ativas`, `Status: ${String(w[7]?.data_status||"—").replaceAll("_"," ")}`]}/><Info title="CRIATIVOS" items={[s.best?`Campeão: ${s.best.ad_name} · ${num(s.best.results)} resultados`:"Sem campeão capturado",`${s.waste?.length||0} gastando sem resultado`,`${s.fatigue?.length||0} com possível fadiga`,`${s.scale?.length||0} oportunidades de escala`]}/><Info title="RELACIONAMENTO" items={[waiting(c.waiting_direction),c.summary_today||"Sem resumo operacional",c.current_subject?`Assunto: ${c.current_subject}`:"Sem assunto pendente",`Última atividade: ${dt(c.last_activity_at)}`]}/><Info title="EXECUÇÃO" items={[`${tasks.open||0} tasks abertas`,`${tasks.overdue||0} vencidas`,`${tasks.due_today||0} vencem hoje`,`${c.overdue_commitments||0} compromissos vencidos · ${c.blockers||0} bloqueios`]}/><Info title="FINANCEIRO / MÍDIA" items={[bal.days_remaining!==null&&bal.days_remaining!==undefined?`Saldo para ~${num(bal.days_remaining,1)} dias`:"Estimativa de saldo indisponível",`Disponível: ${money(bal.available_balance)}`,`Gasto 7d: ${money(bal.spend_7d)}`,bal.account_disabled?"Conta com status de bloqueio":"Conta sem bloqueio detectado"]}/></section>
-      <section className="mrd-changes"><h3>O que mudou</h3>{(e.changes||[]).length?<div>{e.changes.map((x:Row,i:number)=><span className={toneClass(x.tone)} key={i}><b>{x.kind}</b>{x.text}</span>)}</div>:<p>Nenhuma mudança forte detectada no recorte atual.</p>}</section>
-      <section className="mrd-creative-head"><div><span>MEMÓRIA VISUAL</span><h3>Criativos atuais</h3><p>{data.creative_history_days||0} dia(s) de histórico registrado.</p></div><button disabled={busy==="refresh"} onClick={onRefresh}>{busy==="refresh"?"Capturando…":"Atualizar criativos"}</button></section><CreativeGrid rows={data.current_creatives||[]}/>
-      <section className="mrd-creative-head"><div><h3>Criativos anteriores</h3><p>Peças que já apareceram no histórico e não estão na captura atual.</p></div></section><CreativeGrid rows={data.previous_creatives||[]} empty="A memória começou agora; os criativos anteriores vão aparecer conforme as capturas acumularem."/>
-      <section className={`mrd-brief ${data.briefing?.needed?"needed":""}`}><div><span>BRIEFING AUTOMÁTICO</span><h3>{data.briefing?.needed?`${c.display_name} precisa de renovação criativa`:`Radar criativo de ${c.display_name}`}</h3><p>{data.briefing?.suggestion}</p>{data.briefing?.best_creative&&<small>Base vencedora: <b>{data.briefing.best_creative.ad_name}</b> · {num(data.briefing.best_creative.results)} resultados · CPR {money(data.briefing.best_creative.cost_per_result)}</small>}</div><button disabled={busy==="request"} onClick={onRequest}>{busy==="request"?"Criando demanda…":"Solicitar novos criativos"}</button></section>{notice&&<div className="mrd-notice">{notice}</div>}
-      {(data.open_tasks||[]).length>0&&<section className="mrd-tasks"><h3>Tasks abertas</h3>{data.open_tasks.slice(0,8).map((t:Row)=><a href={t.url||"#"} target="_blank" rel="noreferrer" key={t.task_id}><div><b>{t.name}</b><small>{t.assignee_names||"Sem responsável"}</small></div><span>{t.due_date?dt(t.due_date):"sem prazo"}</span></a>)}</section>}
-    </div></>}
-function Info({title,items}:{title:string,items:string[]}){return <article className="mrd-info"><span>{title}</span>{items.map((x,i)=><p key={i}>{x}</p>)}</article>}
-function CreativeGrid({rows,empty="Nenhum criativo capturado."}:{rows:Row[],empty?:string}){if(!rows.length)return <div className="mrd-empty">{empty}</div>;return <div className="mrd-creatives">{rows.slice(0,12).map((r:Row)=><article key={`${r.ad_id}-${r.snapshot_date||"current"}`}><div className="mrd-img">{r.preview_url||r.image_url||r.thumbnail_url?<img src={r.preview_url||r.image_url||r.thumbnail_url} alt={r.ad_name||"Criativo"}/>:<span>Sem prévia</span>}</div><div><small>{r.ad_status||r.snapshot_date||"CRIATIVO"}</small><h4>{r.ad_name||r.creative_name||r.ad_id}</h4><p>{r.campaign_name||"—"}</p><dl><div><dt>Gasto</dt><dd>{money(r.spend)}</dd></div><div><dt>Resultados</dt><dd>{num(r.results)}</dd></div><div><dt>CPR</dt><dd>{money(r.cost_per_result??r.cpl)}</dd></div><div><dt>Freq.</dt><dd>{num(r.frequency,2)}</dd></div></dl></div></article>)}</div>}
-function DesignerView({payload,loading,error}:{payload:Row,loading:boolean,error:string}){const rows:Row[]=payload.top_creatives||[];return <main className="mr-shell"><style>{styles}</style><header className="mr-head"><div><a href="/">← Voltar</a><span>INTELIGÊNCIA CRIATIVA</span><h1>O que está funcionando na agência</h1><p>Peças reais + resultados para o design parar de criar no escuro.</p></div><div className="mr-head-actions"><a href="/">Central de Trabalho</a></div></header>{error&&<div className="mr-error">{error}</div>}<section className="mr-summary"><article><small>CRIATIVOS MAPEADOS</small><b>{payload.creative_count||0}</b><span>anúncios na memória recente</span></article><article><small>COBERTURA HISTÓRICA</small><b>{payload.coverage_days||0}<i>d</i></b><span>vai crescer a cada captura</span></article><article><small>RANKING</small><b>{rows.length}</b><span>melhores peças disponíveis</span></article></section><div className="mr-section-title"><div><span>TOP PERFORMANCE</span><h2>Criativos para estudar</h2></div><p>Ordenados por volume de resultado e eficiência.</p></div>{loading?<div className="mr-loading">Carregando inteligência criativa…</div>:<div className="mdi-grid">{rows.map(r=><article key={`${r.client_id}:${r.ad_id}`}><div className="mdi-img">{r.preview_url?<img src={r.preview_url} alt={r.ad_name||"Criativo"}/>:<span>Sem prévia</span>}</div><div><span>{r.client_name}</span><h3>{r.ad_name||r.creative_name||"Criativo"}</h3><p>{r.campaign_name||"—"}</p><dl><div><dt>Resultados</dt><dd>{num(r.results)}</dd></div><div><dt>CPR</dt><dd>{money(r.cost_per_result??r.cpl)}</dd></div><div><dt>Gasto</dt><dd>{money(r.spend)}</dd></div><div><dt>CTR</dt><dd>{num(r.ctr,2)}%</dd></div></dl><small>GT {r.gt_owner||"—"} · {r.result_type||"resultado"}</small></div></article>)}</div>}</main>}
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setReady(true);
+      if (!data.session) window.location.replace("/");
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => {
+      setSession(next);
+      if (!next) window.location.replace("/");
+    });
+    return () => subscription.unsubscribe();
+  }, []);
 
-const styles=`
-*{box-sizing:border-box}.mr-shell{min-height:100vh;background:#06131f;color:#dbe8f2;padding:30px 34px 80px;font-family:Inter,system-ui,sans-serif}.mr-loading{padding:60px;color:#7d9bb2}.mr-head{max-width:1540px;margin:auto;display:flex;justify-content:space-between;gap:24px;align-items:flex-end;border-bottom:1px solid #163149;padding-bottom:22px}.mr-head a{color:#79bfff;text-decoration:none;font-size:12px}.mr-head span,.mr-section-title span,.mrd-creative-head span,.mrd-brief span{display:block;font-size:9px;font-weight:900;letter-spacing:.12em;color:#62aff0;margin:9px 0}.mr-head h1{font-size:32px;margin:2px 0 4px;color:#f4f8fb}.mr-head p,.mr-section-title p{margin:0;color:#7390a6;font-size:11px}.mr-head-actions{display:flex;gap:8px}.mr-head-actions a{border:1px solid #234760;border-radius:9px;padding:10px 13px;background:#0a1c2a;font-weight:800}.mr-error,.mrd-notice{max-width:1540px;margin:14px auto;padding:11px 13px;border:1px solid #673947;background:#2a151c;border-radius:10px;color:#f0a6b3;font-size:11px}.mr-summary{max-width:1540px;margin:18px auto;display:grid;grid-template-columns:repeat(4,1fr);gap:9px}.mr-summary>button,.mr-summary>article{appearance:none;text-align:left;border:1px solid #18384f;background:#091b29;border-radius:13px;padding:15px;color:inherit}.mr-summary>button{cursor:pointer}.mr-summary>button.active{outline:2px solid #4d86ad}.mr-summary small,.mr-summary span{display:block;color:#718ca1;font-size:8px}.mr-summary b{font-size:28px;display:block;margin:5px 0;color:#eef6fb}.mr-summary b i{font-size:12px;color:#6f899e;font-style:normal}.mr-summary .bad{border-color:#5d3039}.mr-summary .warn{border-color:#5b4827}.mr-summary .good{border-color:#245144}.mr-toolbar{max-width:1540px;margin:0 auto 20px;display:flex;justify-content:space-between;gap:10px}.mr-toolbar nav,.mr-toolbar>div{display:flex;gap:7px}.mr-toolbar button,.mr-toolbar select,.mr-toolbar input{border:1px solid #1d4058;background:#081a28;color:#b9ccda;border-radius:9px;padding:9px 12px;font-size:10px}.mr-toolbar nav button.active{background:#18466a;color:white}.mr-toolbar input{width:220px}.mr-section-title{max-width:1540px;margin:25px auto 10px;display:flex;justify-content:space-between;align-items:flex-end}.mr-section-title h2{margin:2px 0;font-size:21px}.mr-list{max-width:1540px;margin:auto;display:grid;gap:8px}.mr-card{border:1px solid #17384f;background:#081a28;border-radius:13px;display:grid;grid-template-columns:110px 1fr 45px;cursor:pointer;overflow:hidden}.mr-card.bad{border-left:4px solid #a94f60}.mr-card.warn{border-left:4px solid #b88d43}.mr-card.good{border-left:4px solid #3f856f}.mr-card:hover{background:#0b2031}.mr-card-state{padding:15px;border-right:1px solid #17364b}.mr-card-state span{font-size:15px}.mr-card-state b,.mr-card-state small{display:block}.mr-card-state b{font-size:10px;margin-top:7px}.mr-card-state small{font-size:8px;color:#668299;margin-top:3px}.mr-card-main{padding:13px;display:grid;grid-template-columns:230px 340px 1fr 1.2fr;gap:14px;align-items:center}.mr-card-name h3{font-size:14px;margin:0 0 4px;color:#f0f5f9}.mr-card-name span{font-size:8px;color:#728da3}.mr-card-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}.mr-card-metrics small,.mr-card-metrics b{display:block}.mr-card-metrics small{font-size:7px;color:#68849a}.mr-card-metrics b{font-size:10px;margin-top:2px}.mr-reasons{display:flex;gap:5px;flex-wrap:wrap}.mr-reasons span,.mrd-next span,.mrd-changes span{font-size:8px;border:1px solid #24465e;border-radius:20px;padding:5px 8px;color:#83a0b5}.mr-reasons .bad,.mrd-next .bad,.mrd-changes .bad{border-color:#633742;color:#e58c9b}.mr-reasons .warn,.mrd-next .warn,.mrd-changes .warn{border-color:#66512b;color:#d8ae62}.mr-reasons .good,.mrd-next .good,.mrd-changes .good{border-color:#285448;color:#74c5aa}.mr-reasons .muted{opacity:.65}.mr-next small{font-size:7px;color:#5f7c92}.mr-next p{font-size:9px;line-height:1.35;margin:4px 0;color:#b8cbd8}.mr-open{border:0;border-left:1px solid #17364b;background:transparent;color:#70b9ef;font-size:18px}.mr-change-list{max-width:1540px;margin:auto;display:grid;gap:7px}.mr-change{display:grid;grid-template-columns:100px 1fr 170px;text-align:left;align-items:center;border:1px solid #18384f;background:#091b29;border-radius:11px;padding:12px;color:inherit}.mr-change>span{font-size:8px;font-weight:900;color:#79a5c4}.mr-change b{font-size:11px}.mr-change p{margin:3px 0;font-size:10px;color:#89a2b6}.mr-change small{text-align:right;color:#68849a}.mr-change.bad{border-left:3px solid #a94f60}.mr-change.warn{border-left:3px solid #b88d43}.mr-change.good{border-left:3px solid #3f856f}.mr-creative-overview{max-width:1540px;margin:auto;display:grid;grid-template-columns:repeat(3,1fr);gap:9px}.mr-creative-overview button{background:#091b29;border:1px solid #18384f;border-radius:12px;padding:13px;color:inherit;text-align:left}.mr-creative-overview button>div span,.mr-creative-overview button>div small{display:block}.mr-creative-overview button>div span{font-weight:800;font-size:11px}.mr-creative-overview button>div small{font-size:8px;color:#6f899e;margin-top:3px}.mr-creative-overview dl{display:grid;grid-template-columns:1.6fr repeat(3,.7fr);gap:6px;margin:12px 0 0}.mr-creative-overview dt{font-size:7px;color:#68849a}.mr-creative-overview dd{font-size:9px;margin:3px 0 0}.bad-text{color:#ef8091!important}.mr-empty,.mrd-empty{max-width:1540px;margin:15px auto;border:1px dashed #24455d;border-radius:11px;padding:20px;color:#6f899e;font-size:10px}.mr-backdrop{position:fixed;z-index:8000;inset:0;background:rgba(1,7,12,.78);display:flex;justify-content:flex-end}.mr-drawer{width:min(1120px,94vw);height:100vh;background:#06131f;border-left:1px solid #20425a;overflow:auto}.mrd-head{position:sticky;top:0;z-index:4;background:#071724;border-bottom:1px solid #19384f;padding:18px 22px;display:grid;grid-template-columns:35px 1fr auto;align-items:center;gap:10px}.mrd-head button{border:0;background:transparent;color:#7f9aae;font-size:24px}.mrd-head span{font-size:8px;color:#6eb8ec;font-weight:800}.mrd-head h2{margin:3px 0;font-size:22px}.mrd-head p{margin:0;color:#7390a5;font-size:9px}.mrd-head a{border:1px solid #27506a;border-radius:9px;padding:9px 11px;color:#80c4f4;text-decoration:none;font-size:9px}.mrd-body{padding:18px 22px 50px}.mrd-next{border:1px solid #24516d;background:#0b2030;border-radius:13px;padding:16px}.mrd-next small{font-size:8px;color:#6eb8ec;font-weight:900}.mrd-next h3{font-size:17px;margin:6px 0 11px}.mrd-next>div{display:flex;gap:5px;flex-wrap:wrap}.mrd-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:10px}.mrd-info{border:1px solid #18384f;background:#081a28;border-radius:11px;padding:12px}.mrd-info>span{font-size:8px;font-weight:900;color:#70b7e8}.mrd-info p{font-size:9px;line-height:1.35;border-top:1px solid #143047;padding-top:7px;margin:7px 0 0;color:#a6bac8}.mrd-changes{margin-top:12px}.mrd-changes h3,.mrd-creative-head h3,.mrd-tasks h3{font-size:15px;margin:0 0 8px}.mrd-changes>div{display:flex;gap:6px;flex-wrap:wrap}.mrd-changes span{border-radius:9px}.mrd-changes span b{margin-right:6px}.mrd-creative-head{display:flex;justify-content:space-between;align-items:end;margin-top:22px}.mrd-creative-head h3{margin:0}.mrd-creative-head p{font-size:8px;color:#69849a;margin:4px 0}.mrd-creative-head button,.mrd-brief button{border:1px solid #285575;background:#0f3048;color:#a8d9f8;border-radius:9px;padding:9px 12px;font-size:9px;font-weight:800}.mrd-creatives{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.mrd-creatives article{border:1px solid #18384f;background:#081a28;border-radius:12px;overflow:hidden}.mrd-img{height:190px;background:#040e16;display:grid;place-items:center;color:#56748c;font-size:8px}.mrd-img img{width:100%;height:100%;object-fit:cover}.mrd-creatives article>div:last-child{padding:10px}.mrd-creatives small{font-size:7px;color:#6ab8ef;font-weight:800}.mrd-creatives h4{font-size:10px;margin:5px 0}.mrd-creatives p{font-size:7px;color:#6c879d;margin:0;height:20px;overflow:hidden}.mrd-creatives dl,.mdi-grid dl{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:9px 0 0}.mrd-creatives dt,.mdi-grid dt{font-size:6px;color:#658198}.mrd-creatives dd,.mdi-grid dd{font-size:8px;margin:2px 0 0}.mrd-brief{margin-top:22px;border:1px solid #234a63;background:#0a1d2b;border-radius:13px;padding:15px;display:flex;justify-content:space-between;gap:20px;align-items:center}.mrd-brief.needed{border-color:#6c5128;background:#211a11}.mrd-brief h3{margin:3px 0;font-size:15px}.mrd-brief p{font-size:9px;color:#92a9b9;max-width:720px}.mrd-brief small{font-size:8px;color:#7994a8}.mrd-notice{margin:10px 0}.mrd-tasks{margin-top:22px}.mrd-tasks a{display:flex;justify-content:space-between;border-top:1px solid #17364b;padding:9px;color:inherit;text-decoration:none}.mrd-tasks b,.mrd-tasks small{display:block}.mrd-tasks b{font-size:9px}.mrd-tasks small,.mrd-tasks span{font-size:7px;color:#6f899f}.mdi-grid{max-width:1540px;margin:auto;display:grid;grid-template-columns:repeat(4,1fr);gap:9px}.mdi-grid>article{border:1px solid #18384f;background:#081a28;border-radius:12px;overflow:hidden}.mdi-img{height:250px;background:#040e16;display:grid;place-items:center;color:#66849b;font-size:9px}.mdi-img img{width:100%;height:100%;object-fit:cover}.mdi-grid>article>div:last-child{padding:11px}.mdi-grid span{font-size:7px;color:#64b4eb;font-weight:900}.mdi-grid h3{font-size:11px;margin:5px 0}.mdi-grid p{font-size:8px;color:#6d889d;height:25px;overflow:hidden}.mdi-grid>article>div>small{font-size:7px;color:#6d879c}.mr-summary article{min-height:95px}
-@media(max-width:1100px){.mr-card-main{grid-template-columns:1fr 1fr}.mr-next{grid-column:1/-1}.mrd-grid{grid-template-columns:1fr 1fr}.mdi-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:760px){.mr-shell{padding:18px 12px 70px}.mr-head,.mr-toolbar,.mrd-brief{display:block}.mr-head-actions,.mr-toolbar>div{margin-top:10px;flex-wrap:wrap}.mr-summary{grid-template-columns:1fr 1fr}.mr-card{grid-template-columns:78px 1fr 30px}.mr-card-main{grid-template-columns:1fr}.mr-card-metrics{grid-template-columns:1fr 1fr}.mr-reasons,.mr-next{grid-column:auto}.mr-creative-overview,.mrd-creatives,.mdi-grid{grid-template-columns:1fr}.mrd-grid{grid-template-columns:1fr}.mr-change{grid-template-columns:75px 1fr}.mr-change small{display:none}.mr-toolbar input{width:150px}}
-`;
+  const headers = useMemo<Record<string, string> | null>(() => session?.access_token ? {
+    Authorization: `Bearer ${session.access_token}`,
+    apikey: SUPABASE_ANON_KEY,
+  } : null, [session?.access_token]);
+
+  const hydrateFeatured = useCallback(async (body: Row, selectedGt?: string) => {
+    if (!headers || String(body.profile?.role || "") === "DESIGN") return;
+    const candidates: Row[] = (body.clients || [])
+      .filter((c: Row) => Number(c.creative_coverage || 0) > 0)
+      .sort((a: Row, b: Row) => Number(b.evaluation?.creative_signals?.best?.results || 0) - Number(a.evaluation?.creative_signals?.best?.results || 0))
+      .slice(0, 3);
+    if (!candidates.length) { setFeatured([]); return; }
+    const rows = await Promise.all(candidates.map(async (c: Row) => {
+      try {
+        const p = new URLSearchParams({ client_id: String(c.client_id) });
+        if (selectedGt && String(body.profile?.role || "") === "MGMT") p.set("gt", selectedGt);
+        const r = await fetch(`${API}?${p}`, { headers, cache: "no-store" });
+        const b = await r.json().catch(() => ({}));
+        if (!r.ok) return null;
+        const current: Row[] = b.current_creatives || [];
+        const bestId = String(c.evaluation?.creative_signals?.best?.ad_id || "");
+        const creative = current.find((x: Row) => String(x.ad_id) === bestId) || current[0];
+        return creative ? { ...creative, client_name: c.client_name, client_id: c.client_id, gt_owner: c.gt_owner } : null;
+      } catch { return null; }
+    }));
+    setFeatured(rows.filter(Boolean) as Row[]);
+  }, [headers]);
+
+  const load = useCallback(async (selectedGt?: string) => {
+    if (!headers) return;
+    setLoading(true);
+    setError("");
+    try {
+      const p = new URLSearchParams();
+      if (selectedGt) p.set("gt", selectedGt);
+      const r = await fetch(`${API}?${p}`, { headers, cache: "no-store" });
+      if (r.status === 404) { window.location.replace("/"); return; }
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(b.detail || b.error || `API ${r.status}`);
+      setPayload(b);
+      if (!selectedGt && b.selected_gt) setGt(String(b.selected_gt));
+      void hydrateFeatured(b, selectedGt || String(b.selected_gt || ""));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Falha ao carregar o Radar.");
+    } finally {
+      setLoading(false);
+    }
+  }, [headers, hydrateFeatured]);
+
+  useEffect(() => { if (headers) void load(); }, [headers, load]);
+
+  const role = String(payload.profile?.role || "");
+  const clients: Row[] = payload.clients || [];
+  const normalizedQuery = query.trim().toLocaleLowerCase("pt-BR");
+  const searched = useMemo(() => clients.filter((c) => !normalizedQuery || [c.client_name, c.gt_owner, c.cs_owner]
+    .join(" ").toLocaleLowerCase("pt-BR").includes(normalizedQuery)), [clients, normalizedQuery]);
+  const focusClients = useMemo(() => {
+    if (normalizedQuery) return searched;
+    if (band !== "ALL") return searched.filter((c) => c.evaluation?.band === band);
+    return searched.filter((c) => c.evaluation?.band === "ACTION_NOW");
+  }, [searched, band, normalizedQuery]);
+
+  const openClient = useCallback(async (id: string) => {
+    if (!headers) return;
+    setDetailLoading(true);
+    setDetail(null);
+    setNotice("");
+    try {
+      const p = new URLSearchParams({ client_id: id });
+      if (gt && role === "MGMT") p.set("gt", gt);
+      const r = await fetch(`${API}?${p}`, { headers, cache: "no-store" });
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(b.detail || b.error || `API ${r.status}`);
+      setDetail(b);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Falha ao abrir cliente.");
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [headers, gt, role]);
+
+  async function refreshCreatives() {
+    if (!headers || !detail?.client?.client_id) return;
+    setBusy("refresh"); setNotice("");
+    try {
+      const id = String(detail.client.client_id);
+      const r = await fetch(`${CREATIVE_API}?client_id=${encodeURIComponent(id)}&period_days=7`, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({ client_id: id, period_days: 7, force: true }),
+        cache: "no-store",
+      });
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(b.detail || b.error || `API ${r.status}`);
+      await openClient(id);
+      await load(gt);
+      setNotice("Criativos atualizados e memória registrada.");
+    } catch (e) { setNotice(e instanceof Error ? e.message : "Falha ao atualizar criativos."); }
+    finally { setBusy(""); }
+  }
+
+  async function requestCreatives() {
+    if (!headers || !detail?.client?.client_id) return;
+    setBusy("request"); setNotice("");
+    try {
+      const c = detail.client, b = detail.briefing || {}, ev = detail.evaluation || {};
+      const evidence = (ev.reasons || []).slice(0, 4).map((x: Row) => `- ${x.text}`).join("\n");
+      const description = [
+        `Motivo detectado pelo Radar: ${b.reason || "renovação de criativos"}.`,
+        evidence ? `\nEvidências:\n${evidence}` : "",
+        b.best_creative?.ad_name ? `\nMelhor criativo atual: ${b.best_creative.ad_name} — ${num(b.best_creative.results)} resultados · CPR ${money(b.best_creative.cost_per_result)}.` : "",
+        `\nDireção sugerida: ${b.suggestion || "Criar novas variações."}`,
+        `\nPróxima ação do Radar: ${ev.next_action || "—"}`,
+      ].join("");
+      const r = await fetch(WORK_API, {
+        method: "POST",
+        headers: { ...headers, "content-type": "application/json" },
+        body: JSON.stringify({
+          title: b.title || `Novos criativos — ${c.display_name}`,
+          description,
+          client_id: c.client_id,
+          type: "CREATIVE_REQUEST",
+          priority: b.needed ? "HIGH" : "MEDIUM",
+          target_role: "DESIGN",
+          target_person: b.target_person || null,
+          create_clickup: true,
+          source: "meta_radar",
+          source_id: `meta-radar:${c.client_id}:${new Date().toISOString().slice(0, 10)}`,
+          metadata: { radar: true, briefing: b, evaluation_band: ev.band, score: ev.score },
+        }),
+      });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(out.detail || out.error || `API ${r.status}`);
+      setNotice(`Demanda criada na Central${out.clickup?.id ? " e no ClickUp" : ""}.`);
+    } catch (e) { setNotice(e instanceof Error ? e.message : "Falha ao solicitar criativos."); }
+    finally { setBusy(""); }
+  }
+
+  function changeGt(value: string) { setGt(value); setDetail(null); setBand("ALL"); void load(value); }
+
+  if (!ready) return <main className="rv2-loading">Validando sessão…</main>;
+  if (role === "DESIGN") return <DesignerCockpit payload={payload} loading={loading} error={error} />;
+
+  const s = payload.summary || {};
+  const changes: Row[] = (payload.changes || []).filter((x: Row) => !normalizedQuery || String(x.client_name || "").toLocaleLowerCase("pt-BR").includes(normalizedQuery));
+  const actions = clients.filter((c) => c.evaluation?.band !== "HEALTHY").slice(0, 5);
+  const totalSpend = clients.reduce((sum, c) => sum + (finite(c.meta?.spend) || 0), 0);
+  const totalResults = clients.reduce((sum, c) => sum + (finite(c.meta?.results) || 0), 0);
+  const blendedCpl = totalResults > 0 ? totalSpend / totalResults : null;
+  const relationshipOk = clients.filter((c) => !reasonHas(c, ["CLIENT_WAITING", "COMPLAINT"])).length;
+  const executionOk = clients.filter((c) => !reasonHas(c, ["TASK_OVERDUE", "OVERDUE_COMMITMENT", "BLOCKER"])).length;
+  const financeOk = clients.filter((c) => !reasonHas(c, ["BALANCE_CRITICAL", "BALANCE_LOW", "META_DISABLED", "NO_DELIVERY"])).length;
+  const relPct = clients.length ? Math.round(relationshipOk / clients.length * 100) : 0;
+  const execPct = clients.length ? Math.round(executionOk / clients.length * 100) : 0;
+  const finPct = clients.length ? Math.round(financeOk / clients.length * 100) : 0;
+  const focusTitle = normalizedQuery ? "Resultados da busca" : band === "ALL" ? "Ação agora" : BAND[band]?.label;
+
+  return <div className="rv2-app">
+    <aside className="rv2-sidebar">
+      <a className="rv2-brand" href="/"><span className="rv2-brand-mark">◎</span><b>AGENCY<br/>OPS <em>AI</em></b></a>
+      <nav>
+        <a href="/">⌂ <span>Visão geral</span></a>
+        <a href="/meta-radar" className="active">◉ <span>Radar da carteira</span></a>
+        <a href="/meta-performance">↗ <span>Performance Meta</span></a>
+        <a href="/meta-analysis">▥ <span>Análise semanal</span></a>
+      </nav>
+      <div className="rv2-side-foot"><span>INTELIGÊNCIA</span><small>Meta + operação + execução</small></div>
+    </aside>
+
+    <main className="rv2-main">
+      <header className="rv2-topbar">
+        <div className="rv2-title"><h1>Radar da Carteira</h1><p>Inteligência operacional para decisões que movem resultado.</p></div>
+        <div className="rv2-top-controls">
+          {role === "MGMT" && <label className="rv2-select-wrap"><small>GT selecionado</small><select value={gt} onChange={(e) => changeGt(e.target.value)}><option value="">Todos os GTs</option>{(payload.gt_options || []).map((x: string) => <option key={x}>{x}</option>)}</select></label>}
+          <label className="rv2-search"><span>⌕</span><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar cliente…"/></label>
+          <button className="rv2-sync" onClick={() => load(gt)} disabled={loading}><small>{loading ? "Atualizando…" : "Atualizado"}</small><b>{when(payload.generated_at)}</b><span>↻</span></button>
+        </div>
+      </header>
+
+      {error && <div className="rv2-error">{error}</div>}
+
+      <section className="rv2-kpis">
+        <KpiCard cls="danger" glyph="!" label="Ação agora" value={s.action_now ?? 0} helper="clientes exigem atenção imediata" active={band === "ACTION_NOW"} onClick={() => setBand(band === "ACTION_NOW" ? "ALL" : "ACTION_NOW")} />
+        <KpiCard cls="warning" glyph="⌁" label="Acompanhar" value={s.follow_up ?? 0} helper="clientes em acompanhamento" active={band === "FOLLOW_UP"} onClick={() => setBand(band === "FOLLOW_UP" ? "ALL" : "FOLLOW_UP")} />
+        <KpiCard cls="healthy" glyph="✓" label="Saudáveis" value={s.healthy ?? 0} helper="clientes sem ação urgente" active={band === "HEALTHY"} onClick={() => setBand(band === "HEALTHY" ? "ALL" : "HEALTHY")} />
+        <KpiCard cls="creative" glyph="◇" label="Criativos mapeados" value={s.creative_covered ?? 0} helper={`de ${s.total ?? 0} clientes com captura`} />
+      </section>
+
+      <section className="rv2-primary-grid">
+        <Panel className="rv2-risk-panel" title={focusTitle} badge={`${focusClients.length} clientes`} action={band !== "ALL" || normalizedQuery ? <button onClick={() => { setBand("ALL"); setQuery(""); }}>Limpar filtro</button> : null}>
+          <div className="rv2-client-list">
+            {focusClients.slice(0, 7).map((c) => <PriorityClient key={c.client_id} client={c} onOpen={() => openClient(String(c.client_id))} />)}
+            {!loading && !focusClients.length && <div className="rv2-empty">Nenhum cliente encontrado nesse recorte.</div>}
+          </div>
+          {focusClients.length > 7 && <div className="rv2-panel-foot">Mostrando 7 de {focusClients.length} clientes.</div>}
+        </Panel>
+
+        <div className="rv2-side-stack">
+          <Panel title="O que mudou hoje" icon="⌁" action={<span>{changes.length} sinais</span>}>
+            <div className="rv2-events">
+              {changes.slice(0, 5).map((x, i) => <button key={`${x.client_id}-${x.kind}-${i}`} className={`rv2-event ${toneClass(x.tone)}`} onClick={() => openClient(String(x.client_id))}>
+                <span className="rv2-event-dot">{x.tone === "bad" ? "!" : x.tone === "good" ? "✓" : "↗"}</span>
+                <div><b>{x.client_name}</b><p>{x.text}</p></div><small>agora</small>
+              </button>)}
+              {!changes.length && <div className="rv2-empty small">Nenhuma mudança relevante detectada.</div>}
+            </div>
+          </Panel>
+          <Panel title="Próximas ações" icon="↗" action={<span>priorizadas</span>}>
+            <div className="rv2-actions">
+              {actions.map((c) => <button key={c.client_id} onClick={() => openClient(String(c.client_id))}><span className={`rv2-action-icon ${BAND[c.evaluation?.band]?.cls || "healthy"}`}>{BAND[c.evaluation?.band]?.glyph || "✓"}</span><div><b>{c.evaluation?.next_action || "Acompanhar cliente"}</b><small>{c.client_name}</small></div><em>›</em></button>)}
+            </div>
+          </Panel>
+        </div>
+      </section>
+
+      <section className="rv2-secondary-grid">
+        <Panel title="Criativos em destaque" icon="◇" action={<a href="/meta-performance">Ver Performance Meta →</a>}>
+          <div className="rv2-featured-grid">
+            {featured.map((r, i) => <FeaturedCreative key={`${r.client_id}:${r.ad_id}`} row={r} index={i} />)}
+            {!featured.length && <div className="rv2-empty">Os criativos aparecem aqui conforme as capturas da Meta ganham cobertura.</div>}
+          </div>
+        </Panel>
+        <Panel title="Saúde operacional" icon="⊙" action={<span>{clients.length} clientes</span>}>
+          <div className="rv2-health-grid">
+            <HealthCard glyph="♟" label="Relacionamento" value={relPct} helper="sem espera/reclamação crítica" cls={relPct >= 80 ? "healthy" : "warning"} />
+            <HealthCard glyph="↗" label="Execução" value={execPct} helper="sem task/bloqueio crítico" cls={execPct >= 80 ? "healthy" : "warning"} />
+            <HealthCard glyph="$" label="Financeiro / mídia" value={finPct} helper="sem alerta de saldo/entrega" cls={finPct >= 80 ? "healthy" : "warning"} />
+          </div>
+        </Panel>
+      </section>
+
+      <section className="rv2-bottom-strip">
+        <div><span>PERFORMANCE DA CARTEIRA · 7 DIAS</span><p>Leitura consolidada dos clientes no filtro atual.</p></div>
+        <MetricChip label="CPL / CPR médio" value={money(blendedCpl)} />
+        <MetricChip label="Resultados" value={num(totalResults)} />
+        <MetricChip label="Gasto" value={money(totalSpend)} />
+        <div className="rv2-period">7 dias⌄</div>
+      </section>
+    </main>
+
+    {(detailLoading || detail) && <aside className="rv2-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setDetail(null); }}>
+      <section className="rv2-drawer">{detailLoading ? <div className="rv2-loading">Cruzando Meta, operação, saldo e ClickUp…</div> : detail && <ClientDrawer data={detail} notice={notice} busy={busy} onClose={() => setDetail(null)} onRefresh={refreshCreatives} onRequest={requestCreatives} />}</section>
+    </aside>}
+  </div>;
+}
+
+function KpiCard({ cls, glyph, label, value, helper, active, onClick }: { cls: string; glyph: string; label: string; value: unknown; helper: string; active?: boolean; onClick?: () => void }) {
+  const Tag = onClick ? "button" : "article";
+  return <Tag className={`rv2-kpi ${cls} ${active ? "active" : ""}`} onClick={onClick as never}>
+    <div><span className="rv2-kpi-label"><i>{glyph}</i>{label}</span><b>{String(value)}</b><p>{helper}</p><small>{onClick ? "Ver clientes →" : "Cobertura da carteira →"}</small></div><div className="rv2-kpi-art"><span>{glyph}</span></div>
+  </Tag>;
+}
+
+function Panel({ title, icon, badge, action, className = "", children }: { title: string; icon?: string; badge?: string; action?: React.ReactNode; className?: string; children: React.ReactNode }) {
+  return <section className={`rv2-panel ${className}`}><header><div>{icon && <i>{icon}</i>}<h2>{title}</h2>{badge && <span className="rv2-badge">{badge}</span>}</div>{action && <div className="rv2-panel-action">{action}</div>}</header>{children}</section>;
+}
+
+function PriorityClient({ client: c, onOpen }: { client: Row; onOpen: () => void }) {
+  const ev = c.evaluation || {};
+  const band = BAND[ev.band] || BAND.HEALTHY;
+  const reason = (ev.reasons || [])[0];
+  const changes: Row[] = ev.changes || [];
+  const cplChange = changes.find((x) => x.kind === "CPL");
+  const resultChange = changes.find((x) => x.kind === "RESULTADOS");
+  return <button className={`rv2-client-row ${band.cls}`} onClick={onOpen}>
+    <div className="rv2-client-id"><span>{initials(c.client_name)}</span><div><h3>{c.client_name}</h3><small>GT {c.gt_owner || "—"}</small></div><em>{band.short}</em></div>
+    <div className="rv2-client-problem"><small>Principal problema</small><b>{reason?.text || "Sem problema crítico detectado"}</b><p>{reason?.action || "Monitoramento normal da conta."}</p></div>
+    <div className="rv2-client-next"><small>Próxima ação</small><b>{ev.next_action || "Manter acompanhamento"}</b><p>{ev.band === "ACTION_NOW" ? "Sugerido para hoje" : ev.band === "FOLLOW_UP" ? "Acompanhar nos próximos dias" : "Sem urgência"}</p></div>
+    <MetricMini label="Gasto (7d)" value={money(c.meta?.spend)} />
+    <MetricMini label="CPL (7d)" value={money(c.meta?.cpl)} delta={cplChange?.value} />
+    <MetricMini label="Resultados" value={num(c.meta?.results)} delta={resultChange?.value} invert />
+    <span className="rv2-chevron">›</span>
+  </button>;
+}
+
+function MetricMini({ label, value, delta, invert = false }: { label: string; value: string; delta?: unknown; invert?: boolean }) {
+  const d = finite(delta);
+  const good = d !== null ? (invert ? d > 0 : d < 0) : null;
+  return <div className="rv2-mini"><small>{label}</small><b>{value}</b>{d !== null && <em className={good ? "good" : "bad"}>{d > 0 ? "↑" : "↓"} {Math.abs(d).toFixed(0)}%</em>}</div>;
+}
+
+function FeaturedCreative({ row: r, index }: { row: Row; index: number }) {
+  const results = finite(r.results) || 0;
+  const status = results <= 0 ? "Sem resultado" : index === 0 ? "Campeão" : "Em destaque";
+  const cls = results <= 0 ? "bad" : index === 0 ? "champion" : "attention";
+  const src = r.preview_url || r.image_url || r.thumbnail_url;
+  return <article className="rv2-creative-card"><div className="rv2-creative-image">{src ? <img src={src} alt={r.ad_name || "Criativo"}/> : <span>Sem prévia</span>}<em className={cls}>{status}</em></div><div className="rv2-creative-copy"><div><h3>{r.ad_name || r.creative_name || "Criativo"}</h3><span>{r.client_name}</span><p>{r.campaign_name || "—"}</p></div><dl><div><dt>CPL / CPR</dt><dd>{money(r.cost_per_result ?? r.cpl)}</dd></div><div><dt>Resultados</dt><dd>{num(r.results)}</dd></div><div><dt>Gasto</dt><dd>{money(r.spend)}</dd></div><div><dt>CTR</dt><dd>{pct(r.ctr, 2)}</dd></div></dl></div></article>;
+}
+
+function HealthCard({ glyph, label, value, helper, cls }: { glyph: string; label: string; value: number; helper: string; cls: string }) {
+  return <article className={`rv2-health ${cls}`}><div className="rv2-health-head"><i>{glyph}</i><div><b>{label}</b><span>{value >= 80 ? "● Bom" : "● Atenção"}</span></div></div><strong>{value}%</strong><p>{helper}</p><div className="rv2-progress"><span style={{ width: `${Math.max(0, Math.min(100, value))}%` }} /></div></article>;
+}
+
+function MetricChip({ label, value }: { label: string; value: string }) {
+  return <div className="rv2-metric-chip"><small>{label}</small><b>{value}</b></div>;
+}
+
+function ClientDrawer({ data, notice, busy, onClose, onRefresh, onRequest }: { data: Row; notice: string; busy: string; onClose: () => void; onRefresh: () => void; onRequest: () => void }) {
+  const c = data.client || {}, e = data.evaluation || {}, w = data.windows || {}, creative = e.creative_signals || {}, bal = e.balance || {}, tasks = e.tasks || {};
+  const band = BAND[e.band] || BAND.HEALTHY;
+  return <>
+    <header className="rv2-drawer-head"><button onClick={onClose}>×</button><div><span className={band.cls}>{band.label} · score {e.score ?? 0}</span><h2>{c.display_name}</h2><p>GT {c.gt_owner || "—"} · CS {c.cs_owner || "—"} · Design {c.designer_owner || "—"}</p></div><a href={`/meta-performance?client=${encodeURIComponent(c.client_id)}`}>Performance Meta ↗</a></header>
+    <div className="rv2-drawer-body">
+      <section className={`rv2-drawer-hero ${band.cls}`}><small>PRÓXIMA AÇÃO RECOMENDADA</small><h3>{e.next_action || "Manter acompanhamento"}</h3><div>{(e.reasons || []).slice(0, 5).map((r: Row, i: number) => <span className={toneClass(r.tone)} key={`${r.code}-${i}`}>{r.text}</span>)}</div></section>
+      <section className="rv2-drawer-stats">
+        <DrawerStat label="Tráfego" value={`${num(w[7]?.results)} resultados`} helper={`CPL ${money(w[7]?.cpl)} · CTR ${pct(w[7]?.ctr, 2)} · freq. ${num(w[7]?.frequency, 2)}`} cls="blue" />
+        <DrawerStat label="Criativos" value={creative.best?.ad_name || "Sem campeão"} helper={`${creative.waste?.length || 0} sem resultado · ${creative.fatigue?.length || 0} em fadiga`} cls="orange" />
+        <DrawerStat label="Execução" value={`${tasks.open || 0} tasks abertas`} helper={`${tasks.overdue || 0} vencidas · ${tasks.due_today || 0} vencem hoje`} cls="blue" />
+        <DrawerStat label="Financeiro / mídia" value={bal.days_remaining !== null && bal.days_remaining !== undefined ? `~${num(bal.days_remaining, 1)} dias de saldo` : "Saldo indisponível"} helper={`Disponível ${money(bal.available_balance)} · gasto 7d ${money(bal.spend_7d)}`} cls="orange" />
+      </section>
+      <section className="rv2-drawer-section"><header><div><small>MEMÓRIA VISUAL</small><h3>Criativos atuais</h3></div><button onClick={onRefresh} disabled={busy === "refresh"}>{busy === "refresh" ? "Capturando…" : "Atualizar criativos"}</button></header><DrawerCreativeGrid rows={data.current_creatives || []} /></section>
+      <section className={`rv2-brief ${data.briefing?.needed ? "needed" : ""}`}><div><small>BRIEFING AUTOMÁTICO</small><h3>{data.briefing?.needed ? "Renovação criativa recomendada" : "Radar criativo"}</h3><p>{data.briefing?.suggestion}</p></div><button onClick={onRequest} disabled={busy === "request"}>{busy === "request" ? "Criando demanda…" : "Solicitar novos criativos"}</button></section>
+      {notice && <div className="rv2-notice">{notice}</div>}
+      {(data.open_tasks || []).length > 0 && <section className="rv2-drawer-section"><header><div><small>EXECUÇÃO</small><h3>Tasks abertas</h3></div></header><div className="rv2-task-list">{data.open_tasks.slice(0, 8).map((t: Row) => <a key={t.task_id} href={t.url || "#"} target="_blank" rel="noreferrer"><div><b>{t.name}</b><span>{t.assignee_names || "Sem responsável"}</span></div><em>{t.due_date ? new Date(t.due_date).toLocaleDateString("pt-BR") : "sem prazo"}</em></a>)}</div></section>}
+    </div>
+  </>;
+}
+
+function DrawerStat({ label, value, helper, cls }: { label: string; value: string; helper: string; cls: string }) {
+  return <article className={`rv2-dstat ${cls}`}><small>{label}</small><b>{value}</b><p>{helper}</p></article>;
+}
+
+function DrawerCreativeGrid({ rows }: { rows: Row[] }) {
+  if (!rows.length) return <div className="rv2-empty">Nenhum criativo capturado ainda.</div>;
+  return <div className="rv2-dcreative-grid">{rows.slice(0, 9).map((r) => { const src = r.preview_url || r.image_url || r.thumbnail_url; return <article key={String(r.ad_id)}><div>{src ? <img src={src} alt={r.ad_name || "Criativo"}/> : <span>Sem prévia</span>}</div><section><small>{r.ad_status || "CRIATIVO"}</small><h4>{r.ad_name || r.creative_name || r.ad_id}</h4><p>{r.campaign_name || "—"}</p><dl><div><dt>Resultados</dt><dd>{num(r.results)}</dd></div><div><dt>CPR</dt><dd>{money(r.cost_per_result ?? r.cpl)}</dd></div><div><dt>Gasto</dt><dd>{money(r.spend)}</dd></div></dl></section></article>; })}</div>;
+}
+
+function DesignerCockpit({ payload, loading, error }: { payload: Row; loading: boolean; error: string }) {
+  const rows: Row[] = payload.top_creatives || [];
+  return <main className="rv2-designer"><header><div><a href="/">← Voltar</a><small>INTELIGÊNCIA CRIATIVA</small><h1>O que está funcionando na agência</h1><p>Peças reais e resultados para o design criar com memória de performance.</p></div><div><b>{payload.creative_count || 0}</b><span>criativos mapeados</span></div></header>{error && <div className="rv2-error">{error}</div>}{loading ? <div className="rv2-loading">Carregando inteligência criativa…</div> : <section className="rv2-designer-grid">{rows.map((r, i) => <FeaturedCreative key={`${r.client_id}:${r.ad_id}`} row={r} index={i} />)}</section>}</main>;
+}
