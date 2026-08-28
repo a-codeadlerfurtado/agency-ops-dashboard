@@ -43,6 +43,7 @@ import LearningShortcut from "./learning-shortcut";
 import HomeShortcut from "./home-shortcut";
 import LogoutShortcut from "./logout-shortcut";
 import ProfileMenuDismiss from "./profile-menu-dismiss";
+import NotificationPanelDismiss from "./notification-panel-dismiss";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
 import CockpitCollapseBridge from "./cockpit-collapse-bridge";
 import MotionSystem from "./motion-system";
@@ -121,6 +122,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <HomeShortcut />
         <LogoutShortcut />
         <ProfileMenuDismiss />
+        <NotificationPanelDismiss />
       </body>
     </html>
   );
