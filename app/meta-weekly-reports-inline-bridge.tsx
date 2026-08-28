@@ -6,93 +6,51 @@ import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, formatMoney, formatNumber, supabase } from "./shared";
 
 type Row=Record<string,any>;
+type Scope="ALL"|"GT"|"CLIENT";
 const API=`${SUPABASE_URL}/functions/v1/agency-ops-weekly-reports-api`;
-
-function dateLabel(value:unknown){if(!value)return "—";const d=new Date(`${String(value)}T12:00:00`);return new Intl.DateTimeFormat("pt-BR",{day:"2-digit",month:"2-digit"}).format(d);}
-function statusLabel(value:string){return ({READY:"Pronto para enviar",REVIEW_REQUIRED:"Revisar antes de enviar",PENDING:"Na fila",RUNNING:"Gerando",ERROR:"Erro"} as Row)[value]||value;}
-function pct(value:unknown){const n=Number(value);if(!Number.isFinite(n))return "sem comparação";return `${n>0?"↑":n<0?"↓":"="} ${Math.abs(n).toFixed(0)}%`;}
+function dateLabel(value:unknown){if(!value)return "—";const d=new Date(`${String(value)}T12:00:00`);return new Intl.DateTimeFormat("pt-BR",{day:"2-digit",month:"2-digit",year:"2-digit"}).format(d);}
+function statusLabel(value:string){return({READY:"Pronto para enviar",REVIEW_REQUIRED:"Revisar dados",PENDING:"Na fila",RUNNING:"Gerando",ERROR:"Erro"}as Row)[value]||value;}
+function pct(value:unknown){const n=Number(value);if(!Number.isFinite(n))return"sem comparação";return`${n>0?"↑":n<0?"↓":"="} ${Math.abs(n).toFixed(0)}%`;}
+function narrativeOf(report:Row){const n=report.narrative||{};return{headline:String(n.headline||""),body:String(n.body||""),key_insight:String(n.key_insight||""),next_steps:Array.isArray(n.next_steps)?n.next_steps.map(String):[]};}
 
 export default function MetaWeeklyReportsInlineBridge(){
-  const[session,setSession]=useState<Session|null>(null);
-  const[allowed,setAllowed]=useState(false);
-  const[role,setRole]=useState("");
-  const[mode,setMode]=useState<"consultor"|"weekly">("consultor");
-  const[panelHost,setPanelHost]=useState<HTMLElement|null>(null);
-  const[data,setData]=useState<Row>({reports:[],summary:{}});
-  const[loading,setLoading]=useState(false);
-  const[error,setError]=useState("");
-  const[gt,setGt]=useState("");
-  const[query,setQuery]=useState("");
-  const[copied,setCopied]=useState("");
-  const[generating,setGenerating]=useState(false);
+  const[session,setSession]=useState<Session|null>(null),[allowed,setAllowed]=useState(false),[role,setRole]=useState(""),[mode,setMode]=useState<"consultor"|"weekly">("consultor"),[panelHost,setPanelHost]=useState<HTMLElement|null>(null);
+  const[data,setData]=useState<Row>({reports:[],summary:{},periods:[],clients:[]}),[loading,setLoading]=useState(false),[error,setError]=useState(""),[gt,setGt]=useState(""),[query,setQuery]=useState(""),[copied,setCopied]=useState(""),[generating,setGenerating]=useState(false);
+  const[periodStart,setPeriodStart]=useState(""),[periodEnd,setPeriodEnd]=useState(""),[showGenerator,setShowGenerator]=useState(false),[scopeType,setScopeType]=useState<Scope>("ALL"),[scopeValue,setScopeValue]=useState("");
+  const[editing,setEditing]=useState<Row|null>(null),[editForm,setEditForm]=useState<Row>({headline:"",body:"",key_insight:"",next_steps:[]}),[saving,setSaving]=useState(false);
 
   useEffect(()=>{supabase.auth.getSession().then(({data})=>setSession(data.session));const{data:{subscription}}=supabase.auth.onAuthStateChange((_e,next)=>setSession(next));return()=>subscription.unsubscribe();},[]);
   const headers=useMemo(()=>session?.access_token?{Authorization:`Bearer ${session.access_token}`,apikey:SUPABASE_ANON_KEY}:null,[session?.access_token]);
   useEffect(()=>{if(!headers){setAllowed(false);return;}let alive=true;fetch(`${API}?probe=1`,{headers,cache:"no-store"}).then(async r=>{if(!alive||!r.ok){setAllowed(false);return;}const b=await r.json();setAllowed(true);setRole(String(b?.profile?.role||""));}).catch(()=>setAllowed(false));return()=>{alive=false;};},[headers]);
 
-  const load=useCallback(async(selectedGt=gt)=>{if(!headers)return;setLoading(true);setError("");try{const p=new URLSearchParams();if(selectedGt)p.set("gt",selectedGt);const r=await fetch(`${API}?${p}`,{headers,cache:"no-store"});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.detail||b.error||`API ${r.status}`);setData(b);if(!selectedGt&&b.selected_gt)setGt(String(b.selected_gt));}catch(e){setError(e instanceof Error?e.message:"Falha ao carregar relatórios.");}finally{setLoading(false);}},[headers,gt]);
+  const load=useCallback(async(selectedGt=gt,start=periodStart,end=periodEnd)=>{if(!headers)return;setLoading(true);setError("");try{const p=new URLSearchParams();if(selectedGt)p.set("gt",selectedGt);if(start)p.set("period_start",start);if(end)p.set("period_end",end);const r=await fetch(`${API}?${p}`,{headers,cache:"no-store"}),b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.detail||b.error||`API ${r.status}`);setData(b);if(!selectedGt&&b.selected_gt)setGt(String(b.selected_gt));if(!periodStart&&b.period?.period_start)setPeriodStart(String(b.period.period_start));if(!periodEnd&&b.period?.period_end)setPeriodEnd(String(b.period.period_end));if(!showGenerator&&b.default_period){setScopeType("ALL");}}catch(e){setError(e instanceof Error?e.message:"Falha ao carregar relatórios.");}finally{setLoading(false);}},[headers,gt,periodStart,periodEnd,showGenerator]);
+  useEffect(()=>{if(mode==="weekly"&&allowed)void load(gt,periodStart,periodEnd);},[mode,allowed,headers]);
 
-  useEffect(()=>{if(mode==="weekly"&&allowed)void load(gt);},[mode,allowed,headers]);
-
-  useEffect(()=>{
-    if(!allowed||window.location.pathname!=="/")return;
-    let cleanup:()=>void=()=>{};
-    const install=()=>{
-      const host=document.querySelector<HTMLElement>(".meta-consultant-host");
-      if(!host){setPanelHost(null);return;}
-      let nav=host.querySelector<HTMLElement>("[data-weekly-report-tabs]");
-      if(!nav){
-        nav=document.createElement("nav");nav.dataset.weeklyReportTabs="true";nav.className="weekly-report-tabs";
-        const consultor=document.createElement("button"),weekly=document.createElement("button");
-        consultor.type="button";weekly.type="button";consultor.textContent="Consultor";weekly.textContent="Relatório semanal";
-        consultor.dataset.weeklyTab="consultor";weekly.dataset.weeklyTab="weekly";
-        nav.append(consultor,weekly);
-        const first=host.querySelector(".mc-workspace-head");host.insertBefore(nav,first||host.firstChild);
-      }
-      let panel=host.querySelector<HTMLElement>("[data-weekly-reports-panel]");
-      if(!panel){panel=document.createElement("div");panel.dataset.weeklyReportsPanel="true";panel.className="weekly-reports-panel-host";nav.insertAdjacentElement("afterend",panel);}
-      setPanelHost(panel);
-      const click=(event:Event)=>{const btn=(event.target as HTMLElement)?.closest?.("[data-weekly-tab]") as HTMLElement|null;if(!btn)return;setMode(btn.dataset.weeklyTab==="weekly"?"weekly":"consultor");};
-      nav.addEventListener("click",click);cleanup();cleanup=()=>nav?.removeEventListener("click",click);
-    };
-    install();const observer=new MutationObserver(install);observer.observe(document.body,{childList:true,subtree:true});return()=>{observer.disconnect();cleanup();document.querySelectorAll("[data-weekly-report-tabs],[data-weekly-reports-panel]").forEach(n=>n.remove());};
-  },[allowed]);
-
+  useEffect(()=>{if(!allowed||window.location.pathname!=="/")return;let cleanup:()=>void=()=>{};const install=()=>{const host=document.querySelector<HTMLElement>(".meta-consultant-host");if(!host){setPanelHost(null);return;}let nav=host.querySelector<HTMLElement>("[data-weekly-report-tabs]");if(!nav){nav=document.createElement("nav");nav.dataset.weeklyReportTabs="true";nav.className="weekly-report-tabs";const consultor=document.createElement("button"),weekly=document.createElement("button");consultor.type="button";weekly.type="button";consultor.textContent="Consultor";weekly.textContent="Relatório semanal";consultor.dataset.weeklyTab="consultor";weekly.dataset.weeklyTab="weekly";nav.append(consultor,weekly);const first=host.querySelector(".mc-workspace-head");host.insertBefore(nav,first||host.firstChild);}let panel=host.querySelector<HTMLElement>("[data-weekly-reports-panel]");if(!panel){panel=document.createElement("div");panel.dataset.weeklyReportsPanel="true";panel.className="weekly-reports-panel-host";nav.insertAdjacentElement("afterend",panel);}setPanelHost(panel);const click=(event:Event)=>{const btn=(event.target as HTMLElement)?.closest?.("[data-weekly-tab]") as HTMLElement|null;if(btn)setMode(btn.dataset.weeklyTab==="weekly"?"weekly":"consultor");};nav.addEventListener("click",click);cleanup();cleanup=()=>nav?.removeEventListener("click",click);};install();const observer=new MutationObserver(install);observer.observe(document.body,{childList:true,subtree:true});return()=>{observer.disconnect();cleanup();document.querySelectorAll("[data-weekly-report-tabs],[data-weekly-reports-panel]").forEach(n=>n.remove());};},[allowed]);
   useEffect(()=>{const host=document.querySelector<HTMLElement>(".meta-consultant-host");if(!host)return;host.classList.toggle("weekly-report-mode",mode==="weekly");host.querySelectorAll<HTMLElement>("[data-weekly-tab]").forEach(btn=>btn.classList.toggle("active",btn.dataset.weeklyTab===mode));return()=>host.classList.remove("weekly-report-mode");},[mode,panelHost]);
 
-  const reports:Row[]=data.reports||[];
-  const visible=reports.filter(r=>!query.trim()||[r.client_name,r.gt_owner].join(" ").toLowerCase().includes(query.trim().toLowerCase()));
-
-  async function copyLink(report:Row){if(!report.public_path)return;const link=`${window.location.origin}${report.public_path}`;await navigator.clipboard.writeText(link);setCopied(String(report.id));window.setTimeout(()=>setCopied(""),1600);}
-  async function generateNow(){if(!headers||role!=="MGMT")return;setGenerating(true);setError("");try{const r=await fetch(API,{method:"POST",headers:{...headers,"content-type":"application/json"},body:"{}"});const b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.detail||b.error||`API ${r.status}`);window.setTimeout(()=>void load(gt),1800);}catch(e){setError(e instanceof Error?e.message:"Falha ao iniciar geração.");}finally{setGenerating(false);}}
+  const reports:Row[]=data.reports||[],visible=reports.filter(r=>!query.trim()||[r.client_name,r.gt_owner].join(" ").toLowerCase().includes(query.trim().toLowerCase()));
+  const clients:Row[]=data.clients||[],periods:Row[]=data.periods||[];
+  async function post(body:Row){if(!headers)throw new Error("Sessão indisponível");const r=await fetch(API,{method:"POST",headers:{...headers,"content-type":"application/json"},body:JSON.stringify(body)}),b=await r.json().catch(()=>({}));if(!r.ok)throw new Error(b.detail||b.error||`API ${r.status}`);return b;}
+  async function copyLink(report:Row){if(!report.public_path)return;const link=`${window.location.origin}${report.public_path}`;await navigator.clipboard.writeText(link);setCopied(String(report.id));void post({action:"mark_shared",report_id:report.id}).catch(()=>{});window.setTimeout(()=>setCopied(""),1600);}
+  function useDefaultWeek(){const d=data.default_period||{};setPeriodStart(String(d.start||""));setPeriodEnd(String(d.end||""));}
+  async function generateCustom(){if(!periodStart||!periodEnd)return;setGenerating(true);setError("");try{await post({action:"generate",date_from:periodStart,date_to:periodEnd,scope_type:scopeType,scope_value:scopeValue||null});setShowGenerator(false);window.setTimeout(()=>void load(gt,periodStart,periodEnd),1800);}catch(e){setError(e instanceof Error?e.message:"Falha ao iniciar geração.");}finally{setGenerating(false);}}
+  function openEditor(report:Row){setEditing(report);setEditForm(narrativeOf(report));}
+  async function saveNarrative(){if(!editing)return;setSaving(true);setError("");try{await post({action:"edit_narrative",report_id:editing.id,narrative:editForm});setEditing(null);await load(gt,periodStart,periodEnd);}catch(e){setError(e instanceof Error?e.message:"Falha ao salvar leitura.");}finally{setSaving(false);}}
+  function selectPeriod(value:string){const[start,end]=value.split("|");setPeriodStart(start);setPeriodEnd(end);void load(gt,start,end);}
 
   if(!allowed||!panelHost)return null;
   return createPortal(<section className="weekly-reports-workspace">
-    <div className="wr-head">
-      <div><span className="eyebrow">Entrega ao cliente</span><h2>Relatório semanal</h2><p>Relatórios fechados da semana, com campanhas, criativos e leitura executiva. Copie o link e envie no grupo do cliente.</p></div>
-      <div className="wr-actions">
-        {role==="MGMT"&&<select className="control" value={gt} onChange={e=>{setGt(e.target.value);void load(e.target.value);}}><option value="">Todos os GTs</option>{(data.gt_options||[]).map((name:string)=><option key={name} value={name}>{name}</option>)}</select>}
-        <button className="btn" onClick={()=>load(gt)} disabled={loading}>{loading?"Atualizando…":"Atualizar"}</button>
-        {role==="MGMT"&&<button className="btn wr-secondary" onClick={generateNow} disabled={generating}>{generating?"Iniciando…":"Gerar agora"}</button>}
-      </div>
-    </div>
+    <div className="wr-head"><div><span className="eyebrow">Entrega ao cliente</span><h2>Relatórios de performance</h2><p>O padrão automático é segunda → domingo. Para demandas avulsas, escolha qualquer intervalo fechado e gere para a carteira, um GT ou um cliente.</p></div><div className="wr-actions">{role==="MGMT"&&<select className="control" value={gt} onChange={e=>{setGt(e.target.value);void load(e.target.value,periodStart,periodEnd);}}><option value="">Todos os GTs</option>{(data.gt_options||[]).map((name:string)=><option key={name}>{name}</option>)}</select>}<button className="btn" onClick={()=>load(gt,periodStart,periodEnd)} disabled={loading}>{loading?"Atualizando…":"Atualizar"}</button><button className="btn wr-secondary" onClick={()=>setShowGenerator(v=>!v)}>Gerar relatório avulso</button></div></div>
 
-    {data.week&&<div className="wr-week"><b>Semana {dateLabel(data.week.week_start)} → {dateLabel(data.week.week_end)}</b><span>Snapshot fechado · o link não muda depois de enviado</span></div>}
-    <div className="wr-summary">
-      <article><small>Prontos</small><b>{data.summary?.ready||0}</b></article>
-      <article><small>Revisar</small><b>{data.summary?.review||0}</b></article>
-      <article><small>Gerando</small><b>{data.summary?.pending||0}</b></article>
-      <article><small>Erros</small><b>{data.summary?.error||0}</b></article>
-    </div>
+    {showGenerator&&<div className="wr-generator"><div><small>De</small><input className="control" type="date" value={periodStart} onChange={e=>setPeriodStart(e.target.value)}/></div><div><small>Até</small><input className="control" type="date" value={periodEnd} onChange={e=>setPeriodEnd(e.target.value)}/></div><div><small>Gerar para</small><select className="control" value={scopeType} onChange={e=>{setScopeType(e.target.value as Scope);setScopeValue("");}}><option value="ALL">{role==="GT"?"Minha carteira":"Todos os clientes"}</option>{role==="MGMT"&&<option value="GT">Um GT</option>}<option value="CLIENT">Um cliente</option></select></div>{scopeType==="GT"&&<div><small>GT</small><select className="control" value={scopeValue} onChange={e=>setScopeValue(e.target.value)}><option value="">Selecionar…</option>{(data.gt_options||[]).map((name:string)=><option key={name}>{name}</option>)}</select></div>}{scopeType==="CLIENT"&&<div><small>Cliente</small><select className="control" value={scopeValue} onChange={e=>setScopeValue(e.target.value)}><option value="">Selecionar…</option>{clients.map(c=><option key={c.client_id} value={c.client_id}>{c.client_name}</option>)}</select></div>}<div className="wr-generator-buttons"><button className="btn wr-secondary" onClick={useDefaultWeek}>Última seg–dom</button><button className="btn" onClick={generateCustom} disabled={generating||!periodStart||!periodEnd||(scopeType!=="ALL"&&!scopeValue)}>{generating?"Iniciando…":"Gerar"}</button></div><p><b>Dados travados:</b> depois de gerado, gasto, resultados, campanhas, datas e criativos não podem ser editados. Só a leitura textual pode ser ajustada pelo GT.</p></div>}
+
+    <div className="wr-periodbar"><div><b>Período {dateLabel(data.period?.period_start||periodStart)} → {dateLabel(data.period?.period_end||periodEnd)}</b><span>Dados Meta auditados antes de liberar o link</span></div><select className="control" value={periodStart&&periodEnd?`${periodStart}|${periodEnd}`:""} onChange={e=>selectPeriod(e.target.value)}>{periods.map((p:Row)=><option key={`${p.period_start}|${p.period_end}|${p.report_kind}`} value={`${p.period_start}|${p.period_end}`}>{dateLabel(p.period_start)} → {dateLabel(p.period_end)} · {p.report_kind==="WEEKLY"?"semanal":"avulso"}</option>)}</select></div>
+    <div className="wr-summary"><article><small>Prontos</small><b>{data.summary?.ready||0}</b></article><article><small>Revisar dados</small><b>{data.summary?.review||0}</b></article><article><small>Gerando</small><b>{data.summary?.pending||0}</b></article><article><small>Erros</small><b>{data.summary?.error||0}</b></article></div>
     <div className="wr-toolbar"><input className="control" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar cliente…"/><span>{visible.length} relatório{visible.length===1?"":"s"}</span></div>
     {error&&<div className="error-box">{error}</div>}
-    <div className="wr-list">
-      {visible.map(report=>{const m=report.metrics||{},d=report.narrative?.deltas||{};return <article className={`wr-row ${String(report.status).toLowerCase()}`} key={report.id}>
-        <div className="wr-client"><b>{report.client_name}</b><small>{report.gt_owner||"GT não definido"}</small><em className={`wr-status ${String(report.status).toLowerCase()}`}>{statusLabel(String(report.status))}</em></div>
-        <div className="wr-metrics"><span><small>Resultados</small><b>{m.results==null?"—":formatNumber(m.results)}</b><em>{pct(d.results)}</em></span><span><small>CPR</small><b>{m.cpr==null?"—":formatMoney(m.cpr)}</b><em>{pct(d.cpr)}</em></span><span><small>Investimento</small><b>{m.spend==null?"—":formatMoney(m.spend)}</b><em>{pct(d.spend)}</em></span><span><small>Criativos</small><b>{report.creative_count||0}</b><em>no relatório</em></span></div>
-        <div className="wr-row-actions">{report.public_path?<><button className="btn" onClick={()=>copyLink(report)}>{copied===String(report.id)?"Link copiado ✓":"Copiar link"}</button><a className="btn wr-secondary" href={report.public_path} target="_blank" rel="noreferrer">Abrir</a></>:<small>{report.status==="REVIEW_REQUIRED"?"Não liberar para o cliente antes da revisão.":report.last_error||"Aguardando geração."}</small>}</div>
-      </article>;})}
-      {!loading&&!visible.length&&<div className="empty">Ainda não há relatórios para este filtro.</div>}
-    </div>
+    <div className="wr-list">{visible.map(report=>{const m=report.metrics||{},d=report.narrative?.deltas||{};return <article className={`wr-row ${String(report.status).toLowerCase()}`} key={report.id}><div className="wr-client"><b>{report.client_name}</b><small>{report.gt_owner||"GT não definido"}</small><em className={`wr-status ${String(report.status).toLowerCase()}`}>{statusLabel(String(report.status))}</em>{report.audit_status==="PASS"&&<i className="wr-audit">✓ dados auditados</i>}{report.editorial_status==="EDITED"&&<i className="wr-edited">leitura editada por {report.edited_by}</i>}</div><div className="wr-metrics"><span><small>Resultados</small><b>{m.results==null?"—":formatNumber(m.results)}</b><em>{pct(d.results)}</em></span><span><small>CPR</small><b>{m.cpr==null?"—":formatMoney(m.cpr)}</b><em>{pct(d.cpr)}</em></span><span><small>Investimento</small><b>{m.spend==null?"—":formatMoney(m.spend)}</b><em>{pct(d.spend)}</em></span><span><small>Criativos</small><b>{report.creative_count||0}</b><em>no relatório</em></span></div><div className="wr-row-actions">{report.public_path?<><button className="btn wr-secondary" onClick={()=>openEditor(report)}>Editar leitura</button><button className="btn" onClick={()=>copyLink(report)}>{copied===String(report.id)?"Link copiado ✓":"Copiar link"}</button><a className="btn wr-secondary" href={report.public_path} target="_blank" rel="noreferrer">Abrir</a></>:<small>{report.audit_status==="FAIL"?"Os números não fecharam na auditoria. Link bloqueado.":report.status==="REVIEW_REQUIRED"?"Revisar cobertura/dados antes de liberar.":report.last_error||"Aguardando geração."}</small>}</div></article>;})}{!loading&&!visible.length&&<div className="empty">Ainda não há relatórios para este período.</div>}</div>
+
+    {editing&&<div className="wr-editor-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setEditing(null);}}><div className="wr-editor"><header><div><span className="eyebrow">Leitura para o cliente</span><h3>{editing.client_name}</h3><p>Você pode corrigir a interpretação. Os dados do relatório continuam travados.</p></div><button onClick={()=>setEditing(null)}>×</button></header><label>Headline<input className="control" value={editForm.headline||""} onChange={e=>setEditForm(f=>({...f,headline:e.target.value}))}/></label><label>Resumo<textarea className="control" rows={5} value={editForm.body||""} onChange={e=>setEditForm(f=>({...f,body:e.target.value}))}/></label><label>Principal leitura<textarea className="control" rows={3} value={editForm.key_insight||""} onChange={e=>setEditForm(f=>({...f,key_insight:e.target.value}))}/></label><label>Próximos passos<textarea className="control" rows={5} value={(editForm.next_steps||[]).join("\n")} onChange={e=>setEditForm(f=>({...f,next_steps:e.target.value.split("\n").map((x:string)=>x.trim()).filter(Boolean)}))}/></label><div className="wr-editor-note">O texto original do sistema fica guardado no histórico junto com seu nome e horário da alteração.</div><footer><button className="btn wr-secondary" onClick={()=>setEditing(null)}>Cancelar</button><button className="btn" onClick={saveNarrative} disabled={saving}>{saving?"Salvando…":"Salvar leitura"}</button></footer></div></div>}
   </section>,panelHost);
 }
