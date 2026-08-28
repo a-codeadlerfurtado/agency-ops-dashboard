@@ -21,6 +21,7 @@ import AdlerNotificationAreaFilter from "./adler-notification-area-filter";
 import MetaCreativePreviewResponseBridge from "./meta-creative-preview-response-bridge";
 import MetaPerformanceProfileBridge from "./meta-performance-profile-bridge";
 import MetaAnalysisNavBridge from "./meta-analysis-nav-bridge";
+import MetaRadarNavBridge from "./meta-radar-nav-bridge";
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
@@ -97,6 +98,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <AdlerNotificationAreaFilter />
         <MetaCreativePreviewResponseBridge />
         <MetaPerformanceProfileBridge />
+        <MetaRadarNavBridge />
         <MetaAnalysisNavBridge />
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
