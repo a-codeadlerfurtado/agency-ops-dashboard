@@ -9,7 +9,8 @@ const GRAPH_ROOT = `https://graph.facebook.com/${GRAPH_VERSION}`;
 const BUCKET = "agency-meta-creative-previews";
 const MAX_PREVIEW_BYTES = 5 * 1024 * 1024;
 const PREVIEW_CONCURRENCY = 4;
-const MAX_PREVIEWS_PER_SYNC = 60;
+const META_BATCH_CONCURRENCY = 2;
+const MAX_PREVIEWS_PER_SYNC = 0;
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
 const num = (v: unknown) => { const n = Number(v ?? 0); return Number.isFinite(n) ? n : 0; };
 const div = (a: number, b: number) => b > 0 ? a / b : null;
@@ -77,14 +78,22 @@ async function paged(url: string, max = 5000) {
 }
 async function batchGet(paths:string[], token:string) {
   const out=new Map<string,Row>();
-  for(let offset=0;offset<paths.length;offset+=50) {
-    const chunk=paths.slice(offset,offset+50);
-    const body=new URLSearchParams({access_token:token,batch:JSON.stringify(chunk.map(relative_url=>({method:"GET",relative_url})))});
-    const r=await fetch(GRAPH_ROOT,{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body});
-    const b=await r.json().catch(()=>null);
-    if(!r.ok||!Array.isArray(b)) throw new Error(String(b?.error?.message||`Meta batch HTTP ${r.status}`));
-    b.forEach((item:any,index:number)=>{ if(Number(item?.code)<200||Number(item?.code)>=300)return; try{const parsed=JSON.parse(String(item.body||"{}"));if(parsed&&!parsed.error)out.set(chunk[index],parsed);}catch{} });
-  }
+  const chunks:string[][]=[];
+  for(let offset=0;offset<paths.length;offset+=50) chunks.push(paths.slice(offset,offset+50));
+  let cursor=0;
+  const runners=Array.from({length:Math.min(META_BATCH_CONCURRENCY,Math.max(1,chunks.length))},async()=>{
+    while(true){
+      const index=cursor++;
+      if(index>=chunks.length)return;
+      const chunk=chunks[index];
+      const body=new URLSearchParams({access_token:token,batch:JSON.stringify(chunk.map(relative_url=>({method:"GET",relative_url})))});
+      const r=await fetch(GRAPH_ROOT,{method:"POST",headers:{"content-type":"application/x-www-form-urlencoded"},body});
+      const b=await r.json().catch(()=>null);
+      if(!r.ok||!Array.isArray(b)) throw new Error(String(b?.error?.message||`Meta batch HTTP ${r.status}`));
+      b.forEach((item:any,itemIndex:number)=>{if(Number(item?.code)<200||Number(item?.code)>=300)return;try{const parsed=JSON.parse(String(item.body||"{}"));if(parsed&&!parsed.error)out.set(chunk[itemIndex],parsed);}catch{}});
+    }
+  });
+  await Promise.all(runners);
   return out;
 }
 async function insights(accountId:string,token:string) {
@@ -139,7 +148,7 @@ Deno.serve(async(req:Request)=>{
     for(const accountId of accounts) {
       stage=`ads:${accountId}`;
       const adFields="id,name,status,effective_status,campaign{id,name,status,effective_status},adset{id,name},creative{id,name}";
-      const ads=await paged(`${GRAPH_ROOT}/act_${accountId}/ads?limit=200&fields=${encodeURIComponent(adFields)}&access_token=${encodeURIComponent(token)}`,5000);
+      const ads=await paged(`${GRAPH_ROOT}/act_${accountId}/ads?limit=500&fields=${encodeURIComponent(adFields)}&access_token=${encodeURIComponent(token)}`,5000);
       stage=`insights:${accountId}`;
       const insightMap=await insights(accountId,token).catch(()=>new Map<string,Row>());
       stage=`creatives:${accountId}`;
@@ -165,7 +174,7 @@ Deno.serve(async(req:Request)=>{
     for(let offset=0;offset<collected.length;offset+=500){const chunk=collected.slice(offset,offset+500);if(!chunk.length)continue;const {error}=await ops.from("meta_creative_catalog").upsert(chunk,{onConflict:"client_id,meta_ad_account_id,ad_id"});if(error)throw error;}
     const finished=new Date().toISOString();
     const mirroredThisSync=MAX_PREVIEWS_PER_SYNC-previewBudget;
-    await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"OK",ad_count:collected.length,account_count:accounts.length,last_error:null,finished_at:finished,updated_at:finished,metadata:{lifecycle:client.lifecycle,preview_mirror_limit:MAX_PREVIEWS_PER_SYNC,preview_mirrored_this_sync:mirroredThisSync}},{onConflict:"client_id"});
+    await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"OK",ad_count:collected.length,account_count:accounts.length,last_error:null,finished_at:finished,updated_at:finished,metadata:{lifecycle:client.lifecycle,preview_mirror_limit:MAX_PREVIEWS_PER_SYNC,preview_mirrored_this_sync:mirroredThisSync,meta_batch_concurrency:META_BATCH_CONCURRENCY}},{onConflict:"client_id"});
     return json({ok:true,client_id:clientId,client_name:client.display_name,accounts:accounts.length,ads:collected.length,previews_mirrored:mirroredThisSync});
   } catch(error) {
     let raw=""; try{raw=error instanceof Error?error.message:JSON.stringify(error);}catch{raw=String(error);} const message=`${stage}: ${raw}`.slice(0,900);const finished=new Date().toISOString();
