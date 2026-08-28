@@ -18,6 +18,7 @@ import LeonardoScopeNetwork from "./leonardo-scope-network";
 import AdlerFinanceNavBridge from "./adler-finance-nav-bridge";
 import ClientBalancesNavBridge from "./client-balances-nav-bridge";
 import AdlerNotificationAreaFilter from "./adler-notification-area-filter";
+import MetaCreativePreviewResponseBridge from "./meta-creative-preview-response-bridge";
 import MetaPerformanceProfileBridge from "./meta-performance-profile-bridge";
 import MetaAnalysisNavBridge from "./meta-analysis-nav-bridge";
 import AIHeadRouter from "./ai-head-router";
@@ -94,6 +95,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <AdlerFinanceNavBridge />
         <ClientBalancesNavBridge />
         <AdlerNotificationAreaFilter />
+        <MetaCreativePreviewResponseBridge />
         <MetaPerformanceProfileBridge />
         <MetaAnalysisNavBridge />
         <IntegrationHealthBar />
