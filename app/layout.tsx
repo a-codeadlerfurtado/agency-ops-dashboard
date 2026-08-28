@@ -9,6 +9,7 @@ import "./meta-radar/radar-polish.css";
 import "./meta-radar/radar-color-system.css";
 import "./meta-radar/radar-v2.css";
 import "./meta-consultant.css";
+import "./meta-weekly-reports.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -27,6 +28,7 @@ import MetaPerformanceProfileBridge from "./meta-performance-profile-bridge";
 import MetaAnalysisNavBridge from "./meta-analysis-nav-bridge";
 import MetaRadarNavBridge from "./meta-radar-nav-bridge";
 import MetaConsultantInlineBridge from "./meta-consultant-inline-bridge";
+import MetaWeeklyReportsInlineBridge from "./meta-weekly-reports-inline-bridge";
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
@@ -106,6 +108,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <MetaPerformanceProfileBridge />
         <MetaRadarNavBridge />
         <MetaConsultantInlineBridge />
+        <MetaWeeklyReportsInlineBridge />
         <MetaAnalysisNavBridge />
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
