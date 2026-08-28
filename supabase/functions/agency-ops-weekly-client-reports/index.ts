@@ -23,6 +23,15 @@ const nullable = (v: unknown) => { if (v === null || v === undefined || v === ""
 const div = (a: number, b: number) => b > 0 ? a / b : null;
 const pct = (a: number | null, b: number | null) => a === null || b === null || b === 0 ? null : ((a - b) / Math.abs(b)) * 100;
 const shift = (day: string, delta: number) => { const d = new Date(`${day}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + delta); return d.toISOString().slice(0, 10); };
+const dateOnly = (value: unknown) => {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  const raw = String(value ?? "");
+  const match = raw.match(/\d{4}-\d{2}-\d{2}/);
+  if (match) return match[0];
+  const parsed = new Date(raw);
+  if (!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0, 10);
+  throw new Error(`invalid_report_date:${raw}`);
+};
 
 async function secret() {
   if (cachedSecret) return cachedSecret;
@@ -96,7 +105,7 @@ async function mirrorPreview(db: any, clientId: string, weekEnd: string, adId: s
       const path = `weekly/${clientId}/${weekEnd}/${adId}.${extension(contentType)}`;
       const { error } = await db.storage.from(PREVIEW_BUCKET).upload(path, new Uint8Array(buffer), { contentType, cacheControl: "31536000", upsert: true });
       if (!error) return path;
-    } catch { /* tenta a próxima origem */ }
+    } catch { }
   }
   return null;
 }
@@ -202,11 +211,12 @@ function clientNarrative(current: Row, previous: Row | null, campaigns: Row[], c
 }
 
 async function processReport(report: Row, token: string, db: any) {
+  const weekStart = dateOnly(report.week_start), weekEnd = dateOnly(report.week_end);
   const perf = await sql`select * from agency_ops.meta_performance_snapshots where run_id=${report.meta_run_id}::uuid and client_id=${report.client_id}::uuid and period_days in (7,14) order by period_days`;
   const current = perf.find((r:Row)=>Number(r.period_days)===7);
   const fourteen = perf.find((r:Row)=>Number(r.period_days)===14) || null;
   if (!current || !["OK","PARTIAL_PERIOD"].includes(String(current.data_status)) || n(current.active_campaigns) <= 0 || n(current.spend) <= 0) {
-    const snapshot = { version:1, client_name:report.client_name, week_start:report.week_start, week_end:report.week_end, coverage:{status:current?.data_status || "NO_DATA"}, message:"Este cliente precisa de revisão interna antes de compartilhar o relatório semanal." };
+    const snapshot = { version:1, client_name:report.client_name, week_start:weekStart, week_end:weekEnd, coverage:{status:current?.data_status || "NO_DATA"}, message:"Este cliente precisa de revisão interna antes de compartilhar o relatório semanal." };
     return { status:"REVIEW_REQUIRED", snapshot };
   }
   const previous = previousFrom14(current, fourteen);
@@ -218,13 +228,13 @@ async function processReport(report: Row, token: string, db: any) {
     spend:n(row.spend), results:n(row.results), impressions:n(row.impressions), clicks:n(row.clicks), ctr:nullable(row.ctr), cpr:nullable(row.cost_per_result ?? row.cpl), frequency:nullable(row.frequency),
     previous:campaignPrevious(row, by14.get(String(row.campaign_id)) || null),
   })).sort((a:Row,b:Row)=>n(b.results)-n(a.results) || n(b.spend)-n(a.spend)).slice(0,8);
-  const creatives = await captureTopCreatives(db, String(report.client_id), String(report.week_start), String(report.week_end), token);
+  const creatives = await captureTopCreatives(db, String(report.client_id), weekStart, weekEnd, token);
   const narrative = clientNarrative(current, previous, campaigns, creatives);
   const snapshot = {
     version:1,
     client_name:report.client_name,
-    week_start:report.week_start,
-    week_end:report.week_end,
+    week_start:weekStart,
+    week_end:weekEnd,
     generated_at:new Date().toISOString(),
     coverage:{ data_status:current.data_status, requested_days:current.requested_period_days, available_days:current.available_period_days, is_partial:Boolean(current.is_partial_period) },
     current:{ spend:n(current.spend), results:n(current.results), impressions:n(current.impressions), reach:n(current.reach), clicks:n(current.clicks), ctr:nullable(current.ctr), cpr:nullable(current.cost_per_result ?? current.cpl), frequency:nullable(current.frequency), active_campaigns:n(current.active_campaigns) },
@@ -249,7 +259,7 @@ async function invokeWork(metaRunId: string) {
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "GET" && new URL(req.url).searchParams.get("health") === "1") return out({ok:true,service:JOB_NAME,version:1,batch_size:BATCH_SIZE});
+  if (req.method === "GET" && new URL(req.url).searchParams.get("health") === "1") return out({ok:true,service:JOB_NAME,version:2,batch_size:BATCH_SIZE});
   if (req.method !== "POST") return out({error:"method_not_allowed"},405);
   const s = await secret().catch(()=>null);
   if (!s || req.headers.get("x-meta-campaign-secret") !== s) return out({error:"unauthorized"},401);
