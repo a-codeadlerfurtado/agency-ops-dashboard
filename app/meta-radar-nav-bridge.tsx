@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from "./shared";
 
-const API = `${SUPABASE_URL}/functions/v1/agency-ops-meta-radar-api?probe=1`;
+const API = `${SUPABASE_URL}/functions/v1/agency-ops-creative-intelligence-api-v2?probe=1`;
 function remove(){document.querySelectorAll("[data-meta-radar-nav]").forEach(n=>n.remove());}
 function install(label:string){
   if(window.location.pathname!=="/")return;
@@ -20,7 +20,7 @@ function install(label:string){
 export default function MetaRadarNavBridge(){
   const[session,setSession]=useState<Session|null>(null),[label,setLabel]=useState("");
   useEffect(()=>{supabase.auth.getSession().then(({data})=>setSession(data.session));const{data:{subscription}}=supabase.auth.onAuthStateChange((_e,next)=>setSession(next));return()=>subscription.unsubscribe();},[]);
-  useEffect(()=>{if(!session?.access_token){setLabel("");remove();return;}let alive=true;fetch(API,{headers:{Authorization:`Bearer ${session.access_token}`,apikey:SUPABASE_ANON_KEY},cache:"no-store"}).then(async r=>{if(!alive)return;if(!r.ok){setLabel("");remove();return;}const b=await r.json().catch(()=>({}));const role=String(b?.profile?.role||"");setLabel(role==="DESIGN"?"Inteligência Criativa":"");}).catch(()=>{if(alive){setLabel("");remove();}});return()=>{alive=false;};},[session?.access_token]);
+  useEffect(()=>{if(!session?.access_token){setLabel("");remove();return;}let alive=true;fetch(API,{headers:{Authorization:`Bearer ${session.access_token}`,apikey:SUPABASE_ANON_KEY},cache:"no-store"}).then(async r=>{if(!alive)return;if(!r.ok){setLabel("");remove();return;}const b=await r.json().catch(()=>({}));const role=String(b?.profile?.role||"").toUpperCase();const person=String(b?.profile?.person||"");const canSee=role==="DESIGN"||role==="MGMT"||person==="Leonardo Augusto";setLabel(canSee?"Inteligência Criativa":"");}).catch(()=>{if(alive){setLabel("");remove();}});return()=>{alive=false;};},[session?.access_token]);
   useEffect(()=>{if(!label){remove();return;}const apply=()=>install(label);apply();const timer=window.setInterval(apply,1200);return()=>{clearInterval(timer);remove();};},[label]);
   return null;
 }
