@@ -43,6 +43,7 @@ import NotificationLeadClickOverride from "./notification-lead-click-override";
 import ClientNotificationsBridge from "./client-notifications-bridge";
 import ClientCommercialProfileBridge from "./client-commercial-profile-bridge";
 import ClientContextUploadBridge from "./client-context-upload-bridge";
+import CreativeManualEditBridge from "./creative-manual-edit-bridge";
 import LeonardoMeetingNotificationBridge from "./leonardo-meeting-notification-bridge";
 import LeonardoActionWarning from "./leonardo-action-warning";
 import NotificationsHomeLink from "./notifications-home-link";
@@ -114,6 +115,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <DashboardEnhancementsGate />
         <ClientCommercialProfileBridge />
         <ClientContextUploadBridge />
+        <CreativeManualEditBridge />
         <CockpitCollapseBridge />
         <WeekendBalanceAlert />
         <LeadQualityAlert />
