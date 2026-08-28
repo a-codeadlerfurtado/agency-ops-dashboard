@@ -132,22 +132,48 @@ Deno.serve(async(req:Request)=>{
   const {data:secretRow}=await ops.from("automation_settings").select("value").eq("key","META_CAMPAIGN_SYNC_SECRET").maybeSingle();
   const expected=settingText(secretRow?.value).trim();
   if(!expected||req.headers.get("x-meta-campaign-secret")!==expected)return json({ok:false,error:"unauthorized"},401);
-  const body=await req.json().catch(()=>({})); const clientId=String(body?.client_id||"").trim(); if(!clientId)return json({ok:false,error:"client_id_required"},400);
-  const started=new Date().toISOString();
-  await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"RUNNING",started_at:started,finished_at:null,last_error:null,updated_at:started},{onConflict:"client_id"});
+  const body=await req.json().catch(()=>({}));
+  const clientId=String(body?.client_id||"").trim();
+  const mode=String(body?.mode||"full").trim().toLowerCase();
+  if(!clientId)return json({ok:false,error:"client_id_required"},400);
+
   let stage="client";
   try {
-    const {data:client,error:clientError}=await ops.from("clients").select("id,display_name,lifecycle").eq("id",clientId).maybeSingle(); if(clientError)throw clientError; if(!client)throw new Error("client_not_found");
+    const {data:client,error:clientError}=await ops.from("clients").select("id,display_name,lifecycle").eq("id",clientId).maybeSingle();
+    if(clientError)throw clientError;
+    if(!client)throw new Error("client_not_found");
+
+    stage="integrations";
+    const {data:integrations,error:intError}=await ops.from("client_integrations").select("meta_ad_account_id").eq("client_id",clientId).eq("system","META_BM").not("meta_ad_account_id","is",null);
+    if(intError)throw intError;
+    const accounts:string[]=[...new Set<string>((integrations||[]).map((x:Row)=>String(x.meta_ad_account_id||"").trim()).filter(Boolean))];
+
+    if(mode==="dates_only"){
+      let seen=0,updated=0;
+      for(const accountId of accounts){
+        stage=`dates:${accountId}`;
+        const ads=await paged(`${GRAPH_ROOT}/act_${accountId}/ads?limit=500&fields=id,created_time,updated_time&access_token=${encodeURIComponent(token)}`,5000);
+        seen+=ads.length;
+        const rows=ads.map((a:Row)=>({meta_ad_account_id:accountId,ad_id:String(a.id||""),ad_created_at:a.created_time||null,ad_updated_at:a.updated_time||null})).filter((x:Row)=>x.ad_id);
+        if(rows.length){
+          const {data,error}=await ops.rpc("apply_meta_creative_ad_dates",{p_client_id:clientId,p_rows:rows});
+          if(error)throw error;
+          updated+=Number(data||0);
+        }
+      }
+      return json({ok:true,mode:"dates_only",client_id:clientId,client_name:client.display_name,accounts:accounts.length,ads_seen:seen,rows_updated:updated});
+    }
+
+    const started=new Date().toISOString();
+    await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"RUNNING",started_at:started,finished_at:null,last_error:null,updated_at:started},{onConflict:"client_id"});
+
     stage="existing_previews";
     const existingPreviewMap=await existingPreviews(ops,clientId);
     let previewBudget=MAX_PREVIEWS_PER_SYNC;
-    stage="integrations";
-    const {data:integrations,error:intError}=await ops.from("client_integrations").select("meta_ad_account_id").eq("client_id",clientId).eq("system","META_BM").not("meta_ad_account_id","is",null); if(intError)throw intError;
-    const accounts:string[]=[...new Set<string>((integrations||[]).map((x:Row)=>String(x.meta_ad_account_id||"").trim()).filter(Boolean))];
     const collected:Row[]=[];
     for(const accountId of accounts) {
       stage=`ads:${accountId}`;
-      const adFields="id,name,status,effective_status,campaign{id,name,status,effective_status},adset{id,name},creative{id,name}";
+      const adFields="id,name,status,effective_status,created_time,updated_time,campaign{id,name,status,effective_status},adset{id,name},creative{id,name}";
       const ads=await paged(`${GRAPH_ROOT}/act_${accountId}/ads?limit=500&fields=${encodeURIComponent(adFields)}&access_token=${encodeURIComponent(token)}`,5000);
       stage=`insights:${accountId}`;
       const insightMap=await insights(accountId,token).catch(()=>new Map<string,Row>());
@@ -156,29 +182,53 @@ Deno.serve(async(req:Request)=>{
       const creativeFields="id,name,thumbnail_url,image_url,effective_object_story_id,object_type,object_story_spec,asset_feed_spec";
       const paths=creativeIds.map(id=>`${id}?thumbnail_width=600&thumbnail_height=600&fields=${encodeURIComponent(creativeFields)}`);
       const batch=paths.length?await batchGet(paths,token).catch(()=>new Map<string,Row>()):new Map<string,Row>();
-      const creativeMap=new Map<string,Row>(); paths.forEach((p,i)=>{const v=batch.get(p);if(v)creativeMap.set(creativeIds[i],v);});
+      const creativeMap=new Map<string,Row>();
+      paths.forEach((p,i)=>{const v=batch.get(p);if(v)creativeMap.set(creativeIds[i],v);});
       stage=`catalog_rows:${accountId}`;
       const rows=await mapConcurrent(ads,async(a:Row)=>{
-        const adId=String(a.id||"");const creativeId=String(a.creative?.id||"");const creative=creativeMap.get(creativeId)||a.creative||{};const metrics=insightMap.get(adId)||{};
+        const adId=String(a.id||"");
+        const creativeId=String(a.creative?.id||"");
+        const creative=creativeMap.get(creativeId)||a.creative||{};
+        const metrics=insightMap.get(adId)||{};
         const remotePreview=String(creative.thumbnail_url||creative.image_url||"");
         let previewPath=existingPreviewMap.get(`${accountId}:${adId}`)||null;
         const hasRecentDelivery=num(metrics.spend_7d)>0||num(metrics.results_7d)>0||num(metrics.impressions_7d)>0;
         if(!previewPath&&remotePreview&&hasRecentDelivery&&previewBudget>0){previewBudget-=1;previewPath=await mirrorPreview(db,clientId,adId,[creative.thumbnail_url,creative.image_url]);}
-        return {client_id:clientId,client_name:client.display_name,lifecycle:client.lifecycle,meta_ad_account_id:accountId,ad_id:adId,ad_name:a.name||null,ad_status:a.effective_status||a.status||null,adset_id:a.adset?.id||null,adset_name:a.adset?.name||null,campaign_id:a.campaign?.id||null,campaign_name:a.campaign?.name||null,campaign_status:a.campaign?.effective_status||a.campaign?.status||null,creative_id:creativeId||null,creative_name:creative.name||a.creative?.name||null,creative_format:creativeFormat(creative,a.name),effective_object_story_id:creative.effective_object_story_id||null,preview_storage_path:previewPath,thumbnail_url:creative.thumbnail_url||null,image_url:creative.image_url||null,...metrics,last_seen_at:new Date().toISOString(),last_synced_at:new Date().toISOString(),is_current:true,metadata:{graph_api_version:GRAPH_VERSION,object_type:creative.object_type||null,preview_mirror_status:previewPath?"STORED":remotePreview?"REMOTE_ONLY":"UNAVAILABLE"}};
+        return {
+          client_id:clientId,client_name:client.display_name,lifecycle:client.lifecycle,
+          meta_ad_account_id:accountId,ad_id:adId,ad_name:a.name||null,ad_status:a.effective_status||a.status||null,
+          ad_created_at:a.created_time||null,ad_updated_at:a.updated_time||null,
+          adset_id:a.adset?.id||null,adset_name:a.adset?.name||null,
+          campaign_id:a.campaign?.id||null,campaign_name:a.campaign?.name||null,campaign_status:a.campaign?.effective_status||a.campaign?.status||null,
+          creative_id:creativeId||null,creative_name:creative.name||a.creative?.name||null,creative_format:creativeFormat(creative,a.name),effective_object_story_id:creative.effective_object_story_id||null,
+          preview_storage_path:previewPath,thumbnail_url:creative.thumbnail_url||null,image_url:creative.image_url||null,
+          ...metrics,last_seen_at:new Date().toISOString(),last_synced_at:new Date().toISOString(),is_current:true,
+          metadata:{graph_api_version:GRAPH_VERSION,object_type:creative.object_type||null,preview_mirror_status:previewPath?"STORED":remotePreview?"REMOTE_ONLY":"UNAVAILABLE"}
+        };
       });
       collected.push(...rows.filter((r:Row)=>r.ad_id));
     }
     stage="catalog_mark_current";
     await ops.from("meta_creative_catalog").update({is_current:false,last_synced_at:new Date().toISOString()}).eq("client_id",clientId);
     stage="catalog_upsert";
-    for(let offset=0;offset<collected.length;offset+=500){const chunk=collected.slice(offset,offset+500);if(!chunk.length)continue;const {error}=await ops.from("meta_creative_catalog").upsert(chunk,{onConflict:"client_id,meta_ad_account_id,ad_id"});if(error)throw error;}
+    for(let offset=0;offset<collected.length;offset+=500){
+      const chunk=collected.slice(offset,offset+500);
+      if(!chunk.length)continue;
+      const {error}=await ops.from("meta_creative_catalog").upsert(chunk,{onConflict:"client_id,meta_ad_account_id,ad_id"});
+      if(error)throw error;
+    }
     const finished=new Date().toISOString();
     const mirroredThisSync=MAX_PREVIEWS_PER_SYNC-previewBudget;
-    await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"OK",ad_count:collected.length,account_count:accounts.length,last_error:null,finished_at:finished,updated_at:finished,metadata:{lifecycle:client.lifecycle,preview_mirror_limit:MAX_PREVIEWS_PER_SYNC,preview_mirrored_this_sync:mirroredThisSync,meta_batch_concurrency:META_BATCH_CONCURRENCY}},{onConflict:"client_id"});
+    await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"OK",ad_count:collected.length,account_count:accounts.length,last_error:null,finished_at:finished,updated_at:finished,metadata:{lifecycle:client.lifecycle,preview_mirror_limit:MAX_PREVIEWS_PER_SYNC,preview_mirrored_this_sync:mirroredThisSync,meta_batch_concurrency:META_BATCH_CONCURRENCY,ad_creation_dates:true}},{onConflict:"client_id"});
     return json({ok:true,client_id:clientId,client_name:client.display_name,accounts:accounts.length,ads:collected.length,previews_mirrored:mirroredThisSync});
   } catch(error) {
-    let raw=""; try{raw=error instanceof Error?error.message:JSON.stringify(error);}catch{raw=String(error);} const message=`${stage}: ${raw}`.slice(0,900);const finished=new Date().toISOString();
-    await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"ERROR",last_error:message,finished_at:finished,updated_at:finished},{onConflict:"client_id"});
-    return json({ok:false,error:"catalog_sync_failed",detail:message},500);
+    let raw="";
+    try{raw=error instanceof Error?error.message:JSON.stringify(error);}catch{raw=String(error);}
+    const message=`${stage}: ${raw}`.slice(0,900);
+    if(mode!=="dates_only"){
+      const finished=new Date().toISOString();
+      await ops.from("meta_creative_catalog_sync_state").upsert({client_id:clientId,status:"ERROR",last_error:message,finished_at:finished,updated_at:finished},{onConflict:"client_id"});
+    }
+    return json({ok:false,error:mode==="dates_only"?"date_backfill_failed":"catalog_sync_failed",detail:message},500);
   }
 });
