@@ -32,6 +32,7 @@ import CompletedWorkItemDetailBridge from "./completed-work-item-detail-bridge";
 import NotificationLeadDetailBridge from "./notification-lead-detail-bridge";
 import NotificationLeadClickOverride from "./notification-lead-click-override";
 import ClientNotificationsBridge from "./client-notifications-bridge";
+import ClientCommercialProfileBridge from "./client-commercial-profile-bridge";
 import LeonardoMeetingNotificationBridge from "./leonardo-meeting-notification-bridge";
 import LeonardoActionWarning from "./leonardo-action-warning";
 import NotificationsHomeLink from "./notifications-home-link";
@@ -96,6 +97,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <MetaAnalysisNavBridge />
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
+        <ClientCommercialProfileBridge />
         <CockpitCollapseBridge />
         <WeekendBalanceAlert />
         <LeadQualityAlert />
