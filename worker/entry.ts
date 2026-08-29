@@ -42,7 +42,7 @@ async function fetchImageBase64(url: string): Promise<{ base64: string; contentT
   if (bytes.length > 8_000_000) throw new Error("image_too_large");
   return {
     base64: bytesToBase64(bytes),
-    contentType: response.headers.get("content-type") || "application/octet-stream",
+    contentType: response.headers.get("content-type") || "image/jpeg",
     bytes: bytes.length,
   };
 }
@@ -75,7 +75,7 @@ async function runVisionProbe(request: Request, env: any): Promise<Response | nu
             "Descreva o que realmente aparece na imagem. Informe: tipo de criativo, assunto visual principal, textos legiveis, se ha preco/oferta, se ha pessoa/corretor, se ha fachada/interior/lazer/planta e as cores dominantes. Nao invente o que nao estiver visivel.",
         },
       ],
-      image: fetched.base64,
+      image: `data:${fetched.contentType};base64,${fetched.base64}`,
       max_tokens: 260,
       temperature: 0,
     };
