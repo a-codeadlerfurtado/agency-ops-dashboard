@@ -11,6 +11,7 @@ import "./meta-radar/radar-v2.css";
 import "./meta-consultant.css";
 import "./meta-weekly-reports.css";
 import "./client-access-vault.css";
+import "./system-update-center.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -71,6 +72,7 @@ import TeamAccessAdmin from "./team-access-admin";
 import GabrielTasklogMode from "./gabriel-tasklog-mode";
 import GabrielScopeNetwork from "./gabriel-scope-network";
 import PreclientsKanbanBridge from "./preclients-kanban-bridge";
+import SystemUpdateCenter from "./system-update-center";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -144,6 +146,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <TeamAccessAdmin />
         <GabrielTasklogMode />
         <DailyGreeting />
+        <SystemUpdateCenter />
         <OpsQuestionWidget />
         <OpsQuestionBrand />
         <LearningShortcut />
