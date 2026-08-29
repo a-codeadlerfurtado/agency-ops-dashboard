@@ -10,6 +10,7 @@ import "./meta-radar/radar-color-system.css";
 import "./meta-radar/radar-v2.css";
 import "./meta-consultant.css";
 import "./meta-weekly-reports.css";
+import "./client-access-vault.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -42,6 +43,7 @@ import NotificationLeadDetailBridge from "./notification-lead-detail-bridge";
 import NotificationLeadClickOverride from "./notification-lead-click-override";
 import ClientNotificationsBridge from "./client-notifications-bridge";
 import ClientCommercialProfileBridge from "./client-commercial-profile-bridge";
+import ClientAccessVaultBridge from "./client-access-vault-bridge";
 import ClientContextUploadBridge from "./client-context-upload-bridge";
 import CreativeManualEditBridge from "./creative-manual-edit-bridge";
 import CreativeIntelligenceBridge from "./creative-intelligence-bridge";
@@ -115,6 +117,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
         <ClientCommercialProfileBridge />
+        <ClientAccessVaultBridge />
         <ClientContextUploadBridge />
         <CreativeManualEditBridge />
         <CreativeIntelligenceBridge />
