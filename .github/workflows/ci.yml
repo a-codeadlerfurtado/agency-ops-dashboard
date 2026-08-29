@@ -35,3 +35,35 @@ jobs:
           npm run typecheck
       - name: Build
         run: npm run build
+
+  publish-system-update:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout commit metadata
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Build patch-note payload
+        run: node scripts/build-system-update-payload.mjs /tmp/system-update-payload.json
+      - name: Request GitHub OIDC token
+        id: oidc
+        shell: bash
+        run: |
+          TOKEN="$(curl -fsSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=agency-ops-system-updates" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).value))')"
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+      - name: Register system update
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+        run: |
+          curl -fsSL --retry 3 --retry-delay 2 \
+            -H "Authorization: Bearer $OIDC_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data-binary @/tmp/system-update-payload.json \
+            https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-system-update-ingest-api
