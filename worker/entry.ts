@@ -43,15 +43,45 @@ function allowedImageUrl(raw: string): boolean {
   }
 }
 
-async function fetchImageDataUrl(rawUrl: string): Promise<{ dataUrl: string; bytes: number; contentType: string }> {
-  if (!allowedImageUrl(rawUrl)) throw new Error("image_host_not_allowed");
-  const response = await fetch(rawUrl, {
+async function fetchImage(rawUrl: string, transformed: boolean): Promise<Response> {
+  const baseOptions = {
     headers: {
-      accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-      "user-agent": "Mozilla/5.0 CreativeVisionBulk/1.0",
+      accept: "image/jpeg,image/webp,image/*,*/*;q=0.8",
+      "user-agent": "Mozilla/5.0 CreativeVisionBulk/1.1",
     },
     signal: AbortSignal.timeout(20_000),
-  });
+  };
+  if (!transformed) return fetch(rawUrl, baseOptions);
+  return fetch(rawUrl, {
+    ...baseOptions,
+    cf: {
+      image: {
+        fit: "scale-down",
+        width: 320,
+        height: 320,
+        format: "jpeg",
+        quality: 78,
+        metadata: "none",
+      },
+    },
+  } as any);
+}
+
+async function fetchImageDataUrl(rawUrl: string): Promise<{ dataUrl: string; bytes: number; contentType: string; resized: boolean }> {
+  if (!allowedImageUrl(rawUrl)) throw new Error("image_host_not_allowed");
+
+  let resized = true;
+  let response: Response;
+  try {
+    response = await fetchImage(rawUrl, true);
+    if (!response.ok || !(response.headers.get("content-type") || "").toLowerCase().startsWith("image/")) {
+      throw new Error(`transform_http_${response.status}`);
+    }
+  } catch {
+    resized = false;
+    response = await fetchImage(rawUrl, false);
+  }
+
   if (!response.ok) throw new Error(`image_http_${response.status}`);
   const buffer = await response.arrayBuffer();
   const bytes = new Uint8Array(buffer);
@@ -63,6 +93,7 @@ async function fetchImageDataUrl(rawUrl: string): Promise<{ dataUrl: string; byt
     dataUrl: `data:${contentType};base64,${bytesToBase64(bytes)}`,
     bytes: bytes.length,
     contentType,
+    resized,
   };
 }
 
@@ -84,16 +115,16 @@ async function runVisionBulk(request: Request, env: any): Promise<Response | nul
       messages: [
         {
           role: "system",
-          content: "Analise APENAS a imagem do criativo imobiliario. Nao use contexto externo, nao invente e nao repita frases.",
+          content: "Analise somente o criativo imobiliario visivel. Nao invente e nao repita.",
         },
         {
           role: "user",
           content:
-            "Responda em no maximo 140 palavras e, se conseguir, siga este formato: TIPO: ... | ASSUNTO: ... | SECUNDARIOS: ... | TEXTO: ... | PRECO: SIM/NAO + valor | CONDICAO: SIM/NAO + detalhe | PESSOA: SIM/NAO + papel | RENDER: SIM/NAO | ESTILO: ... | DENSIDADE: BAIXA/MEDIA/ALTA | CORES: ... . Descreva apenas o que estiver visivel.",
+            "Em ate 90 palavras: TIPO | ASSUNTO | SECUNDARIOS | TEXTO | PRECO | CONDICAO | PESSOA e papel | RENDER | ESTILO | DENSIDADE | CORES. Use SIM/NAO quando couber e registre apenas o que estiver visivel.",
         },
       ],
       image: fetched.dataUrl,
-      max_tokens: 190,
+      max_tokens: 120,
       temperature: 0,
       repetition_penalty: 1.3,
       frequency_penalty: 0.3,
@@ -102,7 +133,7 @@ async function runVisionBulk(request: Request, env: any): Promise<Response | nul
     return Response.json({
       ok: true,
       model: VISION_MODEL,
-      image: { bytes: fetched.bytes, content_type: fetched.contentType },
+      image: { bytes: fetched.bytes, content_type: fetched.contentType, resized: fetched.resized },
       result,
     });
   } catch (caught) {
