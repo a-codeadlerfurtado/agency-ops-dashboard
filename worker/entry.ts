@@ -6,6 +6,37 @@ const NEW_IMG_SRC = `img-src 'self' data: ${SUPABASE}`;
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 const VISION_BULK_KEY = "cvi_20260829_5b1d73f04c784898";
 
+const VISION_SCHEMA = {
+  type: "object",
+  properties: {
+    visual_type: { type: "string", enum: ["photo", "layout", "render", "print", "other"] },
+    primary_subject: {
+      type: "string",
+      enum: ["facade", "interior", "kitchen", "living_room", "bedroom", "bathroom", "leisure", "pool", "condominium", "land", "floorplan", "map", "person_realtor", "lifestyle", "development", "other"],
+    },
+    secondary_subjects: { type: "array", items: { type: "string" }, maxItems: 8 },
+    visible_text: { type: "array", items: { type: "string" }, maxItems: 10 },
+    has_price: { type: "boolean" },
+    price_text: { type: "string" },
+    has_commercial_condition: { type: "boolean" },
+    commercial_condition_text: { type: "string" },
+    has_person: { type: "boolean" },
+    person_role: { type: "string", enum: ["realtor", "resident", "model", "unknown", "none"] },
+    has_property_photo: { type: "boolean" },
+    has_render: { type: "boolean" },
+    style: { type: "string", enum: ["luxury", "popular", "editorial", "minimalist", "promotional", "institutional", "other"] },
+    information_density: { type: "string", enum: ["low", "medium", "high"] },
+    dominant_colors: { type: "array", items: { type: "string" }, maxItems: 6 },
+    notes: { type: "string", maxLength: 300 },
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+  },
+  required: [
+    "visual_type", "primary_subject", "secondary_subjects", "visible_text", "has_price", "price_text",
+    "has_commercial_condition", "commercial_condition_text", "has_person", "person_role", "has_property_photo",
+    "has_render", "style", "information_density", "dominant_colors", "notes", "confidence",
+  ],
+};
+
 function widenImageCsp(response: Response): Response {
   const headers = new Headers(response.headers);
   const csp = headers.get("content-security-policy");
@@ -87,17 +118,22 @@ async function runVisionBulk(request: Request, env: any): Promise<Response | nul
         {
           role: "system",
           content:
-            "Voce classifica criativos imobiliarios olhando APENAS a imagem fornecida. Ignore qualquer contexto externo. Nao invente. Retorne SOMENTE JSON valido, sem markdown.",
+            "Classifique o criativo imobiliario olhando APENAS a imagem. Ignore contexto externo, nomes de cliente/campanha e nao invente o que nao estiver visivel.",
         },
         {
           role: "user",
           content:
-            "Analise o criativo e retorne este JSON: {\"visual_type\":\"photo|layout|render|print|other\",\"primary_subject\":\"facade|interior|kitchen|living_room|bedroom|bathroom|leisure|pool|condominium|land|floorplan|map|person_realtor|lifestyle|development|other\",\"secondary_subjects\":[\"...\"],\"visible_text\":[\"...\"],\"has_price\":true,\"price_text\":\"\",\"has_commercial_condition\":true,\"commercial_condition_text\":\"\",\"has_person\":true,\"person_role\":\"realtor|resident|model|unknown|none\",\"has_property_photo\":true,\"has_render\":false,\"style\":\"luxury|popular|editorial|minimalist|promotional|institutional|other\",\"information_density\":\"low|medium|high\",\"dominant_colors\":[\"...\"],\"notes\":\"descricao visual curta\",\"confidence\":0.0}. Use false/string vazia/lista vazia quando nao estiver visivel. confidence deve ficar entre 0 e 1.",
+            "Extraia a estrutura visual, assunto, textos legiveis, preco/condicao, pessoas, tipo de imagem, estilo e densidade de informacao. Se algo nao estiver visivel, use false, string vazia ou lista vazia.",
         },
       ],
       image: fetched.dataUrl,
-      max_tokens: 340,
+      response_format: {
+        type: "json_schema",
+        json_schema: VISION_SCHEMA,
+      },
+      max_tokens: 280,
       temperature: 0,
+      repetition_penalty: 1.15,
     };
 
     const result = await env.AI.run(VISION_MODEL, input);
