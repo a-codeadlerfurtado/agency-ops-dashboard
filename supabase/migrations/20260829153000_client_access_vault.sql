@@ -63,10 +63,29 @@ revoke all on table agency_ops.client_access_vault from anon, authenticated;
 revoke all on table agency_ops.client_access_vault_audit from anon, authenticated;
 grant all on table agency_ops.client_access_vault to service_role;
 grant all on table agency_ops.client_access_vault_audit to service_role;
-
 grant usage, select on sequence agency_ops.client_access_vault_audit_id_seq to service_role;
+
+-- The AES key itself lives in Supabase Vault, never in GitHub or browser code.
+-- This SECURITY DEFINER RPC exposes it only to service_role so the Edge Function
+-- can import it into WebCrypto and perform AES-256-GCM in memory.
+create or replace function agency_ops.get_client_vault_key()
+returns text
+language sql
+security definer
+set search_path = pg_catalog, public, vault
+as $$
+  select decrypted_secret
+  from vault.decrypted_secrets
+  where name = 'client_vault_key'
+  order by created_at desc
+  limit 1
+$$;
+revoke all on function agency_ops.get_client_vault_key() from public, anon, authenticated;
+grant execute on function agency_ops.get_client_vault_key() to service_role;
 
 comment on table agency_ops.client_access_vault is
   'Encrypted client system credentials. Ciphertext only; direct anon/authenticated access is revoked.';
 comment on table agency_ops.client_access_vault_audit is
   'Non-secret audit trail for access, reveal, copy, mutation and denied attempts.';
+comment on function agency_ops.get_client_vault_key() is
+  'Returns the client vault AES key only to service-role callers.';
