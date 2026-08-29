@@ -19,6 +19,34 @@ function widenImageCsp(response: Response): Response {
   });
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function fetchImageBase64(url: string): Promise<{ base64: string; contentType: string; bytes: number }> {
+  const response = await fetch(url, {
+    headers: {
+      accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+      "user-agent": "Mozilla/5.0 CreativeVisionProbe/1.0",
+    },
+  });
+  if (!response.ok) throw new Error(`image_http_${response.status}`);
+  const buffer = await response.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  if (!bytes.length) throw new Error("image_empty");
+  if (bytes.length > 8_000_000) throw new Error("image_too_large");
+  return {
+    base64: bytesToBase64(bytes),
+    contentType: response.headers.get("content-type") || "application/octet-stream",
+    bytes: bytes.length,
+  };
+}
+
 async function runVisionProbe(request: Request, env: any): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname !== "/api/creative-vision-probe") return null;
@@ -33,40 +61,34 @@ async function runVisionProbe(request: Request, env: any): Promise<Response | nu
     }
   }
 
-  const input = {
-    messages: [
-      {
-        role: "system",
-        content: "Analise apenas a imagem fornecida. Responda em portugues do Brasil, de forma objetiva.",
-      },
-      {
-        role: "user",
-        content:
-          "Descreva o que realmente aparece na imagem. Informe: tipo de criativo, assunto visual principal, textos legiveis, se ha preco/oferta, se ha pessoa/corretor, se ha fachada/interior/lazer/planta e as cores dominantes. Nao invente o que nao estiver visivel.",
-      },
-    ],
-    image: VISION_PROBE_IMAGE,
-    max_tokens: 260,
-    temperature: 0,
-  };
-
   try {
+    const fetched = await fetchImageBase64(VISION_PROBE_IMAGE);
+    const input = {
+      messages: [
+        {
+          role: "system",
+          content: "Analise apenas a imagem fornecida. Responda em portugues do Brasil, de forma objetiva.",
+        },
+        {
+          role: "user",
+          content:
+            "Descreva o que realmente aparece na imagem. Informe: tipo de criativo, assunto visual principal, textos legiveis, se ha preco/oferta, se ha pessoa/corretor, se ha fachada/interior/lazer/planta e as cores dominantes. Nao invente o que nao estiver visivel.",
+        },
+      ],
+      image: fetched.base64,
+      max_tokens: 260,
+      temperature: 0,
+    };
+
     const result = await env.AI.run(VISION_MODEL, input);
-    return Response.json({ ok: true, model: VISION_MODEL, result });
+    return Response.json({
+      ok: true,
+      model: VISION_MODEL,
+      image: { content_type: fetched.contentType, bytes: fetched.bytes },
+      result,
+    });
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
-    if (/agree|license|licen[cç]a|acceptable use/i.test(message)) {
-      try {
-        await env.AI.run(VISION_MODEL, { prompt: "agree" });
-        const result = await env.AI.run(VISION_MODEL, input);
-        return Response.json({ ok: true, model: VISION_MODEL, license_agreed_now: true, result });
-      } catch (retry) {
-        return Response.json(
-          { ok: false, error: retry instanceof Error ? retry.message : String(retry) },
-          { status: 500 },
-        );
-      }
-    }
     return Response.json({ ok: false, error: message }, { status: 500 });
   }
 }
