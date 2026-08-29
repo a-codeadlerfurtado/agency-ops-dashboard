@@ -4,39 +4,7 @@ const SUPABASE = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const OLD_IMG_SRC = "img-src 'self' data:";
 const NEW_IMG_SRC = `img-src 'self' data: ${SUPABASE}`;
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
-const PARSER_MODEL = "@cf/meta/llama-3.1-8b-instruct-fast";
 const VISION_BULK_KEY = "cvi_20260829_5b1d73f04c784898";
-
-const VISION_SCHEMA = {
-  type: "object",
-  properties: {
-    visual_type: { type: "string", enum: ["photo", "layout", "render", "print", "other"] },
-    primary_subject: {
-      type: "string",
-      enum: ["facade", "interior", "kitchen", "living_room", "bedroom", "bathroom", "leisure", "pool", "condominium", "land", "floorplan", "map", "person_realtor", "lifestyle", "development", "other"],
-    },
-    secondary_subjects: { type: "array", items: { type: "string" }, maxItems: 8 },
-    visible_text: { type: "array", items: { type: "string" }, maxItems: 10 },
-    has_price: { type: "boolean" },
-    price_text: { type: "string" },
-    has_commercial_condition: { type: "boolean" },
-    commercial_condition_text: { type: "string" },
-    has_person: { type: "boolean" },
-    person_role: { type: "string", enum: ["realtor", "resident", "model", "unknown", "none"] },
-    has_property_photo: { type: "boolean" },
-    has_render: { type: "boolean" },
-    style: { type: "string", enum: ["luxury", "popular", "editorial", "minimalist", "promotional", "institutional", "other"] },
-    information_density: { type: "string", enum: ["low", "medium", "high"] },
-    dominant_colors: { type: "array", items: { type: "string" }, maxItems: 6 },
-    notes: { type: "string", maxLength: 300 },
-    confidence: { type: "number", minimum: 0, maximum: 1 },
-  },
-  required: [
-    "visual_type", "primary_subject", "secondary_subjects", "visible_text", "has_price", "price_text",
-    "has_commercial_condition", "commercial_condition_text", "has_person", "person_role", "has_property_photo",
-    "has_render", "style", "information_density", "dominant_colors", "notes", "confidence",
-  ],
-};
 
 function widenImageCsp(response: Response): Response {
   const headers = new Headers(response.headers);
@@ -98,17 +66,10 @@ async function fetchImageDataUrl(rawUrl: string): Promise<{ dataUrl: string; byt
   };
 }
 
-function usageNumber(value: unknown): number {
-  const n = Number(value);
-  return Number.isFinite(n) ? n : 0;
-}
-
 async function runVisionBulk(request: Request, env: any): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname !== "/api/internal/creative-vision") return null;
-  if (request.method !== "POST") {
-    return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
-  }
+  if (request.method !== "POST") return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
   if (request.headers.get("x-creative-vision-key") !== VISION_BULK_KEY) {
     return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
@@ -119,63 +80,30 @@ async function runVisionBulk(request: Request, env: any): Promise<Response | nul
     if (!imageUrl) return Response.json({ ok: false, error: "missing_image_url" }, { status: 400 });
 
     const fetched = await fetchImageDataUrl(imageUrl);
-    const visionResult = await env.AI.run(VISION_MODEL, {
+    const result = await env.AI.run(VISION_MODEL, {
       messages: [
         {
           role: "system",
-          content:
-            "Analise APENAS a imagem do criativo imobiliario. Nao use contexto externo e nao invente. Seja compacto, sem repetir frases.",
+          content: "Analise APENAS a imagem do criativo imobiliario. Nao use contexto externo, nao invente e nao repita frases.",
         },
         {
           role: "user",
           content:
-            "Descreva em no maximo 120 palavras: tipo visual, assunto principal e secundarios, textos legiveis, preco/oferta/condicao, pessoa/corretor, foto real ou render, estilo, densidade de informacao e cores dominantes.",
+            "Responda em no maximo 140 palavras e, se conseguir, siga este formato: TIPO: ... | ASSUNTO: ... | SECUNDARIOS: ... | TEXTO: ... | PRECO: SIM/NAO + valor | CONDICAO: SIM/NAO + detalhe | PESSOA: SIM/NAO + papel | RENDER: SIM/NAO | ESTILO: ... | DENSIDADE: BAIXA/MEDIA/ALTA | CORES: ... . Descreva apenas o que estiver visivel.",
         },
       ],
       image: fetched.dataUrl,
-      max_tokens: 180,
+      max_tokens: 190,
       temperature: 0,
-      repetition_penalty: 1.25,
-      frequency_penalty: 0.2,
+      repetition_penalty: 1.3,
+      frequency_penalty: 0.3,
     });
-
-    const visionText = typeof visionResult?.response === "string"
-      ? visionResult.response.trim()
-      : JSON.stringify(visionResult?.response ?? "");
-    if (!visionText) throw new Error("empty_vision_response");
-
-    const parserResult = await env.AI.run(PARSER_MODEL, {
-      messages: [
-        {
-          role: "system",
-          content:
-            "Converta a descricao visual recebida em dados estruturados. Nao acrescente fatos que nao estejam na descricao. Responda somente no schema pedido.",
-        },
-        { role: "user", content: visionText },
-      ],
-      response_format: {
-        type: "json_schema",
-        json_schema: VISION_SCHEMA,
-      },
-      max_tokens: 260,
-      temperature: 0,
-    });
-
-    const vu = visionResult?.usage || {};
-    const pu = parserResult?.usage || {};
-    const usage = {
-      prompt_tokens: usageNumber(vu.prompt_tokens) + usageNumber(pu.prompt_tokens),
-      completion_tokens: usageNumber(vu.completion_tokens) + usageNumber(pu.completion_tokens),
-      total_tokens: usageNumber(vu.total_tokens) + usageNumber(pu.total_tokens),
-      neurons: usageNumber(vu.neurons) + usageNumber(pu.neurons),
-    };
 
     return Response.json({
       ok: true,
-      model: `${VISION_MODEL}+${PARSER_MODEL}`,
+      model: VISION_MODEL,
       image: { bytes: fetched.bytes, content_type: fetched.contentType },
-      result: { response: parserResult?.response, usage },
-      stage_usage: { vision: vu, parser: pu },
+      result,
     });
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
@@ -187,7 +115,6 @@ export default {
   async fetch(request: Request, env: any, context: any): Promise<Response> {
     const vision = await runVisionBulk(request, env);
     if (vision) return vision;
-
     const response = await baseWorker.fetch(request, env, context);
     return widenImageCsp(response);
   },
