@@ -4,7 +4,7 @@ const SUPABASE = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const OLD_IMG_SRC = "img-src 'self' data:";
 const NEW_IMG_SRC = `img-src 'self' data: ${SUPABASE}`;
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
-const VISION_PROBE_IMAGE = "https://scontent-iad6-1.xx.fbcdn.net/v/t15.13418-10/484232698_1039545421533113_659905603519595124_n.jpg?_nc_cat=106&ccb=1-7&_nc_eui2=AeF1WfVQ1pLTHIbhb0y-2HrDpcPkJ5tKB1Klw-Qnm0oHUrShBcWAbKRyfKx79zEqd3F4MuVfzul8S9UIJZhh_XY3&_nc_ohc=wdWdBOTVsPEQ7kNvwHMr4pf&_nc_oc=AdohnkgAlcA6Bhmf7ZTDn5IVDgkWWMgNqS-55z-UDh_qb3tuZ9hGdESkrCA8CWTGuuFdIX2Hk_Lu_uIeTBEssJOi&_nc_zt=23&_nc_ht=scontent-iad6-1.xx&edm=AAT1rw8EAAAA&_nc_gid=jQ9yjIJYAokbUSnEo4vtrg&_nc_tpa=Q5bMBQI60u-9WaLsNBKn_n-iSpNt1UxB1wgz2tSfV2z2PrWl7Rlm35nokqsvqadAtgSyPr4pluZrYPaNkg&stp=c0.5000x0.5000f_dst-emg0_p600x600_q75_tt6&ur=aaa768&_nc_sid=58080a&oh=00_AQIkbgHrSNgp2mDcC4PuSC81nSeGRpf2qWjgnerhn0IbEw&oe=6A990CC7";
+const VISION_PROBE_KEY = "cvp_20260829_7f0e3a44c8c249bd";
 
 function widenImageCsp(response: Response): Response {
   const headers = new Headers(response.headers);
@@ -19,39 +19,14 @@ function widenImageCsp(response: Response): Response {
   });
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
-  return btoa(binary);
-}
-
-async function fetchImageBase64(url: string): Promise<{ base64: string; contentType: string; bytes: number }> {
-  const response = await fetch(url, {
-    headers: {
-      accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-      "user-agent": "Mozilla/5.0 CreativeVisionProbe/1.0",
-    },
-  });
-  if (!response.ok) throw new Error(`image_http_${response.status}`);
-  const buffer = await response.arrayBuffer();
-  const bytes = new Uint8Array(buffer);
-  if (!bytes.length) throw new Error("image_empty");
-  if (bytes.length > 8_000_000) throw new Error("image_too_large");
-  return {
-    base64: bytesToBase64(bytes),
-    contentType: response.headers.get("content-type") || "image/jpeg",
-    bytes: bytes.length,
-  };
-}
-
 async function runVisionProbe(request: Request, env: any): Promise<Response | null> {
   const url = new URL(request.url);
   if (url.pathname !== "/api/creative-vision-probe") return null;
-  if (request.method !== "GET") {
+  if (request.method !== "POST") {
     return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
+  }
+  if (request.headers.get("x-creative-probe-key") !== VISION_PROBE_KEY) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
   if (env.AI_RATE_LIMITER?.limit) {
@@ -62,31 +37,36 @@ async function runVisionProbe(request: Request, env: any): Promise<Response | nu
   }
 
   try {
-    const fetched = await fetchImageBase64(VISION_PROBE_IMAGE);
+    const body = await request.json().catch(() => null) as any;
+    const base64 = String(body?.image_base64 || "");
+    const contentType = String(body?.content_type || "image/jpeg").toLowerCase();
+    if (!base64 || base64.length > 11_000_000) {
+      return Response.json({ ok: false, error: "invalid_image" }, { status: 400 });
+    }
+    if (!/^image\/(jpeg|jpg|png|webp|gif)$/.test(contentType)) {
+      return Response.json({ ok: false, error: "unsupported_image_type" }, { status: 400 });
+    }
+
     const input = {
       messages: [
         {
           role: "system",
-          content: "Analise apenas a imagem fornecida. Responda em portugues do Brasil, de forma objetiva.",
+          content:
+            "Voce classifica criativos imobiliarios olhando APENAS a imagem fornecida. Nao use nome de campanha, cliente ou anuncio. Responda em portugues do Brasil.",
         },
         {
           role: "user",
           content:
-            "Descreva o que realmente aparece na imagem. Informe: tipo de criativo, assunto visual principal, textos legiveis, se ha preco/oferta, se ha pessoa/corretor, se ha fachada/interior/lazer/planta e as cores dominantes. Nao invente o que nao estiver visivel.",
+            "Analise a imagem e devolva uma descricao curta e objetiva contendo: tipo visual (foto, layout, render, print etc.); assunto principal (fachada, interior, lazer, planta, pessoa/corretor, terreno, empreendimento ou outro); textos legiveis importantes; se ha preco/oferta/condicao; se ha pessoa; e o estilo geral. Nao invente elementos nao visiveis.",
         },
       ],
-      image: `data:${fetched.contentType};base64,${fetched.base64}`,
-      max_tokens: 260,
+      image: `data:${contentType};base64,${base64}`,
+      max_tokens: 180,
       temperature: 0,
     };
 
     const result = await env.AI.run(VISION_MODEL, input);
-    return Response.json({
-      ok: true,
-      model: VISION_MODEL,
-      image: { content_type: fetched.contentType, bytes: fetched.bytes },
-      result,
-    });
+    return Response.json({ ok: true, model: VISION_MODEL, result });
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : String(caught);
     return Response.json({ ok: false, error: message }, { status: 500 });
