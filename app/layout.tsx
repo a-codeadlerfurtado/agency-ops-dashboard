@@ -61,6 +61,7 @@ import AutomationNavBridge from "./automation-nav-bridge";
 import DonnahNavBridge from "./donnah-nav-bridge";
 import SidebarInformationArchitecture from "./sidebar-information-architecture";
 import NavBrandIcons from "./nav-brand-icons";
+import NavBrandIconsOutlineFix from "./nav-brand-icons-outline-fix";
 import LearningShortcut from "./learning-shortcut";
 import HomeShortcut from "./home-shortcut";
 import LogoutShortcut from "./logout-shortcut";
@@ -147,6 +148,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <DonnahNavBridge />
         <SidebarInformationArchitecture />
         <NavBrandIcons />
+        <NavBrandIconsOutlineFix />
         <TeamAccessAdmin />
         <GabrielTasklogMode />
         <DailyGreeting />
