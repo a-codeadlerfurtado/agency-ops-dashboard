@@ -36,6 +36,14 @@ async function adsManagementGranted(token: string) {
   const body = await metaJson(`https://graph.facebook.com/${VERSION}/me/permissions?access_token=${encodeURIComponent(token)}`);
   return (body?.data || []).some((p: Row) => p.permission === "ads_management" && p.status === "granted");
 }
+async function resolveMetaToken(db: any) {
+  const { data, error } = await db.schema("agency_ops").rpc("get_meta_system_user_token");
+  const vaultToken = !error && typeof data === "string" ? data.trim() : "";
+  if (vaultToken) return { token: vaultToken, source: "SUPABASE_VAULT" };
+  const envToken = String(Deno.env.get("META_SYSTEM_USER_TOKEN") || "").trim();
+  if (envToken) return { token: envToken, source: "EDGE_ENV" };
+  return { token: "", source: null };
+}
 
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get("origin");
@@ -49,9 +57,7 @@ Deno.serve(async (req: Request) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") || "";
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || "";
   const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
-  const metaToken = Deno.env.get("META_SYSTEM_USER_TOKEN") || "";
   if (!supabaseUrl || !anonKey || !serviceRole) return reply({ error: "server_configuration" }, 500);
-  if (!metaToken) return reply({ error: "meta_token_missing" }, 503);
 
   const authHeader = req.headers.get("Authorization") || "";
   if (!authHeader.startsWith("Bearer ")) return reply({ error: "unauthorized" }, 401);
@@ -61,6 +67,8 @@ Deno.serve(async (req: Request) => {
   if (authError || !user?.id) return reply({ error: "unauthorized" }, 401);
 
   const db = createClient(supabaseUrl, serviceRole, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { token: metaToken, source: metaTokenSource } = await resolveMetaToken(db);
+  if (!metaToken) return reply({ error: "meta_token_missing" }, 503);
   const ops = db.schema("agency_ops");
   const [{ data: pref }, { data: approvals }] = await Promise.all([
     ops.from("user_preferences").select("collaborator_person,name").eq("user_key", user.id).maybeSingle(),
@@ -76,17 +84,42 @@ Deno.serve(async (req: Request) => {
 
   const body = await req.json().catch(() => ({}));
   const action = String(body?.action || "CAPABILITIES").toUpperCase();
+  const requestSource = String(body?.source || "CLIENT_360").toUpperCase() === "CAMPAIGNS" ? "CAMPAIGNS" : "CLIENT_360";
+
+  if (action === "DISCOVER") {
+    const clientName = String(body?.client_name || "").trim();
+    if (!clientName) return reply({ error: "client_required" }, 400);
+    const { data: candidates, error: clientError } = await ops.from("clients")
+      .select("id,display_name,gt_owner,lifecycle")
+      .eq("display_name", clientName)
+      .limit(3);
+    if (clientError) return reply({ error: "query_failed" }, 500);
+    const scoped = (candidates || []).filter((row: Row) => role !== "GT" || elevated || String(row.gt_owner || "") === person);
+    if (!(candidates || []).length) return reply({ error: "client_not_found" }, 404);
+    if (!scoped.length) return reply({ error: "forbidden" }, 403);
+    if (scoped.length !== 1) return reply({ error: "client_ambiguous" }, 409);
+    const found = scoped[0];
+    const { data: inventory, error: inventoryError } = await ops.from("meta_campaign_inventory")
+      .select("client_id,account_key,meta_ad_account_id,campaign_id,campaign_name,campaign_status,objective,checked_at")
+      .eq("client_id", found.id)
+      .order("campaign_name", { ascending: true })
+      .limit(500);
+    if (inventoryError) return reply({ error: "query_failed" }, 500);
+    return reply({ ok: true, client: found, campaigns: inventory || [], source: requestSource });
+  }
+
   const clientId = String(body?.client_id || "").trim();
   if (!clientId) return reply({ error: "client_required" }, 400);
   const { data: client, error: clientError } = await ops.from("clients").select("id,display_name,gt_owner,lifecycle").eq("id", clientId).maybeSingle();
   if (clientError) return reply({ error: "query_failed" }, 500);
   if (!client) return reply({ error: "client_not_found" }, 404);
   if (role === "GT" && !elevated && String(client.gt_owner || "") !== person) return reply({ error: "forbidden" }, 403);
+  if (client.lifecycle === "CHURNED" && !["CAPABILITIES"].includes(action)) return reply({ error: "client_churned" }, 409);
 
   if (action === "CAPABILITIES") {
     try {
       const granted = await adsManagementGranted(metaToken);
-      return reply({ ok: true, meta_write: granted, permission: granted ? "ads_management" : null, actions: granted ? ["PAUSE", "RESUME"] : [] });
+      return reply({ ok: true, meta_write: granted, permission: granted ? "ads_management" : null, actions: granted ? ["PAUSE", "RESUME"] : [], token_source: metaTokenSource });
     } catch (error) {
       return reply({ ok: false, error: "meta_capability_check_failed", detail: String((error as Error)?.message || error) }, 502);
     }
@@ -135,7 +168,7 @@ Deno.serve(async (req: Request) => {
       before_state: previewState,
       preview_hash: previewHash,
       expires_at: expiresAt,
-      request_metadata: { client_name: client.display_name, source: "CLIENT_360", meta_permission_checked: true },
+      request_metadata: { client_name: client.display_name, source: requestSource, meta_permission_checked: true, token_source: metaTokenSource },
     }).select("id,action_type,preview_state,expires_at,status").single();
     if (insertError || !inserted) return reply({ error: "preview_store_failed" }, 500);
     return reply({ ok: true, preview: inserted, confirmation_phrase: "CONFIRMAR", requires_password: true });
