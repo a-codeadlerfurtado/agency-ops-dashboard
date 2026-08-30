@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from "./shared";
 
 type UpdateItem = {
@@ -75,6 +75,10 @@ export default function SystemUpdateCenter() {
   const [historyItems, setHistoryItems] = useState<UpdateItem[]>([]);
   const [historyRole, setHistoryRole] = useState("");
   const [historySearch, setHistorySearch] = useState("");
+  const checkingRef = useRef(false);
+  const payloadRef = useRef<Payload | null>(null);
+
+  useEffect(() => { payloadRef.current = payload; }, [payload]);
 
   const api = useCallback(async (action: string, extra: Record<string, unknown> = {}) => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -89,16 +93,21 @@ export default function SystemUpdateCenter() {
   }, []);
 
   const check = useCallback(async () => {
-    if (checking || payload) return;
+    if (checkingRef.current || payloadRef.current) return;
+    checkingRef.current = true;
     setChecking(true);
     try {
       const next = await api("CHECK") as Payload | null;
       setNavAllowed(Boolean(next?.ok && next.allowed && !next.excluded));
       if (!next?.ok || !next.allowed || !next.mode || next.mode === "NONE" || !next.updates?.length) return;
+      payloadRef.current = next;
       setPayload(next);
       if (next.mode === "DAILY" && next.edition_date) void api("MARK_SHOWN", { edition_date: next.edition_date, commit_shas: next.updates.map((item) => item.sha) });
-    } finally { setChecking(false); }
-  }, [api, checking, payload]);
+    } finally {
+      checkingRef.current = false;
+      setChecking(false);
+    }
+  }, [api]);
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
@@ -157,7 +166,11 @@ export default function SystemUpdateCenter() {
     try {
       if (payload.mode === "PREVIEW_STACK") await api("ACK_PREVIEW");
       else if (payload.mode === "DAILY" && payload.edition_date) await api("DISMISS_DAILY", { edition_date: payload.edition_date, commit_shas: updates.map((item) => item.sha) });
-    } finally { setPayload(null); setClosing(false); }
+    } finally {
+      payloadRef.current = null;
+      setPayload(null);
+      setClosing(false);
+    }
   }
 
   return (
