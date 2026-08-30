@@ -15,7 +15,7 @@ const clean = (value: unknown) => String(value ?? "").trim();
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
-  if (!['GET', 'POST'].includes(req.method)) return reply({ error: "method_not_allowed" }, 405);
+  if (!["GET", "POST"].includes(req.method)) return reply({ error: "method_not_allowed" }, 405);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
   const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -36,9 +36,15 @@ Deno.serve(async (req) => {
   const userKey = userData.user.id;
   const { data: pref } = await ops.from("user_preferences").select("collaborator_person").eq("user_key", userKey).maybeSingle();
   const person = clean(pref?.collaborator_person);
-  if (!person) return reply({ error: "forbidden" }, 403);
+  if (!person) return reply({ error: "forbidden", detail: "campaign_notes_profile_required" }, 403);
+
   const { data: roster } = await ops.from("team_roster").select("role,is_former").eq("person", person).maybeSingle();
-  if (!roster || roster.is_former || roster.role !== "GT") return reply({ error: "forbidden", detail: "campaign_notes_gt_only" }, 403);
+  const role = clean(roster?.role).toUpperCase();
+  const isGt = role === "GT";
+  const isAdler = role === "MGMT" && person === "Adler Furtado";
+  if (!roster || roster.is_former || (!isGt && !isAdler)) {
+    return reply({ error: "forbidden", detail: "campaign_notes_gt_or_adler_only" }, 403);
+  }
 
   const url = new URL(req.url);
   const body = req.method === "POST" ? await req.json().catch(() => ({})) : {};
@@ -47,13 +53,18 @@ Deno.serve(async (req) => {
   const accountKey = clean(req.method === "GET" ? url.searchParams.get("account_key") : body?.account_key);
   if (!clientName || !campaignName) return reply({ error: "campaign_context_required" }, 400);
 
-  const { data: client, error: clientError } = await ops.from("campaign_client_latest")
+  let clientQuery = ops.from("campaign_client_latest")
     .select("client_id,display_name,gt_owner,lifecycle")
-    .eq("display_name", clientName)
-    .eq("gt_owner", person)
-    .maybeSingle();
+    .eq("display_name", clientName);
+  if (isGt) clientQuery = clientQuery.eq("gt_owner", person);
+  const { data: client, error: clientError } = await clientQuery.maybeSingle();
   if (clientError) return reply({ error: "query_failed", detail: clientError.message }, 500);
-  if (!client?.client_id) return reply({ error: "campaign_outside_wallet" }, 403);
+  if (!client?.client_id) {
+    return reply({
+      error: isGt ? "campaign_outside_wallet" : "client_not_found",
+      detail: isGt ? "Esta campanha não pertence à carteira deste GT." : "Cliente não localizado para observações de campanha.",
+    }, isGt ? 403 : 404);
+  }
 
   const { data: candidates, error: campaignError } = await ops.from("meta_campaign_inventory")
     .select("client_id,account_key,meta_ad_account_id,campaign_id,campaign_name,campaign_status,objective,checked_at")
@@ -62,6 +73,7 @@ Deno.serve(async (req) => {
     .order("checked_at", { ascending: false })
     .limit(25);
   if (campaignError) return reply({ error: "query_failed", detail: campaignError.message }, 500);
+
   const exact = (candidates ?? []).find((row: any) => !accountKey || clean(row.account_key) === accountKey || clean(row.meta_ad_account_id) === accountKey);
   const campaign = exact ?? (accountKey ? null : (candidates ?? [])[0]);
   if (!campaign?.campaign_id) return reply({ error: "campaign_not_found" }, 404);
@@ -95,7 +107,9 @@ Deno.serve(async (req) => {
   return reply({
     eligible: true,
     person,
-    client: { client_id: client.client_id, display_name: client.display_name },
+    role,
+    scope: isAdler ? "ALL" : "WALLET",
+    client: { client_id: client.client_id, display_name: client.display_name, gt_owner: client.gt_owner },
     campaign,
     notes: notes ?? [],
   });
