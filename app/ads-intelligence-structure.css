@@ -1,5 +1,6 @@
 .ads-intelligence-host.aii-structure-active .aii-tab-content{display:none!important}
-.aii-structure-content{display:grid;gap:10px;margin-top:1px}
+.ads-intelligence-host.aii-structure-active .aii-tabs>button.active:not([data-aii-structure-tab]){background:transparent!important;border-color:transparent!important;color:var(--muted)!important;box-shadow:none!important}
+.aii-structure-content{display:grid;gap:10px;margin:0;min-width:0;width:100%}
 .aii-structure-head{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;margin:2px}
 .aii-structure-head h3{font-size:15px;margin:3px 0 0}.aii-structure-head p{font-size:9px;color:var(--muted);margin:4px 0 0}.aii-structure-head>div:last-child{display:flex;align-items:center;gap:7px}.aii-structure-head .control{min-width:220px;font-size:9px}
 .aii-inline-warning{font-size:9px;line-height:1.45;color:#ffe08b;border:1px solid rgba(247,201,92,.22);background:rgba(247,201,92,.06);border-radius:10px;padding:9px 11px}
