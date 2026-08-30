@@ -13,6 +13,7 @@ import "./meta-weekly-reports.css";
 import "./client-access-vault.css";
 import "./system-update-center.css";
 import "./security-center.css";
+import "./client-360.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -47,6 +48,7 @@ import ClientNotificationsBridge from "./client-notifications-bridge";
 import ClientCommercialProfileBridge from "./client-commercial-profile-bridge";
 import ClientAccessVaultBridge from "./client-access-vault-bridge";
 import ClientContextUploadBridge from "./client-context-upload-bridge";
+import Client360Bridge from "./client-360-bridge";
 import CreativeManualEditBridge from "./creative-manual-edit-bridge";
 import CreativeIntelligenceBridge from "./creative-intelligence-bridge";
 import LeonardoMeetingNotificationBridge from "./leonardo-meeting-notification-bridge";
@@ -117,6 +119,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <MetaAnalysisNavBridge />
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
+        <Client360Bridge />
         <ClientCommercialProfileBridge />
         <ClientAccessVaultBridge />
         <ClientContextUploadBridge />
