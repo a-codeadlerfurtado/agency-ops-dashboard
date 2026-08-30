@@ -12,6 +12,7 @@ import "./meta-consultant.css";
 import "./meta-weekly-reports.css";
 import "./client-access-vault.css";
 import "./system-update-center.css";
+import "./security-center.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -73,6 +74,7 @@ import GabrielTasklogMode from "./gabriel-tasklog-mode";
 import GabrielScopeNetwork from "./gabriel-scope-network";
 import PreclientsKanbanBridge from "./preclients-kanban-bridge";
 import SystemUpdateCenter from "./system-update-center";
+import SecurityCenter from "./security-center";
 
 export const viewport: Viewport = {
   width: "device-width",
@@ -86,10 +88,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          rel="stylesheet"
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap"
-        />
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" />
       </head>
       <body>
         <GabrielScopeNetwork />
@@ -147,6 +146,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <GabrielTasklogMode />
         <DailyGreeting />
         <SystemUpdateCenter />
+        <SecurityCenter />
         <OpsQuestionWidget />
         <OpsQuestionBrand />
         <LearningShortcut />
