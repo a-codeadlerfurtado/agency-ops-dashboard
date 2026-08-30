@@ -26,12 +26,8 @@ function localParts(date = new Date()) {
   }).formatToParts(date);
   const get = (type: string) => parts.find((p) => p.type === type)?.value || "";
   return {
-    year: Number(get("year")),
-    month: Number(get("month")),
-    day: Number(get("day")),
-    hour: Number(get("hour")),
-    minute: Number(get("minute")),
-    weekday: get("weekday"),
+    year: Number(get("year")), month: Number(get("month")), day: Number(get("day")),
+    hour: Number(get("hour")), minute: Number(get("minute")), weekday: get("weekday"),
   };
 }
 
@@ -45,30 +41,21 @@ function previousBusinessDate(current: { year: number; month: number; day: numbe
   return `${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, "0")}-${String(cursor.getUTCDate()).padStart(2, "0")}`;
 }
 
-function cutoffIso(day: string) {
-  return new Date(`${day}T08:30:00-03:00`).toISOString();
-}
-
+function cutoffIso(day: string) { return new Date(`${day}T08:30:00-03:00`).toISOString(); }
 function currentEdition(now = new Date()) {
   const p = localParts(now);
-  const weekday = p.weekday;
-  const isWeekend = weekday === "Sat" || weekday === "Sun";
+  const isWeekend = p.weekday === "Sat" || p.weekday === "Sun";
   const afterCutoff = p.hour > 8 || (p.hour === 8 && p.minute >= 30);
   const editionDate = dateKey(p);
-  return {
-    editionDate,
-    isWeekend,
-    afterCutoff,
-    start: cutoffIso(previousBusinessDate(p)),
-    end: cutoffIso(editionDate),
-  };
+  return { editionDate, isWeekend, afterCutoff, start: cutoffIso(previousBusinessDate(p)), end: cutoffIso(editionDate) };
 }
-
 function visibleForRole(row: any, role: string) {
   if (role === "MGMT") return true;
   const roles = Array.isArray(row?.target_roles) ? row.target_roles : [];
   return roles.includes("ALL") || roles.includes(role);
 }
+
+const UPDATE_FIELDS = "sha,committed_at,title,added,fixed,removed,explanation,target_roles,subject,summary_source,release_status,reverts_sha,reverted_by_sha";
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -78,9 +65,9 @@ Deno.serve(async (req: Request) => {
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
   const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!supabaseUrl || !anonKey || !serviceRole) return reply({ ok: false, error: "server_configuration" }, 500);
-
   const authHeader = req.headers.get("Authorization") || "";
   if (!authHeader.startsWith("Bearer ")) return reply({ ok: false, error: "unauthorized" }, 401);
+
   const auth = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: authHeader } },
     auth: { persistSession: false, autoRefreshToken: false },
@@ -103,6 +90,17 @@ Deno.serve(async (req: Request) => {
   const action = String(body?.action || "CHECK").toUpperCase();
   const edition = currentEdition();
 
+  if (action === "HISTORY") {
+    const limit = Math.max(10, Math.min(200, Number(body?.limit || 120)));
+    const { data: rows, error } = await ops.from("system_update_commits")
+      .select(UPDATE_FIELDS)
+      .order("committed_at", { ascending: false })
+      .limit(limit);
+    if (error) return reply({ ok: false, error: "history_query_failed", detail: error.message }, 500);
+    const updates = (rows || []).filter((row: any) => visibleForRole(row, role));
+    return reply({ ok: true, allowed: true, mode: "HISTORY", person, role, updates });
+  }
+
   if (action === "ACK_PREVIEW") {
     await ops.from("system_update_preview_queue").update({ dismissed_at: new Date().toISOString() }).eq("user_key", user.id);
     return reply({ ok: true });
@@ -114,12 +112,7 @@ Deno.serve(async (req: Request) => {
     const shas = Array.isArray(body?.commit_shas)
       ? body.commit_shas.map(String).filter((sha: string) => /^[0-9a-f]{40}$/i.test(sha)).slice(0, 100)
       : [];
-    const payload: any = {
-      user_key: user.id,
-      edition_date: requestedDate,
-      commit_shas: shas,
-      shown_at: new Date().toISOString(),
-    };
+    const payload: any = { user_key: user.id, edition_date: requestedDate, commit_shas: shas, shown_at: new Date().toISOString() };
     if (action === "DISMISS_DAILY") payload.dismissed_at = new Date().toISOString();
     const { error } = await ops.from("system_update_receipts").upsert(payload, { onConflict: "user_key,edition_date" });
     if (error) return reply({ ok: false, error: "receipt_write_failed" }, 500);
@@ -129,28 +122,13 @@ Deno.serve(async (req: Request) => {
   if (action !== "CHECK") return reply({ ok: false, error: "unknown_action" }, 400);
 
   const { data: preview } = await ops.from("system_update_preview_queue")
-    .select("enabled,commit_limit,dismissed_at")
-    .eq("user_key", user.id)
-    .maybeSingle();
+    .select("enabled,commit_limit,dismissed_at").eq("user_key", user.id).maybeSingle();
   if (preview?.enabled && !preview?.dismissed_at && person === "Adler Furtado") {
     const limit = Math.max(1, Math.min(12, Number(preview.commit_limit || 6)));
     const { data: commits, error } = await ops.from("system_update_commits")
-      .select("sha,committed_at,title,added,fixed,removed,explanation,target_roles,subject,summary_source")
-      .order("committed_at", { ascending: false })
-      .limit(limit);
+      .select(UPDATE_FIELDS).order("committed_at", { ascending: false }).limit(limit);
     if (error) return reply({ ok: false, error: "preview_query_failed" }, 500);
-    if ((commits || []).length) {
-      return reply({
-        ok: true,
-        allowed: true,
-        mode: "PREVIEW_STACK",
-        preview: true,
-        person,
-        role,
-        edition_date: edition.editionDate,
-        updates: commits,
-      });
-    }
+    if ((commits || []).length) return reply({ ok: true, allowed: true, mode: "PREVIEW_STACK", preview: true, person, role, edition_date: edition.editionDate, updates: commits });
   }
 
   if (edition.isWeekend || !edition.afterCutoff) {
@@ -158,32 +136,16 @@ Deno.serve(async (req: Request) => {
   }
 
   const { data: receipt } = await ops.from("system_update_receipts")
-    .select("shown_at,dismissed_at")
-    .eq("user_key", user.id)
-    .eq("edition_date", edition.editionDate)
-    .maybeSingle();
+    .select("shown_at,dismissed_at").eq("user_key", user.id).eq("edition_date", edition.editionDate).maybeSingle();
   if (receipt?.shown_at) return reply({ ok: true, allowed: true, mode: "NONE", reason: "already_shown", person, role });
 
   const { data: rows, error } = await ops.from("system_update_commits")
-    .select("sha,committed_at,title,added,fixed,removed,explanation,target_roles,subject,summary_source")
-    .gt("committed_at", edition.start)
-    .lte("committed_at", edition.end)
-    .order("committed_at", { ascending: true })
-    .limit(100);
+    .select(UPDATE_FIELDS)
+    .gt("committed_at", edition.start).lte("committed_at", edition.end)
+    .order("committed_at", { ascending: true }).limit(100);
   if (error) return reply({ ok: false, error: "updates_query_failed" }, 500);
-
   const updates = (rows || []).filter((row: any) => visibleForRole(row, role));
   if (!updates.length) return reply({ ok: true, allowed: true, mode: "NONE", reason: "no_relevant_updates", person, role, edition_date: edition.editionDate });
 
-  return reply({
-    ok: true,
-    allowed: true,
-    mode: "DAILY",
-    person,
-    role,
-    edition_date: edition.editionDate,
-    window_start: edition.start,
-    window_end: edition.end,
-    updates,
-  });
+  return reply({ ok: true, allowed: true, mode: "DAILY", person, role, edition_date: edition.editionDate, window_start: edition.start, window_end: edition.end, updates });
 });
