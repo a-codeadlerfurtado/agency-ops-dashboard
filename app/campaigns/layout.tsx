@@ -1,5 +1,5 @@
 import CampaignsSubnav from "./campaigns-subnav";
-import CampaignSafeActionsBridge from "./campaign-safe-actions-bridge";
+import CampaignInlineActionsBridge from "./campaign-inline-actions-bridge";
 
 export default function CampaignsLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -11,7 +11,7 @@ export default function CampaignsLayout({ children }: { children: React.ReactNod
         .tc-area-subnav a.active{color:#fff;background:linear-gradient(135deg,rgba(242,107,33,.2),rgba(80,190,255,.12));border-color:#b85b28;box-shadow:inset 3px 0 0 #f26b21}
       `}</style>
       <CampaignsSubnav />
-      <CampaignSafeActionsBridge />
+      <CampaignInlineActionsBridge />
       {children}
     </>
   );
