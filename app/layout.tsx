@@ -60,6 +60,7 @@ import WorkCenterScopeNetwork from "./work-center-scope-network";
 import AutomationNavBridge from "./automation-nav-bridge";
 import DonnahNavBridge from "./donnah-nav-bridge";
 import SidebarInformationArchitecture from "./sidebar-information-architecture";
+import NavBrandIcons from "./nav-brand-icons";
 import LearningShortcut from "./learning-shortcut";
 import HomeShortcut from "./home-shortcut";
 import LogoutShortcut from "./logout-shortcut";
@@ -145,6 +146,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <AutomationNavBridge />
         <DonnahNavBridge />
         <SidebarInformationArchitecture />
+        <NavBrandIcons />
         <TeamAccessAdmin />
         <GabrielTasklogMode />
         <DailyGreeting />
