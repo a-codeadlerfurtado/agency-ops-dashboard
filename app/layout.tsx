@@ -10,6 +10,7 @@ import "./meta-radar/radar-color-system.css";
 import "./meta-radar/radar-v2.css";
 import "./meta-consultant.css";
 import "./ads-intelligence.css";
+import "./ads-intelligence-structure.css";
 import "./meta-weekly-reports.css";
 import "./client-access-vault.css";
 import "./system-update-center.css";
@@ -34,6 +35,7 @@ import MetaAnalysisNavBridge from "./meta-analysis-nav-bridge";
 import MetaRadarNavBridge from "./meta-radar-nav-bridge";
 import MetaConsultantInlineBridge from "./meta-consultant-inline-bridge";
 import AdsIntelligenceInlineBridge from "./ads-intelligence-inline-bridge";
+import AdsIntelligenceStructureBridge from "./ads-intelligence-structure-bridge";
 import MetaWeeklyReportsInlineBridge from "./meta-weekly-reports-inline-bridge";
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
@@ -120,6 +122,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <MetaRadarNavBridge />
         <MetaConsultantInlineBridge />
         <AdsIntelligenceInlineBridge />
+        <AdsIntelligenceStructureBridge />
         <MetaWeeklyReportsInlineBridge />
         <MetaAnalysisNavBridge />
         <IntegrationHealthBar />
