@@ -12,13 +12,23 @@ const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body)
   headers: { ...CORS, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
 });
 
+function isMetaConsultantRequest(rawBody: string) {
+  try {
+    const body = JSON.parse(rawBody);
+    const question = typeof body?.question === "string" ? body.question : "";
+    return question.includes("DADOS ATUAIS DO DASHBOARD:") ||
+      (question.includes("DADOS ATUAIS:") && question.includes("PERGUNTA DO GT:"));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Compatibilidade da rota original do OpsQuestion.
  *
- * O frontend legado ainda chama agency-ops-ai-ask. A autorização e o escopo por
- * perfil agora vivem em agency-ops-ai-ask-team, portanto esta rota apenas encaminha
- * a requisição autenticada. Assim versões antigas do bundle deixam de aplicar o
- * antigo bloqueio Beta exclusivo do Adler sem abrir acesso anônimo.
+ * Perguntas humanas continuam em agency-ops-ai-ask-team, com os limites normais
+ * do OpsQuestion. Prompts estruturados gerados pelo Consultor de Performance são
+ * encaminhados para uma rota dedicada, com autenticação e escopo GT/MGMT próprios.
  */
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
@@ -32,7 +42,10 @@ Deno.serve(async (req: Request) => {
   if (!authHeader.startsWith("Bearer ")) return reply({ ok: false, error: "unauthorized" }, 401);
 
   const rawBody = await req.text();
-  const target = `${supabaseUrl}/functions/v1/agency-ops-ai-ask-team`;
+  const functionName = isMetaConsultantRequest(rawBody)
+    ? "agency-ops-meta-consultant-ai"
+    : "agency-ops-ai-ask-team";
+  const target = `${supabaseUrl}/functions/v1/${functionName}`;
 
   try {
     const response = await fetch(target, {
@@ -56,7 +69,9 @@ Deno.serve(async (req: Request) => {
   } catch (error) {
     return reply({
       ok: false,
-      error: "Falha temporária no OpsQuestion.",
+      error: functionName === "agency-ops-meta-consultant-ai"
+        ? "Não foi possível gerar a leitura agora. Tente novamente em alguns segundos."
+        : "Falha temporária no OpsQuestion.",
       detail: String(error instanceof Error ? error.message : error).slice(0, 300),
     }, 502);
   }
