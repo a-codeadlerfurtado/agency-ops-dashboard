@@ -1,16 +1,20 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, formatMoney, formatNumber, initials, supabase } from "./shared";
 
 type Row = Record<string, any>;
 type Tab = "decision" | "campaigns" | "benchmark" | "ai";
+type CacheEntry = { at: number; body: Row };
 
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-api`;
 const AI_API = `${SUPABASE_URL}/functions/v1/agency-ops-meta-consultant-ai`;
 const CAMPAIGN_ACTION_API = `${SUPABASE_URL}/functions/v1/agency-ops-campaign-inline-action-v2`;
+const DETAIL_CACHE_MS = 60_000;
+const LIST_CACHE_MS = 45_000;
+const AI_TIMEOUT_MS = 25_000;
 
 const finite = (value: unknown) => {
   if (value === null || value === undefined || value === "") return null;
@@ -21,6 +25,12 @@ const money = (value: unknown) => finite(value) === null ? "—" : formatMoney(v
 const number = (value: unknown, digits = 0) => finite(value) === null ? "—" : formatNumber(value, digits);
 const percent = (value: unknown, digits = 1) => finite(value) === null ? "—" : `${number(value, digits)}%`;
 
+function remainingDaysLabel(value: unknown) {
+  const days = finite(value);
+  if (days === null) return "dias restantes indisponíveis";
+  const rounded = Math.max(0, Math.round(days));
+  return rounded === 1 ? "1 dia restante" : `${rounded} dias restantes`;
+}
 function paceLabel(status: string) {
   if (status === "OVER_PACE") return "Acima do ritmo";
   if (status === "UNDER_PACE") return "Abaixo do ritmo";
@@ -141,6 +151,8 @@ export default function AdsIntelligenceInlineBridge() {
   const [aiLoading, setAiLoading] = useState(false);
   const [actionId, setActionId] = useState("");
   const [toast, setToast] = useState("");
+  const detailCacheRef = useRef<Map<string, CacheEntry>>(new Map());
+  const listLoadedAtRef = useRef(0);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -156,34 +168,42 @@ export default function AdsIntelligenceInlineBridge() {
     if (!headers) { setAllowed(false); return; }
     let alive = true;
     fetch(`${API}?probe=1`, { headers, cache: "no-store" })
-      .then(async (response) => {
-        if (!alive) return;
-        setAllowed(response.ok);
-      })
+      .then((response) => { if (alive) setAllowed(response.ok); })
       .catch(() => { if (alive) setAllowed(false); });
     return () => { alive = false; };
   }, [headers]);
 
-  const loadList = useCallback(async () => {
+  const loadList = useCallback(async (force = false) => {
     if (!headers) return;
+    if (!force && payload.clients?.length && Date.now() - listLoadedAtRef.current < LIST_CACHE_MS) return;
     setLoading(true); setError("");
     try {
       const response = await fetch(API, { headers, cache: "no-store" });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.detail || body.error || `API ${response.status}`);
       setPayload(body);
+      listLoadedAtRef.current = Date.now();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao carregar Ads Intelligence.");
     } finally { setLoading(false); }
-  }, [headers]);
+  }, [headers, payload.clients?.length]);
 
-  const openClient = useCallback(async (id: string) => {
+  const openClient = useCallback(async (id: string, force = false) => {
     if (!headers || !id) return;
-    setSelectedId(id); setDetailLoading(true); setDetail(null); setError(""); setTab("decision");
+    setSelectedId(id); setError(""); setTab("decision"); setToast("");
+    const cached = detailCacheRef.current.get(id);
+    if (!force && cached && Date.now() - cached.at < DETAIL_CACHE_MS) {
+      setDetail(cached.body);
+      setDetailLoading(false);
+      return;
+    }
+    setDetailLoading(true);
+    setDetail((current) => String(current?.client?.id || "") === id ? current : null);
     try {
       const response = await fetch(`${API}?client_id=${encodeURIComponent(id)}`, { headers, cache: "no-store" });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.detail || body.error || `API ${response.status}`);
+      detailCacheRef.current.set(id, { at: Date.now(), body });
       setDetail(body);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao abrir cliente.");
@@ -195,12 +215,15 @@ export default function AdsIntelligenceInlineBridge() {
     const key = String(detail.client.id);
     if (!force && aiCache[key]) return;
     setAiLoading(true); setError("");
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
     try {
       const response = await fetch(AI_API, {
         method: "POST",
         headers: { ...headers, "content-type": "application/json" },
         body: JSON.stringify({ question: buildAiPrompt(detail) }),
         cache: "no-store",
+        signal: controller.signal,
       });
       const body = await response.json().catch(() => ({}));
       if (!response.ok || body?.ok === false) throw new Error(body?.error || body?.detail || `IA ${response.status}`);
@@ -208,8 +231,12 @@ export default function AdsIntelligenceInlineBridge() {
       if (!answer) throw new Error("A IA não devolveu uma leitura utilizável.");
       setAiCache((current) => ({ ...current, [key]: answer }));
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Falha ao gerar leitura da IA.");
-    } finally { setAiLoading(false); }
+      if (caught instanceof DOMException && caught.name === "AbortError") setError("O AI Copilot passou de 25s. O Decision Engine continua disponível imediatamente; tente o diagnóstico novamente depois.");
+      else setError(caught instanceof Error ? caught.message : "Falha ao gerar leitura da IA.");
+    } finally {
+      window.clearTimeout(timeout);
+      setAiLoading(false);
+    }
   }, [headers, detail, aiCache]);
 
   const toggleCampaign = useCallback(async (campaign: Row) => {
@@ -235,14 +262,17 @@ export default function AdsIntelligenceInlineBridge() {
       const body = await response.json().catch(() => ({}));
       if (!response.ok || body?.ok === false) throw new Error(body.detail || body.error || `Meta ${response.status}`);
       setToast(`${campaign.campaign_name}: ${desired === "ACTIVE" ? "ativada" : "pausada"} e verificada na Meta.`);
-      await openClient(String(detail.client.id));
-      await loadList();
+      const clientId = String(detail.client.id);
+      detailCacheRef.current.delete(clientId);
+      listLoadedAtRef.current = 0;
+      await openClient(clientId, true);
+      await loadList(true);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Falha ao alterar campanha.");
     } finally { setActionId(""); }
   }, [headers, detail, openClient, loadList]);
 
-  useEffect(() => { if (active && headers) void loadList(); }, [active, headers, loadList]);
+  useEffect(() => { if (active && headers) void loadList(false); }, [active, headers, loadList]);
 
   useEffect(() => {
     if (!allowed || window.location.pathname !== "/") { setActive(false); return; }
@@ -282,7 +312,7 @@ export default function AdsIntelligenceInlineBridge() {
       };
     };
     install();
-    const timer = window.setInterval(install, 1500);
+    const timer = window.setInterval(install, 2500);
     return () => {
       window.clearInterval(timer);
       cleanup?.();
@@ -316,7 +346,7 @@ export default function AdsIntelligenceInlineBridge() {
         </div>
         <div className="aii-head-actions">
           <span className="aii-policy-pill">Budget guardrail ativo</span>
-          <button className="button secondary" onClick={() => void loadList()} disabled={loading}>Atualizar</button>
+          <button className="button secondary" onClick={() => void loadList(true)} disabled={loading}>Atualizar</button>
         </div>
       </header>
 
@@ -338,8 +368,8 @@ export default function AdsIntelligenceInlineBridge() {
             <label className="aii-check"><input type="checkbox" checked={attentionOnly} onChange={(e) => setAttentionOnly(e.target.checked)} /> Só atenção</label>
           </div>
           <div className="aii-client-scroll">
-            {loading && <div className="aii-list-state">Atualizando carteira…</div>}
-            {!loading && visible.map((row: Row) => <button key={row.client_id} className={`aii-client-row ${selectedId === row.client_id ? "active" : ""}`} onClick={() => void openClient(String(row.client_id))}>
+            {loading && !payload.clients?.length && <div className="aii-list-state">Atualizando carteira…</div>}
+            {visible.map((row: Row) => <button key={row.client_id} className={`aii-client-row ${selectedId === row.client_id ? "active" : ""}`} onClick={() => void openClient(String(row.client_id), false)}>
               <span className="avatar">{initials(row.client_name)}</span>
               <span className="copy"><b>{row.client_name}</b><small>GT {row.gt_owner || "—"}</small><em>{row.monthly_budget ? `Budget ${money(row.monthly_budget)}` : "Budget não validado"}</em></span>
               <span className={`dot ${row.attention ? "warn" : "good"}`} />
@@ -349,17 +379,17 @@ export default function AdsIntelligenceInlineBridge() {
 
         <main className="aii-detail">
           {!selectedId && <div className="card aii-empty"><div><span className="aii-orb">AI</span><h3>Escolha um cliente</h3><p>O Ads Intelligence cruza budget, pacing, Meta, benchmarks e estrutura antes de sugerir qualquer ação.</p></div></div>}
-          {detailLoading && <div className="card aii-empty"><div><span className="aii-spinner"/><h3>Lendo conta e budget</h3><p>Consultando gasto MTD e contexto operacional.</p></div></div>}
-          {detail && !detailLoading && <>
-            <section className="card aii-client-hero">
+          {detailLoading && !detail && <div className="card aii-empty"><div><span className="aii-spinner"/><h3>Lendo conta e budget</h3><p>Consultando gasto MTD e contexto operacional.</p></div></div>}
+          {detail && <>
+            <section className={`card aii-client-hero ${detailLoading ? "is-refreshing" : ""}`}>
               <div className="aii-client-title"><span className="avatar">{initials(detail.client?.display_name)}</span><div><span className="eyebrow">Conta selecionada</span><h2>{detail.client?.display_name}</h2><p>GT {detail.client?.gt_owner || "—"} · CS {detail.client?.cs_owner || "—"}</p></div></div>
-              <div className={`aii-pace-state ${paceTone(pacing.status)}`}><small>Pacing mensal</small><b>{paceLabel(pacing.status)}</b><span>{pacing.source === "META_LIVE" ? "Meta ao vivo" : pacing.source === "META_LIVE_PARTIAL" ? "Meta parcial" : "leitura protegida"}</span></div>
+              <div className={`aii-pace-state ${paceTone(pacing.status)}`}><small>Pacing mensal</small><b>{paceLabel(pacing.status)}</b><span>{detailLoading ? "atualizando…" : pacing.source === "META_LIVE" ? "Meta ao vivo" : pacing.source === "META_LIVE_PARTIAL" ? "Meta parcial" : "leitura protegida"}</span></div>
             </section>
 
             <section className="aii-budget-grid">
               <div className="card aii-budget-card"><small>Budget mensal</small><b>{money(budget.monthly_budget)}</b><span>teto operacional</span></div>
               <div className="card aii-budget-card"><small>Gasto MTD</small><b>{money(pacing.mtd_spend)}</b><span>acumulado do mês</span></div>
-              <div className="card aii-budget-card"><small>Restante</small><b>{money(pacing.remaining_budget)}</b><span>{number(pacing.remaining_days)} dias restantes</span></div>
+              <div className="card aii-budget-card"><small>Restante</small><b>{money(pacing.remaining_budget)}</b><span>{remainingDaysLabel(pacing.remaining_days)}</span></div>
               <div className="card aii-budget-card"><small>Ritmo ideal daqui</small><b>{pacing.ideal_daily_remaining === null || pacing.ideal_daily_remaining === undefined ? "—" : `${money(pacing.ideal_daily_remaining)}/dia`}</b><span>para respeitar o teto</span></div>
               <div className={`card aii-budget-card ${paceTone(pacing.status)}`}><small>Projeção do mês</small><b>{money(pacing.projected_month_spend)}</b><span>{finite(pacing.variance) === null ? "sem projeção segura" : Number(pacing.variance) > 0 ? `${money(pacing.variance)} acima` : `${money(Math.abs(Number(pacing.variance)))} abaixo`}</span></div>
             </section>
@@ -368,7 +398,7 @@ export default function AdsIntelligenceInlineBridge() {
               <button className={tab === "decision" ? "active" : ""} onClick={() => setTab("decision")}>Decision Engine</button>
               <button className={tab === "campaigns" ? "active" : ""} onClick={() => setTab("campaigns")}>Campanhas</button>
               <button className={tab === "benchmark" ? "active" : ""} onClick={() => setTab("benchmark")}>Benchmark</button>
-              <button className={tab === "ai" ? "active" : ""} onClick={() => { setTab("ai"); void runAi(false); }}>AI Copilot</button>
+              <button className={tab === "ai" ? "active" : ""} onClick={() => setTab("ai")}>AI Copilot</button>
             </nav>
 
             {tab === "decision" && <div className="aii-tab-content">
@@ -424,9 +454,9 @@ export default function AdsIntelligenceInlineBridge() {
 
             {tab === "ai" && <div className="aii-tab-content">
               <section className="card aii-ai-card">
-                <div className="aii-section-title"><div><span className="eyebrow">AI Copilot</span><h3>Leitura consultiva da conta</h3></div><button className="button secondary" disabled={aiLoading} onClick={() => void runAi(true)}>{aiLoading ? "Analisando…" : "Reanalisar"}</button></div>
-                {aiLoading && !aiText && <div className="aii-ai-loading"><span className="aii-spinner"/><div><b>Cruzando contexto</b><small>Budget, pacing, benchmark, campanhas e criativos.</small></div></div>}
-                {aiText ? <AiAnswer text={aiText} /> : !aiLoading ? <div className="aii-ai-placeholder"><p>A IA só sugere escala depois de validar o teto financeiro e o pacing. Caso contrário, busca outra solução.</p><button className="button" onClick={() => void runAi(false)}>Gerar diagnóstico</button></div> : null}
+                <div className="aii-section-title"><div><span className="eyebrow">AI Copilot</span><h3>Leitura consultiva da conta</h3></div>{aiText && <button className="button secondary" disabled={aiLoading} onClick={() => void runAi(true)}>{aiLoading ? "Analisando…" : "Reanalisar"}</button>}</div>
+                {aiLoading && !aiText && <div className="aii-ai-loading"><span className="aii-spinner"/><div><b>Cruzando contexto</b><small>Budget, pacing, benchmark, campanhas e criativos. Limite de espera: 25s.</small></div></div>}
+                {aiText ? <AiAnswer text={aiText} /> : !aiLoading ? <div className="aii-ai-placeholder"><p>O Decision Engine acima é imediato. O Copilot é uma camada adicional e só roda quando você pedir, para não travar a navegação.</p><button className="button" onClick={() => void runAi(false)}>Gerar diagnóstico</button></div> : null}
               </section>
             </div>}
           </>}
