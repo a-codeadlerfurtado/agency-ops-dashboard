@@ -113,6 +113,7 @@ function placementFor(node: HTMLElement): Placement {
   const label = norm(node.getAttribute("title") || node.textContent);
   const href = node instanceof HTMLAnchorElement ? norm(node.getAttribute("href")) : "";
 
+  if (node.hasAttribute("data-ads-intelligence-nav")) return { group: "performance", order: 4 };
   if (node.hasAttribute("data-meta-consultant-nav")) return { group: "performance", order: 5 };
   if (node.hasAttribute("data-meta-analysis-nav") || href === "/meta-analysis") return { group: "performance", order: 30 };
   if (node.hasAttribute("data-meta-performance-nav") || href === "/meta-performance" || label === "performance meta") return { group: "performance", order: 80, contextual: true };
