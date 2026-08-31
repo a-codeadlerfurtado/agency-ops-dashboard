@@ -54,6 +54,7 @@ const RULES: Array<[string, string]> = [
   ['[title="Alertas"], [title^="Alertas operacionais"]', "bell"],
   ['[title^="Desempenho OP"], [title^="Desempenho da operação"], [title^="Desempenho da operacao"]', "chart"],
   ['[title^="Central Criativa"], [title="Inteligência Criativa"], [title="Inteligencia Criativa"]', "palette"],
+  ['[title^="Produção de Roteiros"], [title^="Producao de Roteiros"]', "file"],
   ['[title^="Funil Comercial"]', "funnel"],
   ['[title="Financeiro"], [title^="Mensalidades"]', "wallet"],
   ['[title^="Automações"], [title^="Automacoes"]', "gear"],

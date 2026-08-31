@@ -60,8 +60,6 @@ import ClientContextUploadBridge from "./client-context-upload-bridge";
 import Client360Bridge from "./client-360-bridge";
 import CreativeManualEditBridge from "./creative-manual-edit-bridge";
 import CreativeIntelligenceBridge from "./creative-intelligence-bridge";
-import VideoScriptsBridge from "./video-scripts-bridge";
-import VideoScriptsNavPersistence from "./video-scripts-nav-persistence";
 import LeonardoMeetingNotificationBridge from "./leonardo-meeting-notification-bridge";
 import LeonardoActionWarning from "./leonardo-action-warning";
 import NotificationsHomeLink from "./notifications-home-link";
@@ -143,8 +141,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <ClientContextUploadBridge />
         <CreativeManualEditBridge />
         <CreativeIntelligenceBridge />
-        <VideoScriptsBridge />
-        <VideoScriptsNavPersistence />
         <CockpitCollapseBridge />
         <WeekendBalanceAlert />
         <LeadQualityAlert />

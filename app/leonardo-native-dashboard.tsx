@@ -13,9 +13,10 @@ import {
 } from "./shared";
 
 const CreativeCenter = lazy(() => import("./views/creative").then((m) => ({ default: m.CreativeCenter })));
+const VideoScriptsCenter = lazy(() => import("./views/video-scripts").then((m) => ({ default: m.VideoScriptsCenter })));
 
 type Row = Record<string, any>;
-type Tab = "home" | "funnel" | "clients" | "campaigns" | "meetings" | "direction" | "creative" | "clickup";
+type Tab = "home" | "funnel" | "clients" | "campaigns" | "meetings" | "direction" | "creative" | "scripts" | "clickup";
 type NavItem = { key: string; label: string; tab?: Tab; href?: string };
 
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-commercial-direction-api`;
@@ -30,6 +31,7 @@ const NAV: NavItem[] = [
   { key: "finance", label: "Financeiro", href: "/finance" },
   { key: "onboarding", label: "Onboarding", href: "/leonardo-onboarding" },
   { key: "creative", label: "Central Criativa", tab: "creative" },
+  { key: "scripts", label: "Produção de Roteiros", tab: "scripts" },
   { key: "work", label: "Central de Trabalho", href: "/leonardo-work" },
   { key: "clickup", label: "ClickUp", tab: "clickup" },
   { key: "diary", label: "Diário", href: "/leonardo-diary" },
@@ -164,6 +166,7 @@ function ClickUpExecutiveView({ data }: { data: Row }) {
 
 function CommercialContent({ tab, data, clickup, token }: { tab: Tab; data: Row; clickup: Row; token: string }) {
   if (tab === "creative") return <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando Central Criativa…</div>}><CreativeCenter token={token} /></Suspense>;
+  if (tab === "scripts") return <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando Produção de Roteiros…</div>}><VideoScriptsCenter token={token} /></Suspense>;
   if (tab === "clickup") return <ClickUpExecutiveView data={clickup} />;
   if (tab === "funnel") return <FunnelView data={data} />;
   if (tab === "clients") return <ClientsView data={data} />;
@@ -195,7 +198,7 @@ export default function LeonardoNativeDashboard({ session }: { session: Session 
   useEffect(() => { document.documentElement.style.setProperty("--sidenav-width", sidebarOpen ? "224px" : "58px"); }, [sidebarOpen]);
 
   const load = useCallback(async () => {
-    if (tab === "creative") { setLoading(false); return; }
+    if (tab === "creative" || tab === "scripts") { setLoading(false); return; }
     setLoading(true); setError("");
     try {
       const endpoint = tab === "clickup" ? CLICKUP_API : API;
@@ -207,7 +210,7 @@ export default function LeonardoNativeDashboard({ session }: { session: Session 
     finally { setLoading(false); }
   }, [session.access_token, tab]);
 
-  useEffect(() => { void load(); if (tab === "creative") return; const timer = window.setInterval(() => void load(), 60_000); return () => window.clearInterval(timer); }, [load, tab]);
+  useEffect(() => { void load(); if (tab === "creative" || tab === "scripts") return; const timer = window.setInterval(() => void load(), 60_000); return () => window.clearInterval(timer); }, [load, tab]);
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setCommandOpen(true); }
@@ -234,7 +237,7 @@ export default function LeonardoNativeDashboard({ session }: { session: Session 
       <div className="source-banner"><span>Visão executiva comercial.</span> Comercial, financeiro, onboarding e indicadores consolidados permanecem acessíveis; a operação geral continua fora deste perfil.</div>
       <aside className={`side-nav${sidebarOpen ? " open" : ""}`} aria-label="Visões do dashboard"><button className="side-nav-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? "Recolher menu" : "Expandir menu"} title={sidebarOpen ? "Recolher menu" : "Expandir menu"}>{sidebarOpen ? "⟨" : "⟩"}</button><div className="side-nav-items">{NAV.map((item) => <button key={item.key} className={item.tab === tab && !item.href ? "active" : ""} onClick={() => openItem(item)} title={item.label}>{item.label}</button>)}</div></aside>
       {error && <div className="error-box">{error}</div>}
-      {loading && !hasCurrentData && tab !== "creative" ? <div className="auth-loading"><span className="dot loading"/> Carregando…</div> : <CommercialContent tab={tab} data={data} clickup={clickup} token={session.access_token} />}
+      {loading && !hasCurrentData && !(["creative", "scripts"] as Tab[]).includes(tab) ? <div className="auth-loading"><span className="dot loading"/> Carregando…</div> : <CommercialContent tab={tab} data={data} clickup={clickup} token={session.access_token} />}
     </main>
 
     {commandOpen && <div className="leo-native-modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setCommandOpen(false); }}><section className="card leo-native-command" role="dialog" aria-modal="true"><div className="workspace-head"><div><span className="eyebrow">Navegação rápida</span><h2>Pesquisar no perfil</h2></div><button className="theme-btn" onClick={() => setCommandOpen(false)}>×</button></div><div className="leo-native-command-grid">{NAV.map((item) => <button key={item.key} onClick={() => { openItem(item); setCommandOpen(false); }}>{item.label}</button>)}</div></section></div>}
