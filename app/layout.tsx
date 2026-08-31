@@ -41,6 +41,7 @@ import AdsIntelligenceStructureBridge from "./ads-intelligence-structure-bridge"
 import AdsIntelligenceAdPreviewBridge from "./ads-intelligence-ad-preview-bridge";
 import AdsIntelligenceOpsBridge from "./ads-intelligence-ops-bridge";
 import MetaWeeklyReportsInlineBridge from "./meta-weekly-reports-inline-bridge";
+import WeeklyReportDeliveryCheckboxBridge from "./weekly-report-delivery-checkbox-bridge";
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
@@ -132,6 +133,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <AdsIntelligenceAdPreviewBridge />
         <AdsIntelligenceOpsBridge />
         <MetaWeeklyReportsInlineBridge />
+        <WeeklyReportDeliveryCheckboxBridge />
         <MetaAnalysisNavBridge />
         <IntegrationHealthBar />
         <DashboardEnhancementsGate />
