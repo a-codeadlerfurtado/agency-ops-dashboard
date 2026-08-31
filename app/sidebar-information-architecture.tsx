@@ -123,6 +123,7 @@ function placementFor(node: HTMLElement): Placement {
   if (node.hasAttribute("data-automation-health-nav") || href === "/automations" || label.startsWith("automacoes")) return { group: "sistemas", order: 10 };
   if (node.hasAttribute("data-donnah-nav") || href.includes("/integrations/donnah") || label === "donnah") return { group: "sistemas", order: 20 };
   if (href === "/ia" || label === "ia" || label.startsWith("ia (beta")) return { group: "sistemas", order: 30 };
+  if (node.hasAttribute("data-video-scripts-nav") || label.startsWith("producao de roteiros")) return { group: "criativo", order: 15 };
   if (href === "/meta-radar" || label.startsWith("inteligencia criativa")) return { group: "criativo", order: 20 };
 
   if (label === "visao geral") return { group: "inicio", order: 10 };
