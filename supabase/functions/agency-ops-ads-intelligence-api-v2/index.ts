@@ -10,10 +10,14 @@ const finite=(v:unknown)=>{if(v===null||v===undefined||v==="")return null;const 
 const cleanAccount=(v:unknown)=>String(v||"").trim().replace(/^act_/,"");
 const localDate=()=>new Intl.DateTimeFormat("en-CA",{timeZone:"America/Sao_Paulo",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
 
-async function resolveMetaToken(db:any){
+async function resolveMetaTokens(db:any){
+  const env=String(Deno.env.get("META_SYSTEM_USER_TOKEN")||"").trim();
   const {data,error}=await db.schema("agency_ops").rpc("get_meta_system_user_token");
   const vault=!error&&typeof data==="string"?data.trim():"";
-  return vault||String(Deno.env.get("META_SYSTEM_USER_TOKEN")||"").trim();
+  const out:{token:string;source:string}[]=[];
+  if(env) out.push({token:env,source:"ENV_OPERATIONAL"});
+  if(vault&&vault!==env) out.push({token:vault,source:"VAULT_FALLBACK"});
+  return out;
 }
 
 async function canonicalAccounts(ops:any,clientId:string){
@@ -58,19 +62,30 @@ async function fetchSpend(token:string,accountId:string,since:string,until:strin
 }
 
 async function liveMtdSpend(db:any,ops:any,clientId:string,since:string,until:string){
-  const token=await resolveMetaToken(db);
+  const tokens=await resolveMetaTokens(db);
   const canonical=await canonicalAccounts(ops,clientId);
-  if(!token||!canonical.ids.length)return {spend:null,accounts:[],failures:canonical.ids.length||1,source:"UNAVAILABLE",account_source:canonical.source};
+  if(!tokens.length||!canonical.ids.length)return {spend:null,accounts:[],failures:canonical.ids.length||1,source:"UNAVAILABLE",account_source:canonical.source,credential_source:null};
   let spend=0,failures=0;
   const accounts:Row[]=[];
+  const usedSources=new Set<string>();
   for(const id of canonical.ids){
-    const result=await fetchSpend(token,id,since,until);
-    if(result.ok){spend+=Number(result.spend||0);accounts.push({account_id:id,spend:Number(result.spend||0),status:"OK"});}
-    else{failures++;accounts.push({account_id:id,status:"ERROR",error:result.error});}
+    let ok=false,lastError="";
+    for(const credential of tokens){
+      const result=await fetchSpend(credential.token,id,since,until);
+      if(result.ok){
+        spend+=Number(result.spend||0);
+        usedSources.add(credential.source);
+        accounts.push({account_id:id,spend:Number(result.spend||0),status:"OK",credential_source:credential.source});
+        ok=true;
+        break;
+      }
+      lastError=String(result.error||"");
+    }
+    if(!ok){failures++;accounts.push({account_id:id,status:"ERROR",error:lastError||"Meta spend unavailable"});}
   }
   const successes=canonical.ids.length-failures;
   const source=successes===canonical.ids.length?"META_LIVE":successes>0&&canonical.ids.length>1?"META_LIVE_PARTIAL":"UNAVAILABLE";
-  return {spend:successes>0?spend:null,accounts,failures,source,account_source:canonical.source};
+  return {spend:successes>0?spend:null,accounts,failures,source,account_source:canonical.source,credential_source:[...usedSources].join("+")||null};
 }
 
 function budgetPacing(monthlyBudget:number|null,mtdSpend:number|null,today:string){
@@ -113,9 +128,10 @@ Deno.serve(async(req:Request)=>{
     const mtd=await liveMtdSpend(db,ops,clientId,since,today);
     const monthlyBudget=finite(body?.budget?.monthly_budget);
     const pacing=budgetPacing(monthlyBudget,finite(mtd.spend),today);
-    body.pacing={...pacing,source:mtd.source,account_reads:mtd.accounts,failures:mtd.failures,account_source:mtd.account_source,as_of:today,financial_query:"SPEND_ONLY"};
+    body.pacing={...pacing,source:mtd.source,account_reads:mtd.accounts,failures:mtd.failures,account_source:mtd.account_source,credential_source:mtd.credential_source,as_of:today,financial_query:"SPEND_ONLY"};
     body.recommendations=patchBudgetRecommendations(body,body.pacing);
-    body.mtd_diagnostic={canonical_account_source:mtd.account_source,account_count:mtd.accounts.length,successful_accounts:mtd.accounts.filter((r:Row)=>r.status==="OK").length,query:"account insights / spend only",as_of:today};
+    body.mtd_diagnostic={canonical_account_source:mtd.account_source,credential_source:mtd.credential_source,account_count:mtd.accounts.length,successful_accounts:mtd.accounts.filter((r:Row)=>r.status==="OK").length,query:"account insights / spend only",as_of:today};
+    console.log("[ads-intelligence-v2-mtd]",JSON.stringify({client_id:clientId,source:mtd.source,credential_source:mtd.credential_source,failures:mtd.failures,accounts:mtd.accounts.map((r:Row)=>({account_id:r.account_id,status:r.status,error:r.error?String(r.error).slice(0,140):null}))}));
     return json(body,200);
   }catch(error){
     console.error("[ads-intelligence-v2-mtd]",error);
