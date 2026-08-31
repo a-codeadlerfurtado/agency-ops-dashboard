@@ -1,0 +1,37 @@
+name: hotfix-ads-intelligence-structure-v2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/hotfix-ads-intelligence-structure-v2.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Point structure bridge to v2 intelligence API
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('app/ads-intelligence-structure-bridge.tsx')
+          s = p.read_text()
+          old = 'const INTELLIGENCE_API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-api`;'
+          new = 'const INTELLIGENCE_API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-api-v2`;'
+          if old not in s:
+              raise SystemExit('Expected old Ads Intelligence API constant not found.')
+          p.write_text(s.replace(old, new))
+          PY
+      - name: Commit hotfix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/ads-intelligence-structure-bridge.tsx
+          git commit -m "Use Ads Intelligence v2 in structure bridge"
+          git push
