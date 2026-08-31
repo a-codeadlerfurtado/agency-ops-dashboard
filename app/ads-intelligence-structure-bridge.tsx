@@ -13,6 +13,7 @@ type Recommendation = { field: string; current: string; action: string; reason: 
 const STRUCTURE_API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-structure-api`;
 const INTELLIGENCE_API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-api`;
 const ACTION_API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-action-api`;
+const BENCHMARK_API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-benchmark-api`;
 const CACHE_MS = 90_000;
 const CONTEXT_CACHE_MS = 60_000;
 
@@ -50,7 +51,7 @@ function partialLabel(payload: Row) {
   };
   const stage = stageLabels[String(first.stage || "")] || "leitura Meta";
   const loaded = `${number(coverage.adsets_loaded)} conjuntos e ${number(coverage.ads_loaded)} anúncios carregados`;
-  return `Leitura parcial da Meta: falha em ${stage} na conta ${first.account_id || "vinculada"}. ${loaded}. O que respondeu foi mantido; recomendações continuam usando apenas dados disponíveis.`;
+  return `Leitura parcial da Meta: falha em ${stage} na conta ${first.account_id || "vinculada"}. ${loaded}. O que respondeu foi mantido.`;
 }
 
 function metaAdsetUrl(row: Row, state?: Row | null) {
@@ -84,88 +85,108 @@ function fieldSummary(state: Row, field: string) {
   }
   if (field === "placements") {
     const publishers = list<string>(targeting.publisher_platforms);
-    const manual = publishers.length || ["facebook_positions","instagram_positions","messenger_positions","audience_network_positions"].some((key) => list(targeting[key]).length);
+    const manual = publishers.length || ["facebook_positions", "instagram_positions", "messenger_positions", "audience_network_positions"].some((key) => list(targeting[key]).length);
     return manual ? `Manual · ${publishers.length ? publishers.join(", ") : "plataformas definidas por posição"}` : "Advantage+ / automático";
   }
   return "—";
 }
 
-function makeRecommendations(row: Row, state: Row, context: Row | null): Recommendation[] {
-  const benchmark = context?.benchmark || {};
+function benchmarkUnavailableReason(benchmark: Row | null) {
+  if (!benchmark) return "A coorte contextual ainda não foi carregada.";
+  if (benchmark.status === "INSUFFICIENT_PROFILE") return "Não foi possível identificar um tipo de produto estruturado e inequívoco para este conjunto.";
+  if (benchmark.status === "INSUFFICIENT_SAMPLE") return `A coorte correta não atingiu a amostra mínima (${number(benchmark.sample_size)} de ${number(benchmark.min_sample)}).`;
+  if (benchmark.status === "INFORMATIONAL_ONLY") return "A comparação disponível é ampla demais para autorizar mudança; ela serve apenas como contexto.";
+  return String(benchmark.methodology || "Não existe benchmark contextual suficiente para orientar alteração.");
+}
+
+function makeRecommendations(row: Row, state: Row, context: Row | null, benchmark: Row | null): Recommendation[] {
   const pacing = context?.pacing || {};
   const budget = context?.budget || {};
-  const cprRatio = ratio(row.cost_per_result, benchmark.cpl);
-  const ctrRatio = ratio(row.ctr, benchmark.ctr);
-  const cpcRatio = ratio(row.cpc, benchmark.cpc);
-  const freqRatio = ratio(row.frequency, benchmark.frequency);
+  const validBenchmark = Boolean(benchmark?.valid_for_recommendation);
+  const b = validBenchmark ? benchmark : {};
+  const cprRatio = validBenchmark ? ratio(row.cost_per_result, b.cpl) : null;
+  const ctrRatio = validBenchmark ? ratio(row.ctr, b.ctr) : null;
+  const cpcRatio = validBenchmark ? ratio(row.cpc, b.cpc) : null;
+  const freqRatio = validBenchmark ? ratio(row.frequency, b.frequency) : null;
   const spend = finite(row.spend) || 0;
   const results = finite(row.results) || 0;
   const remaining = finite(pacing.remaining_budget);
   const monthly = finite(budget.monthly_budget);
   const paceStatus = String(pacing.status || "");
   const recs: Recommendation[] = [];
+  const noBench = benchmarkUnavailableReason(benchmark);
 
   if (monthly === null) {
-    recs.push({ field: "Orçamento", current: finite(state.daily_budget) ? `${budgetMoney(state.daily_budget)}/dia` : "CBO / sem budget local", action: "Não aumentar verba até o teto mensal estar validado.", reason: "O Ads Intelligence não deve recomendar escala sem uma restrição financeira confiável.", confidence: "Alta", tone: "critical" });
-  } else if (remaining !== null && (remaining <= Math.max(5, monthly * .05) || ["OVER_PACE","BUDGET_REACHED"].includes(paceStatus))) {
-    recs.push({ field: "Orçamento", current: finite(state.daily_budget) ? `${budgetMoney(state.daily_budget)}/dia` : "CBO / sem budget local", action: "Não aumentar. Se mexer, use redistribuição ou redução dentro do teto mensal.", reason: `Restante estimado ${money(remaining)} de ${money(monthly)} e pacing ${paceStatus || "indisponível"}.`, confidence: "Alta", tone: "warn" });
-  } else if (cprRatio !== null && cprRatio <= .85 && results >= 3) {
-    recs.push({ field: "Orçamento", current: finite(state.daily_budget) ? `${budgetMoney(state.daily_budget)}/dia` : "CBO / sem budget local", action: "É candidato a receber redistribuição de verba, sem aumentar o budget mensal do cliente.", reason: `CPR ${money(row.cost_per_result)} está ${number((1 - cprRatio) * 100, 0)}% abaixo da mediana interna (${money(benchmark.cpl)}).`, confidence: "Média", tone: "good" });
+    recs.push({ field: "Orçamento", current: finite(state.daily_budget) ? `${budgetMoney(state.daily_budget)}/dia` : "CBO / sem budget local", action: "Não aumentar verba até o teto mensal estar validado.", reason: "Budget mensal é uma restrição operacional obrigatória e independe de benchmark.", confidence: "Alta", tone: "critical" });
+  } else if (remaining !== null && (remaining <= Math.max(5, monthly * .05) || ["OVER_PACE", "BUDGET_REACHED"].includes(paceStatus))) {
+    recs.push({ field: "Orçamento", current: finite(state.daily_budget) ? `${budgetMoney(state.daily_budget)}/dia` : "CBO / sem budget local", action: "Não aumentar. Se mexer, use redistribuição ou redução dentro do teto mensal.", reason: `Restante estimado ${money(remaining)} de ${money(monthly)}; pacing ${paceStatus || "indisponível"}.`, confidence: "Alta", tone: "warn" });
+  } else if (validBenchmark && cprRatio !== null && cprRatio <= .85 && results >= 3) {
+    recs.push({ field: "Orçamento", current: finite(state.daily_budget) ? `${budgetMoney(state.daily_budget)}/dia` : "CBO / sem budget local", action: "Pode ser candidato a receber redistribuição de verba, sem aumentar o budget mensal do cliente.", reason: `CPR ${money(row.cost_per_result)} está ${number((1 - cprRatio) * 100, 0)}% abaixo da mediana da coorte correta (${money(b.cpl)}).`, confidence: "Média", tone: "good" });
   } else {
-    recs.push({ field: "Orçamento", current: finite(state.daily_budget) ? `${budgetMoney(state.daily_budget)}/dia` : "CBO / sem budget local", action: "Manter o orçamento por enquanto; não há evidência forte para escalar este conjunto.", reason: `CPR atual ${money(row.cost_per_result)} vs. mediana interna ${money(benchmark.cpl)}.`, confidence: "Média", tone: "info" });
+    recs.push({ field: "Orçamento", current: finite(state.daily_budget) ? `${budgetMoney(state.daily_budget)}/dia` : "CBO / sem budget local", action: "Manter o orçamento por enquanto.", reason: validBenchmark ? `CPR ${money(row.cost_per_result)} vs. coorte ${money(b.cpl)} não sustenta escala clara.` : `Sem recomendação de escala por benchmark. ${noBench}`, confidence: validBenchmark ? "Média" : "Alta", tone: "info" });
   }
 
-  if ((freqRatio !== null && freqRatio >= 1.2 && ctrRatio !== null && ctrRatio <= .9) || (cprRatio !== null && cprRatio >= 1.25 && ctrRatio !== null && ctrRatio <= .9)) {
-    recs.push({ field: "Público", current: fieldSummary(state, "audience"), action: "Testar uma variação de público por vez antes de aumentar verba.", reason: `CTR ${pct(row.ctr)} vs. benchmark ${pct(benchmark.ctr)}${freqRatio !== null ? `; frequência ${number(row.frequency, 2)} vs. ${number(benchmark.frequency, 2)}` : ""}. O sinal combina pior atração com possível saturação/aderência baixa.`, confidence: "Média", tone: "warn" });
+  if (!validBenchmark) {
+    recs.push({ field: "Público", current: fieldSummary(state, "audience"), action: "Não recomendar alteração de público por benchmark agora.", reason: noBench, confidence: "Alta", tone: "info" });
+    recs.push({ field: "Localização", current: fieldSummary(state, "location"), action: "Não cortar ou ampliar praça com base em referência ampla.", reason: `${noBench} Use breakdown geográfico da própria conta como evidência adicional antes de mexer.`, confidence: "Alta", tone: "info" });
+    recs.push({ field: "Posicionamentos", current: fieldSummary(state, "placements"), action: "Não restringir posicionamentos por benchmark insuficiente.", reason: `${noBench} O correto é abrir breakdown de placement na Meta e validar volume + custo por resultado.`, confidence: "Alta", tone: "info" });
+    recs.push({ field: "Otimização", current: String(state.optimization_goal || "—").replaceAll("_", " "), action: "Manter o objetivo de otimização até haver evidência comparável ou problema técnico claro.", reason: noBench, confidence: "Alta", tone: "info" });
+    recs.push({ field: "Estratégia de lance", current: String(state.bid_strategy || "—").replaceAll("_", " "), action: "Não alterar lance com base em benchmark amplo.", reason: noBench, confidence: "Alta", tone: "info" });
+    recs.push({ field: "Criativo / entrega", current: `CTR ${pct(row.ctr)} · Freq. ${number(row.frequency, 2)}`, action: "Não concluir fadiga apenas pelo número atual.", reason: `${noBench} Compare também a tendência do próprio conjunto e os criativos da mesma campanha.`, confidence: "Alta", tone: "info" });
   } else {
-    recs.push({ field: "Público", current: fieldSummary(state, "audience"), action: "Não alterar o público só para gerar atividade.", reason: `Não há desvio suficientemente forte no benchmark agregado para justificar mexer na segmentação agora. CTR ${pct(row.ctr)} vs. ${pct(benchmark.ctr)}.`, confidence: "Média", tone: "good" });
+    if ((freqRatio !== null && freqRatio >= 1.2 && ctrRatio !== null && ctrRatio <= .9) || (cprRatio !== null && cprRatio >= 1.25 && ctrRatio !== null && ctrRatio <= .9)) {
+      recs.push({ field: "Público", current: fieldSummary(state, "audience"), action: "Testar uma variação de público por vez antes de aumentar verba.", reason: `CTR ${pct(row.ctr)} vs. coorte ${pct(b.ctr)}${freqRatio !== null ? `; frequência ${number(row.frequency, 2)} vs. ${number(b.frequency, 2)}` : ""}.`, confidence: "Média", tone: "warn" });
+    } else {
+      recs.push({ field: "Público", current: fieldSummary(state, "audience"), action: "Não alterar o público só para gerar atividade.", reason: `A leitura frente à coorte (${pct(b.ctr)} CTR mediano) não mostra desvio suficiente.`, confidence: "Média", tone: "good" });
+    }
+
+    recs.push({ field: "Localização", current: fieldSummary(state, "location"), action: "Usar o breakdown geográfico da Meta antes de mudar a praça.", reason: `A coorte confirma contexto regional (${benchmark?.scope?.city || benchmark?.scope?.state || "região compatível"}), mas não prova qual bairro/cidade interna está pior neste conjunto.`, confidence: "Alta", tone: "info" });
+
+    if ((ctrRatio !== null && ctrRatio < .85) || (cpcRatio !== null && cpcRatio > 1.2)) {
+      recs.push({ field: "Posicionamentos", current: fieldSummary(state, "placements"), action: "Investigar breakdown por posicionamento na Meta; só restringir placement com volume e ineficiência comprovada.", reason: `CTR ${pct(row.ctr)} vs. ${pct(b.ctr)} e CPC ${money(row.cpc)} vs. ${money(b.cpc)} justificam investigação, não corte automático.`, confidence: "Média", tone: "info" });
+    } else {
+      recs.push({ field: "Posicionamentos", current: fieldSummary(state, "placements"), action: "Manter os posicionamentos atuais.", reason: "Sem deterioração relevante de CTR/CPC frente à coorte contextual.", confidence: "Média", tone: "good" });
+    }
+
+    const optimization = String(state.optimization_goal || "—").replaceAll("_", " ");
+    if (results < 5 && spend > 0) {
+      recs.push({ field: "Otimização", current: optimization, action: "Não trocar o objetivo de otimização com esta amostra.", reason: `${number(results)} resultado(s) em 7 dias é pouco para atribuir o problema à otimização.`, confidence: "Alta", tone: "info" });
+    } else if (ctrRatio !== null && ctrRatio >= 1 && cprRatio !== null && cprRatio > 1.2) {
+      recs.push({ field: "Otimização", current: optimization, action: "Antes de mudar otimização, investigar o que acontece depois do clique/lead.", reason: "CTR está pelo menos na mediana da coorte, mas CPR está pior; isso reduz a evidência de problema de entrega.", confidence: "Média", tone: "info" });
+    } else {
+      recs.push({ field: "Otimização", current: optimization, action: "Manter o objetivo atual por enquanto.", reason: "A coorte contextual não mostra evidência suficiente para atribuir o desvio ao objetivo de otimização.", confidence: "Média", tone: "good" });
+    }
+
+    const bid = String(state.bid_strategy || "—").replaceAll("_", " ");
+    if (/CAP/i.test(String(state.bid_strategy || "")) && ((cprRatio !== null && cprRatio > 1.15) || paceStatus === "UNDER_PACE")) {
+      recs.push({ field: "Estratégia de lance", current: bid, action: "Revisar o cap na Meta como hipótese isolada.", reason: `Pacing ${paceStatus || "indisponível"} e CPR ${money(row.cost_per_result)} vs. coorte ${money(b.cpl)} justificam checar limitação de entrega.`, confidence: "Média", tone: "warn" });
+    } else {
+      recs.push({ field: "Estratégia de lance", current: bid, action: "Manter a estratégia de lance atual.", reason: "A coorte contextual não mostra evidência suficiente para trocar lance.", confidence: "Baixa", tone: "good" });
+    }
+
+    if ((ctrRatio !== null && ctrRatio < .85) || (freqRatio !== null && freqRatio > 1.2)) {
+      recs.push({ field: "Criativo / entrega", current: `CTR ${pct(row.ctr)} · Freq. ${number(row.frequency, 2)}`, action: "Priorizar teste de criativo antes de reformar várias variáveis simultaneamente.", reason: `CTR/frequência desviam da coorte (${pct(b.ctr)} / ${number(b.frequency, 2)}).`, confidence: "Alta", tone: "warn" });
+    } else {
+      recs.push({ field: "Criativo / entrega", current: `CTR ${pct(row.ctr)} · Freq. ${number(row.frequency, 2)}`, action: "Sem urgência para trocar criativo por benchmark.", reason: "Os sinais de atração/saturação não estão suficientemente ruins frente à coorte correta.", confidence: "Média", tone: "good" });
+    }
   }
 
-  recs.push({ field: "Localização", current: fieldSummary(state, "location"), action: cprRatio !== null && cprRatio > 1.2 ? "Abrir o breakdown geográfico na Meta e revisar apenas regiões com gasto relevante e CPR pior." : "Manter; não restringir localização por feeling.", reason: "O benchmark interno atual é agregado e não possui mediana geográfica por cidade/região para este conjunto. A recomendação segura é usar o breakdown da Meta antes de cortar praça.", confidence: "Baixa", tone: cprRatio !== null && cprRatio > 1.2 ? "info" : "good" });
-
-  const placementCurrent = fieldSummary(state, "placements");
-  if ((ctrRatio !== null && ctrRatio < .85) || (cpcRatio !== null && cpcRatio > 1.2)) {
-    recs.push({ field: "Posicionamentos", current: placementCurrent, action: "Abrir breakdown por posicionamento na Meta antes de limitar entrega; corte apenas placement com volume e ineficiência comprovada.", reason: `CTR ${pct(row.ctr)} vs. ${pct(benchmark.ctr)} e CPC ${money(row.cpc)} vs. ${money(benchmark.cpc)} indicam que vale investigar onde a entrega está pior, mas o benchmark não identifica sozinho qual placement é o culpado.`, confidence: "Média", tone: "info" });
-  } else {
-    recs.push({ field: "Posicionamentos", current: placementCurrent, action: "Manter os posicionamentos atuais.", reason: "Sem deterioração relevante de CTR/CPC frente à mediana interna, restringir placements tende a adicionar complexidade sem evidência.", confidence: "Média", tone: "good" });
-  }
-
-  const optimization = String(state.optimization_goal || "—").replaceAll("_", " ");
-  if (results < 5 && spend > 0) {
-    recs.push({ field: "Otimização", current: optimization, action: "Não trocar o objetivo de otimização com esta amostra.", reason: `${number(results)} resultado(s) em 7 dias é pouco para atribuir o problema ao optimization goal.`, confidence: "Alta", tone: "info" });
-  } else if (ctrRatio !== null && ctrRatio >= 1 && cprRatio !== null && cprRatio > 1.2) {
-    recs.push({ field: "Otimização", current: optimization, action: "Antes de mudar otimização, investigar o que acontece depois do clique/lead.", reason: "CTR está pelo menos no benchmark, mas CPR está pior; isso reduz a evidência de que o problema principal seja a entrega do anúncio.", confidence: "Média", tone: "info" });
-  } else {
-    recs.push({ field: "Otimização", current: optimization, action: "Manter o objetivo atual por enquanto.", reason: "O benchmark disponível não mostra evidência suficiente para atribuir o desvio ao objetivo de otimização.", confidence: "Média", tone: "good" });
-  }
-
-  const bid = String(state.bid_strategy || "—").replaceAll("_", " ");
-  if (/CAP/i.test(String(state.bid_strategy || "")) && (cprRatio !== null && cprRatio > 1.15 || paceStatus === "UNDER_PACE")) {
-    recs.push({ field: "Estratégia de lance", current: bid, action: "Revisar o cap na Meta; ele pode estar limitando a entrega ou encarecendo a obtenção de volume.", reason: `Pacing ${paceStatus || "indisponível"} e CPR ${money(row.cost_per_result)} vs. ${money(benchmark.cpl)}. Faça a mudança como teste controlado, não junto com público/criativo.`, confidence: "Média", tone: "warn" });
-  } else {
-    recs.push({ field: "Estratégia de lance", current: bid, action: "Manter a estratégia de lance atual.", reason: "Não há evidência benchmark suficiente para trocar lance sem isolar outras variáveis.", confidence: "Baixa", tone: "good" });
-  }
-
-  if ((ctrRatio !== null && ctrRatio < .85) || (freqRatio !== null && freqRatio > 1.2)) {
-    recs.push({ field: "Criativo / entrega", current: `CTR ${pct(row.ctr)} · Freq. ${number(row.frequency, 2)}`, action: "Priorizar teste de criativo antes de reformar público, lance e otimização ao mesmo tempo.", reason: `CTR/frequência estão desviando da referência interna (${pct(benchmark.ctr)} / ${number(benchmark.frequency, 2)}).`, confidence: "Alta", tone: "warn" });
-  } else {
-    recs.push({ field: "Criativo / entrega", current: `CTR ${pct(row.ctr)} · Freq. ${number(row.frequency, 2)}`, action: "Sem urgência para trocar criativo por benchmark.", reason: "Os principais sinais de atração/saturação não estão suficientemente ruins frente à referência interna.", confidence: "Média", tone: "good" });
-  }
-
-  recs.push({ field: "Programação", current: `${state.start_time ? new Date(state.start_time).toLocaleDateString("pt-BR") : "início não informado"} → ${state.end_time ? new Date(state.end_time).toLocaleDateString("pt-BR") : "sem fim definido"}`, action: paceStatus === "OVER_PACE" ? "Não estender entrega sem primeiro corrigir pacing/orçamento no Meta." : "Manter datas, salvo necessidade comercial real.", reason: paceStatus === "OVER_PACE" ? "A projeção financeira já está acima do ritmo; estender/antecipar entrega pode ampliar o desvio." : "Datas não devem ser alteradas para tentar resolver um KPI sem relação causal comprovada.", confidence: "Alta", tone: paceStatus === "OVER_PACE" ? "warn" : "good" });
+  recs.push({ field: "Programação", current: `${state.start_time ? new Date(state.start_time).toLocaleDateString("pt-BR") : "início não informado"} → ${state.end_time ? new Date(state.end_time).toLocaleDateString("pt-BR") : "sem fim definido"}`, action: paceStatus === "OVER_PACE" ? "Não estender entrega sem primeiro corrigir pacing/orçamento na Meta." : "Manter datas, salvo necessidade comercial real.", reason: paceStatus === "OVER_PACE" ? "A projeção financeira já está acima do ritmo." : "Datas não devem ser alteradas para tentar resolver KPI sem relação causal comprovada.", confidence: "Alta", tone: paceStatus === "OVER_PACE" ? "warn" : "good" });
 
   return recs;
 }
 
-function rowSignal(row: Row, context: Row | null) {
-  const bench = context?.benchmark || {};
-  const pacing = context?.pacing || {};
-  const cprRatio = ratio(row.cost_per_result, bench.cpl);
-  const ctrRatio = ratio(row.ctr, bench.ctr);
-  if (["OVER_PACE","BUDGET_REACHED"].includes(String(pacing.status || ""))) return { label: "Budget", tone: "warn" };
-  if ((cprRatio !== null && cprRatio > 1.25) || (ctrRatio !== null && ctrRatio < .8)) return { label: "Revisar", tone: "warn" };
-  if (cprRatio !== null || ctrRatio !== null) return { label: "Saudável", tone: "good" };
-  return { label: "Sem leitura", tone: "muted" };
+function rowSignal(context: Row | null) {
+  const pacing = String(context?.pacing?.status || "");
+  if (["OVER_PACE", "BUDGET_REACHED"].includes(pacing)) return { label: "Budget", tone: "warn" };
+  return { label: "Analisar", tone: "muted" };
+}
+
+function cohortLabel(benchmark: Row | null) {
+  if (!benchmark) return "Coorte não carregada";
+  if (!benchmark.valid_for_recommendation) return "Benchmark insuficiente";
+  const dims = list<string>(benchmark.dimensions).map((d) => d === "cidade" ? "cidade" : d === "estado" ? "estado" : d === "tipo_produto" ? "produto" : d === "faixa_ticket" ? "ticket" : d);
+  return `${number(benchmark.sample_size)} pares · ${dims.join(" + ")}`;
 }
 
 export default function AdsIntelligenceStructureBridge() {
@@ -181,6 +202,7 @@ export default function AdsIntelligenceStructureBridge() {
   const [query, setQuery] = useState("");
   const [advisorRow, setAdvisorRow] = useState<Row | null>(null);
   const [advisorState, setAdvisorState] = useState<Row | null>(null);
+  const [advisorBenchmark, setAdvisorBenchmark] = useState<Row | null>(null);
   const [advisorLoading, setAdvisorLoading] = useState(false);
   const cacheRef = useRef<Map<string, CacheEntry>>(new Map());
   const contextCacheRef = useRef<Map<string, CacheEntry>>(new Map());
@@ -254,12 +276,12 @@ export default function AdsIntelligenceStructureBridge() {
       const adsButton = ensureButton("ads", "Anúncios");
       const open = (next: "adsets" | "ads") => {
         const name = String(currentRoot.querySelector(".aii-client-hero h2")?.textContent || "").trim();
-        setClientName(name); setMode(next); setQuery(""); setAdvisorRow(null); setAdvisorState(null); setError("");
+        setClientName(name); setMode(next); setQuery(""); setAdvisorRow(null); setAdvisorState(null); setAdvisorBenchmark(null); setError("");
         if (name) void load(name, false); else setError("Selecione um cliente antes de abrir Conjuntos ou Anúncios.");
       };
       const onSets = () => open("adsets"); const onAds = () => open("ads");
-      const onTabs = (event: Event) => { const target = event.target instanceof Element ? event.target.closest("button") : null; if (!target || target.hasAttribute("data-aii-structure-tab")) return; setMode(null); setAdvisorRow(null); setAdvisorState(null); };
-      const onRootClick = (event: Event) => { const target = event.target instanceof Element ? event.target.closest(".aii-client-row") : null; if (!target) return; setMode(null); setClientName(""); setAdvisorRow(null); setAdvisorState(null); setContext(null); };
+      const onTabs = (event: Event) => { const target = event.target instanceof Element ? event.target.closest("button") : null; if (!target || target.hasAttribute("data-aii-structure-tab")) return; setMode(null); setAdvisorRow(null); setAdvisorState(null); setAdvisorBenchmark(null); };
+      const onRootClick = (event: Event) => { const target = event.target instanceof Element ? event.target.closest(".aii-client-row") : null; if (!target) return; setMode(null); setClientName(""); setAdvisorRow(null); setAdvisorState(null); setAdvisorBenchmark(null); setContext(null); };
       cleanup?.(); adsetsButton.addEventListener("click", onSets); adsButton.addEventListener("click", onAds); tabs.addEventListener("click", onTabs, true); currentRoot.addEventListener("click", onRootClick, true);
       cleanup = () => { adsetsButton.removeEventListener("click", onSets); adsButton.removeEventListener("click", onAds); tabs.removeEventListener("click", onTabs, true); currentRoot.removeEventListener("click", onRootClick, true); };
     };
@@ -277,20 +299,25 @@ export default function AdsIntelligenceStructureBridge() {
 
   const openAdvisor = useCallback(async (row: Row) => {
     if (!headers || !clientName) return;
-    setAdvisorRow(row); setAdvisorState(null); setAdvisorLoading(true); setError("");
+    setAdvisorRow(row); setAdvisorState(null); setAdvisorBenchmark(null); setAdvisorLoading(true); setError("");
+    const clientId = String(payload?.client?.id || context?.client?.id || "");
     try {
-      const response = await fetch(ACTION_API, {
+      const statePromise = fetch(ACTION_API, {
         method: "POST", headers: { ...headers, "content-type": "application/json" },
         body: JSON.stringify({ client_name: clientName, object_type: "ADSET", object_id: String(row.id), action: "GET_STATE" }), cache: "no-store",
+      }).then(async (response) => {
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok || body?.ok === false) throw new Error(errorLabel(body, `Meta ${response.status}`));
+        return body.state || row;
       });
-      const body = await response.json().catch(() => ({}));
-      if (!response.ok || body?.ok === false) throw new Error(errorLabel(body, `Meta ${response.status}`));
-      setAdvisorState(body.state || row);
-    } catch (caught) {
-      setAdvisorState(row);
-      setError(caught instanceof Error ? `${caught.message} As recomendações abaixo usarão apenas os campos já carregados.` : "Não foi possível ler a configuração completa.");
+      const benchmarkPromise = clientId ? fetch(`${BENCHMARK_API}?client_id=${encodeURIComponent(clientId)}&campaign_name=${encodeURIComponent(String(row.campaign_name || ""))}&adset_name=${encodeURIComponent(String(row.name || ""))}&campaign_id=${encodeURIComponent(String(row.campaign_id || ""))}`, { headers, cache: "no-store" })
+        .then(async (response) => { const body = await response.json().catch(() => ({})); return response.ok ? body.benchmark || null : null; })
+        .catch(() => null) : Promise.resolve(null);
+      const [state, benchmark] = await Promise.all([statePromise.catch((caught) => { setError(`${caught instanceof Error ? caught.message : "Não foi possível ler a configuração completa."} As recomendações usarão apenas os campos disponíveis.`); return row; }), benchmarkPromise]);
+      setAdvisorState(state);
+      setAdvisorBenchmark(benchmark);
     } finally { setAdvisorLoading(false); }
-  }, [headers, clientName]);
+  }, [headers, clientName, payload?.client?.id, context?.client?.id]);
 
   const rows = useMemo(() => {
     const source: Row[] = mode === "ads" ? payload.ads || [] : payload.adsets || [];
@@ -298,20 +325,20 @@ export default function AdsIntelligenceStructureBridge() {
     return source.filter((row) => `${row.name} ${row.campaign_name || ""} ${row.status || ""}`.toLocaleLowerCase("pt-BR").includes(needle));
   }, [payload, mode, query]);
 
-  const recommendations = useMemo(() => advisorRow && advisorState ? makeRecommendations(advisorRow, advisorState, context) : [], [advisorRow, advisorState, context]);
+  const recommendations = useMemo(() => advisorRow && advisorState ? makeRecommendations(advisorRow, advisorState, context, advisorBenchmark) : [], [advisorRow, advisorState, context, advisorBenchmark]);
   if (!host || !root || !mode) return null;
   const warning = partialLabel(payload);
 
   return createPortal(<>
     <section className="aii-structure-content">
       <div className="aii-structure-head">
-        <div><span className="eyebrow">Meta ao vivo · 7 dias</span><h3>{mode === "adsets" ? "Conjuntos de anúncios" : "Anúncios"}</h3><p>{mode === "adsets" ? "Leitura, benchmark e recomendação. A edição acontece no Gerenciador da Meta." : "Leitura de entrega e atalho para editar o anúncio na Meta."}</p></div>
+        <div><span className="eyebrow">Meta ao vivo · 7 dias</span><h3>{mode === "adsets" ? "Conjuntos de anúncios" : "Anúncios"}</h3><p>{mode === "adsets" ? "Leitura, benchmark contextual e recomendação. A edição acontece no Gerenciador da Meta." : "Leitura de entrega e atalho para editar o anúncio na Meta."}</p></div>
         <div><input className="control" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={`Buscar ${mode === "adsets" ? "conjunto" : "anúncio"}`} /><button className="button secondary" disabled={loading || !clientName} onClick={() => void load(clientName, true)}>Atualizar Meta</button></div>
       </div>
       {error && <div className="error-box">{error}</div>}{warning && <div className="aii-inline-warning">{warning}</div>}
-      {loading ? <div className="card aii-structure-loading"><span className="aii-spinner"/><div><b>Lendo estrutura direto da Meta</b><small>Dados ao vivo + contexto de benchmark interno.</small></div></div> : mode === "adsets" ?
+      {loading ? <div className="card aii-structure-loading"><span className="aii-spinner"/><div><b>Lendo estrutura direto da Meta</b><small>Dados ao vivo; benchmark só entra depois de validar a coorte.</small></div></div> : mode === "adsets" ?
       <div className="card aii-table-wrap"><table className="aii-table aii-structure-table"><thead><tr><th>Conjunto</th><th>Status</th><th>Sinal</th><th>Budget</th><th>Gasto 7d</th><th>Resultados</th><th>CPR</th><th>CTR</th><th>Ações</th></tr></thead><tbody>{rows.map((row) => {
-        const status = String(row.status || "").toUpperCase(); const hasDaily = (finite(row.daily_budget) || 0) > 0; const signal = rowSignal(row, context); const url = metaAdsetUrl(row);
+        const status = String(row.status || "").toUpperCase(); const hasDaily = (finite(row.daily_budget) || 0) > 0; const signal = rowSignal(context); const url = metaAdsetUrl(row);
         return <tr key={row.id}><td><b>{row.name}</b><small>ID {row.id}{row.source === "WAREHOUSE_SNAPSHOT" ? " · snapshot" : ""}</small></td><td><span className={`aii-status ${status === "ACTIVE" ? "active" : "paused"}`}>{status === "ACTIVE" ? "Ativo" : status === "PAUSED" ? "Pausado" : status || "—"}</span></td><td><span className={`aii-signal ${signal.tone}`}>{signal.label}</span></td><td><b>{hasDaily ? budgetMoney(row.daily_budget) : "CBO / sem budget local"}</b></td><td>{money(row.spend)}</td><td>{number(row.results)}</td><td>{money(row.cost_per_result)}</td><td>{pct(row.ctr)}</td><td><div className="aii-row-actions"><button className="aii-recommend-button" onClick={() => void openAdvisor(row)}>Recomendações</button>{url ? <a className="aii-meta-link" href={url} target="_blank" rel="noreferrer">Editar na Meta ↗</a> : <span className="muted">sem link</span>}</div></td></tr>;
       })}{!rows.length && <tr><td colSpan={9} className="aii-no-rows">{payload.partial ? "Nenhum conjunto pôde ser carregado na parte da leitura que respondeu." : "Nenhum conjunto encontrado."}</td></tr>}</tbody></table></div> :
       <div className="card aii-table-wrap"><table className="aii-table aii-structure-table"><thead><tr><th>Anúncio</th><th>Status</th><th>Gasto 7d</th><th>Resultados</th><th>CPR</th><th>CTR</th><th>Freq.</th><th>Ação</th></tr></thead><tbody>{rows.map((row) => {
@@ -321,14 +348,18 @@ export default function AdsIntelligenceStructureBridge() {
       <footer className="aii-structure-footer"><span>{rows.length} objetos</span><span>Ads Intelligence recomenda · Meta continua sendo a fonte de edição</span></footer>
     </section>
 
-    {advisorRow && createPortal(<div className="aii-advisor-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) { setAdvisorRow(null); setAdvisorState(null); } }}><section className="aii-advisor-modal" role="dialog" aria-modal="true">
-      <header><div><span className="eyebrow">Recomendações por campo</span><h3>{advisorRow.name}</h3><p>Benchmark interno, performance de 7 dias e pacing financeiro orientam a decisão. Campos sem benchmark granular são marcados com confiança menor — sem inventar certeza.</p></div><button onClick={() => { setAdvisorRow(null); setAdvisorState(null); }}>×</button></header>
-      {advisorLoading ? <div className="aii-advisor-loading"><span className="aii-spinner"/><div><b>Lendo configuração do conjunto</b><small>Buscando estado atual na Meta antes de recomendar.</small></div></div> : <div className="aii-advisor-body">
-        <div className="aii-advisor-kpis"><div><small>CPR conjunto</small><b>{money(advisorRow.cost_per_result)}</b><span>benchmark {money(context?.benchmark?.cpl)}</span></div><div><small>CTR conjunto</small><b>{pct(advisorRow.ctr)}</b><span>benchmark {pct(context?.benchmark?.ctr)}</span></div><div><small>Frequência</small><b>{number(advisorRow.frequency, 2)}</b><span>benchmark {number(context?.benchmark?.frequency, 2)}</span></div><div><small>Budget restante</small><b>{money(context?.pacing?.remaining_budget)}</b><span>teto {money(context?.budget?.monthly_budget)}</span></div></div>
+    {advisorRow && createPortal(<div className="aii-advisor-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) { setAdvisorRow(null); setAdvisorState(null); setAdvisorBenchmark(null); } }}><section className="aii-advisor-modal" role="dialog" aria-modal="true">
+      <header><div><span className="eyebrow">Recomendações por campo</span><h3>{advisorRow.name}</h3><p>Benchmark só é usado quando a coorte tem evidência estruturada de produto + geografia compatível e amostra mínima. Sem isso, o sistema não inventa recomendação.</p></div><button onClick={() => { setAdvisorRow(null); setAdvisorState(null); setAdvisorBenchmark(null); }}>×</button></header>
+      {advisorLoading ? <div className="aii-advisor-loading"><span className="aii-spinner"/><div><b>Validando configuração e coorte</b><small>Lendo Meta + produto estruturado + cidade/estado + ticket.</small></div></div> : <div className="aii-advisor-body">
+        <div className={`aii-cohort-proof ${advisorBenchmark?.valid_for_recommendation ? "valid" : "insufficient"}`}>
+          <div><small>COORTE USADA</small><b>{cohortLabel(advisorBenchmark)}</b><span>{advisorBenchmark?.methodology || "Sem benchmark contextual."}</span></div>
+          <div className="aii-cohort-tags"><span>Produto: {advisorBenchmark?.scope?.product_name || advisorBenchmark?.scope?.product_type_key || "não resolvido"}</span><span>Local: {advisorBenchmark?.scope?.city || advisorBenchmark?.scope?.state || "não resolvido"}</span><span>Ticket: {advisorBenchmark?.scope?.ticket_band || "não resolvido"}</span><span>Match: {advisorBenchmark?.scope?.product_match || "—"}</span></div>
+        </div>
+        <div className="aii-advisor-kpis"><div><small>CPR conjunto</small><b>{money(advisorRow.cost_per_result)}</b><span>{advisorBenchmark?.valid_for_recommendation ? `coorte ${money(advisorBenchmark?.cpl)}` : "sem comparação autorizada"}</span></div><div><small>CTR conjunto</small><b>{pct(advisorRow.ctr)}</b><span>{advisorBenchmark?.valid_for_recommendation ? `coorte ${pct(advisorBenchmark?.ctr)}` : "sem comparação autorizada"}</span></div><div><small>Frequência</small><b>{number(advisorRow.frequency, 2)}</b><span>{advisorBenchmark?.valid_for_recommendation ? `coorte ${number(advisorBenchmark?.frequency, 2)}` : "sem comparação autorizada"}</span></div><div><small>Budget restante</small><b>{money(context?.pacing?.remaining_budget)}</b><span>teto {money(context?.budget?.monthly_budget)}</span></div></div>
         <div className="aii-advisor-grid">{recommendations.map((rec) => <article className={`aii-field-rec ${rec.tone}`} key={rec.field}><div className="aii-field-rec-top"><b>{rec.field}</b><span>Confiança {rec.confidence.toLowerCase()}</span></div><small className="current">Atual: {rec.current}</small><h4>{rec.action}</h4><p>{rec.reason}</p></article>)}</div>
-        <div className="aii-advisor-note"><b>Regra de decisão</b><span>Não mude orçamento, público, posicionamento, lance, otimização e criativo ao mesmo tempo. Escolha a hipótese com melhor evidência, altere na Meta e reavalie após nova amostra.</span></div>
+        <div className="aii-advisor-note"><b>Regra de decisão</b><span>Nenhuma recomendação usa benchmark nacional ou carteira inteira como substituto de uma coorte comparável. Quando não há amostra suficiente, a decisão fica conservadora e pede evidência da própria conta.</span></div>
       </div>}
-      <footer><div><b>Edição centralizada na Meta</b><span>O dashboard recomenda e preserva uma única fonte de verdade para configuração.</span></div><div><button className="button secondary" onClick={() => { setAdvisorRow(null); setAdvisorState(null); }}>Fechar</button>{metaAdsetUrl(advisorRow, advisorState) ? <a className="button aii-meta-primary" href={metaAdsetUrl(advisorRow, advisorState)} target="_blank" rel="noreferrer">Editar este conjunto na Meta ↗</a> : null}</div></footer>
+      <footer><div><b>Edição centralizada na Meta</b><span>O dashboard recomenda; o Gerenciador continua sendo a única fonte de edição.</span></div><div><button className="button secondary" onClick={() => { setAdvisorRow(null); setAdvisorState(null); setAdvisorBenchmark(null); }}>Fechar</button>{metaAdsetUrl(advisorRow, advisorState) ? <a className="button aii-meta-primary" href={metaAdsetUrl(advisorRow, advisorState)} target="_blank" rel="noreferrer">Editar este conjunto na Meta ↗</a> : null}</div></footer>
     </section></div>, document.body)}
   </>, host);
 }
