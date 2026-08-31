@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import NativeDashboard from "./dashboard-native";
 import LeonardoNativeDashboard from "./leonardo-native-dashboard";
@@ -15,9 +15,12 @@ export default function DashboardRouter() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [route, setRoute] = useState<RouteState>("loading");
+  const routeRequest = useRef(0);
 
   const resolveRoute = useCallback(async (current: Session | null) => {
+    const requestId = ++routeRequest.current;
     setSession(current);
+
     if (!current) {
       setRoute("native");
       setAuthReady(true);
@@ -25,26 +28,77 @@ export default function DashboardRouter() {
     }
 
     setRoute("loading");
+    setAuthReady(false);
+
     try {
-      const body = await loadProfileLite();
+      // Usa exatamente a sessão entregue pelo evento. loadProfileLite não volta ao
+      // mutex do Supabase, então o callback de autenticação nunca entra em deadlock.
+      const body = await loadProfileLite(current);
+      if (requestId !== routeRequest.current) return;
+
       const role = String(body?.profile?.role || "").toUpperCase();
       const person = String(body?.profile?.person || "");
       setRoute(role === "COMMERCIAL" && person === "Leonardo Augusto" ? "leonardo" : "native");
     } catch {
-      // Nunca renderiza o dashboard operacional enquanto o perfil autenticado
-      // nao foi resolvido. Isso evita exatamente o flash/troca de camada que
-      // existia no Leonardo e evita liberar uma casca incorreta em falha de rede.
+      if (requestId !== routeRequest.current) return;
+
+      // O carregamento do perfil tem timeout de 10 segundos. Uma falha real termina
+      // nesta tela recuperável; o usuário nunca fica preso em validação infinita.
       setRoute("error");
     } finally {
-      setAuthReady(true);
+      if (requestId === routeRequest.current) setAuthReady(true);
     }
   }, []);
 
   useEffect(() => {
     let active = true;
-    supabase.auth.getSession().then(({ data }) => { if (active) void resolveRoute(data.session); });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, current) => { if (active) void resolveRoute(current); });
-    return () => { active = false; subscription.unsubscribe(); };
+    let authTimer: number | null = null;
+
+    const scheduleRoute = (current: Session) => {
+      if (authTimer !== null) window.clearTimeout(authTimer);
+      authTimer = window.setTimeout(() => {
+        authTimer = null;
+        if (active) void resolveRoute(current);
+      }, 0);
+    };
+
+    supabase.auth.getSession()
+      .then(({ data, error }) => {
+        if (!active) return;
+        if (error) {
+          ++routeRequest.current;
+          setSession(null);
+          setRoute("error");
+          setAuthReady(true);
+          return;
+        }
+        void resolveRoute(data.session);
+      })
+      .catch(() => {
+        if (!active) return;
+        ++routeRequest.current;
+        setSession(null);
+        setRoute("error");
+        setAuthReady(true);
+      });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, current) => {
+      if (!active) return;
+
+      // Deixa o callback síncrono retornar antes de qualquer trabalho assíncrono.
+      // SIGNED_OUT não consulta o Supabase e pode ser aplicado imediatamente.
+      if (!current) {
+        void resolveRoute(null);
+        return;
+      }
+      scheduleRoute(current);
+    });
+
+    return () => {
+      active = false;
+      if (authTimer !== null) window.clearTimeout(authTimer);
+      subscription.unsubscribe();
+    };
   }, [resolveRoute]);
 
   if (!authReady || route === "loading") {
@@ -54,7 +108,24 @@ export default function DashboardRouter() {
   if (route === "error") {
     return <main className="auth-loading" style={{ display: "grid", gap: 12, placeItems: "center" }}>
       <span>Não foi possível validar o perfil agora.</span>
-      <button className="btn" onClick={() => { setAuthReady(false); void supabase.auth.getSession().then(({ data }) => resolveRoute(data.session)); }}>Tentar novamente</button>
+      <button
+        className="btn"
+        onClick={() => {
+          setAuthReady(false);
+          setRoute("loading");
+          void supabase.auth.getSession()
+            .then(({ data, error }) => {
+              if (error) throw error;
+              return resolveRoute(data.session);
+            })
+            .catch(() => {
+              setRoute("error");
+              setAuthReady(true);
+            });
+        }}
+      >
+        Tentar novamente
+      </button>
     </main>;
   }
 
@@ -62,6 +133,7 @@ export default function DashboardRouter() {
     <LeonardoNativeDashboard session={session} />
     <LeonardoClientFinancialStatusBridge session={session} />
   </>;
+
   return <>
     <NativeDashboard />
     {session && <WorkReassignmentBridge session={session} />}
