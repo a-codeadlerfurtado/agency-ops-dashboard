@@ -9,7 +9,7 @@ type Row = Record<string, any>;
 type Tab = "decision" | "campaigns" | "benchmark" | "ai";
 type CacheEntry = { at: number; body: Row };
 
-const API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-api`;
+const API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-api-v2`;
 const AI_API = `${SUPABASE_URL}/functions/v1/agency-ops-meta-consultant-ai`;
 const CAMPAIGN_ACTION_API = `${SUPABASE_URL}/functions/v1/agency-ops-campaign-inline-action-v2`;
 const DETAIL_CACHE_MS = 60_000;
@@ -383,12 +383,12 @@ export default function AdsIntelligenceInlineBridge() {
           {detail && <>
             <section className={`card aii-client-hero ${detailLoading ? "is-refreshing" : ""}`}>
               <div className="aii-client-title"><span className="avatar">{initials(detail.client?.display_name)}</span><div><span className="eyebrow">Conta selecionada</span><h2>{detail.client?.display_name}</h2><p>GT {detail.client?.gt_owner || "—"} · CS {detail.client?.cs_owner || "—"}</p></div></div>
-              <div className={`aii-pace-state ${paceTone(pacing.status)}`}><small>Pacing mensal</small><b>{paceLabel(pacing.status)}</b><span>{detailLoading ? "atualizando…" : pacing.source === "META_LIVE" ? "Meta ao vivo" : pacing.source === "META_LIVE_PARTIAL" ? "Meta parcial" : "leitura protegida"}</span></div>
+              <div className={`aii-pace-state ${paceTone(pacing.status)}`}><small>Pacing mensal</small><b>{paceLabel(pacing.status)}</b><span>{detailLoading ? "atualizando…" : pacing.source === "META_LIVE" ? "Meta ao vivo" : pacing.source === "META_LIVE_PARTIAL" ? "Meta parcial" : pacing.source === "UNAVAILABLE" ? "Meta indisponível" : "leitura protegida"}</span></div>
             </section>
 
             <section className="aii-budget-grid">
               <div className="card aii-budget-card"><small>Budget mensal</small><b>{money(budget.monthly_budget)}</b><span>teto operacional</span></div>
-              <div className="card aii-budget-card"><small>Gasto MTD</small><b>{money(pacing.mtd_spend)}</b><span>acumulado do mês</span></div>
+              <div className="card aii-budget-card"><small>Gasto no mês</small><b>{money(pacing.mtd_spend)}</b><span>quanto já foi gasto no mês atual até agora</span></div>
               <div className="card aii-budget-card"><small>Restante</small><b>{money(pacing.remaining_budget)}</b><span>{remainingDaysLabel(pacing.remaining_days)}</span></div>
               <div className="card aii-budget-card"><small>Ritmo ideal daqui</small><b>{pacing.ideal_daily_remaining === null || pacing.ideal_daily_remaining === undefined ? "—" : `${money(pacing.ideal_daily_remaining)}/dia`}</b><span>para respeitar o teto</span></div>
               <div className={`card aii-budget-card ${paceTone(pacing.status)}`}><small>Projeção do mês</small><b>{money(pacing.projected_month_spend)}</b><span>{finite(pacing.variance) === null ? "sem projeção segura" : Number(pacing.variance) > 0 ? `${money(pacing.variance)} acima` : `${money(Math.abs(Number(pacing.variance)))} abaixo`}</span></div>
