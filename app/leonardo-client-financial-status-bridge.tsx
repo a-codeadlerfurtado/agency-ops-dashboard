@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, text } from "./shared";
 
@@ -36,8 +37,14 @@ function flagsFrom(value: StatusValue) {
   };
 }
 
+function clientsWorkspace() {
+  return Array.from(document.querySelectorAll<HTMLElement>("section.workspace"))
+    .find((section) => section.querySelector("h2")?.textContent?.trim() === "Clientes") || null;
+}
+
 export default function LeonardoClientFinancialStatusBridge({ session }: { session: Session }) {
   const [visibleOnClients, setVisibleOnClients] = useState(false);
+  const [toolbarTarget, setToolbarTarget] = useState<HTMLElement | null>(null);
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
@@ -67,8 +74,9 @@ export default function LeonardoClientFinancialStatusBridge({ session }: { sessi
 
   useEffect(() => {
     const detect = () => {
-      const headings = Array.from(document.querySelectorAll("section.workspace h2"));
-      setVisibleOnClients(headings.some((node) => node.textContent?.trim() === "Clientes"));
+      const workspace = clientsWorkspace();
+      setVisibleOnClients(Boolean(workspace));
+      setToolbarTarget(workspace?.querySelector<HTMLElement>(".leo-native-toolbar") || null);
     };
     detect();
     const observer = new MutationObserver(detect);
@@ -80,6 +88,65 @@ export default function LeonardoClientFinancialStatusBridge({ session }: { sessi
     if (!visibleOnClients) { setOpen(false); return; }
     void load();
   }, [visibleOnClients, load]);
+
+  useEffect(() => {
+    if (!visibleOnClients || !items.length) return;
+    const workspace = clientsWorkspace();
+    const table = workspace?.querySelector<HTMLTableElement>(".table-wrap table");
+    if (!workspace || !table) return;
+
+    const byName = new Map(items.map((row) => [normalize(row.display_name), row]));
+    const applyInlineStatus = () => {
+      table.querySelectorAll<HTMLTableRowElement>("tbody tr").forEach((tr) => {
+        const name = tr.querySelector("td:first-child b")?.textContent?.trim() || "";
+        const row = byName.get(normalize(name));
+        const statusCell = tr.querySelector<HTMLTableCellElement>("td:nth-child(2)");
+        if (!statusCell) return;
+        const key = row ? `${Boolean(row.inadimplente)}:${Boolean(row.juridico)}` : "false:false";
+        const existing = statusCell.querySelector<HTMLElement>(".leo-client-financial-inline");
+        if (existing?.dataset.statusKey === key) return;
+        existing?.remove();
+        tr.classList.toggle("leo-client-financial-flagged", Boolean(row?.inadimplente || row?.juridico));
+        tr.classList.toggle("leo-client-financial-inadimplente", Boolean(row?.inadimplente));
+        tr.classList.toggle("leo-client-financial-juridico", Boolean(row?.juridico));
+        if (!row?.inadimplente && !row?.juridico) return;
+
+        const holder = document.createElement("div");
+        holder.className = "leo-client-financial-inline";
+        holder.dataset.statusKey = key;
+        const addBadge = (label: string, className: string) => {
+          const badge = document.createElement("button");
+          badge.type = "button";
+          badge.className = `leo-client-financial-badge ${className}`;
+          badge.textContent = label;
+          badge.title = "Abrir classificação financeira/jurídica";
+          badge.onclick = () => {
+            setQuery(name);
+            setFilter(className === "inadimplente" ? "INADIMPLENTE" : "JURIDICO");
+            setOpen(true);
+          };
+          holder.appendChild(badge);
+        };
+        if (row.inadimplente) addBadge("Inadimplente", "inadimplente");
+        if (row.juridico) addBadge("Jurídico", "juridico");
+        statusCell.appendChild(holder);
+      });
+    };
+
+    applyInlineStatus();
+    let scheduled = false;
+    const observer = new MutationObserver(() => {
+      if (scheduled) return;
+      scheduled = true;
+      window.requestAnimationFrame(() => { scheduled = false; applyInlineStatus(); });
+    });
+    observer.observe(table, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      table.querySelectorAll(".leo-client-financial-inline").forEach((node) => node.remove());
+      table.querySelectorAll("tr").forEach((tr) => tr.classList.remove("leo-client-financial-flagged", "leo-client-financial-inadimplente", "leo-client-financial-juridico"));
+    };
+  }, [visibleOnClients, items]);
 
   async function saveStatus(row: Row, next: StatusValue) {
     const flags = flagsFrom(next);
@@ -133,15 +200,16 @@ export default function LeonardoClientFinancialStatusBridge({ session }: { sessi
     });
   }, [current, query, filter]);
 
-  if (!visibleOnClients) return null;
+  const trigger = visibleOnClients ? <button className="leo-finance-status-trigger" type="button" onClick={() => { setQuery(""); setFilter("CURRENT"); setOpen(true); }}>
+    <span>Financeiro / Jurídico</span>
+    <i className="danger">{counts.inadimplente} inad.</i>
+    <i className="warn">{counts.juridico} jur.</i>
+  </button> : null;
 
   return <>
-    <button className="leo-finance-status-trigger" type="button" onClick={() => setOpen(true)}>
-      <span>Financeiro / Jurídico</span>
-      <b>{counts.inadimplente + counts.juridico}</b>
-    </button>
+    {toolbarTarget && trigger ? createPortal(trigger, toolbarTarget) : null}
 
-    {open && <div className="leo-finance-status-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && !savingId) setOpen(false); }}>
+    {visibleOnClients && open && <div className="leo-finance-status-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target && !savingId) setOpen(false); }}>
       <section className="leo-finance-status-modal" role="dialog" aria-modal="true" aria-label="Status financeiro e jurídico dos clientes">
         <header>
           <div><span>CARTEIRA · FATURAMENTO REAL</span><h2>Status financeiro e jurídico</h2><p>Clientes marcados como inadimplentes ou jurídicos ficam fora do faturamento real, sem alterar o status operacional Ativo/Onboarding.</p></div>
@@ -187,14 +255,21 @@ export default function LeonardoClientFinancialStatusBridge({ session }: { sessi
     </div>}
 
     <style>{`
-      .leo-finance-status-trigger{position:fixed;right:34px;top:176px;z-index:72;display:flex;align-items:center;gap:10px;border:1px solid rgba(255,122,47,.48);border-radius:10px;background:linear-gradient(135deg,rgba(255,122,47,.18),rgba(18,24,29,.96));color:var(--text);padding:9px 12px;font:inherit;font-size:12px;font-weight:750;cursor:pointer;box-shadow:0 10px 28px rgba(0,0,0,.22)}
-      .leo-finance-status-trigger:hover{border-color:#ff9a61}.leo-finance-status-trigger b{display:grid;place-items:center;min-width:22px;height:22px;border-radius:999px;background:rgba(255,122,47,.2);color:#ffad7c;font-size:11px}
+      /* Ajuste somente visual do perfil comercial: mesma estrutura, menos ruído. */
+      .shell .top{gap:14px}.shell .top .brand{min-width:0}.shell .top .brand .subtitle{max-width:350px;line-height:1.35}.shell .top .live{gap:7px}.shell .top .command-trigger{min-width:134px}.shell .top .profile-trigger{min-width:168px}
+      .shell>.source-banner{margin-top:10px;margin-bottom:14px;padding:9px 12px;border-radius:10px;font-size:11px;line-height:1.4}.shell .workspace{padding:18px}.shell .workspace-head{align-items:center;gap:18px;margin-bottom:12px}.shell .workspace-head h2{margin-bottom:3px}.shell .workspace-head p{max-width:660px;line-height:1.45}.shell .card.section{border-radius:14px}
+      .shell .leo-native-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:12px 0}.shell .leo-native-toolbar>input.control{flex:1 1 330px;min-width:220px}.shell .leo-native-toolbar>select.control{flex:0 0 auto;min-width:180px}.shell .table-wrap{border:1px solid var(--line);border-radius:12px;overflow:auto;background:color-mix(in srgb,var(--panel2) 70%,transparent)}.shell .table-wrap table{margin:0}.shell .table-wrap th{font-size:9px;letter-spacing:.07em}.shell .table-wrap td{padding-top:11px;padding-bottom:11px}.shell .table-wrap tbody tr{transition:background .14s ease}.shell .table-wrap tbody tr:hover{background:var(--wash)}.shell .side-nav-items{gap:3px}.shell .side-nav-items button{border-radius:8px}
+
+      .leo-finance-status-trigger{margin-left:auto;display:flex;align-items:center;gap:7px;border:1px solid rgba(255,122,47,.34);border-radius:9px;background:rgba(255,122,47,.07);color:var(--text);padding:8px 10px;font:inherit;font-size:11px;font-weight:760;cursor:pointer;white-space:nowrap}.leo-finance-status-trigger:hover{border-color:#ff9a61;background:rgba(255,122,47,.11)}.leo-finance-status-trigger i{font-style:normal;border-radius:999px;padding:3px 6px;font-size:9px;font-weight:850}.leo-finance-status-trigger i.danger{background:rgba(255,118,110,.1);color:#ff968f}.leo-finance-status-trigger i.warn{background:rgba(244,189,98,.1);color:#f4bd62}
+      .leo-client-financial-inline{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}.leo-client-financial-badge{border-radius:999px;padding:3px 6px;background:transparent;font:inherit;font-size:9px;font-weight:850;line-height:1.2;cursor:pointer}.leo-client-financial-badge.inadimplente{border:1px solid rgba(255,118,110,.42);background:rgba(255,118,110,.08);color:#ff918b}.leo-client-financial-badge.juridico{border:1px solid rgba(244,189,98,.42);background:rgba(244,189,98,.08);color:#f1c879}.leo-client-financial-badge:hover{filter:brightness(1.12)}.shell .table-wrap tbody tr.leo-client-financial-inadimplente td:first-child{box-shadow:inset 3px 0 0 rgba(255,118,110,.72)}.shell .table-wrap tbody tr.leo-client-financial-juridico:not(.leo-client-financial-inadimplente) td:first-child{box-shadow:inset 3px 0 0 rgba(244,189,98,.72)}.shell .table-wrap tbody tr.leo-client-financial-flagged{background:rgba(244,189,98,.018)}
+
       .leo-finance-status-backdrop{position:fixed;inset:0;z-index:140;background:rgba(0,0,0,.72);display:grid;place-items:center;padding:20px}.leo-finance-status-modal{width:min(1060px,97vw);max-height:90vh;overflow:hidden;display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 30px 90px rgba(0,0,0,.42);color:var(--text)}
       .leo-finance-status-modal>header{display:flex;justify-content:space-between;gap:20px;padding:20px 22px 15px;border-bottom:1px solid var(--line)}.leo-finance-status-modal>header span{font-size:9px;letter-spacing:.15em;color:#ff9a61;font-weight:850}.leo-finance-status-modal>header h2{margin:4px 0 5px;font-size:22px}.leo-finance-status-modal>header p{margin:0;color:var(--muted);font-size:12px;max-width:760px;line-height:1.5}.leo-finance-status-modal>header>button{width:34px;height:34px;border:1px solid var(--line);border-radius:9px;background:var(--panel2);color:var(--text);font-size:20px;cursor:pointer}
       .leo-finance-status-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;padding:14px 18px 4px}.leo-finance-status-kpis button{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--text);cursor:pointer}.leo-finance-status-kpis button.active{border-color:var(--blue);box-shadow:0 0 0 1px rgba(118,198,255,.12)}.leo-finance-status-kpis button.danger strong{color:#ff766e}.leo-finance-status-kpis button.warn strong{color:#f4bd62}.leo-finance-status-kpis button.success strong{color:#52d59d}.leo-finance-status-kpis small{color:var(--muted);font-size:10px}.leo-finance-status-kpis strong{font-size:21px}
       .leo-finance-status-toolbar{display:flex;gap:9px;padding:10px 18px}.leo-finance-status-toolbar input{flex:1;min-width:0;border:1px solid var(--line);border-radius:9px;background:var(--panel2);color:var(--text);padding:10px 12px;outline:none}.leo-finance-status-toolbar button{border:1px solid var(--line);border-radius:9px;background:var(--panel2);color:var(--text);padding:9px 12px;cursor:pointer}.leo-finance-status-feedback{margin:0 18px 8px;padding:9px 11px;border-radius:8px;font-size:11px}.leo-finance-status-feedback.success{background:rgba(82,213,157,.09);color:#7ee3b7}.leo-finance-status-feedback.error{background:rgba(255,118,110,.09);color:#ff968f}
       .leo-finance-status-table-wrap{overflow:auto;margin:0 18px 18px;border:1px solid var(--line);border-radius:11px}.leo-finance-status-table-wrap table{width:100%;border-collapse:collapse}.leo-finance-status-table-wrap th,.leo-finance-status-table-wrap td{padding:11px 12px;text-align:left;border-bottom:1px solid var(--line);font-size:11px}.leo-finance-status-table-wrap th{position:sticky;top:0;z-index:2;background:var(--panel2);color:var(--muted);font-size:9px;text-transform:uppercase;letter-spacing:.08em}.leo-finance-status-table-wrap td:first-child b,.leo-finance-status-table-wrap td:first-child small{display:block}.leo-finance-status-table-wrap td:first-child small{margin-top:3px;color:var(--muted)}.leo-finance-lifecycle{display:inline-flex;padding:5px 7px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font-size:10px}.leo-finance-status-select{min-width:190px;border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--text);padding:7px 9px;outline:none}.leo-finance-status-select.inadimplente,.leo-finance-status-select.both{border-color:rgba(255,118,110,.5);color:#ff968f}.leo-finance-status-select.juridico{border-color:rgba(244,189,98,.55);color:#f4bd62}.leo-finance-status-select.regular{border-color:rgba(82,213,157,.38);color:#7ee3b7}.leo-finance-status-empty{text-align:center!important;color:var(--muted);padding:24px!important}
-      @media(max-width:800px){.leo-finance-status-trigger{right:14px;top:150px}.leo-finance-status-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.leo-finance-status-modal{max-height:94vh}.leo-finance-status-table-wrap{margin-left:10px;margin-right:10px}.leo-finance-status-modal>header{padding-left:14px;padding-right:14px}}
+      @media(max-width:900px){.shell .top .brand .subtitle{display:none}.leo-finance-status-trigger{margin-left:0}.leo-finance-status-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.leo-finance-status-modal{max-height:94vh}.leo-finance-status-table-wrap{margin-left:10px;margin-right:10px}.leo-finance-status-modal>header{padding-left:14px;padding-right:14px}}
+      @media(max-width:640px){.leo-finance-status-trigger span{display:none}.shell .leo-native-toolbar>select.control{min-width:0;flex:1 1 160px}}
     `}</style>
   </>;
 }
