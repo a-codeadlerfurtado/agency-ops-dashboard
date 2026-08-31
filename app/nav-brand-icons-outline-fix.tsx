@@ -16,8 +16,10 @@ function ensureStyles() {
       flex:0 0 18px!important;
       background:none!important;
       background-image:none!important;
-      color:color-mix(in srgb,var(--muted) 88%,var(--text))!important;
-      opacity:.92!important;
+      color:#0866ff!important;
+      opacity:.96!important;
+      filter:drop-shadow(0 0 0 rgba(8,102,255,0))!important;
+      transition:color .16s ease,opacity .16s ease,filter .16s ease,transform .16s ease!important;
     }
     .nav-brand-icon[data-kind="meta"] svg {
       width:18px!important;
@@ -25,17 +27,23 @@ function ensureStyles() {
       display:block!important;
       fill:none!important;
       stroke:currentColor!important;
-      stroke-width:1.65!important;
+      stroke-width:1.8!important;
       stroke-linecap:round!important;
       stroke-linejoin:round!important;
       vector-effect:non-scaling-stroke;
       overflow:visible;
     }
     .side-nav-items > button:hover .nav-brand-icon[data-kind="meta"],
-    .side-nav-items > a:hover .nav-brand-icon[data-kind="meta"],
-    .side-nav-items > .active .nav-brand-icon[data-kind="meta"] {
-      color:var(--text)!important;
+    .side-nav-items > a:hover .nav-brand-icon[data-kind="meta"] {
+      color:#1683ff!important;
       opacity:1!important;
+      filter:drop-shadow(0 0 5px rgba(8,102,255,.28))!important;
+      transform:translateY(-.25px)!important;
+    }
+    .side-nav-items > .active .nav-brand-icon[data-kind="meta"] {
+      color:#1683ff!important;
+      opacity:1!important;
+      filter:drop-shadow(0 0 6px rgba(8,102,255,.34))!important;
     }
     .side-nav:not(.open) .side-nav-items > button:not(.sidebar-ia-group-title),
     .side-nav:not(.open) .side-nav-items > a {
