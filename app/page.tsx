@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import NativeDashboard from "./dashboard-native";
 import LeonardoNativeDashboard from "./leonardo-native-dashboard";
+import LeonardoClientFinancialStatusBridge from "./leonardo-client-financial-status-bridge";
 import WorkReassignmentBridge from "./work-reassignment-bridge";
 import WorkReassignmentAwayBridge from "./work-reassignment-away-bridge";
 import { loadProfileLite, supabase } from "./shared";
@@ -57,7 +58,10 @@ export default function DashboardRouter() {
     </main>;
   }
 
-  if (route === "leonardo" && session) return <LeonardoNativeDashboard session={session} />;
+  if (route === "leonardo" && session) return <>
+    <LeonardoNativeDashboard session={session} />
+    <LeonardoClientFinancialStatusBridge session={session} />
+  </>;
   return <>
     <NativeDashboard />
     {session && <WorkReassignmentBridge session={session} />}
