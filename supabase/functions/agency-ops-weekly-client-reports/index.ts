@@ -84,6 +84,79 @@ async function paged(url: string) {
   }
   return rows;
 }
+
+
+function scopeNorm(value: unknown) {
+  return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+function activityExtra(value: unknown): Row {
+  if (!value) return {};
+  if (typeof value === "object") return value as Row;
+  try { const parsed = JSON.parse(String(value)); return parsed && typeof parsed === "object" ? parsed : {}; } catch { return {}; }
+}
+async function syncMetaCampaignCreationScope(clientId: string, accountIds: string[], token: string) {
+  try {
+    const clients = await sql`select entrada::text as entrada from agency_ops.clients where id=${clientId}::uuid limit 1`;
+    const entry = String(clients[0]?.entrada || "");
+    if (!entry) return;
+    const roster = await sql`select person from agency_ops.team_roster`;
+    const aliases = await sql`select meta_actor_name,person from agency_ops.campaign_report_actor_aliases where active=true`;
+    const agencyActors = new Map<string,string>();
+    for (const row of roster) agencyActors.set(scopeNorm(row.person), String(row.person));
+    for (const row of aliases) agencyActors.set(scopeNorm(row.meta_actor_name), String(row.person));
+    const fields = encodeURIComponent("actor_id,actor_name,event_time,event_type,extra_data,object_id,object_name,object_type,translated_event_type");
+    const since = encodeURIComponent(`${entry}T00:00:00+00:00`);
+    const until = encodeURIComponent(new Date().toISOString());
+    for (const accountId of [...new Set(accountIds.map(String).filter(Boolean))]) {
+      let activities: Row[] = [];
+      try { activities = await paged(`${GRAPH_ROOT}/act_${accountId}/activities?since=${since}&until=${until}&limit=500&fields=${fields}&access_token=${encodeURIComponent(token)}`); }
+      catch { continue; }
+      const best = new Map<string,Row>();
+      for (const activity of activities) {
+        const eventType = String(activity.event_type || "").toLowerCase();
+        if (!eventType.startsWith("create_campaign")) continue;
+        const extra = activityExtra(activity.extra_data);
+        const campaignId = String(extra.campaign_id || (/campaign/i.test(String(activity.object_type || "")) ? activity.object_id : "") || "");
+        if (!campaignId) continue;
+        const actorRaw = String(activity.actor_name || "").trim();
+        const actorPerson = agencyActors.get(scopeNorm(actorRaw)) || null;
+        const candidate = { ...activity, campaign_id: campaignId, actor_raw: actorRaw, actor_person: actorPerson };
+        const existing = best.get(campaignId);
+        if (!existing || (actorPerson && !existing.actor_person)) best.set(campaignId, candidate);
+      }
+      for (const evidence of best.values()) {
+        const isAgency = Boolean(evidence.actor_person);
+        await sql`
+insert into agency_ops.campaign_report_scope(
+  client_id,account_id,campaign_id,campaign_name,ownership_status,include_in_reports,
+  evidence_source,evidence_actor,evidence_event_type,evidence_at,evidence,last_checked_at,updated_at
+) values (
+  ${clientId}::uuid,${accountId},${String(evidence.campaign_id)},${String(evidence.object_name || "") || null},
+  ${isAgency ? "AGENCY_CREATED" : "EXTERNAL"},${isAgency},'META_ACTIVITY',${String(evidence.actor_person || evidence.actor_raw || "") || null},
+  ${String(evidence.event_type || "CREATE_CAMPAIGN")},${String(evidence.event_time || "") || null}::timestamptz,
+  ${sql.json({ actor_id:evidence.actor_id || null, actor_name:evidence.actor_raw || null, object_id:evidence.object_id || null, object_type:evidence.object_type || null, translated_event_type:evidence.translated_event_type || null, extra_data:activityExtra(evidence.extra_data) })},now(),now()
+)
+on conflict(client_id,account_id,campaign_id) do update set
+  campaign_name=coalesce(nullif(excluded.campaign_name,''),agency_ops.campaign_report_scope.campaign_name),
+  ownership_status=case when agency_ops.campaign_report_scope.include_in_reports then agency_ops.campaign_report_scope.ownership_status else excluded.ownership_status end,
+  include_in_reports=agency_ops.campaign_report_scope.include_in_reports or excluded.include_in_reports,
+  evidence_source=case when excluded.include_in_reports or not agency_ops.campaign_report_scope.include_in_reports then excluded.evidence_source else agency_ops.campaign_report_scope.evidence_source end,
+  evidence_actor=case when excluded.include_in_reports or not agency_ops.campaign_report_scope.include_in_reports then excluded.evidence_actor else agency_ops.campaign_report_scope.evidence_actor end,
+  evidence_event_type=case when excluded.include_in_reports or not agency_ops.campaign_report_scope.include_in_reports then excluded.evidence_event_type else agency_ops.campaign_report_scope.evidence_event_type end,
+  evidence_at=case when excluded.include_in_reports or not agency_ops.campaign_report_scope.include_in_reports then excluded.evidence_at else agency_ops.campaign_report_scope.evidence_at end,
+  evidence=case when excluded.include_in_reports or not agency_ops.campaign_report_scope.include_in_reports then excluded.evidence else agency_ops.campaign_report_scope.evidence end,
+  last_checked_at=now(),updated_at=now()
+where not agency_ops.campaign_report_scope.manual_override`;
+      }
+    }
+  } catch { /* ownership discovery is fail-closed; resolver keeps unknown campaigns out */ }
+}
+async function campaignScopeDecision(clientId: string, accountId: string, campaignId: string, campaignName: string) {
+  const rows = await sql`select * from agency_ops.resolve_campaign_report_scope(${clientId}::uuid,${accountId},${campaignId},${campaignName})`;
+  const row = rows[0] || {};
+  return { include:Boolean(row.include_in_reports), ownership_status:String(row.ownership_status || "UNKNOWN"), evidence_source:row.evidence_source || null, evidence_actor:row.evidence_actor || null, evidence_event_type:row.evidence_event_type || null, evidence_at:row.evidence_at || null };
+}
+
 function extension(contentType: string) {
   const type = contentType.toLowerCase().split(";")[0].trim();
   if (type === "image/png") return "png";
@@ -128,57 +201,14 @@ function campaignPrevious(current: Row, fourteen: Row | null) {
   const results = Math.max(0, n(fourteen.results) - n(current.results));
   const impressions = Math.max(0, n(fourteen.impressions) - n(current.impressions));
   const clicks = Math.max(0, n(fourteen.clicks) - n(current.clicks));
-  return { spend, results, ctr: impressions > 0 ? clicks / impressions * 100 : null, cpr: results > 0 ? spend / results : null };
+  return { spend, results, impressions, clicks, ctr: impressions > 0 ? clicks / impressions * 100 : null, cpr: results > 0 ? spend / results : null };
 }
 
-async function captureTopCreatives(db: any, clientId: string, weekStart: string, weekEnd: string, token: string) {
-  const integrations = await sql`select distinct meta_ad_account_id::text account_id from agency_ops.client_integrations where client_id=${clientId}::uuid and system='META_BM' and meta_ad_account_id is not null order by meta_ad_account_id`;
-  const all: Row[] = [];
-  for (const integration of integrations) {
-    const account = String(integration.account_id || "");
-    if (!account) continue;
-    const fields = ["ad_id","ad_name","adset_id","adset_name","campaign_id","campaign_name","spend","impressions","clicks","reach","frequency","actions"].join(",");
-    const range = encodeURIComponent(JSON.stringify({ since: weekStart, until: weekEnd }));
-    const rows = await paged(`${GRAPH_ROOT}/act_${account}/insights?level=ad&time_range=${range}&limit=500&fields=${fields}&access_token=${encodeURIComponent(token)}`);
-    for (const row of rows) {
-      const metric = canonical(row.ad_name || null, row.actions);
-      const spend = n(row.spend), impressions = n(row.impressions), clicks = n(row.clicks), reach = n(row.reach);
-      if (spend <= 0 && impressions <= 0 && metric.results <= 0) continue;
-      all.push({
-        ad_id: String(row.ad_id || ""), ad_name: row.ad_name || null, campaign_id: row.campaign_id || null, campaign_name: row.campaign_name || null,
-        spend, results: metric.results, impressions, clicks, reach,
-        ctr: impressions > 0 ? clicks / impressions * 100 : null,
-        frequency: nullable(row.frequency) ?? div(impressions, reach),
-        cpr: metric.results > 0 ? spend / metric.results : null,
-        result_type: metric.result_type,
-      });
-    }
-  }
-  if (!all.length) return [];
-  const successful = all.filter((r) => n(r.results) > 0 && nullable(r.cpr) !== null).sort((a,b)=>n(a.cpr)-n(b.cpr));
-  const medianCpr = successful.length ? n(successful[Math.floor(successful.length / 2)].cpr) : 0;
-  const waste = all.filter((r) => n(r.results) <= 0 && n(r.spend) >= Math.max(20, medianCpr)).sort((a,b)=>n(b.spend)-n(a.spend))[0] || null;
-  const ranked = [...all].filter((r)=>n(r.results)>0).sort((a,b)=>n(b.results)-n(a.results) || n(a.cpr)-n(b.cpr));
-  const selected: Row[] = [];
-  if (ranked[0]) selected.push({ ...ranked[0], badge: "Destaque da semana", tone: "good" });
-  const efficient = ranked.slice(1).sort((a,b)=>n(a.cpr)-n(b.cpr))[0];
-  if (efficient) selected.push({ ...efficient, badge: "Boa eficiência", tone: "info" });
-  if (waste && !selected.some((r)=>r.ad_id===waste.ad_id)) selected.push({ ...waste, badge: "Ponto de atenção", tone: "warn" });
-  for (const row of ranked) {
-    if (selected.length >= 3) break;
-    if (!selected.some((x)=>x.ad_id===row.ad_id)) selected.push({ ...row, badge: "Em destaque", tone: "info" });
-  }
-
-  for (const creative of selected.slice(0,3)) {
-    try {
-      const ad = await graph(`${GRAPH_ROOT}/${creative.ad_id}?fields=${encodeURIComponent("id,name,status,effective_status,creative{id,name}")}&access_token=${encodeURIComponent(token)}`);
-      const creativeId = String(ad?.creative?.id || "");
-      let meta: Row = ad?.creative || {};
-      if (creativeId) meta = await graph(`${GRAPH_ROOT}/${creativeId}?thumbnail_width=900&thumbnail_height=900&fields=${encodeURIComponent("id,name,thumbnail_url,image_url,effective_object_story_id")}&access_token=${encodeURIComponent(token)}`);
-      creative.preview_storage_path = await mirrorPreview(db, clientId, weekEnd, creative.ad_id, [meta.thumbnail_url, meta.image_url]);
-      creative.ad_status = ad?.effective_status || ad?.status || null;
-    } catch { creative.preview_storage_path = null; }
-  }
+async function captureTopCreatives(db:any,clientId:string,weekStart:string,weekEnd:string,token:string,allowedCampaignIds:Set<string>){
+  const integrations=await sql`select distinct meta_ad_account_id::text account_id from agency_ops.client_integrations where client_id=${clientId}::uuid and system='META_BM' and meta_ad_account_id is not null order by meta_ad_account_id`;const all:Row[]=[];
+  for(const integration of integrations){const account=String(integration.account_id||"");if(!account)continue;const fields=["ad_id","ad_name","adset_id","adset_name","campaign_id","campaign_name","spend","impressions","clicks","reach","frequency","actions"].join(",");const range=encodeURIComponent(JSON.stringify({since:weekStart,until:weekEnd}));const rows=await paged(`${GRAPH_ROOT}/act_${account}/insights?level=ad&time_range=${range}&limit=500&fields=${fields}&access_token=${encodeURIComponent(token)}`);for(const row of rows){if(!allowedCampaignIds.has(String(row.campaign_id||"")))continue;const metric=canonical(row.ad_name||null,row.actions);const spend=n(row.spend),impressions=n(row.impressions),clicks=n(row.clicks),reach=n(row.reach);if(spend<=0&&impressions<=0&&metric.results<=0)continue;all.push({ad_id:String(row.ad_id||""),ad_name:row.ad_name||null,campaign_id:row.campaign_id||null,campaign_name:row.campaign_name||null,spend,results:metric.results,impressions,clicks,reach,ctr:impressions>0?clicks/impressions*100:null,frequency:nullable(row.frequency)??div(impressions,reach),cpr:metric.results>0?spend/metric.results:null,result_type:metric.result_type});}}
+  if(!all.length)return[];const successful=all.filter((r)=>n(r.results)>0&&nullable(r.cpr)!==null).sort((a,b)=>n(a.cpr)-n(b.cpr));const medianCpr=successful.length?n(successful[Math.floor(successful.length/2)].cpr):0;const waste=all.filter((r)=>n(r.results)<=0&&n(r.spend)>=Math.max(20,medianCpr)).sort((a,b)=>n(b.spend)-n(a.spend))[0]||null;const ranked=[...all].filter((r)=>n(r.results)>0).sort((a,b)=>n(b.results)-n(a.results)||n(a.cpr)-n(b.cpr));const selected:Row[]=[];if(ranked[0])selected.push({...ranked[0],badge:"Destaque da semana",tone:"good"});const efficient=ranked.slice(1).sort((a,b)=>n(a.cpr)-n(b.cpr))[0];if(efficient)selected.push({...efficient,badge:"Boa eficiência",tone:"info"});if(waste&&!selected.some((r)=>r.ad_id===waste.ad_id))selected.push({...waste,badge:"Ponto de atenção",tone:"warn"});for(const row of ranked){if(selected.length>=3)break;if(!selected.some((x)=>x.ad_id===row.ad_id))selected.push({...row,badge:"Em destaque",tone:"info"});}
+  for(const creative of selected.slice(0,3)){try{const ad=await graph(`${GRAPH_ROOT}/${creative.ad_id}?fields=${encodeURIComponent("id,name,status,effective_status,creative{id,name}")}&access_token=${encodeURIComponent(token)}`);const creativeId=String(ad?.creative?.id||"");let meta:Row=ad?.creative||{};if(creativeId)meta=await graph(`${GRAPH_ROOT}/${creativeId}?thumbnail_width=900&thumbnail_height=900&fields=${encodeURIComponent("id,name,thumbnail_url,image_url,effective_object_story_id")}&access_token=${encodeURIComponent(token)}`);creative.preview_storage_path=await mirrorPreview(db,clientId,weekEnd,creative.ad_id,[meta.thumbnail_url,meta.image_url]);creative.ad_status=ad?.effective_status||ad?.status||null;}catch{creative.preview_storage_path=null;}}
   return selected.slice(0,3);
 }
 
@@ -210,42 +240,20 @@ function clientNarrative(current: Row, previous: Row | null, campaigns: Row[], c
   return { headline, body, key_insight: keyInsight, next_steps: actions.slice(0,4), deltas: { spend:dSpend, results:dResults, cpr:dCpr, ctr:dCtr } };
 }
 
-async function processReport(report: Row, token: string, db: any) {
-  const weekStart = dateOnly(report.week_start), weekEnd = dateOnly(report.week_end);
-  const perf = await sql`select * from agency_ops.meta_performance_snapshots where run_id=${report.meta_run_id}::uuid and client_id=${report.client_id}::uuid and period_days in (7,14) order by period_days`;
-  const current = perf.find((r:Row)=>Number(r.period_days)===7);
-  const fourteen = perf.find((r:Row)=>Number(r.period_days)===14) || null;
-  if (!current || !["OK","PARTIAL_PERIOD"].includes(String(current.data_status)) || n(current.active_campaigns) <= 0 || n(current.spend) <= 0) {
-    const snapshot = { version:1, client_name:report.client_name, week_start:weekStart, week_end:weekEnd, coverage:{status:current?.data_status || "NO_DATA"}, message:"Este cliente precisa de revisão interna antes de compartilhar o relatório semanal." };
-    return { status:"REVIEW_REQUIRED", snapshot };
-  }
-  const previous = previousFrom14(current, fourteen);
-  const campaignRows = await sql`select * from agency_ops.meta_campaign_performance_snapshots where run_id=${report.meta_run_id}::uuid and client_id=${report.client_id}::uuid and period_days in (7,14)`;
-  const by14 = new Map<string,Row>();
-  for (const row of campaignRows.filter((r:Row)=>Number(r.period_days)===14)) by14.set(String(row.campaign_id), row);
-  const campaigns = campaignRows.filter((r:Row)=>Number(r.period_days)===7 && n(r.spend)>0).map((row:Row)=>({
-    campaign_id:row.campaign_id, campaign_name:row.campaign_name, campaign_status:row.campaign_status, objective:row.objective,
-    spend:n(row.spend), results:n(row.results), impressions:n(row.impressions), clicks:n(row.clicks), ctr:nullable(row.ctr), cpr:nullable(row.cost_per_result ?? row.cpl), frequency:nullable(row.frequency),
-    previous:campaignPrevious(row, by14.get(String(row.campaign_id)) || null),
-  })).sort((a:Row,b:Row)=>n(b.results)-n(a.results) || n(b.spend)-n(a.spend)).slice(0,8);
-  const creatives = await captureTopCreatives(db, String(report.client_id), weekStart, weekEnd, token);
-  const narrative = clientNarrative(current, previous, campaigns, creatives);
-  const snapshot = {
-    version:1,
-    client_name:report.client_name,
-    week_start:weekStart,
-    week_end:weekEnd,
-    generated_at:new Date().toISOString(),
-    coverage:{ data_status:current.data_status, requested_days:current.requested_period_days, available_days:current.available_period_days, is_partial:Boolean(current.is_partial_period) },
-    current:{ spend:n(current.spend), results:n(current.results), impressions:n(current.impressions), reach:n(current.reach), clicks:n(current.clicks), ctr:nullable(current.ctr), cpr:nullable(current.cost_per_result ?? current.cpl), frequency:nullable(current.frequency), active_campaigns:n(current.active_campaigns) },
-    previous,
-    trends:{ spend:trend(n(current.spend),previous?.spend??null), results:trend(n(current.results),previous?.results??null), cpr:trend(nullable(current.cost_per_result ?? current.cpl),previous?.cpr??null), ctr:trend(nullable(current.ctr),previous?.ctr??null) },
-    narrative,
-    campaigns,
-    creatives,
-    disclaimer:"Resultados e indicadores são dados reportados pela Meta. A leitura não presume qualidade comercial, CRM ou fechamento quando essas evidências não fazem parte do recorte.",
-  };
-  return { status:"READY", snapshot };
+async function processReport(report:Row,token:string,db:any){
+  const weekStart=dateOnly(report.week_start),weekEnd=dateOnly(report.week_end);
+  const perf=await sql`select * from agency_ops.meta_performance_snapshots where run_id=${report.meta_run_id}::uuid and client_id=${report.client_id}::uuid and period_days in (7,14) order by period_days`;const base=perf.find((r:Row)=>Number(r.period_days)===7);
+  const campaignRows=await sql`select * from agency_ops.meta_campaign_performance_snapshots where run_id=${report.meta_run_id}::uuid and client_id=${report.client_id}::uuid and period_days in (7,14)`;
+  const seven=campaignRows.filter((r:Row)=>Number(r.period_days)===7&&n(r.spend)>0);const accountIds=[...new Set(seven.map((r:Row)=>String(r.meta_ad_account_id||"")).filter(Boolean))];await syncMetaCampaignCreationScope(String(report.client_id),accountIds,token);
+  const decisions=new Map<string,any>();for(const row of seven){const key=String(row.campaign_id);if(!decisions.has(key))decisions.set(key,await campaignScopeDecision(String(report.client_id),String(row.meta_ad_account_id||""),key,String(row.campaign_name||key)));}
+  const eligible=seven.filter((row:Row)=>decisions.get(String(row.campaign_id))?.include);const allowedIds=new Set(eligible.map((r:Row)=>String(r.campaign_id)));const excluded=seven.filter((r:Row)=>!allowedIds.has(String(r.campaign_id))).map((r:Row)=>({campaign_id:r.campaign_id,campaign_name:r.campaign_name,spend:n(r.spend),results:n(r.results),...(decisions.get(String(r.campaign_id))||{})}));
+  const spend=eligible.reduce((s:number,r:Row)=>s+n(r.spend),0),results=eligible.reduce((s:number,r:Row)=>s+n(r.results),0),impressions=eligible.reduce((s:number,r:Row)=>s+n(r.impressions),0),clicks=eligible.reduce((s:number,r:Row)=>s+n(r.clicks),0),reach=eligible.reduce((s:number,r:Row)=>s+n(r.reach),0);
+  if(!base||!eligible.length||spend<=0){return{status:"REVIEW_REQUIRED",snapshot:{version:2,client_name:report.client_name,week_start:weekStart,week_end:weekEnd,coverage:{status:"NO_AGENCY_MANAGED_DELIVERY"},ownership_scope:{mode:"AGENCY_ONLY",included_campaigns:[],excluded_campaigns:excluded},message:"Não houve entrega de campanha comprovadamente criada ou operada pela agência nesta semana."}};}
+  const by14=new Map<string,Row>();for(const row of campaignRows.filter((r:Row)=>Number(r.period_days)===14))by14.set(String(row.campaign_id),row);
+  const campaigns=eligible.map((row:Row)=>({campaign_id:row.campaign_id,campaign_name:row.campaign_name,campaign_status:row.campaign_status,objective:row.objective,spend:n(row.spend),results:n(row.results),impressions:n(row.impressions),clicks:n(row.clicks),reach:n(row.reach),ctr:nullable(row.ctr),cpr:nullable(row.cost_per_result??row.cpl),frequency:nullable(row.frequency),previous:campaignPrevious(row,by14.get(String(row.campaign_id))||null),ownership:decisions.get(String(row.campaign_id))||null})).sort((a:Row,b:Row)=>n(b.results)-n(a.results)||n(b.spend)-n(a.spend)).slice(0,8);
+  const previousPieces=campaigns.map((r:Row)=>r.previous).filter(Boolean);const previousSpend=previousPieces.reduce((s:number,r:Row)=>s+n(r.spend),0),previousResults=previousPieces.reduce((s:number,r:Row)=>s+n(r.results),0),previousImpressions=previousPieces.reduce((s:number,r:Row)=>s+n(r.impressions),0),previousClicks=previousPieces.reduce((s:number,r:Row)=>s+n(r.clicks),0);const previous={spend:previousSpend,results:previousResults,impressions:previousImpressions,clicks:previousClicks,ctr:previousImpressions>0?previousClicks/previousImpressions*100:null,cpr:div(previousSpend,previousResults)};
+  const current={spend,results,impressions,reach,clicks,ctr:impressions>0?clicks/impressions*100:null,cpr:div(spend,results),frequency:div(impressions,reach),active_campaigns:eligible.filter((r:Row)=>String(r.campaign_status||"").toUpperCase()==="ACTIVE").length};const creatives=await captureTopCreatives(db,String(report.client_id),weekStart,weekEnd,token,allowedIds);const narrative=clientNarrative(current,previous,campaigns,creatives);
+  const snapshot={version:2,client_name:report.client_name,week_start:weekStart,week_end:weekEnd,generated_at:new Date().toISOString(),coverage:{data_status:base.data_status,requested_days:base.requested_period_days,available_days:base.available_period_days,is_partial:Boolean(base.is_partial_period),scope:"AGENCY_ONLY"},ownership_scope:{mode:"AGENCY_ONLY",included_campaigns:campaigns.map((r:Row)=>({campaign_id:r.campaign_id,campaign_name:r.campaign_name,ownership:r.ownership})),excluded_campaigns:excluded},current,previous,trends:{spend:trend(current.spend,previous.spend),results:trend(current.results,previous.results),cpr:trend(current.cpr,previous.cpr),ctr:trend(current.ctr,previous.ctr)},narrative,campaigns,creatives,disclaimer:"Este relatório considera somente campanhas com evidência de criação ou operação pela agência. Campanhas próprias do cliente sem atuação comprovada da equipe são excluídas."};return{status:"READY",snapshot};
 }
 
 async function invokeWork(metaRunId: string) {
