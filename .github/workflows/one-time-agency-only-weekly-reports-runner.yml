@@ -1,0 +1,43 @@
+name: Run agency-only weekly report patch
+
+on:
+  push:
+    paths:
+      - .github/workflows/one-time-agency-only-weekly-reports-runner.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Execute stored patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('.github/workflows/one-time-agency-only-weekly-reports.yml').read_text().splitlines()
+          start = next(i for i, line in enumerate(source) if line.strip() == "python3 - <<'PY'") + 1
+          end = next(i for i in range(start, len(source)) if source[i].strip() == 'PY')
+          lines = []
+          for line in source[start:end]:
+              lines.append(line[10:] if line.startswith('          ') else line)
+          code = '\n'.join(lines)
+          exec(compile(code, 'agency_scope_patch.py', 'exec'), {})
+          Path('.github/workflows/one-time-agency-only-weekly-reports-runner.yml').unlink()
+          PY
+      - name: Verify patch
+        run: |
+          grep -q 'AGENCY_ONLY' supabase/functions/agency-ops-weekly-client-reports/index.ts
+          grep -q 'AGENCY_ONLY' supabase/functions/agency-ops-weekly-client-reports-custom/index.ts
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: scope weekly reports to agency-managed campaigns"
+          git push origin HEAD:main
