@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import MeetingsBridge from "./meetings-bridge";
 
 export default function CampaignsNavBridge() {
   useEffect(() => {
@@ -19,5 +20,5 @@ export default function CampaignsNavBridge() {
     document.addEventListener("click", handler, true);
     return () => document.removeEventListener("click", handler, true);
   }, []);
-  return null;
+  return <MeetingsBridge />;
 }
