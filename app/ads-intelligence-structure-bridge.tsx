@@ -11,7 +11,7 @@ type CacheEntry = { at: number; payload: Row };
 type Recommendation = { field: string; current: string; action: string; reason: string; confidence: "Alta" | "Média" | "Baixa"; tone: "good" | "info" | "warn" | "critical" };
 
 const STRUCTURE_API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-structure-api`;
-const INTELLIGENCE_API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-api`;
+const INTELLIGENCE_API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-api-v2`;
 const ACTION_API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-intelligence-action-api`;
 const BENCHMARK_API = `${SUPABASE_URL}/functions/v1/agency-ops-ads-benchmark-api`;
 const CACHE_MS = 90_000;
