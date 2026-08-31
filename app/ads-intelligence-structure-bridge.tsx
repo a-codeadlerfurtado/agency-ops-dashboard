@@ -102,8 +102,9 @@ function benchmarkUnavailableReason(benchmark: Row | null) {
 function makeRecommendations(row: Row, state: Row, context: Row | null, benchmark: Row | null): Recommendation[] {
   const pacing = context?.pacing || {};
   const budget = context?.budget || {};
-  const validBenchmark = Boolean(benchmark?.valid_for_recommendation);
-  const b = validBenchmark ? benchmark : {};
+  const benchmarkSafe: Row = benchmark || {};
+  const validBenchmark = benchmarkSafe.valid_for_recommendation === true;
+  const b: Row = validBenchmark ? benchmarkSafe : {};
   const cprRatio = validBenchmark ? ratio(row.cost_per_result, b.cpl) : null;
   const ctrRatio = validBenchmark ? ratio(row.ctr, b.ctr) : null;
   const cpcRatio = validBenchmark ? ratio(row.cpc, b.cpc) : null;
