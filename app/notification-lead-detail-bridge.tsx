@@ -18,7 +18,7 @@ function isLeadQualityNotification(item: Row | null | undefined) {
     || /lead incompleto/i.test(String(item.title || ""));
 }
 
-function normalize(value: unknown) {
+function normTxt(value: unknown) {
   return String(value ?? "")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -27,13 +27,34 @@ function normalize(value: unknown) {
     .toLocaleLowerCase("pt-BR");
 }
 
+function isBriefingNotification(item: Row | null | undefined) {
+  if (!item) return false;
+  return String(item.source || "").toLocaleLowerCase("pt-BR") === "briefing_hub"
+    || String(item.type || "").toUpperCase().startsWith("BRIEFING_");
+}
+
+function findBrief(rows: Row[], button: HTMLButtonElement) {
+  const title = normTxt(button.querySelector("b")?.textContent || "");
+  const visible = normTxt(button.textContent || "");
+  const exact = rows.filter((item) => {
+    if (!isBriefingNotification(item) || normTxt(item.title) !== title) return false;
+    const description = normTxt(item.description);
+    return !description || visible.includes(description);
+  });
+
+  if (exact.length === 1) return exact[0];
+
+  const byTitle = rows.filter((item) => isBriefingNotification(item) && normTxt(item.title) === title);
+  return byTitle.length === 1 ? byTitle[0] : null;
+}
+
 function exactNotificationForButton(rows: Row[], button: HTMLButtonElement) {
-  const title = normalize(button.querySelector("b")?.textContent || "");
-  const visible = normalize(button.textContent || "");
+  const title = normTxt(button.querySelector("b")?.textContent || "");
+  const visible = normTxt(button.textContent || "");
   const candidates = rows.filter((item) => {
     if (!isLeadQualityNotification(item)) return false;
-    if (normalize(item.title) !== title) return false;
-    const description = normalize(item.description);
+    if (normTxt(item.title) !== title) return false;
+    const description = normTxt(item.description);
     return Boolean(description) && visible.includes(description);
   });
 
@@ -43,9 +64,9 @@ function exactNotificationForButton(rows: Row[], button: HTMLButtonElement) {
   // a descrição renderizada mudou apenas na parte do ator/data, usamos também
   // cliente + produto + ocorrência para chegar a uma única notificação.
   const byIdentity = rows.filter((item) => {
-    if (!isLeadQualityNotification(item) || normalize(item.title) !== title) return false;
-    const description = normalize(item.description);
-    const product = normalize(item.metadata?.product_label);
+    if (!isLeadQualityNotification(item) || normTxt(item.title) !== title) return false;
+    const description = normTxt(item.description);
+    const product = normTxt(item.metadata?.product_label);
     const occurrence = Number(item.metadata?.occurrence_no || 0);
     const occurrenceText = occurrence ? `${occurrence}` : "";
     const descriptionMatches = description ? visible.includes(description) : false;
@@ -122,6 +143,33 @@ export default function NotificationLeadDetailBridge() {
       if (!notificationButton) return;
 
       const title = notificationButton.querySelector("b")?.textContent?.trim() || "";
+
+      let briefing = findBrief(notifications, notificationButton);
+      if (!briefing) {
+        const fresh = await loadNotifications();
+        briefing = findBrief(fresh, notificationButton);
+      }
+
+      if (briefing) {
+        const deepLink = String(briefing.metadata?.deep_link || briefing.metadata?.dashboard_path || "").trim();
+        if (deepLink) {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          try {
+            if (!briefing.read_at) await apiPost("notifications-read", accessToken, { id: briefing.id });
+          } catch {
+            // A navegação não depende da marcação como lida.
+          }
+          const destination = /^https?:\/\//i.test(deepLink)
+            ? deepLink
+            : `https://agency-briefing-hub.lakassessoriadigital.workers.dev${deepLink.startsWith("/") ? "" : "/"}${deepLink}`;
+          const separator = destination.includes("#") ? "&" : "#";
+          window.location.assign(`${destination}${separator}access_token=${encodeURIComponent(accessToken)}`);
+          return;
+        }
+      }
+
       if (!/lead incompleto/i.test(title)) return;
 
       // Impede SEMPRE o clique original do NotificationCenter para este tipo de alerta.
