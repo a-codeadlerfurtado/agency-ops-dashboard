@@ -259,25 +259,64 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
   return response;
 }
 
-let profileLiteCache: { userId: string; promise: Promise<Row> } | null = null;
+const PROFILE_LITE_CACHE_MS = 30_000;
+const PROFILE_LITE_TIMEOUT_MS = 10_000;
 
-export async function loadProfileLite(): Promise<Row> {
-  const { data, error } = await supabase.auth.getSession();
-  const userId = data.session?.user.id;
-  if (error || !userId) throw new SessionExpiredError();
+let profileLiteCache: {
+  userId: string;
+  accessToken: string;
+  expiresAt: number;
+  promise: Promise<Row>;
+} | null = null;
 
-  if (!profileLiteCache || profileLiteCache.userId !== userId) {
-    const promise = authenticatedFetch(`${SUPABASE_URL}/functions/v1/agency-ops-profile-lite`, { cache: "no-store" })
+// A sessão pode vir diretamente do evento onAuthStateChange. Nesse caminho é
+// obrigatório NÃO chamar getSession() nem authenticatedFetch(), porque ambos voltam
+// ao mutex interno do Supabase e podem deixar a tela presa em "Validando perfil".
+export async function loadProfileLite(currentSession?: Session | null): Promise<Row> {
+  const session = currentSession ?? (await supabase.auth.getSession()).data.session;
+  const userId = session?.user.id;
+  const accessToken = session?.access_token;
+  if (!userId || !accessToken) throw new SessionExpiredError();
+
+  const now = Date.now();
+  const cacheExpired = !profileLiteCache || profileLiteCache.expiresAt <= now;
+  const sessionChanged = !profileLiteCache
+    || profileLiteCache.userId !== userId
+    || profileLiteCache.accessToken !== accessToken;
+
+  if (cacheExpired || sessionChanged) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), PROFILE_LITE_TIMEOUT_MS);
+    const promise = fetch(`${SUPABASE_URL}/functions/v1/agency-ops-profile-lite`, {
+      cache: "no-store",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        apikey: SUPABASE_ANON_KEY,
+      },
+      signal: controller.signal,
+    })
       .then(async (response) => {
+        if (response.status === 401) throw new SessionExpiredError();
         if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
         return response.json();
       })
       .catch((caught) => {
         if (profileLiteCache?.promise === promise) profileLiteCache = null;
+        if (caught instanceof DOMException && caught.name === "AbortError") {
+          throw new Error("A validação do perfil excedeu 10 segundos.");
+        }
         throw caught;
-      });
-    profileLiteCache = { userId, promise };
+      })
+      .finally(() => window.clearTimeout(timeout));
+
+    profileLiteCache = {
+      userId,
+      accessToken,
+      expiresAt: now + PROFILE_LITE_CACHE_MS,
+      promise,
+    };
   }
+
   return profileLiteCache.promise;
 }
 
