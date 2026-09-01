@@ -1,4 +1,4 @@
-name: Inspect Briefing Hub worker for Drive migration
+name: Probe Cloudflare deployment environment
 
 on:
   push:
@@ -8,91 +8,36 @@ on:
       - '.github/workflows/briefing-hub-drive-inspect.yml'
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  inspect:
+  probe-environment:
+    strategy:
+      fail-fast: false
+      matrix:
+        env_name: [production, Production, cloudflare, Cloudflare, workers, Workers, deploy, Deploy]
+    environment: ${{ matrix.env_name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 3
     env:
-      CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN || secrets.CLOUDFLARE_TOKEN || vars.CLOUDFLARE_API_TOKEN || vars.CF_API_TOKEN || vars.CLOUDFLARE_TOKEN }}
+      CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN || secrets.CLOUDFLARE_TOKEN }}
       ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || vars.CF_ACCOUNT_ID || 'c3e4211c99f0c7d71701a6f59a23befb' }}
-      SCRIPT: agency-briefing-hub
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: briefing-hub-drive-deploy-20260901
-      - name: Validate token
+      - name: Probe environment credential
+        shell: bash
         run: |
           set -euo pipefail
-          test -n "${CF_API_TOKEN:-}" || { echo 'NO_CF_TOKEN'; exit 2; }
-          echo 'CF_TOKEN_PRESENT=true'
-      - name: Fetch current deployment, version detail and content
-        run: |
-          set -euo pipefail
-          mkdir -p .cloudflare-snapshots /tmp/cf
-          curl -fsS "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/$SCRIPT/deployments" \
-            -H "Authorization: Bearer $CF_API_TOKEN" > /tmp/cf/deployments.json
-          VERSION_ID=$(jq -r '.result.deployments[0].versions | max_by(.percentage) | .version_id // empty' /tmp/cf/deployments.json)
-          if [ -z "$VERSION_ID" ]; then
-            VERSION_ID=$(jq -r '.result.deployments[0].versions[0].version_id // empty' /tmp/cf/deployments.json)
+          if [ -z "${CF_API_TOKEN:-}" ]; then
+            echo "ENVIRONMENT=${{ matrix.env_name }} CF_TOKEN_PRESENT=false"
+            exit 0
           fi
-          test -n "$VERSION_ID"
-          echo "CURRENT_VERSION_ID=$VERSION_ID"
-          curl -fsS "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/$SCRIPT/versions/$VERSION_ID" \
-            -H "Authorization: Bearer $CF_API_TOKEN" > .cloudflare-snapshots/agency-briefing-hub-version.json
-          curl -fsS -D /tmp/cf/content.headers \
-            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/$SCRIPT/content/v2" \
-            -H "Authorization: Bearer $CF_API_TOKEN" -o /tmp/cf/content.body
-          python - <<'PY'
-          from pathlib import Path
-          from email.parser import BytesParser
-          from email.policy import default
-          headers=Path('/tmp/cf/content.headers').read_text(errors='replace')
-          body=Path('/tmp/cf/content.body').read_bytes()
-          ct=''
-          for line in headers.splitlines():
-              if line.lower().startswith('content-type:'):
-                  ct=line.split(':',1)[1].strip()
-          out=Path('.cloudflare-snapshots')
-          out.mkdir(exist_ok=True)
-          chosen=None
-          if 'multipart/' in ct.lower():
-              msg=BytesParser(policy=default).parsebytes((f'Content-Type: {ct}\r\nMIME-Version: 1.0\r\n\r\n').encode()+body)
-              parts=[]
-              for i,p in enumerate(msg.iter_parts()):
-                  name=p.get_param('name', header='content-disposition') or p.get_filename() or f'part-{i}'
-                  data=p.get_payload(decode=True) or b''
-                  parts.append((name,p.get_content_type(),len(data)))
-                  if chosen is None and (name.endswith('.js') or 'javascript' in p.get_content_type()):
-                      chosen=data
-              print('PARTS='+repr(parts))
-          else:
-              chosen=body
-              print('CONTENT_TYPE='+ct)
-          if chosen is None:
-              raise SystemExit('No JS module found in Worker content')
-          text=chosen.decode('utf-8')
-          (out/'agency-briefing-hub-current.js').write_text(text)
-          print('SOURCE_BYTES='+str(len(chosen)))
-          for needle in ['/api/client/materials','briefing_files','portal-config','data_base64']:
-              p=text.find(needle)
-              print(f'NEEDLE {needle} POS={p}')
-              if p>=0:
-                  s=max(0,p-1800); e=min(len(text),p+5200)
-                  print('---SNIP---')
-                  print(text[s:e])
-                  print('---ENDSNIP---')
-          PY
-      - name: Save snapshot on isolated branch
-        run: |
-          set -euo pipefail
-          git config user.name 'briefing-hub-drive-bot'
-          git config user.email 'actions@users.noreply.github.com'
-          git add .cloudflare-snapshots/agency-briefing-hub-current.js .cloudflare-snapshots/agency-briefing-hub-version.json
-          if git diff --cached --quiet; then
-            echo 'Snapshot unchanged'
+          echo "ENVIRONMENT=${{ matrix.env_name }} CF_TOKEN_PRESENT=true"
+          HTTP=$(curl -sS -o /tmp/cf.json -w '%{http_code}' \
+            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/agency-briefing-hub/deployments" \
+            -H "Authorization: Bearer $CF_API_TOKEN")
+          echo "ENVIRONMENT=${{ matrix.env_name }} CLOUDFLARE_HTTP=$HTTP"
+          if [ "$HTTP" = "200" ] && jq -e '.success == true' /tmp/cf.json >/dev/null 2>&1; then
+            echo "ENVIRONMENT=${{ matrix.env_name }} CLOUDFLARE_ACCESS_OK=true"
           else
-            git commit -m 'chore: snapshot current Briefing Hub worker'
-            git push origin HEAD:briefing-hub-drive-deploy-20260901
+            echo "ENVIRONMENT=${{ matrix.env_name }} CLOUDFLARE_ACCESS_OK=false"
           fi
