@@ -1,0 +1,53 @@
+name: Emergency Briefing Hub rollback
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/briefing-hub-emergency-rollback.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rollback-briefing-hub:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Roll back only agency-briefing-hub to stable v26
+        env:
+          CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN || secrets.CLOUDFLARE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CF_API_TOKEN:-}" ]; then
+            echo "No Cloudflare API token secret is configured under the expected names."
+            exit 2
+          fi
+
+          RESPONSE=$(curl -sS --fail-with-body \
+            -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/c3e4211c99f0c7d71701a6f59a23befb/workers/scripts/agency-briefing-hub/deployments" \
+            -H "Authorization: Bearer ${CF_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data '{"strategy":"percentage","versions":[{"version_id":"fe97df34-7527-4389-b353-3cd4ead60b05","percentage":100}],"annotations":{"workers/message":"Emergency rollback Briefing Hub to stable v26 after v44 login regression; agency-ops-dashboard untouched"}}')
+
+          echo "$RESPONSE" | jq -e '.success == true' >/dev/null
+          DEPLOYMENT_ID=$(echo "$RESPONSE" | jq -r '.result.id // empty')
+          test -n "$DEPLOYMENT_ID"
+          echo "Briefing Hub rollback deployment created: $DEPLOYMENT_ID"
+
+      - name: Smoke test public login page
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5; do
+            if curl -fsS --max-time 20 \
+              "https://agency-briefing-hub.lakassessoriadigital.workers.dev/cliente" \
+              -o /tmp/briefing-client.html; then
+              break
+            fi
+            sleep 3
+          done
+          test -s /tmp/briefing-client.html
+          grep -qi "Briefing Hub" /tmp/briefing-client.html
+          grep -qi "Entrar" /tmp/briefing-client.html
+          echo "Public login page is responding after rollback."
