@@ -10,6 +10,45 @@ permissions:
   contents: read
 
 jobs:
+  browser-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Verify login button in real browser
+        run: |
+          set -euo pipefail
+          python -m pip install -q selenium
+          python - <<'PY'
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.common.by import By
+          from selenium.webdriver.support.ui import WebDriverWait
+          from selenium.webdriver.support import expected_conditions as EC
+
+          opts = Options()
+          opts.add_argument('--headless=new')
+          opts.add_argument('--no-sandbox')
+          opts.add_argument('--disable-dev-shm-usage')
+          opts.add_argument('--window-size=1440,1000')
+          driver = webdriver.Chrome(options=opts)
+          try:
+              driver.get('https://agency-briefing-hub.lakassessoriadigital.workers.dev/cliente')
+              wait = WebDriverWait(driver, 20)
+              user = wait.until(EC.visibility_of_element_located((By.NAME, 'username')))
+              password = driver.find_element(By.NAME, 'password')
+              button = driver.find_element(By.CSS_SELECTOR, '.auth-submit')
+              user.send_keys('__browser_smoke_invalid__')
+              password.send_keys('__browser_smoke_invalid__')
+              button.click()
+              wait.until(lambda d: 'invalid_credentials' in d.find_element(By.ID, 'er').text)
+              print('LOGIN_BUTTON_HANDLER_OK')
+              print('ERROR_TEXT=' + driver.find_element(By.ID, 'er').text)
+              print('URL=' + driver.current_url)
+              print('CONSOLE=' + str(driver.get_log('browser') if hasattr(driver, 'get_log') else []))
+          finally:
+              driver.quit()
+          PY
+
   rollback-briefing-hub:
     runs-on: ubuntu-latest
     timeout-minutes: 5
