@@ -15,6 +15,7 @@ import "./ads-intelligence-ad-preview.css";
 import "./ads-intelligence-ops.css";
 import "./meta-weekly-reports.css";
 import "./client-access-vault.css";
+import "./client-meta-assets.css";
 import "./system-update-center.css";
 import "./security-center.css";
 import "./client-360.css";
@@ -56,6 +57,7 @@ import NotificationLeadClickOverride from "./notification-lead-click-override";
 import ClientNotificationsBridge from "./client-notifications-bridge";
 import ClientCommercialProfileBridge from "./client-commercial-profile-bridge";
 import ClientAccessVaultBridge from "./client-access-vault-bridge";
+import ClientMetaAssetsBridge from "./client-meta-assets-bridge";
 import ClientContextUploadBridge from "./client-context-upload-bridge";
 import Client360Bridge from "./client-360-bridge";
 import CreativeManualEditBridge from "./creative-manual-edit-bridge";
@@ -138,6 +140,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <Client360Bridge />
         <ClientCommercialProfileBridge />
         <ClientAccessVaultBridge />
+        <ClientMetaAssetsBridge />
         <ClientContextUploadBridge />
         <CreativeManualEditBridge />
         <CreativeIntelligenceBridge />
