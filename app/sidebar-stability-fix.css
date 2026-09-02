@@ -2,9 +2,10 @@
  * Sidebar hard-stability layer.
  *
  * The dashboard historically had multiple runtime systems touching the same
- * .side-nav-items container. The information-architecture reordering layer is
- * no longer mounted; this file also neutralizes the remaining legacy enhancer
- * nodes and browser-compositing effects that can make the sidebar flicker.
+ * .side-nav-items container. Runtime information-architecture reordering is no
+ * longer mounted. This file keeps navigation geometry stable and defines a
+ * deterministic semantic order with CSS only, so role-specific tabs are simply
+ * omitted when the profile does not have access.
  */
 
 /* Never let legacy runtime group labels enter layout. */
@@ -64,3 +65,68 @@
 .side-nav-items > a {
   transition-property: background-color, color, border-color, box-shadow, opacity !important;
 }
+
+/*
+ * Stable semantic order.
+ *
+ * IMPORTANT: this uses flex `order`; it never moves DOM nodes, never starts a
+ * timer and never observes mutations. A role only sees the buttons it is already
+ * authorized to see. Missing tabs leave no gap because order is ordinal only.
+ */
+.side-nav-items > button,
+.side-nav-items > a { order: 900; }
+
+/* 1. Trabalho do dia */
+.side-nav-items > [title="Visão geral"],
+.side-nav-items > [title="Visao geral"] { order: 10; }
+.side-nav-items > [title="Foco do dia"],
+.side-nav-items > [title="Meu dia"] { order: 20; }
+.side-nav-items > [title^="Central de Trabalho"] { order: 30; }
+.side-nav-items > [title="Alertas"],
+.side-nav-items > [title^="Alertas operacionais"] { order: 40; }
+.side-nav-items > [title="Diário"] { order: 50; }
+.side-nav-items > [data-commercial-funnel-nav] { order: 60; }
+
+/* 2. Carteira / jornada do cliente */
+.side-nav-items > [title="Clientes"],
+.side-nav-items > [title="Carteira"] { order: 100; }
+.side-nav-items > [title="Saúde"],
+.side-nav-items > [title^="Saúde da carteira"] { order: 110; }
+.side-nav-items > [title="Conversas"] { order: 120; }
+.side-nav-items > [title="Onboarding"],
+.side-nav-items > [title^="Jornada do cliente"] { order: 130; }
+.side-nav-items > [title="Pré-clientes"],
+.side-nav-items > [title^="Pré-clientes"] { order: 140; }
+
+/* 3. Mídia / performance */
+.side-nav-items > [title="Campanhas"] { order: 200; }
+.side-nav-items > [data-ads-intelligence-nav] { order: 210; }
+.side-nav-items > [data-meta-consultant-nav] { order: 220; }
+.side-nav-items > [data-meta-performance-nav] { order: 230; }
+.side-nav-items > [data-meta-analysis-nav] { order: 240; }
+.side-nav-items > [data-client-balances-nav] { order: 250; }
+
+/* 4. Criativo */
+.side-nav-items > [title^="Central Criativa"] { order: 300; }
+.side-nav-items > [title^="Produção de Roteiros"],
+.side-nav-items > [data-video-scripts-nav] { order: 310; }
+.side-nav-items > [data-meta-radar-nav] { order: 320; }
+
+/* 5. Gestão */
+.side-nav-items > [title="Equipe"]:not([data-meetings-nav]) { order: 400; }
+.side-nav-items > [title^="Desempenho OP"],
+.side-nav-items > [title^="Desempenho da operação"] { order: 410; }
+.side-nav-items > [data-meetings-nav] { order: 420; }
+.side-nav-items > [title="Auditoria"] { order: 430; }
+.side-nav-items > [title="Evidências"] { order: 440; }
+.side-nav-items > [title="Contratos"] { order: 450; }
+.side-nav-items > [data-adler-finance-nav] { order: 460; }
+
+/* 6. Sistemas / integrações */
+.side-nav-items > [title="ClickUp"] { order: 500; }
+.side-nav-items > [data-donnah-nav] { order: 510; }
+.side-nav-items > [data-automation-health-nav] { order: 520; }
+.side-nav-items > [title="IA"],
+.side-nav-items > [title^="IA (Beta"] { order: 530; }
+.side-nav-items > [data-system-updates-nav] { order: 540; }
+.side-nav-items > [data-security-center-nav] { order: 550; }
