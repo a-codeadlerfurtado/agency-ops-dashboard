@@ -1,0 +1,44 @@
+name: Capture live Briefing Hub client UI
+
+on:
+  push:
+    branches:
+      - briefing-hub-drive-deploy-20260901
+    paths:
+      - '.github/workflows/briefing-hub-public-ui-snapshot.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: briefing-hub-drive-deploy-20260901
+      - name: Capture current public client application
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .briefing-live
+          curl -fsSL --retry 3 --retry-delay 2 --max-time 30 \
+            'https://agency-briefing-hub.lakassessoriadigital.workers.dev/cliente' \
+            -o .briefing-live/cliente.html
+          test -s .briefing-live/cliente.html
+          grep -qi 'Briefing Hub' .briefing-live/cliente.html
+          echo "Captured $(wc -c < .briefing-live/cliente.html) bytes"
+      - name: Save snapshot on isolated branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'briefing-hub-ui-snapshot-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add .briefing-live/cliente.html
+          if git diff --cached --quiet; then
+            echo 'Snapshot unchanged'
+          else
+            git commit -m 'chore: snapshot live Briefing Hub client UI'
+            git push origin HEAD:briefing-hub-drive-deploy-20260901
+          fi
