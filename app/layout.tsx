@@ -33,7 +33,6 @@ import LeonardoScopeNetwork from "./leonardo-scope-network";
 import AdlerFinanceNavBridge from "./adler-finance-nav-bridge";
 import ClientBalancesNavBridge from "./client-balances-nav-bridge";
 import AdlerNotificationAreaFilter from "./adler-notification-area-filter";
-import AdlerPasswordManagerBridge from "./adler-password-manager-bridge";
 import MetaCreativePreviewResponseBridge from "./meta-creative-preview-response-bridge";
 import MetaPerformanceProfileBridge from "./meta-performance-profile-bridge";
 import MetaAnalysisNavBridge from "./meta-analysis-nav-bridge";
@@ -141,7 +140,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <Client360Bridge />
         <ClientCommercialProfileBridge />
         <ClientAccessVaultBridge />
-        <AdlerPasswordManagerBridge />
         <ClientMetaAssetsBridge />
         <ClientContextUploadBridge />
         <CreativeManualEditBridge />
