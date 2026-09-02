@@ -317,7 +317,9 @@ export async function loadProfileLite(currentSession?: Session | null): Promise<
     };
   }
 
-  return profileLiteCache.promise;
+  const cachedProfile = profileLiteCache;
+  if (!cachedProfile) throw new Error("profile_cache_unavailable");
+  return cachedProfile.promise;
 }
 
 export async function api(view: string, _token: string, params: Record<string, string> = {}) {
