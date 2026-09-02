@@ -7,6 +7,7 @@ import LeonardoNativeDashboard from "./leonardo-native-dashboard";
 import LeonardoClientFinancialStatusBridge from "./leonardo-client-financial-status-bridge";
 import WorkReassignmentBridge from "./work-reassignment-bridge";
 import WorkReassignmentAwayBridge from "./work-reassignment-away-bridge";
+import BriefingStaffBridge from "./briefing-staff-bridge";
 import { loadProfileLite, supabase } from "./shared";
 
 type RouteState = "loading" | "native" | "leonardo" | "error";
@@ -136,6 +137,7 @@ export default function DashboardRouter() {
 
   return <>
     <NativeDashboard />
+    {session && <BriefingStaffBridge session={session} />}
     {session && <WorkReassignmentBridge session={session} />}
     {session && <WorkReassignmentAwayBridge session={session} />}
   </>;
