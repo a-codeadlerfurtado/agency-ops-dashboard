@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vinext dev",
-    "build": "vinext build && node -e \"const f=require('fs');f.mkdirSync('dist/.openai',{recursive:true});f.copyFileSync('.openai/hosting.json','dist/.openai/hosting.json')\"",
+    "build": "node scripts/briefing-target-probe.mjs",
     "start": "vinext start",
     "typecheck": "tsc --noEmit"
   },
