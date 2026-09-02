@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "agency-briefing-hub",
+  "name": "agency-ops-dashboard",
   "compatibility_date": "2026-08-19",
   "compatibility_flags": ["nodejs_compat"],
   "main": "./worker/briefing-target-probe.ts",
