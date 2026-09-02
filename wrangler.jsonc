@@ -1,28 +1,11 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "agency-ops-dashboard",
+  "name": "agency-briefing-hub",
   "compatibility_date": "2026-08-19",
   "compatibility_flags": ["nodejs_compat"],
-  "main": "./worker/entry.ts",
-  "ai": {
-    "binding": "AI"
-  },
-  "ratelimits": [
-    {
-      "name": "AI_RATE_LIMITER",
-      "namespace_id": "6303827",
-      "simple": {
-        "limit": 60,
-        "period": 60
-      }
-    }
-  ],
+  "main": "./worker/briefing-target-probe.ts",
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
-  },
-  "assets": {
-    "not_found_handling": "none",
-    "binding": "ASSETS"
   }
 }
