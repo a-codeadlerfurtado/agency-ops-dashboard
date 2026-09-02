@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { createClient } from "@supabase/supabase-js";
 import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from "./shared";
 
 type VaultItem = {
@@ -29,7 +28,7 @@ type Credential = VaultItem & {
   revealed_at?: string | null;
 };
 
-const ACCESS_API = `${SUPABASE_URL}/functions/v1/agency-ops-client-access-vault-api`;
+const ACCESS_API = `${SUPABASE_URL}/functions/v1/agency-ops-adler-vault-api`;
 const UNLOCK_SECONDS = 180;
 const PROFILE_BUTTON_CLASS = "adler-global-vault-trigger";
 
@@ -58,11 +57,13 @@ function errLabel(code: unknown) {
   const labels: Record<string, string> = {
     invalid_reauthentication: "A senha do seu perfil está incorreta.",
     reauth_locked: "Muitas tentativas incorretas. O cofre foi bloqueado temporariamente.",
-    unauthorized: "Sua sessão expirou.",
+    unauthorized: "Sua sessão do Dashboard expirou. Entre novamente.",
     forbidden: "Seu perfil não tem permissão para esse acesso.",
     credential_not_found: "Esse acesso não existe mais.",
     credential_decryption_failed: "Não foi possível abrir essa credencial.",
     vault_key_missing: "A chave criptográfica do cofre não está disponível.",
+    vault_key_invalid_length: "A chave criptográfica do cofre está inválida.",
+    client_not_found: "O cliente desse acesso não foi encontrado.",
   };
   return labels[value] || "Não foi possível concluir essa ação agora.";
 }
@@ -83,6 +84,7 @@ export default function AdlerPasswordManagerBridge() {
   const [unlockPassword, setUnlockPassword] = useState("");
   const [unlockError, setUnlockError] = useState("");
   const [unlockUntil, setUnlockUntil] = useState(0);
+  const [secondsLeft, setSecondsLeft] = useState(0);
   const [pendingReveal, setPendingReveal] = useState<VaultItem | null>(null);
   const [toast, setToast] = useState("");
   const passwordRef = useRef("");
@@ -91,14 +93,21 @@ export default function AdlerPasswordManagerBridge() {
   const lock = useCallback(() => {
     passwordRef.current = "";
     setUnlockUntil(0);
+    setSecondsLeft(0);
     setUnlockPassword("");
     setUnlockOpen(false);
+    setUnlockError("");
     setPendingReveal(null);
     setRevealed({});
     setVisiblePasswords(new Set());
     if (unlockTimerRef.current) window.clearTimeout(unlockTimerRef.current);
     unlockTimerRef.current = null;
   }, []);
+
+  const closeVault = useCallback(() => {
+    setOpen(false);
+    lock();
+  }, [lock]);
 
   const loadItems = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -123,9 +132,15 @@ export default function AdlerPasswordManagerBridge() {
 
   useEffect(() => {
     void loadItems();
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
-      lock();
-      void loadItems();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") {
+        lock();
+        setAllowed(false);
+        setItems([]);
+        setOpen(false);
+        return;
+      }
+      if (event === "SIGNED_IN" || event === "USER_UPDATED") void loadItems();
     });
     return () => subscription.unsubscribe();
   }, [loadItems, lock]);
@@ -178,8 +193,20 @@ export default function AdlerPasswordManagerBridge() {
   }, [lock]);
 
   useEffect(() => {
+    if (!unlockUntil) return;
+    const tick = () => {
+      const left = Math.max(0, Math.ceil((unlockUntil - Date.now()) / 1000));
+      setSecondsLeft(left);
+      if (left <= 0) lock();
+    };
+    tick();
+    const interval = window.setInterval(tick, 500);
+    return () => window.clearInterval(interval);
+  }, [lock, unlockUntil]);
+
+  useEffect(() => {
     if (!toast) return;
-    const timer = window.setTimeout(() => setToast(""), 2200);
+    const timer = window.setTimeout(() => setToast(""), 2400);
     return () => window.clearTimeout(timer);
   }, [toast]);
 
@@ -196,7 +223,6 @@ export default function AdlerPasswordManagerBridge() {
 
   const clientCount = useMemo(() => new Set(items.map((item) => item.client_id)).size, [items]);
   const briefingCount = useMemo(() => items.filter((item) => /briefing hub/i.test(item.system_name)).length, [items]);
-  const secondsLeft = unlockUntil ? Math.max(0, Math.ceil((unlockUntil - Date.now()) / 1000)) : 0;
   const unlocked = Boolean(passwordRef.current && unlockUntil > Date.now());
 
   function toggleFavorite(id: string) {
@@ -208,35 +234,54 @@ export default function AdlerPasswordManagerBridge() {
     });
   }
 
-  async function vaultApi(action: string, item: VaultItem, extra: Record<string, unknown> = {}) {
+  async function currentToken(forceRefresh = false) {
+    if (forceRefresh) {
+      const refreshed = await supabase.auth.refreshSession();
+      if (refreshed.data.session?.access_token) return refreshed.data.session.access_token;
+    }
     const { data: { session } } = await supabase.auth.getSession();
-    if (!session?.access_token) throw new Error("unauthorized");
-    const response = await fetch(ACCESS_API, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${session.access_token}`,
-        apikey: SUPABASE_ANON_KEY,
-        "content-type": "application/json",
-      },
-      cache: "no-store",
-      body: JSON.stringify({ action, client_id: item.client_id, item_id: item.id, ...extra }),
-    });
-    const payload = await response.json().catch(() => ({ ok: false, error: `http_${response.status}` }));
-    if (!response.ok || !payload?.ok) throw new Error(String(payload?.error || `http_${response.status}`));
-    return payload;
+    if (session?.access_token) return session.access_token;
+    const refreshed = await supabase.auth.refreshSession();
+    if (refreshed.data.session?.access_token) return refreshed.data.session.access_token;
+    throw new Error("unauthorized");
+  }
+
+  async function vaultApi(action: string, item: VaultItem, extra: Record<string, unknown> = {}) {
+    const request = async (token: string) => {
+      const response = await fetch(ACCESS_API, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: SUPABASE_ANON_KEY,
+          "content-type": "application/json",
+        },
+        cache: "no-store",
+        body: JSON.stringify({ action, client_id: item.client_id, item_id: item.id, ...extra }),
+      });
+      const payload = await response.json().catch(() => ({ ok: false, error: `http_${response.status}` }));
+      return { response, payload };
+    };
+
+    let result = await request(await currentToken());
+    if (result.response.status === 401) result = await request(await currentToken(true));
+    if (!result.response.ok || !result.payload?.ok) throw new Error(String(result.payload?.error || `http_${result.response.status}`));
+    return result.payload;
+  }
+
+  function armUnlock(password: string) {
+    passwordRef.current = password;
+    const until = Date.now() + UNLOCK_SECONDS * 1000;
+    setUnlockUntil(until);
+    setSecondsLeft(UNLOCK_SECONDS);
+    if (unlockTimerRef.current) window.clearTimeout(unlockTimerRef.current);
+    unlockTimerRef.current = window.setTimeout(lock, UNLOCK_SECONDS * 1000);
   }
 
   async function revealWithPassword(item: VaultItem, dashboardPassword: string) {
-    setLoading(true);
-    try {
-      const payload = await vaultApi("REVEAL", item, { dashboard_password: dashboardPassword });
-      setRevealed((current) => ({ ...current, [item.id]: { ...item, ...(payload.credential || {}) } }));
-      setToast("Acesso liberado");
-    } catch (error) {
-      const message = errLabel(error instanceof Error ? error.message : error);
-      setToast(message);
-      if (/senha|bloqueado/i.test(message)) lock();
-    } finally { setLoading(false); }
+    const payload = await vaultApi("REVEAL", item, { dashboard_password: dashboardPassword });
+    const credential = { ...item, ...(payload.credential || {}) } as Credential;
+    setRevealed((current) => ({ ...current, [item.id]: credential }));
+    return credential;
   }
 
   async function requestReveal(item: VaultItem) {
@@ -244,50 +289,61 @@ export default function AdlerPasswordManagerBridge() {
     if (!unlocked) {
       setPendingReveal(item);
       setUnlockError("");
+      setUnlockPassword("");
       setUnlockOpen(true);
       return;
     }
-    await revealWithPassword(item, passwordRef.current);
+    setLoading(true);
+    try {
+      await revealWithPassword(item, passwordRef.current);
+      setToast("Acesso liberado");
+    } catch (error) {
+      const code = error instanceof Error ? error.message : error;
+      const message = errLabel(code);
+      setToast(message);
+      if (String(code) === "invalid_reauthentication" || String(code) === "reauth_locked" || String(code) === "unauthorized") {
+        lock();
+        setPendingReveal(item);
+        setUnlockError(message);
+        setUnlockOpen(true);
+      }
+    } finally { setLoading(false); }
   }
 
   async function unlock(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!unlockPassword) return;
+    if (!unlockPassword || !items.length) return;
+    const password = unlockPassword;
     setLoading(true);
     setUnlockError("");
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.user?.email) throw new Error("Sessão expirada.");
-      const verifier = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-      });
-      const result = await verifier.auth.signInWithPassword({ email: session.user.email, password: unlockPassword });
-      try { await verifier.auth.signOut(); } catch { /* no-op */ }
-      if (result.error || result.data.user?.id !== session.user.id) throw new Error("Senha incorreta.");
-      const password = unlockPassword;
-      passwordRef.current = password;
-      const until = Date.now() + UNLOCK_SECONDS * 1000;
-      setUnlockUntil(until);
+      if (pendingReveal) await revealWithPassword(pendingReveal, password);
+      else await vaultApi("VERIFY", items[0], { dashboard_password: password });
+      armUnlock(password);
       setUnlockPassword("");
       setUnlockOpen(false);
-      if (unlockTimerRef.current) window.clearTimeout(unlockTimerRef.current);
-      unlockTimerRef.current = window.setTimeout(lock, UNLOCK_SECONDS * 1000);
-      const pending = pendingReveal;
       setPendingReveal(null);
-      if (pending) await revealWithPassword(pending, password);
+      setToast(pendingReveal ? "Acesso liberado" : "Cofre desbloqueado");
     } catch (error) {
-      setUnlockError(error instanceof Error ? error.message : "Não foi possível confirmar sua identidade.");
+      const code = error instanceof Error ? error.message : error;
+      setUnlockError(errLabel(code));
+      passwordRef.current = "";
+      setUnlockUntil(0);
+      setSecondsLeft(0);
     } finally { setLoading(false); }
   }
 
   async function copy(item: VaultItem, field: "LOGIN" | "PASSWORD") {
-    let credential = revealed[item.id];
+    const credential = revealed[item.id];
     if (!credential) {
       await requestReveal(item);
       return;
     }
     const value = field === "LOGIN" ? credential.login : credential.password;
-    if (!value) { setToast(field === "LOGIN" ? "Esse acesso não tem login salvo" : "Senha não encontrada"); return; }
+    if (!value) {
+      setToast(field === "LOGIN" ? "Esse acesso não tem login salvo" : "Senha não encontrada");
+      return;
+    }
     try {
       await navigator.clipboard.writeText(String(value));
       setToast(field === "LOGIN" ? "Login copiado" : "Senha copiada");
@@ -308,26 +364,27 @@ export default function AdlerPasswordManagerBridge() {
   return createPortal(<>
     <style>{`
       .${PROFILE_BUTTON_CLASS}{font-weight:650!important;color:#dbeafe!important}
-      .adler-pm-backdrop{position:fixed;inset:0;z-index:2147482500;background:rgba(2,6,23,.72);backdrop-filter:blur(12px);display:flex;align-items:center;justify-content:center;padding:24px}
-      .adler-pm{width:min(1180px,96vw);height:min(820px,92vh);background:#0b1220;border:1px solid rgba(148,163,184,.2);border-radius:24px;box-shadow:0 30px 90px rgba(0,0,0,.55);overflow:hidden;display:flex;flex-direction:column;color:#e5edf8}
-      .adler-pm-head{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:24px 28px 18px;border-bottom:1px solid rgba(148,163,184,.14)}
-      .adler-pm-eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#60a5fa;font-weight:800}
-      .adler-pm h2{font-size:26px;margin:4px 0 5px;font-family:"Inter Tight",Inter,sans-serif}.adler-pm-head p{margin:0;color:#94a3b8;font-size:13px}
-      .adler-pm-close,.adler-pm-icon{border:1px solid rgba(148,163,184,.16);background:#111827;color:#cbd5e1;border-radius:10px;cursor:pointer}.adler-pm-close{width:38px;height:38px;font-size:22px}
-      .adler-pm-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:16px 28px 0}.adler-pm-stat{background:#0f172a;border:1px solid rgba(148,163,184,.12);border-radius:14px;padding:13px 15px}.adler-pm-stat b{display:block;font-size:21px}.adler-pm-stat span{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em}
-      .adler-pm-tools{display:flex;gap:10px;align-items:center;padding:16px 28px}.adler-pm-search{flex:1;position:relative}.adler-pm-search input{width:100%;height:44px;border-radius:12px;border:1px solid rgba(148,163,184,.18);background:#0f172a;color:#f8fafc;padding:0 14px 0 40px;outline:none}.adler-pm-search:before{content:"⌕";position:absolute;left:14px;top:9px;color:#64748b;font-size:22px}.adler-pm-tools select,.adler-pm-filter{height:44px;border-radius:12px;border:1px solid rgba(148,163,184,.18);background:#0f172a;color:#dbeafe;padding:0 12px}.adler-pm-filter{cursor:pointer}.adler-pm-filter.active{border-color:#3b82f6;background:#172554}
-      .adler-pm-lock{margin:0 28px 14px;padding:10px 12px;border-radius:12px;background:#111827;border:1px solid rgba(148,163,184,.12);display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:12px;color:#94a3b8}.adler-pm-lock b{color:#cbd5e1}.adler-pm-lock button{border:0;background:transparent;color:#60a5fa;cursor:pointer;font-weight:700}
-      .adler-pm-list{padding:0 28px 28px;overflow:auto;display:grid;gap:10px}.adler-pm-item{border:1px solid rgba(148,163,184,.13);background:#0f172a;border-radius:16px;overflow:hidden}.adler-pm-row{display:grid;grid-template-columns:44px minmax(180px,1fr) minmax(160px,.8fr) auto;gap:14px;align-items:center;padding:14px 16px}.adler-pm-badge{width:42px;height:42px;border-radius:12px;background:#172554;color:#93c5fd;display:grid;place-items:center;font-weight:900;font-size:17px}.adler-pm-main b{display:block;font-size:14px}.adler-pm-main small,.adler-pm-meta small{display:block;color:#94a3b8;font-size:11px;margin-top:3px}.adler-pm-meta{min-width:0}.adler-pm-meta b{font-size:12px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.adler-pm-actions{display:flex;gap:7px}.adler-pm-actions button{height:34px;border-radius:9px;border:1px solid rgba(148,163,184,.16);background:#111827;color:#cbd5e1;padding:0 11px;cursor:pointer;font-size:12px;font-weight:650}.adler-pm-actions button.primary{background:#2563eb;border-color:#2563eb;color:white}.adler-pm-actions button.star{width:34px;padding:0;font-size:17px}.adler-pm-actions button.star.active{color:#fbbf24}
-      .adler-pm-secret{border-top:1px solid rgba(148,163,184,.12);padding:14px 16px 16px;background:#0b1324;display:grid;grid-template-columns:1fr 1fr;gap:10px}.adler-pm-field{border:1px solid rgba(148,163,184,.12);border-radius:12px;padding:11px 12px;background:#0f172a}.adler-pm-field label{display:block;color:#64748b;font-size:10px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}.adler-pm-field code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#e2e8f0;font-size:12px;word-break:break-all}.adler-pm-field .field-actions{display:flex;gap:6px;margin-top:8px}.adler-pm-field button{border:0;background:transparent;color:#60a5fa;padding:0;cursor:pointer;font-size:11px;font-weight:700}.adler-pm-notes{grid-column:1/-1}.adler-pm-empty{padding:44px;text-align:center;color:#64748b;border:1px dashed rgba(148,163,184,.16);border-radius:16px}
-      .adler-pm-unlock-wrap{position:fixed;inset:0;z-index:2147482600;background:rgba(2,6,23,.78);display:grid;place-items:center;padding:20px}.adler-pm-unlock{width:min(430px,94vw);background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:20px;padding:24px;box-shadow:0 24px 80px rgba(0,0,0,.5)}.adler-pm-unlock h3{margin:0 0 6px;font-size:20px}.adler-pm-unlock p{margin:0 0 16px;color:#94a3b8;font-size:12px}.adler-pm-unlock input{width:100%;height:44px;border-radius:11px;border:1px solid rgba(148,163,184,.2);background:#0b1220;color:white;padding:0 12px;outline:none}.adler-pm-unlock-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}.adler-pm-unlock-actions button{height:38px;border-radius:10px;border:1px solid rgba(148,163,184,.16);background:#111827;color:#cbd5e1;padding:0 14px;cursor:pointer}.adler-pm-unlock-actions .primary{background:#2563eb;border-color:#2563eb;color:white}.adler-pm-error{color:#fca5a5!important;margin-top:9px!important}.adler-pm-toast{position:fixed;right:24px;bottom:24px;z-index:2147482700;background:#111827;border:1px solid rgba(148,163,184,.18);color:#e2e8f0;border-radius:12px;padding:11px 14px;box-shadow:0 18px 55px rgba(0,0,0,.45);font-size:12px}
-      @media(max-width:760px){.adler-pm-backdrop{padding:0}.adler-pm{width:100vw;height:100vh;border-radius:0}.adler-pm-stats{grid-template-columns:1fr 1fr;padding-inline:16px}.adler-pm-stat:last-child{grid-column:1/-1}.adler-pm-head,.adler-pm-tools,.adler-pm-list{padding-left:16px;padding-right:16px}.adler-pm-tools{flex-wrap:wrap}.adler-pm-search{flex-basis:100%}.adler-pm-row{grid-template-columns:40px 1fr auto}.adler-pm-meta{grid-column:2}.adler-pm-actions{grid-column:1/-1;justify-content:flex-end}.adler-pm-secret{grid-template-columns:1fr}}
+      .adler-pm-backdrop{position:fixed;inset:0;z-index:2147482500;background:rgba(2,6,23,.72);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;padding:20px}
+      .adler-pm{width:min(1180px,calc(100vw - 40px));height:min(760px,calc(100dvh - 40px));max-height:calc(100dvh - 40px);background:#0b1220;border:1px solid rgba(148,163,184,.2);border-radius:22px;box-shadow:0 30px 90px rgba(0,0,0,.55);overflow:hidden;display:flex;flex-direction:column;color:#e5edf8;min-height:0}
+      .adler-pm-head{flex:0 0 auto;display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:20px 24px 16px;border-bottom:1px solid rgba(148,163,184,.14)}
+      .adler-pm-eyebrow{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:#60a5fa;font-weight:800}
+      .adler-pm h2{font-size:25px;line-height:1.05;margin:4px 0 5px;font-family:"Inter Tight",Inter,sans-serif}.adler-pm-head p{margin:0;color:#94a3b8;font-size:12px;line-height:1.4}
+      .adler-pm-close{flex:0 0 38px;width:38px;height:38px;border:1px solid rgba(148,163,184,.16);background:#111827;color:#cbd5e1;border-radius:10px;cursor:pointer;font-size:22px}
+      .adler-pm-stats{flex:0 0 auto;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:14px 22px 0}.adler-pm-stat{background:#0f172a;border:1px solid rgba(148,163,184,.12);border-radius:13px;padding:11px 14px;min-height:67px}.adler-pm-stat b{display:block;font-size:20px;line-height:1.1}.adler-pm-stat span{display:block;margin-top:6px;font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.08em}
+      .adler-pm-tools{flex:0 0 auto;display:flex;gap:10px;align-items:center;padding:14px 22px 12px}.adler-pm-search{flex:1;position:relative;min-width:180px}.adler-pm-search input{box-sizing:border-box;width:100%;height:42px;border-radius:11px;border:1px solid rgba(148,163,184,.18);background:#0f172a;color:#f8fafc;padding:0 14px 0 39px;outline:none;font-size:13px}.adler-pm-search:before{content:"⌕";position:absolute;left:14px;top:8px;color:#64748b;font-size:21px;pointer-events:none}.adler-pm-tools select,.adler-pm-filter{height:42px;border-radius:11px;border:1px solid rgba(148,163,184,.18);background:#0f172a;color:#dbeafe;padding:0 12px}.adler-pm-filter{cursor:pointer;white-space:nowrap}.adler-pm-filter.active{border-color:#3b82f6;background:#172554}
+      .adler-pm-lock{flex:0 0 auto;margin:0 22px 12px;padding:9px 11px;border-radius:11px;background:#111827;border:1px solid rgba(148,163,184,.12);display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:11px;color:#94a3b8}.adler-pm-lock b{color:#cbd5e1}.adler-pm-lock button{border:0;background:transparent;color:#60a5fa;cursor:pointer;font-weight:700;white-space:nowrap}
+      .adler-pm-list{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;scrollbar-gutter:stable;padding:0 22px 22px;display:flex;flex-direction:column;gap:8px;overscroll-behavior:contain}.adler-pm-item{flex:0 0 auto;min-height:66px;border:1px solid rgba(148,163,184,.13);background:#0f172a;border-radius:14px;overflow:hidden}.adler-pm-row{min-height:66px;box-sizing:border-box;display:grid;grid-template-columns:42px minmax(190px,1fr) minmax(180px,.8fr) auto;gap:13px;align-items:center;padding:11px 14px}.adler-pm-badge{width:40px;height:40px;border-radius:11px;background:#172554;color:#93c5fd;display:grid;place-items:center;font-weight:900;font-size:16px}.adler-pm-main,.adler-pm-meta{min-width:0}.adler-pm-main b{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.adler-pm-main small,.adler-pm-meta small{display:block;color:#94a3b8;font-size:10px;line-height:1.3;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.adler-pm-meta b{font-size:11px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.adler-pm-actions{display:flex;align-items:center;gap:6px;white-space:nowrap}.adler-pm-actions button{height:32px;border-radius:9px;border:1px solid rgba(148,163,184,.16);background:#111827;color:#cbd5e1;padding:0 10px;cursor:pointer;font-size:11px;font-weight:650}.adler-pm-actions button.adler-pm-primary{background:#2563eb!important;border-color:#2563eb!important;color:#fff!important}.adler-pm-actions button.star{width:32px;padding:0;font-size:16px}.adler-pm-actions button.star.active{color:#fbbf24}
+      .adler-pm-secret{border-top:1px solid rgba(148,163,184,.12);padding:12px 14px 14px;background:#0b1324;display:grid;grid-template-columns:1fr 1fr;gap:9px}.adler-pm-field{min-width:0;border:1px solid rgba(148,163,184,.12);border-radius:11px;padding:10px 11px;background:#0f172a}.adler-pm-field label{display:block;color:#64748b;font-size:9px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:5px}.adler-pm-field code{display:block;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#e2e8f0;font-size:11px;line-height:1.4;word-break:break-all}.adler-pm-field .field-actions{display:flex;gap:10px;margin-top:8px}.adler-pm-field button{border:0;background:transparent;color:#60a5fa;padding:0;cursor:pointer;font-size:10px;font-weight:700}.adler-pm-notes{grid-column:1/-1}.adler-pm-empty{flex:0 0 auto;padding:38px;text-align:center;color:#64748b;border:1px dashed rgba(148,163,184,.16);border-radius:14px}
+      .adler-pm-unlock-wrap{position:fixed;inset:0;z-index:2147482600;background:rgba(2,6,23,.82);display:grid;place-items:center;padding:20px}.adler-pm-unlock{box-sizing:border-box;width:min(430px,94vw);background:#0f172a;border:1px solid rgba(148,163,184,.18);border-radius:18px;padding:22px;box-shadow:0 24px 80px rgba(0,0,0,.5)}.adler-pm-unlock h3{margin:0 0 6px;font-size:19px}.adler-pm-unlock p{margin:0 0 15px;color:#94a3b8;font-size:11px;line-height:1.45}.adler-pm-unlock input{box-sizing:border-box;width:100%;height:43px;border-radius:10px;border:1px solid rgba(148,163,184,.2);background:#0b1220;color:white;padding:0 12px;outline:none}.adler-pm-unlock-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:13px}.adler-pm-unlock-actions button{height:37px;border-radius:9px;border:1px solid rgba(148,163,184,.16);background:#111827;color:#cbd5e1;padding:0 13px;cursor:pointer}.adler-pm-unlock-actions .adler-pm-primary{background:#2563eb!important;border-color:#2563eb!important;color:white!important}.adler-pm-error{color:#fca5a5!important;margin:9px 0 0!important}.adler-pm-toast{position:fixed;right:22px;bottom:22px;z-index:2147482700;background:#111827;border:1px solid rgba(148,163,184,.18);color:#e2e8f0;border-radius:11px;padding:10px 13px;box-shadow:0 18px 55px rgba(0,0,0,.45);font-size:11px}
+      @media(max-width:900px){.adler-pm-row{grid-template-columns:40px minmax(150px,1fr) auto}.adler-pm-meta{grid-column:2}.adler-pm-actions{grid-column:3;grid-row:1/3}.adler-pm-stats{grid-template-columns:repeat(3,1fr)}}
+      @media(max-width:760px){.adler-pm-backdrop{padding:0}.adler-pm{width:100vw;height:100dvh;max-height:100dvh;border-radius:0}.adler-pm-head{padding:17px 16px 13px}.adler-pm-stats{grid-template-columns:1fr 1fr;padding-inline:16px}.adler-pm-stat:last-child{grid-column:1/-1}.adler-pm-tools,.adler-pm-list{padding-left:16px;padding-right:16px}.adler-pm-tools{flex-wrap:wrap}.adler-pm-search{flex-basis:100%}.adler-pm-lock{margin-left:16px;margin-right:16px}.adler-pm-row{grid-template-columns:40px minmax(0,1fr);gap:10px}.adler-pm-meta{grid-column:2}.adler-pm-actions{grid-column:1/-1;grid-row:auto;justify-content:flex-end;flex-wrap:wrap}.adler-pm-secret{grid-template-columns:1fr}}
     `}</style>
 
-    {open && <div className="adler-pm-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setOpen(false); }}>
+    {open && <div className="adler-pm-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) closeVault(); }}>
       <section className="adler-pm" role="dialog" aria-modal="true" aria-label="Cofre de acessos do Adler">
         <header className="adler-pm-head">
           <div><span className="adler-pm-eyebrow">Perfil do Adler</span><h2>Cofre de acessos</h2><p>Gerenciador central de logins da operação. Senhas permanecem criptografadas e só são abertas após confirmar sua senha do Dashboard.</p></div>
-          <button className="adler-pm-close" onClick={() => { setOpen(false); lock(); }} aria-label="Fechar">×</button>
+          <button type="button" className="adler-pm-close" onClick={closeVault} aria-label="Fechar">×</button>
         </header>
 
         <div className="adler-pm-stats">
@@ -339,12 +396,12 @@ export default function AdlerPasswordManagerBridge() {
         <div className="adler-pm-tools">
           <div className="adler-pm-search"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente, CRM, Briefing Hub, domínio..." autoFocus /></div>
           <select value={category} onChange={(event) => setCategory(event.target.value)}><option value="ALL">Todos os tipos</option>{Object.entries(CATEGORY_LABEL).map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select>
-          <button className={`adler-pm-filter${favoriteOnly ? " active" : ""}`} onClick={() => setFavoriteOnly((value) => !value)}>★ Favoritos</button>
+          <button type="button" className={`adler-pm-filter${favoriteOnly ? " active" : ""}`} onClick={() => setFavoriteOnly((value) => !value)}>★ Favoritos</button>
         </div>
 
         <div className="adler-pm-lock">
-          <span>{unlocked ? <><b>Desbloqueado</b> por até {secondsLeft || UNLOCK_SECONDS}s enquanto esta janela estiver aberta.</> : <><b>Bloqueado.</b> Confirme sua senha para visualizar uma credencial.</>}</span>
-          {unlocked ? <button onClick={lock}>Bloquear agora</button> : <button onClick={() => { setUnlockError(""); setUnlockOpen(true); }}>Desbloquear</button>}
+          <span>{unlocked ? <><b>Desbloqueado.</b> Bloqueio automático em {secondsLeft}s.</> : <><b>Bloqueado.</b> Confirme sua senha para visualizar uma credencial.</>}</span>
+          {unlocked ? <button type="button" onClick={lock}>Bloquear agora</button> : <button type="button" disabled={!items.length} onClick={() => { setPendingReveal(null); setUnlockPassword(""); setUnlockError(""); setUnlockOpen(true); }}>Desbloquear</button>}
         </div>
 
         <div className="adler-pm-list">
@@ -357,14 +414,14 @@ export default function AdlerPasswordManagerBridge() {
                 <div className="adler-pm-main"><b>{item.system_name}</b><small>{item.client_name} · {CATEGORY_LABEL[item.category] || item.category}</small></div>
                 <div className="adler-pm-meta"><b>{host(item.login_url)}</b><small>Atualizado {fmt(item.updated_at)}</small></div>
                 <div className="adler-pm-actions">
-                  <button className={`star${favorites.has(item.id) ? " active" : ""}`} onClick={() => toggleFavorite(item.id)} title="Favorito">★</button>
-                  {item.login_url && <button onClick={() => window.open(String(item.login_url), "_blank", "noopener,noreferrer")}>Abrir site</button>}
-                  <button className="primary" disabled={loading} onClick={() => void requestReveal(item)}>{credential ? "Aberto" : "Ver acesso"}</button>
+                  <button type="button" className={`star${favorites.has(item.id) ? " active" : ""}`} onClick={() => toggleFavorite(item.id)} title="Favorito">★</button>
+                  {item.login_url && <button type="button" onClick={() => window.open(String(item.login_url), "_blank", "noopener,noreferrer")}>Abrir site</button>}
+                  <button type="button" className="adler-pm-primary" disabled={loading} onClick={() => void requestReveal(item)}>{credential ? "Aberto" : "Ver acesso"}</button>
                 </div>
               </div>
               {credential && <div className="adler-pm-secret">
-                <div className="adler-pm-field"><label>Login / usuário</label><code>{credential.login || "Não informado"}</code><div className="field-actions"><button onClick={() => void copy(item, "LOGIN")}>Copiar login</button></div></div>
-                <div className="adler-pm-field"><label>Senha</label><code>{showPassword ? (credential.password || "Não encontrada") : "••••••••••••"}</code><div className="field-actions"><button onClick={() => togglePassword(item.id)}>{showPassword ? "Ocultar" : "Mostrar"}</button><button onClick={() => void copy(item, "PASSWORD")}>Copiar senha</button></div></div>
+                <div className="adler-pm-field"><label>Login / usuário</label><code>{credential.login || "Não informado"}</code><div className="field-actions"><button type="button" onClick={() => void copy(item, "LOGIN")}>Copiar login</button></div></div>
+                <div className="adler-pm-field"><label>Senha</label><code>{showPassword ? (credential.password || "Não encontrada") : "••••••••••••"}</code><div className="field-actions"><button type="button" onClick={() => togglePassword(item.id)}>{showPassword ? "Ocultar" : "Mostrar"}</button><button type="button" onClick={() => void copy(item, "PASSWORD")}>Copiar senha</button></div></div>
                 {credential.notes && <div className="adler-pm-field adler-pm-notes"><label>Observações</label><code>{credential.notes}</code></div>}
               </div>}
             </article>;
@@ -377,10 +434,10 @@ export default function AdlerPasswordManagerBridge() {
     {unlockOpen && <div className="adler-pm-unlock-wrap">
       <form className="adler-pm-unlock" onSubmit={unlock}>
         <h3>Confirmar identidade</h3>
-        <p>Digite a senha do seu próprio perfil do Dashboard. Ela fica somente na memória desta aba e é apagada automaticamente em 3 minutos, ao fechar o cofre ou ao trocar de aba.</p>
+        <p>Digite a senha do seu próprio perfil do Dashboard. Ela é validada no servidor e permanece apenas na memória desta aba por até 3 minutos.</p>
         <input type="password" autoComplete="current-password" value={unlockPassword} onChange={(event) => setUnlockPassword(event.target.value)} placeholder="Senha do Dashboard" autoFocus />
         {unlockError && <p className="adler-pm-error">{unlockError}</p>}
-        <div className="adler-pm-unlock-actions"><button type="button" onClick={() => { setUnlockOpen(false); setPendingReveal(null); setUnlockPassword(""); setUnlockError(""); }}>Cancelar</button><button className="primary" disabled={loading || !unlockPassword}>{loading ? "Confirmando..." : "Desbloquear"}</button></div>
+        <div className="adler-pm-unlock-actions"><button type="button" onClick={() => { setUnlockOpen(false); setPendingReveal(null); setUnlockPassword(""); setUnlockError(""); }}>Cancelar</button><button type="submit" className="adler-pm-primary" disabled={loading || !unlockPassword}>{loading ? "Confirmando..." : "Desbloquear"}</button></div>
       </form>
     </div>}
 
