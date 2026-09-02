@@ -1,7 +1,7 @@
 # Agency Ops Dashboard
 
 Dashboard "Central de Operações" — frontend em Vinext (Vite + React Server Components)
-nativo para Cloudflare Workers, backend em Supabase (Postgres, Auth, Edge Functions).
+nativo para Cloudflare Workers, backend em Supabase (Postgres + Auth + Edge Functions).
 
 ## Stack
 - `vinext` (framework baseado em Vite que reimplementa a API do Next.js), React 19 RSC
@@ -36,3 +36,4 @@ já está em produção no projeto Supabase — não é necessário reaplicar as
 <!-- deploy trigger: initial Cloudflare Workers build -->
 <!-- deploy trigger: production worker aligned 2026-08-20T12:16-03:00 -->
 <!-- deploy trigger: combined Leonardo + Adler finance 2026-08-24T20:07-03:00 -->
+<!-- deploy trigger: Adler vault production 2026-09-02T09:58-03:00 -->
