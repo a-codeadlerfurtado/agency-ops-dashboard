@@ -1,0 +1,83 @@
+name: Snapshot active external Briefing Hub worker
+
+on:
+  push:
+    branches:
+      - briefing-hub-materials-tree-20260902
+    paths:
+      - '.github/workflows/briefing-hub-materials-tree-snapshot.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: Cloudflare
+    env:
+      CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN || secrets.CLOUDFLARE_TOKEN }}
+      ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || vars.CF_ACCOUNT_ID || 'c3e4211c99f0c7d71701a6f59a23befb' }}
+      SCRIPT: agency-briefing-hub
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: briefing-hub-materials-tree-20260902
+          fetch-depth: 0
+      - name: Validate Cloudflare access
+        run: |
+          set -euo pipefail
+          test -n "${CF_API_TOKEN:-}" || { echo 'NO_CF_TOKEN'; exit 2; }
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/$SCRIPT/deployments" \
+            -H "Authorization: Bearer $CF_API_TOKEN" > /tmp/deployments.json
+          jq -e '.success == true' /tmp/deployments.json >/dev/null
+      - name: Snapshot currently active worker
+        run: |
+          set -euo pipefail
+          mkdir -p .cloudflare-snapshots/materials-tree /tmp/cf
+          DEPLOYMENT_ID=$(jq -r '.result.deployments[0].id // .result.deployments[0].deployment_id // empty' /tmp/deployments.json)
+          VERSION_ID=$(jq -r '.result.deployments[0].versions | max_by(.percentage) | .version_id // empty' /tmp/deployments.json)
+          if [ -z "$VERSION_ID" ]; then VERSION_ID=$(jq -r '.result.deployments[0].versions[0].version_id // empty' /tmp/deployments.json); fi
+          test -n "$VERSION_ID"
+          curl -fsS "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/$SCRIPT/versions/$VERSION_ID" \
+            -H "Authorization: Bearer $CF_API_TOKEN" > .cloudflare-snapshots/materials-tree/version.json
+          curl -fsS -D /tmp/cf/content.headers \
+            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/$SCRIPT/content/v2" \
+            -H "Authorization: Bearer $CF_API_TOKEN" -o /tmp/cf/content.body
+          python - <<'PY'
+          from pathlib import Path
+          from email.parser import BytesParser
+          from email.policy import default
+          import json
+          headers=Path('/tmp/cf/content.headers').read_text(errors='replace')
+          body=Path('/tmp/cf/content.body').read_bytes()
+          ct=''
+          for line in headers.splitlines():
+              if line.lower().startswith('content-type:'):
+                  ct=line.split(':',1)[1].strip()
+          chosen=None
+          parts=[]
+          if 'multipart/' in ct.lower():
+              msg=BytesParser(policy=default).parsebytes((f'Content-Type: {ct}\r\nMIME-Version: 1.0\r\n\r\n').encode()+body)
+              for i,p in enumerate(msg.iter_parts()):
+                  name=p.get_param('name',header='content-disposition') or p.get_filename() or f'part-{i}'
+                  data=p.get_payload(decode=True) or b''
+                  parts.append({'name':name,'type':p.get_content_type(),'bytes':len(data)})
+                  if chosen is None and (name.endswith('.js') or 'javascript' in p.get_content_type()): chosen=data
+          else:
+              chosen=body
+              parts.append({'name':'worker','type':ct,'bytes':len(body)})
+          if chosen is None: raise SystemExit('No JavaScript module found')
+          out=Path('.cloudflare-snapshots/materials-tree')
+          out.joinpath('current.js').write_text(chosen.decode('utf-8'))
+          out.joinpath('content-parts.json').write_text(json.dumps(parts,indent=2))
+          PY
+          printf '{"deployment_id":"%s","version_id":"%s"}\n' "$DEPLOYMENT_ID" "$VERSION_ID" > .cloudflare-snapshots/materials-tree/active.json
+      - name: Commit isolated snapshot
+        run: |
+          set -euo pipefail
+          git config user.name 'briefing-hub-materials-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add .cloudflare-snapshots/materials-tree
+          git commit -m 'chore: snapshot active agency-briefing-hub for materials tree' || exit 0
+          git push origin HEAD:briefing-hub-materials-tree-20260902
