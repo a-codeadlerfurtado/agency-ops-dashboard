@@ -13,7 +13,7 @@ permissions:
 jobs:
   capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,17 +28,31 @@ jobs:
             -o .briefing-live/cliente.html
           test -s .briefing-live/cliente.html
           grep -qi 'Briefing Hub' .briefing-live/cliente.html
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          text=Path('.briefing-live/cliente.html').read_text(errors='replace')
+          styles=re.findall(r'<style[^>]*>(.*?)</style>', text, flags=re.I|re.S)
+          scripts=re.findall(r'<script[^>]*>(.*?)</script>', text, flags=re.I|re.S)
+          for i,s in enumerate(styles,1): Path(f'.briefing-live/style-{i}.css').write_text(s)
+          for i,s in enumerate(scripts,1): Path(f'.briefing-live/script-{i}.js').write_text(s)
+          body=re.search(r'<body[^>]*>(.*?)</body>', text, flags=re.I|re.S)
+          if body: Path('.briefing-live/body.html').write_text(body.group(1))
+          Path('.briefing-live/manifest.txt').write_text(f'bytes={len(text)}\nstyles={len(styles)}\nscripts={len(scripts)}\n')
+          PY
+          npx --yes prettier@3.6.2 --write '.briefing-live/*.html' '.briefing-live/*.css' '.briefing-live/*.js' || true
           echo "Captured $(wc -c < .briefing-live/cliente.html) bytes"
+          cat .briefing-live/manifest.txt
       - name: Save snapshot on isolated branch
         shell: bash
         run: |
           set -euo pipefail
           git config user.name 'briefing-hub-ui-snapshot-bot'
           git config user.email 'actions@users.noreply.github.com'
-          git add .briefing-live/cliente.html
+          git add .briefing-live
           if git diff --cached --quiet; then
             echo 'Snapshot unchanged'
           else
-            git commit -m 'chore: snapshot live Briefing Hub client UI'
+            git commit -m 'chore: split live Briefing Hub client UI snapshot'
             git push origin HEAD:briefing-hub-drive-deploy-20260901
           fi
