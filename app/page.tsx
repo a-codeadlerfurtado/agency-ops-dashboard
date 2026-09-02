@@ -8,21 +8,70 @@ import LeonardoClientFinancialStatusBridge from "./leonardo-client-financial-sta
 import WorkReassignmentBridge from "./work-reassignment-bridge";
 import WorkReassignmentAwayBridge from "./work-reassignment-away-bridge";
 import BriefingStaffBridge from "./briefing-staff-bridge";
-import { loadProfileLite, supabase } from "./shared";
+import { supabase } from "./shared";
 
 type RouteState = "loading" | "native" | "leonardo" | "error";
+type RouteProfile = { person: string; role: string };
+
+const ROUTE_PROFILE_TIMEOUT_MS = 4_000;
+
+async function loadRouteProfile(current: Session): Promise<RouteProfile> {
+  const userKey = current.user.id;
+  if (!userKey) throw new Error("profile_user_missing");
+
+  let timer: number | null = null;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => reject(new Error("profile_route_timeout")), ROUTE_PROFILE_TIMEOUT_MS);
+  });
+
+  const read = (async () => {
+    const ops = supabase.schema("agency_ops");
+    const { data: pref, error: prefError } = await ops
+      .from("user_preferences")
+      .select("collaborator_person,name")
+      .eq("user_key", userKey)
+      .maybeSingle();
+
+    if (prefError) throw prefError;
+    const person = String(pref?.collaborator_person || pref?.name || "").trim();
+    if (!person) throw new Error("profile_not_found");
+
+    const { data: roster, error: rosterError } = await ops
+      .from("team_roster")
+      .select("person,role")
+      .eq("person", person)
+      .eq("is_former", false)
+      .maybeSingle();
+
+    if (rosterError) throw rosterError;
+    if (!roster?.person || !roster?.role) throw new Error("profile_not_found");
+
+    return {
+      person: String(roster.person),
+      role: String(roster.role).toUpperCase(),
+    };
+  })();
+
+  try {
+    return await Promise.race([read, timeout]);
+  } finally {
+    if (timer !== null) window.clearTimeout(timer);
+  }
+}
 
 export default function DashboardRouter() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [route, setRoute] = useState<RouteState>("loading");
   const routeRequest = useRef(0);
+  const routedUser = useRef("");
 
   const resolveRoute = useCallback(async (current: Session | null) => {
     const requestId = ++routeRequest.current;
     setSession(current);
 
     if (!current) {
+      routedUser.current = "";
       setRoute("native");
       setAuthReady(true);
       return;
@@ -32,19 +81,16 @@ export default function DashboardRouter() {
     setAuthReady(false);
 
     try {
-      // Usa exatamente a sessão entregue pelo evento. loadProfileLite não volta ao
-      // mutex do Supabase, então o callback de autenticação nunca entra em deadlock.
-      const body = await loadProfileLite(current);
+      // A decisão de rota precisa ser barata e não pode depender de uma Edge Function
+      // disputando o Auth com o restante do Dashboard. As duas leituras abaixo usam
+      // o JWT já presente na sessão e respeitam o RLS do schema agency_ops.
+      const profile = await loadRouteProfile(current);
       if (requestId !== routeRequest.current) return;
 
-      const role = String(body?.profile?.role || "").toUpperCase();
-      const person = String(body?.profile?.person || "");
-      setRoute(role === "COMMERCIAL" && person === "Leonardo Augusto" ? "leonardo" : "native");
+      routedUser.current = current.user.id;
+      setRoute(profile.role === "COMMERCIAL" && profile.person === "Leonardo Augusto" ? "leonardo" : "native");
     } catch {
       if (requestId !== routeRequest.current) return;
-
-      // O carregamento do perfil tem timeout de 10 segundos. Uma falha real termina
-      // nesta tela recuperável; o usuário nunca fica preso em validação infinita.
       setRoute("error");
     } finally {
       if (requestId === routeRequest.current) setAuthReady(true);
@@ -83,16 +129,29 @@ export default function DashboardRouter() {
         setAuthReady(true);
       });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, current) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, current) => {
       if (!active) return;
 
-      // Deixa o callback síncrono retornar antes de qualquer trabalho assíncrono.
-      // SIGNED_OUT não consulta o Supabase e pode ser aplicado imediatamente.
       if (!current) {
         void resolveRoute(null);
         return;
       }
-      scheduleRoute(current);
+
+      // Refresh de token não muda o papel do usuário. Atualizamos somente a sessão
+      // entregue aos componentes e evitamos refazer a validação de perfil inteira.
+      if (event === "TOKEN_REFRESHED") {
+        setSession(current);
+        return;
+      }
+
+      // SIGNED_IN pode ser emitido novamente ao recuperar foco. Se já roteamos o
+      // mesmo usuário, não geramos novas consultas desnecessárias.
+      if (event === "SIGNED_IN" && routedUser.current === current.user.id) {
+        setSession(current);
+        return;
+      }
+
+      if (event === "SIGNED_IN" || event === "USER_UPDATED") scheduleRoute(current);
     });
 
     return () => {
