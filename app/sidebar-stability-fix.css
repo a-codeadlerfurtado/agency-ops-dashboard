@@ -67,7 +67,8 @@
 }
 
 /*
- * Stable semantic order.
+ * Stable semantic order for the shared/native dashboard (MGMT, GT, CS, DESIGN,
+ * AI and every non-Leonardo profile).
  *
  * IMPORTANT: this uses flex `order`; it never moves DOM nodes, never starts a
  * timer and never observes mutations. A role only sees the buttons it is already
@@ -116,7 +117,8 @@
 .side-nav-items > [title="Equipe"]:not([data-meetings-nav]) { order: 400; }
 .side-nav-items > [title^="Desempenho OP"],
 .side-nav-items > [title^="Desempenho da operação"] { order: 410; }
-.side-nav-items > [data-meetings-nav] { order: 420; }
+.side-nav-items > [data-meetings-nav],
+.side-nav-items > [title="Reuniões"] { order: 420; }
 .side-nav-items > [title="Auditoria"] { order: 430; }
 .side-nav-items > [title="Evidências"] { order: 440; }
 .side-nav-items > [title="Contratos"] { order: 450; }
@@ -130,3 +132,23 @@
 .side-nav-items > [title^="IA (Beta"] { order: 530; }
 .side-nav-items > [data-system-updates-nav] { order: 540; }
 .side-nav-items > [data-security-center-nav] { order: 550; }
+
+/*
+ * Leonardo / COMMERCIAL has a deliberately different information architecture.
+ * Scope by a component that only exists in LeonardoNativeDashboard so these
+ * overrides cannot leak into GT/CS/DESIGN/AI/MGMT.
+ */
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Home Comercial"] { order: 10; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Funil Comercial"] { order: 20; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Clientes"] { order: 30; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Onboarding"] { order: 40; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Campanhas"] { order: 50; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Reuniões"] { order: 60; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Direção Comercial"] { order: 70; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Financeiro"] { order: 80; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title^="Central Criativa"] { order: 90; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title^="Produção de Roteiros"] { order: 100; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title^="Central de Trabalho"] { order: 110; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="ClickUp"] { order: 120; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Diário"] { order: 130; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="TaskLog"] { order: 140; }
