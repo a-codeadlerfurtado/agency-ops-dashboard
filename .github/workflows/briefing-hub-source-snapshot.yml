@@ -1,0 +1,81 @@
+name: Snapshot live Briefing Hub source
+
+on:
+  push:
+    branches:
+      - briefing-hub-drive-deploy-20260901
+    paths:
+      - '.github/workflows/briefing-hub-source-snapshot.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    strategy:
+      fail-fast: false
+      matrix:
+        env_name: [production, Production, cloudflare, Cloudflare, workers, Workers, deploy, Deploy]
+    environment: ${{ matrix.env_name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN || secrets.CLOUDFLARE_TOKEN }}
+      ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || vars.CF_ACCOUNT_ID || 'c3e4211c99f0c7d71701a6f59a23befb' }}
+      SCRIPT: agency-briefing-hub
+    steps:
+      - name: Check access and snapshot source
+        id: snap
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${CF_API_TOKEN:-}" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          mkdir -p snapshot /tmp/cf
+          HTTP=$(curl -sS -o /tmp/cf/deployments.json -w '%{http_code}' \
+            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/$SCRIPT/deployments" \
+            -H "Authorization: Bearer $CF_API_TOKEN")
+          if [ "$HTTP" != "200" ] || ! jq -e '.success == true' /tmp/cf/deployments.json >/dev/null 2>&1; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          curl -fsS -D /tmp/cf/content.headers \
+            "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/$SCRIPT/content/v2" \
+            -H "Authorization: Bearer $CF_API_TOKEN" -o /tmp/cf/content.body
+          cp /tmp/cf/content.headers snapshot/content.headers
+          python - <<'PY'
+          from pathlib import Path
+          from email.parser import BytesParser
+          from email.policy import default
+          headers=Path('/tmp/cf/content.headers').read_text(errors='replace')
+          body=Path('/tmp/cf/content.body').read_bytes()
+          ct=''
+          for line in headers.splitlines():
+              if line.lower().startswith('content-type:'):
+                  ct=line.split(':',1)[1].strip()
+          out=Path('snapshot')
+          if 'multipart/' in ct.lower():
+              msg=BytesParser(policy=default).parsebytes((f'Content-Type: {ct}\r\nMIME-Version: 1.0\r\n\r\n').encode()+body)
+              manifest=[]
+              for i,p in enumerate(msg.iter_parts()):
+                  name=p.get_param('name', header='content-disposition') or p.get_filename() or f'part-{i}'
+                  safe=''.join(c if c.isalnum() or c in '._-' else '_' for c in name)
+                  data=p.get_payload(decode=True) or b''
+                  (out/safe).write_bytes(data)
+                  manifest.append(f'{i}\t{name}\t{p.get_content_type()}\t{len(data)}\t{safe}')
+              (out/'manifest.tsv').write_text('\n'.join(manifest))
+          else:
+              (out/'worker.js').write_bytes(body)
+              (out/'manifest.tsv').write_text(f'0\tworker.js\t{ct}\t{len(body)}\tworker.js')
+          PY
+          echo "available=true" >> "$GITHUB_OUTPUT"
+      - name: Upload source snapshot
+        if: steps.snap.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: briefing-hub-live-source-${{ matrix.env_name }}
+          path: snapshot
+          if-no-files-found: error
+          retention-days: 1
