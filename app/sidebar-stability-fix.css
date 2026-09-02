@@ -99,6 +99,41 @@
 .side-nav-items > [title="Pré-clientes"],
 .side-nav-items > [title^="Pré-clientes"] { order: 140; }
 
+/* Briefing Hub is injected at runtime, but belongs to the same horizontal grid
+ * as native navigation items. Keep its icon in normal flex flow so the generic
+ * sidebar ::before motion layer cannot overlap the label. */
+.shell .side-nav .side-nav-items > .brief-staff-nav {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 12px !important;
+  box-sizing: border-box !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+  text-indent: 0 !important;
+}
+.shell .side-nav .side-nav-items > .brief-staff-nav::before {
+  display: inline-block !important;
+  position: static !important;
+  width: 18px !important;
+  min-width: 18px !important;
+  height: 18px !important;
+  flex: 0 0 18px !important;
+  margin: 0 !important;
+  transform: none !important;
+  inset: auto !important;
+  pointer-events: none !important;
+}
+.shell .side-nav:not(.open) .side-nav-items > .brief-staff-nav {
+  justify-content: center !important;
+  gap: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+.shell .side-nav:not(.open) .side-nav-items > .brief-staff-nav::before {
+  margin: 0 auto !important;
+}
+
 /* 3. Mídia / performance */
 .side-nav-items > [title="Campanhas"] { order: 200; }
 .side-nav-items > [data-ads-intelligence-nav] { order: 210; }
@@ -106,6 +141,22 @@
 .side-nav-items > [data-meta-performance-nav] { order: 230; }
 .side-nav-items > [data-meta-analysis-nav] { order: 240; }
 .side-nav-items > [data-client-balances-nav] { order: 250; }
+
+/* The Meta-branded nav layer used a 34px left inset, pushing both icon and label
+ * to the right. Normalize those runtime entries to the native 12px sidebar inset. */
+.shell .side-nav .side-nav-items > [data-ads-intelligence-nav],
+.shell .side-nav .side-nav-items > [data-meta-consultant-nav],
+.shell .side-nav .side-nav-items > [data-meta-performance-nav],
+.shell .side-nav .side-nav-items > [data-meta-analysis-nav] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 12px !important;
+  box-sizing: border-box !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+  text-indent: 0 !important;
+}
 
 /* 4. Criativo */
 .side-nav-items > [title^="Central Criativa"] { order: 300; }
