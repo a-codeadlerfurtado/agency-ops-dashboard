@@ -38,3 +38,4 @@ já está em produção no projeto Supabase — não é necessário reaplicar as
 <!-- deploy trigger: combined Leonardo + Adler finance 2026-08-24T20:07-03:00 -->
 <!-- deploy trigger: Adler vault production 2026-09-02T09:58-03:00 -->
 <!-- deploy trigger: auth rollback stable 2026-09-02T10:33-03:00 -->
+<!-- deploy trigger: briefing hub presentation mode 2026-09-02T11:54-03:00 -->
