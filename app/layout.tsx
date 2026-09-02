@@ -34,6 +34,7 @@ import AdlerFinanceNavBridge from "./adler-finance-nav-bridge";
 import ClientBalancesNavBridge from "./client-balances-nav-bridge";
 import AdlerNotificationAreaFilter from "./adler-notification-area-filter";
 import AdlerPasswordManagerBridge from "./adler-password-manager-bridge";
+import AdlerVaultLegacyBackfillBridge from "./adler-vault-legacy-backfill-bridge";
 import MetaCreativePreviewResponseBridge from "./meta-creative-preview-response-bridge";
 import MetaPerformanceProfileBridge from "./meta-performance-profile-bridge";
 import MetaAnalysisNavBridge from "./meta-analysis-nav-bridge";
@@ -141,6 +142,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <Client360Bridge />
         <ClientCommercialProfileBridge />
         <ClientAccessVaultBridge />
+        <AdlerVaultLegacyBackfillBridge />
         <AdlerPasswordManagerBridge />
         <ClientMetaAssetsBridge />
         <ClientContextUploadBridge />
