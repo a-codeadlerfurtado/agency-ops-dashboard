@@ -1,14 +1,13 @@
 /*
- * Sidebar stability hotfix.
+ * Sidebar hard-stability layer.
  *
- * The legacy SidebarEnhancer in dashboard-enhancements.tsx injects
- * .ops-nav-group-label nodes every 1.8s, while SidebarInformationArchitecture
- * already owns the visible navigation grouping. Those two systems competing for
- * the same .side-nav-items container caused visible layout shifts/flicker.
- *
- * Keep the legacy nodes out of layout so they can never move the sidebar while
- * the native information architecture remains the single visible group system.
+ * The dashboard historically had multiple runtime systems touching the same
+ * .side-nav-items container. The information-architecture reordering layer is
+ * no longer mounted; this file also neutralizes the remaining legacy enhancer
+ * nodes and browser-compositing effects that can make the sidebar flicker.
  */
+
+/* Never let legacy runtime group labels enter layout. */
 .side-nav-items > .ops-nav-group-label {
   display: none !important;
   width: 0 !important;
@@ -20,8 +19,8 @@
   pointer-events: none !important;
 }
 
-/* Legacy badges are recreated imperatively. Keep them out of document flow so
- * their refresh cannot resize/reflow navigation rows. */
+/* Legacy badges may still be recreated imperatively by dashboard enhancements.
+ * Keep them completely out of document flow so a refresh cannot resize rows. */
 .side-nav-items > button,
 .side-nav-items > a {
   position: relative;
@@ -35,4 +34,33 @@
   transform: translateY(-50%) !important;
   margin: 0 !important;
   pointer-events: none !important;
+}
+
+/* Chrome/Windows can show ghosting on a frequently updated sidebar when
+ * backdrop-filter promotes it to a separate compositing surface. Keep the
+ * navigation fully opaque and deterministic instead of blurring content behind it. */
+.side-nav {
+  background: var(--panel2) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* Global motion-system styles translate every button on hover. Navigation should
+ * stay physically fixed: only color/background feedback is allowed here. */
+.side-nav button:hover,
+.side-nav a:hover,
+.side-nav button:active,
+.side-nav a:active {
+  transform: none !important;
+}
+
+/* Prevent layout animation/jitter if classes or badges are refreshed while data
+ * is loading. Do not animate geometry inside the sidebar. */
+.side-nav,
+.side-nav-items,
+.side-nav-items > button,
+.side-nav-items > a {
+  transition-property: background-color, color, border-color, box-shadow, opacity !important;
 }
