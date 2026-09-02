@@ -19,6 +19,7 @@ import "./client-meta-assets.css";
 import "./system-update-center.css";
 import "./security-center.css";
 import "./client-360.css";
+import "./sidebar-stability-fix.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
