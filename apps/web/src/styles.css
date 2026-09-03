@@ -105,9 +105,11 @@ h1, h2, h3, h4 {
   font-weight: 600;
   letter-spacing: -0.018em;
 }
-h1 { font-size: 22px; }
-h2 { font-size: 17px; }
-h3 { font-size: 14px; }
+/* Escala com salto real entre niveis. A anterior ia 22/17/14: comprimida
+   demais para alguma coisa dominar a tela. */
+h1 { font-size: 19px; letter-spacing: -0.022em; }
+h2 { font-size: 14.5px; letter-spacing: -0.01em; font-weight: 600; }
+h3 { font-size: 13px; }
 
 a { color: var(--blue); text-decoration: none; }
 a:hover { text-decoration: underline; }
@@ -267,14 +269,21 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* ============================================================ atoms ==== */
 
+/* Sombra pesada em TODO card faz tudo flutuar igual e nada virar foco. Card
+   e superficie, nao objeto solto: fica so a borda. Sombra passa a significar
+   "esta acima da pagina" - modal, dropdown, card arrastado. */
 .card {
   background: var(--panel);
   border: 1px solid var(--line-card);
   border-radius: var(--r-lg);
-  box-shadow: var(--shadow);
+}
+/* rotulo explicativo no cabecalho nao pode competir com o titulo */
+.card-head .badge {
+  background: transparent; border-color: transparent;
+  color: var(--text-subtle); font-size: 11px; padding: 0; height: auto;
 }
 .card-head {
-  padding: 14px 16px;
+  padding: 13px 16px;
   border-bottom: 1px solid var(--line-soft);
   display: flex;
   align-items: center;
@@ -287,12 +296,107 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* KPI: o primeiro card e maior porque carrega o numero que decide o mes.
+   Em classe, nao em style inline - inline nao responde a media query, e no
+   celular tres colunas de 1.3fr viram tres colunas espremidas. */
+.grid.kpi { grid-template-columns: 1.3fr 1fr 1fr; }
+@media (max-width: 900px) {
+  .grid.kpi { grid-template-columns: 1fr 1fr; }
+  .grid.kpi > :first-child { grid-column: 1 / -1; }
+}
+@media (max-width: 560px) {
+  .grid.kpi { grid-template-columns: 1fr; }
+  .stat-hero .stat-value { font-size: 32px; }
+}
 
 .row { display: flex; align-items: center; gap: 10px; }
 .col { display: flex; flex-direction: column; gap: 4px; }
 
 /* stat: numero grande, rotulo discreto, sem cromo desnecessario */
-.stat { padding: 15px 16px; }
+.stat { padding: 14px 16px; }
+
+/* ---- hierarquia de metrica ----
+   Antes eram oito caixas de peso identico: o VGV do mes tinha o mesmo destaque
+   de "Visitas: 0". Numero que decide o mes precisa dominar a tela; numero de
+   apoio precisa recuar. */
+
+.stat-hero { padding: 16px 18px; }
+.stat-hero .stat-value {
+  font-size: 38px;
+  letter-spacing: -0.042em;
+  line-height: 1.02;
+  margin-top: 9px;
+}
+.stat-hero .stat-label { font-size: 11px; }
+
+/* Zero nao merece o mesmo peso de 875 mil. Recua sem sumir: a informacao
+   "nao aconteceu" continua legivel, so para de gritar. */
+.stat-value.zerado { color: var(--text-subtle); font-weight: 500; }
+
+/* faixa de apoio: metricas secundarias em linha, sem virar oito caixas */
+.faixa {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  background: var(--panel);
+  border: 1px solid var(--line-card);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+.faixa-item {
+  flex: 1 1 130px;
+  padding: 12px 16px;
+  min-width: 0;
+  border-right: 1px solid var(--line-soft);
+}
+.faixa-item:last-child { border-right: 0; }
+.faixa-rotulo {
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--text-subtle);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.faixa-valor {
+  margin-top: 5px; font-size: 19px; font-weight: 600;
+  letter-spacing: -0.025em; color: var(--text-heading);
+  font-variant-numeric: tabular-nums;
+}
+.faixa-valor.zerado { color: var(--text-subtle); font-weight: 500; }
+.faixa-nota { margin-top: 2px; font-size: 11.5px; color: var(--text-subtle); }
+
+@media (max-width: 860px) {
+  .faixa-item { flex: 1 1 50%; border-bottom: 1px solid var(--line-soft); }
+  .faixa-item:nth-child(even) { border-right: 0; }
+}
+
+/* ---- funil: barra que da para ler ----
+   A anterior tinha 7px com gradiente azul->laranja. O gradiente nao codificava
+   nada (era decoracao) e etapas pequenas viravam pontinho invisivel. Agora:
+   trilho sempre visivel, barra sólida, e a queda entre etapas em destaque -
+   que e o numero que o gestor procura. */
+.funil-linha + .funil-linha { margin-top: 13px; }
+.funil-topo { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.funil-nome { color: var(--muted); }
+.funil-total {
+  margin-left: auto; font-weight: 650; font-size: 14px;
+  color: var(--text-heading); font-variant-numeric: tabular-nums;
+}
+.funil-queda {
+  min-width: 42px; text-align: right; font-size: 11.5px;
+  font-variant-numeric: tabular-nums; color: var(--text-subtle);
+}
+.funil-queda.ruim { color: var(--warning); }
+.funil-trilho {
+  margin-top: 6px; height: 8px; border-radius: 99px;
+  background: var(--panel-2);
+  border: 1px solid var(--line-soft);
+  overflow: hidden;
+}
+.funil-barra {
+  height: 100%; border-radius: 99px; background: var(--blue);
+  transition: width var(--d-slow) var(--ease);
+}
+/* so a etapa final usa a cor de acao: e o que se quer alcancar */
+.funil-linha:last-child .funil-barra { background: var(--success); }
 .stat-label {
   font-size: 11.5px;
   font-weight: 500;
@@ -426,7 +530,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 table.tbl { width: 100%; border-collapse: collapse; font-size: 13.5px; }
 table.tbl th {
   text-align: left;
-  padding: 9px 14px;
+  padding: 7px 14px;
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
@@ -438,8 +542,9 @@ table.tbl th {
   position: sticky;
   top: 0;
 }
+/* 42px por linha e altura de site, nao de ferramenta de trabalho. */
 table.tbl td {
-  padding: 11px 14px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--line-soft);
   vertical-align: middle;
 }

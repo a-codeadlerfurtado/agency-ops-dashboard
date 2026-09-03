@@ -3,7 +3,7 @@ import { irPara } from "../App";
 import { dinheiroCurto, numero, primeiroNome, rotuloOrigem } from "../lib/format";
 import { leadsParados, painelAdmin, painelBroker } from "../lib/queries";
 import {
-  Alerta, Card, CardsCarregando, Ico, Numero, Skeleton, Stat, useAsync, Vazio,
+  Alerta, Card, CardsCarregando, Ico, Numero, Skeleton, useAsync, Vazio,
 } from "../ui";
 import type { Sessao } from "../lib/types";
 
@@ -17,6 +17,9 @@ const PERIODOS = [
 export default function VisaoGeral({ sessao }: { sessao: Sessao }) {
   return sessao.isAdmin ? <PainelAdmin sessao={sessao} /> : <PainelCorretor sessao={sessao} />;
 }
+
+/** Zero recua sem sumir: "nao aconteceu" continua legivel, so para de gritar. */
+const zerado = (v: number | null | undefined) => (v ? "" : " zerado");
 
 /* ================================================================ ADMIN === */
 
@@ -53,29 +56,70 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
         </div>
       </div>
 
-      {/* Numero conta ate o valor ao TROCAR de periodo, nao na primeira carga:
-          a transicao existe para mostrar que o dado mudou, nao para enfeitar
-          a chegada. */}
-      <div className="grid cols-4">
-        {carregando ? <CardsCarregando n={8} /> : (
+      {/* Resultado e saúde da operação.
+          Volume (leads, qualificados, visitas, propostas) NÃO entra aqui: já
+          está no funil logo abaixo, e mostrar o mesmo número duas vezes gasta
+          a tela sem informar. Antes eram oito caixas de peso idêntico — o VGV
+          do mês tinha o mesmo destaque de "Visitas: 0". */}
+      <div className="grid kpi">
+        {carregando ? <CardsCarregando n={3} /> : (
           <>
-            <Stat rotulo="Leads"        valor={<Numero valor={c?.leads ?? 0} formatar={numero} />} />
-            <Stat rotulo="Atendidos"    valor={<Numero valor={c?.atendidos ?? 0} formatar={numero} />}
-                  rodape={c && c.leads > 0 ? `${Math.round((c.atendidos / c.leads) * 100)}% dos leads` : undefined} />
-            <Stat rotulo="Qualificados" valor={<Numero valor={c?.qualificados ?? 0} formatar={numero} />} />
-            <Stat rotulo="Visitas"      valor={<Numero valor={c?.visitas ?? 0} formatar={numero} />} />
-            <Stat rotulo="Propostas"    valor={<Numero valor={c?.propostas ?? 0} formatar={numero} />} />
-            <Stat rotulo="Vendas"       valor={<Numero valor={c?.vendas ?? 0} formatar={numero} />} tom="up" />
-            <Stat rotulo="VGV"          valor={<Numero valor={c?.vgv ?? 0} formatar={dinheiroCurto} />}
-                  tom="up"
-                  rodape={c?.vendas
-                    ? `ticket ${dinheiroCurto((c.vgv ?? 0) / c.vendas)}`
-                    : "sem venda no periodo"} />
-            <Stat rotulo="SLA perdido"  valor={<Numero valor={c?.sla_perdido ?? 0} formatar={numero} />}
-                  tom={c && (c.sla_perdido ?? 0) > 0 ? "down" : undefined}
-                  rodape="leads nao aceitos no prazo" />
+            <Card className="stat stat-hero">
+              <div className="stat-label">VGV no periodo</div>
+              <div className={`stat-value${zerado(c?.vgv)}`}>
+                <Numero valor={c?.vgv ?? 0} formatar={dinheiroCurto} />
+              </div>
+              <div className="stat-foot">
+                {c?.vendas
+                  ? `ticket medio ${dinheiroCurto((c.vgv ?? 0) / c.vendas)}`
+                  : "nenhuma venda fechada no periodo"}
+              </div>
+            </Card>
+
+            <Card className="stat stat-hero">
+              <div className="stat-label">Vendas</div>
+              <div className={`stat-value${zerado(c?.vendas)}`}>
+                <Numero valor={c?.vendas ?? 0} formatar={numero} />
+              </div>
+              <div className="stat-foot">
+                {c && c.leads > 0
+                  ? `${((c.vendas / c.leads) * 100).toFixed(1)}% dos leads do periodo`
+                  : "sem base de comparacao"}
+              </div>
+            </Card>
+
+            <Card className="stat stat-hero">
+              <div className="stat-label">SLA perdido</div>
+              <div
+                className={`stat-value${zerado(c?.sla_perdido)}`}
+                style={{ color: c && (c.sla_perdido ?? 0) > 0 ? "var(--danger)" : undefined }}
+              >
+                <Numero valor={c?.sla_perdido ?? 0} formatar={numero} />
+              </div>
+              <div className="stat-foot">
+                {c && (c.sla_perdido ?? 0) > 0
+                  ? "leads nao aceitos no prazo"
+                  : "todo lead aceito no prazo"}
+              </div>
+            </Card>
           </>
         )}
+      </div>
+
+      {/* Faixa de apoio: números que o funil não dá, sem virar mais quatro caixas. */}
+      <div className="faixa">
+        <FaixaItem rotulo="Leads no periodo" valor={carregando ? "--" : numero(c?.leads)}
+                   vazio={!c?.leads} />
+        <FaixaItem
+          rotulo="Taxa de atendimento"
+          valor={carregando || !c?.leads ? "--" : `${Math.round((c.atendidos / c.leads) * 100)}%`}
+          nota={carregando || !c ? undefined : `${numero(c.atendidos)} de ${numero(c.leads)}`}
+          vazio={!c?.atendidos}
+        />
+        <FaixaItem rotulo="Propostas" valor={carregando ? "--" : numero(c?.propostas)}
+                   vazio={!c?.propostas} />
+        <FaixaItem rotulo="Visitas" valor={carregando ? "--" : numero(c?.visitas)}
+                   vazio={!c?.visitas} />
       </div>
 
       <div className="grid cols-2">
@@ -87,8 +131,8 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
           </div>
           <div className="card-body">
             {carregando ? (
-              <div className="col" style={{ gap: 12 }}>
-                {[0, 1, 2, 3, 4, 5].map((i) => <Skeleton key={i} h={22} />)}
+              <div className="col" style={{ gap: 14 }}>
+                {[0, 1, 2, 3, 4, 5].map((i) => <Skeleton key={i} h={26} />)}
               </div>
             ) : (
               <Funil dados={painel.dado?.funil ?? []} />
@@ -111,18 +155,27 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
               <div className="table-wrap">
                 <table className="tbl">
                   <thead>
-                    <tr><th>Origem</th><th className="num">Leads</th>
-                        <th className="num">Qualif.</th><th className="num">Vendas</th>
-                        <th className="num">VGV</th></tr>
+                    <tr>
+                      <th>Origem</th><th className="num">Leads</th>
+                      <th className="num">Qualif.</th><th className="num">Vendas</th>
+                      <th className="num">VGV</th>
+                    </tr>
                   </thead>
                   <tbody>
                     {painel.dado?.origens.map((o) => (
                       <tr key={o.origem}>
                         <td>{rotuloOrigem(o.origem)}</td>
                         <td className="num">{o.leads}</td>
-                        <td className="num">{o.qualificados}</td>
-                        <td className="num">{o.vendas}</td>
-                        <td className="num nowrap" style={{ color: o.vgv ? "var(--success)" : undefined }}>
+                        <td className="num" style={{ color: o.qualificados ? undefined : "var(--text-subtle)" }}>
+                          {o.qualificados}
+                        </td>
+                        <td className="num" style={{ color: o.vendas ? undefined : "var(--text-subtle)" }}>
+                          {o.vendas}
+                        </td>
+                        <td className="num nowrap" style={{
+                          color: o.vgv ? "var(--success)" : "var(--text-subtle)",
+                          fontWeight: o.vgv ? 600 : 400,
+                        }}>
                           {o.vgv ? dinheiroCurto(o.vgv) : "--"}
                         </td>
                       </tr>
@@ -140,6 +193,18 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
         <CardParados parados={parados.dado} carregando={parados.carregando} />
       </div>
     </>
+  );
+}
+
+function FaixaItem({
+  rotulo, valor, nota, vazio,
+}: { rotulo: string; valor: string; nota?: string; vazio?: boolean }) {
+  return (
+    <div className="faixa-item">
+      <div className="faixa-rotulo">{rotulo}</div>
+      <div className={`faixa-valor${vazio ? " zerado" : ""}`}>{valor}</div>
+      {nota && <div className="faixa-nota">{nota}</div>}
+    </div>
   );
 }
 
@@ -183,37 +248,35 @@ function CardCampanhas({ campanhas, carregando }: {
   );
 }
 
+/**
+ * Funil. A versão anterior tinha barra de 7px com gradiente azul→laranja: o
+ * gradiente não codificava nada (era decoração) e etapa pequena virava um
+ * pontinho invisível. Agora o trilho é sempre visível, a barra é sólida, e a
+ * queda entre etapas ganha destaque — é o número que o gestor procura.
+ */
 function Funil({ dados }: { dados: { ord: number; etapa: string; total: number }[] }) {
   const topo = dados[0]?.total ?? 0;
   if (topo === 0) return <Vazio titulo="Sem leads no periodo" texto="Ajuste o filtro de datas." />;
 
   return (
-    <div className="col" style={{ gap: 11 }}>
+    <div>
       {dados.map((d, i) => {
-        const pct = Math.round((d.total / topo) * 100);
+        const pct = (d.total / topo) * 100;
         const anterior = dados[i - 1]?.total;
         const queda = anterior && anterior > 0 ? Math.round((d.total / anterior) * 100) : null;
         return (
-          <div key={d.ord}>
-            <div className="row" style={{ marginBottom: 5, fontSize: 12.5 }}>
-              <span style={{ color: "var(--muted)" }}>{d.etapa}</span>
-              <span className="spacer" />
-              <span className="num" style={{ fontWeight: 600, color: "var(--text-heading)" }}>
+          <div key={d.ord} className="funil-linha">
+            <div className="funil-topo">
+              <span className="funil-nome">{d.etapa}</span>
+              <span className="funil-total" style={{ color: d.total ? undefined : "var(--text-subtle)" }}>
                 {d.total}
               </span>
               {queda != null && i > 0 && (
-                <span className="num" style={{ color: "var(--text-subtle)", fontSize: 11.5, minWidth: 38, textAlign: "right" }}>
-                  {queda}%
-                </span>
+                <span className={`funil-queda ${queda < 40 ? "ruim" : ""}`.trim()}>{queda}%</span>
               )}
             </div>
-            <div style={{ height: 7, borderRadius: 99, background: "var(--panel-2)", overflow: "hidden" }}>
-              <div style={{
-                width: `${Math.max(pct, 1.5)}%`, height: "100%", borderRadius: 99,
-                background: "linear-gradient(90deg, var(--blue) 0%, var(--accent) 100%)",
-                opacity: 0.55 + (0.45 * (dados.length - i)) / dados.length,
-                transition: "width 400ms var(--ease)",
-              }} />
+            <div className="funil-trilho">
+              <div className="funil-barra" style={{ width: `${Math.max(pct, 0)}%` }} />
             </div>
           </div>
         );
@@ -233,7 +296,7 @@ function PainelCorretor({ sessao }: { sessao: Sessao }) {
   const d = p.dado;
   const hora = new Date().getHours();
   const saudacao = hora < 12 ? "Bom dia" : hora < 18 ? "Boa tarde" : "Boa noite";
-  const N = (v: number | undefined) => <Numero valor={v ?? 0} formatar={numero} />;
+  const atrasados = d?.followups_atrasados ?? 0;
 
   return (
     <>
@@ -242,26 +305,61 @@ function PainelCorretor({ sessao }: { sessao: Sessao }) {
         <div style={{ color: "var(--text-subtle)", fontSize: 13, marginTop: 2 }}>
           {p.carregando
             ? "Carregando seu dia..."
-            : d && d.followups_atrasados > 0
-              ? `Voce tem ${d.followups_atrasados} follow-up${d.followups_atrasados > 1 ? "s" : ""} atrasado${d.followups_atrasados > 1 ? "s" : ""}. Comece por eles.`
+            : atrasados > 0
+              ? `Voce tem ${atrasados} follow-up${atrasados > 1 ? "s" : ""} atrasado${atrasados > 1 ? "s" : ""}. Comece por eles.`
               : "Sem atrasos. Bom dia para avancar o funil."}
         </div>
       </div>
 
-      <div className="grid cols-4">
-        <Stat rotulo="Novos leads"   valor={p.carregando ? <Skeleton h={28} w={44} /> : N(d?.novos)}
-              rodape={d?.sem_aceite ? `${d.sem_aceite} sem aceite` : "Tudo aceito"} />
-        <Stat rotulo="Follow-ups hoje" valor={p.carregando ? <Skeleton h={28} w={44} /> : N(d?.followups_hoje)} />
-        <Stat rotulo="Atrasados"     valor={p.carregando ? <Skeleton h={28} w={44} /> : N(d?.followups_atrasados)}
-              tom={d && d.followups_atrasados > 0 ? "down" : undefined}
-              rodape={d && d.followups_atrasados > 0 ? "Prioridade" : "Em dia"} />
-        <Stat rotulo="Visitas hoje"  valor={p.carregando ? <Skeleton h={28} w={44} /> : N(d?.visitas_hoje)} />
+      {/* O corretor decide o dia por urgência, não por volume: o que está
+          atrasado vem primeiro e maior. O resto é apoio. */}
+      <div className="grid kpi">
+        {p.carregando ? <CardsCarregando n={3} /> : (
+          <>
+            <Card className="stat stat-hero">
+              <div className="stat-label">Atrasados</div>
+              <div className={`stat-value${zerado(atrasados)}`}
+                   style={{ color: atrasados > 0 ? "var(--danger)" : undefined }}>
+                <Numero valor={atrasados} formatar={numero} />
+              </div>
+              <div className="stat-foot">
+                {atrasados > 0 ? "resolva antes de tudo" : "nada atrasado"}
+              </div>
+            </Card>
+
+            <Card className="stat stat-hero">
+              <div className="stat-label">Para hoje</div>
+              <div className={`stat-value${zerado((d?.followups_hoje ?? 0) + (d?.visitas_hoje ?? 0))}`}>
+                <Numero valor={(d?.followups_hoje ?? 0) + (d?.visitas_hoje ?? 0)} formatar={numero} />
+              </div>
+              <div className="stat-foot">
+                {`${d?.followups_hoje ?? 0} follow-up, ${d?.visitas_hoje ?? 0} visita`}
+              </div>
+            </Card>
+
+            <Card className="stat stat-hero">
+              <div className="stat-label">Leads novos</div>
+              <div className={`stat-value${zerado(d?.novos)}`}
+                   style={{ color: (d?.novos ?? 0) > 0 ? "var(--accent-light)" : undefined }}>
+                <Numero valor={d?.novos ?? 0} formatar={numero} />
+              </div>
+              <div className="stat-foot">
+                {d?.sem_aceite ? `${d.sem_aceite} sem aceite` : "tudo aceito"}
+              </div>
+            </Card>
+          </>
+        )}
       </div>
 
-      <div className="grid cols-2">
-        <Stat rotulo="Propostas abertas" valor={p.carregando ? <Skeleton h={28} w={44} /> : N(d?.em_proposta)} />
-        <Stat rotulo="Meu VGV" valor={p.carregando ? <Skeleton h={28} w={80} /> : <Numero valor={d?.vgv ?? 0} formatar={dinheiroCurto} />} tom="up"
-              rodape={`${d?.vendas ?? 0} venda${(d?.vendas ?? 0) === 1 ? "" : "s"} fechada${(d?.vendas ?? 0) === 1 ? "" : "s"}`} />
+      <div className="faixa">
+        <FaixaItem rotulo="Propostas abertas" valor={p.carregando ? "--" : numero(d?.em_proposta)}
+                   vazio={!d?.em_proposta} />
+        <FaixaItem rotulo="Minhas vendas" valor={p.carregando ? "--" : numero(d?.vendas)}
+                   vazio={!d?.vendas} />
+        <FaixaItem rotulo="Meu VGV" valor={p.carregando ? "--" : dinheiroCurto(d?.vgv ?? 0)}
+                   vazio={!d?.vgv} />
+        <FaixaItem rotulo="Parados 30+ dias" valor={p.carregando ? "--" : numero(d?.parados_30d)}
+                   vazio={!d?.parados_30d} />
       </div>
 
       <div className="grid cols-2">
@@ -274,20 +372,26 @@ function PainelCorretor({ sessao }: { sessao: Sessao }) {
             </button>
           </div>
           <div className="card-body">
-            <div className="col" style={{ gap: 10 }}>
+            <div className="col" style={{ gap: 8 }}>
               <Acao
                 icone={Ico.fire({ size: 15 })}
-                titulo={`${d?.novos ?? 0} lead${(d?.novos ?? 0) === 1 ? "" : "s"} novo${(d?.novos ?? 0) === 1 ? "" : "s"} esperando contato`}
+                titulo={`${d?.novos ?? 0} lead novo esperando contato`}
+                urgente={(d?.novos ?? 0) > 0}
                 aoClicar={() => irPara("/pipeline")}
               />
               <Acao
                 icone={Ico.clock({ size: 15 })}
-                titulo={`${d?.followups_hoje ?? 0} follow-up${(d?.followups_hoje ?? 0) === 1 ? "" : "s"} vencendo hoje`}
+                titulo={`${d?.followups_hoje ?? 0} follow-up vencendo hoje`}
                 aoClicar={() => irPara("/followups")}
               />
               <Acao
+                icone={Ico.building({ size: 15 })}
+                titulo={`${d?.visitas_hoje ?? 0} visita agendada para hoje`}
+                aoClicar={() => irPara("/visitas")}
+              />
+              <Acao
                 icone={Ico.alert({ size: 15 })}
-                titulo={`${d?.parados_30d ?? 0} oportunidade${(d?.parados_30d ?? 0) === 1 ? "" : "s"} sem interacao ha 30+ dias`}
+                titulo={`${d?.parados_30d ?? 0} oportunidade sem interacao ha 30+ dias`}
                 aoClicar={() => irPara("/leads")}
               />
             </div>
@@ -300,8 +404,8 @@ function PainelCorretor({ sessao }: { sessao: Sessao }) {
   );
 }
 
-function Acao({ icone, titulo, aoClicar }: {
-  icone: React.ReactNode; titulo: string; aoClicar: () => void;
+function Acao({ icone, titulo, aoClicar, urgente }: {
+  icone: React.ReactNode; titulo: string; aoClicar: () => void; urgente?: boolean;
 }) {
   return (
     <button
@@ -309,11 +413,14 @@ function Acao({ icone, titulo, aoClicar }: {
       onClick={aoClicar}
       style={{
         width: "100%", textAlign: "left", cursor: "pointer",
-        background: "var(--panel-2)", border: "1px solid var(--line-soft)",
-        borderRadius: "var(--r)", padding: "11px 13px", color: "var(--text)",
+        background: "var(--panel-2)",
+        border: `1px solid ${urgente ? "var(--accent-soft)" : "var(--line-soft)"}`,
+        borderRadius: "var(--r)", padding: "10px 13px", color: "var(--text)",
       }}
     >
-      <span style={{ color: "var(--accent-light)", display: "flex" }}>{icone}</span>
+      <span style={{ color: urgente ? "var(--accent-light)" : "var(--muted)", display: "flex" }}>
+        {icone}
+      </span>
       <span style={{ fontSize: 13.5 }}>{titulo}</span>
       <span className="spacer" />
       <span style={{ color: "var(--text-subtle)", display: "flex" }}>{Ico.arrow({ size: 15 })}</span>
