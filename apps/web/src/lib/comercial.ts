@@ -1,6 +1,6 @@
 import { supabase } from "./supabase";
 import type {
-  Development, Fila, LeadInterest, Match, MembroFila, Property,
+  Development, Fila, HorarioFila, LeadInterest, Match, MembroFila, Property,
   PropertyStatus, PropertyType, Proposal, ProposalStatus, Sale, Visit, VisitStatus,
 } from "./types";
 
@@ -258,7 +258,7 @@ export async function cancelarVenda(id: string, motivo: string) {
 export async function filas(tenantId: string): Promise<Fila[]> {
   const { data, error } = await supabase
     .from("lead_queues")
-    .select("id, name, status, acceptance_timeout_seconds, cursor_sort_order")
+    .select("id, name, status, acceptance_timeout_seconds, cursor_sort_order, timezone, working_hours")
     .eq("tenant_id", tenantId)
     .order("name");
   if (error) throw error;
@@ -277,13 +277,18 @@ export async function membrosDaFila(queueId: string): Promise<MembroFila[]> {
 
 export async function salvarFila(
   tenantId: string,
-  f: { id?: string; name: string; acceptance_timeout_seconds: number; status?: "ACTIVE" | "INACTIVE" }
+  f: {
+    id?: string; name: string; acceptance_timeout_seconds: number;
+    status?: "ACTIVE" | "INACTIVE";
+    working_hours?: HorarioFila | Record<string, never>;
+  }
 ) {
   const linha = {
     tenant_id: tenantId,
     name: f.name,
     acceptance_timeout_seconds: f.acceptance_timeout_seconds,
     status: f.status ?? "ACTIVE",
+    working_hours: f.working_hours ?? {},
   };
   const { error } = f.id
     ? await supabase.from("lead_queues").update(linha).eq("id", f.id)

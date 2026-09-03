@@ -228,12 +228,22 @@ export interface Sale {
   property?: { title: string } | null;
 }
 
+export interface HorarioFila {
+  /** isodow: 1=segunda ... 7=domingo */
+  dias: number[];
+  inicio: string;
+  fim: string;
+}
+
 export interface Fila {
   id: string;
   name: string;
   status: "ACTIVE" | "INACTIVE";
   acceptance_timeout_seconds: number;
   cursor_sort_order: number;
+  timezone?: string;
+  /** {} = atende 24x7 */
+  working_hours?: HorarioFila | Record<string, never>;
 }
 
 export interface MembroFila {

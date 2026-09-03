@@ -38,6 +38,9 @@ export class WorkflowSla extends WorkflowEntrypoint<Env, ParametrosSla> {
     const { assignmentId, segundos } = evento.payload;
     const tentativa = evento.payload.tentativa ?? 1;
 
+    // O prazo respeita o expediente da fila, entao pode ser de minutos (lead
+    // que chega as 14h) ou de dias (lead que chega sexta as 20h). O Workflow
+    // dorme o tempo que for - e por isso que nao existe cron aqui.
     await passo.sleep("aguardar o prazo de aceite", `${Math.max(segundos, 30)} seconds`);
 
     const r = await passo.do(

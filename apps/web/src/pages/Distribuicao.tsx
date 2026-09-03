@@ -5,7 +5,7 @@ import { mensagemDeErro } from "../lib/supabase";
 import {
   Alerta, Avatar, Card, Ico, Skeleton, useAsync, useToast, Vazio,
 } from "../ui";
-import type { Fila, Sessao } from "../lib/types";
+import type { Fila, HorarioFila, Sessao } from "../lib/types";
 
 export default function Distribuicao({ sessao }: { sessao: Sessao }) {
   const [editando, setEditando] = useState<Partial<Fila> | null>(null);
@@ -104,6 +104,7 @@ function CardFila({
         <span className="badge">
           {Ico.clock({ size: 12 })} aceite em {Math.round(fila.acceptance_timeout_seconds / 60)} min
         </span>
+        <span className="badge">{descreveHorario(fila.working_hours)}</span>
         <span className="spacer" />
         <button className="btn ghost sm" onClick={aoEditar}>Configurar</button>
       </div>
@@ -194,6 +195,26 @@ function CardFila({
   );
 }
 
+const DIAS = [
+  { n: 1, r: "Seg" }, { n: 2, r: "Ter" }, { n: 3, r: "Qua" },
+  { n: 4, r: "Qui" }, { n: 5, r: "Sex" }, { n: 6, r: "Sab" }, { n: 7, r: "Dom" },
+];
+
+/** Resume o expediente numa frase curta para o cabecalho da fila. */
+function descreveHorario(h: Fila["working_hours"]): string {
+  const w = h as HorarioFila | undefined;
+  if (!w || !w.inicio || !w.dias?.length) return "atende 24h";
+  const nomes = DIAS.filter((d) => w.dias.includes(d.n)).map((d) => d.r);
+  const primeiro = nomes[0] ?? "";
+  const ultimo = nomes[nomes.length - 1] ?? "";
+  const ordenados = [...w.dias].sort((a, b) => a - b);
+  const contiguo =
+    ordenados.length > 2 &&
+    ordenados.every((d, i) => i === 0 || d === (ordenados[i - 1] ?? d) + 1);
+  const seq = contiguo ? primeiro + " a " + ultimo : nomes.join(", ");
+  return seq + " " + w.inicio + "-" + w.fim;
+}
+
 function FormFila({
   sessao, inicial, aoFechar, aoSalvar,
 }: {
@@ -206,6 +227,11 @@ function FormFila({
     String(Math.round((inicial.acceptance_timeout_seconds ?? 300) / 60))
   );
   const [ativa, setAtiva] = useState((inicial.status ?? "ACTIVE") === "ACTIVE");
+  const h0 = inicial.working_hours as HorarioFila | undefined;
+  const [limitaHorario, setLimitaHorario] = useState(Boolean(h0?.inicio));
+  const [dias, setDias] = useState<number[]>(h0?.dias ?? [1, 2, 3, 4, 5]);
+  const [horaIni, setHoraIni] = useState(h0?.inicio ?? "09:00");
+  const [horaFim, setHoraFim] = useState(h0?.fim ?? "19:00");
   const [salvando, setSalvando] = useState(false);
 
   async function enviar(e: React.FormEvent) {
@@ -217,6 +243,9 @@ function FormFila({
         name: nome.trim(),
         acceptance_timeout_seconds: Math.max(Number(minutos) * 60, 30),
         status: ativa ? "ACTIVE" : "INACTIVE",
+        working_hours: limitaHorario && dias.length
+          ? { dias: [...dias].sort((a, b) => a - b), inicio: horaIni, fim: horaFim }
+          : {},
       });
       avisar("ok", "Fila salva.");
       aoSalvar();
@@ -256,6 +285,46 @@ function FormFila({
             <input type="checkbox" checked={ativa} onChange={(e) => setAtiva(e.target.checked)} />
             Fila ativa
           </label>
+
+          <div style={{ borderTop: "1px solid var(--line-soft)", paddingTop: 13 }}>
+            <span className="eyebrow">Horario de atendimento</span>
+            <label className="row" style={{ gap: 8, fontSize: 13.5, cursor: "pointer", marginBottom: 10 }}>
+              <input type="checkbox" checked={limitaHorario}
+                     onChange={(e) => setLimitaHorario(e.target.checked)} />
+              Contar o prazo so dentro do expediente
+            </label>
+
+            {limitaHorario && (
+              <>
+                <div className="row" style={{ gap: 5, flexWrap: "wrap", marginBottom: 11 }}>
+                  {DIAS.map((d) => (
+                    <button key={d.n} type="button"
+                            className={dias.includes(d.n) ? "btn sm" : "btn ghost sm"}
+                            onClick={() => setDias((v) =>
+                              v.includes(d.n) ? v.filter((x) => x !== d.n) : [...v, d.n])}>
+                      {d.r}
+                    </button>
+                  ))}
+                </div>
+                <div className="grid cols-2">
+                  <div className="field">
+                    <label className="label">Abre</label>
+                    <input className="input" type="time" value={horaIni}
+                           onChange={(e) => setHoraIni(e.target.value)} />
+                  </div>
+                  <div className="field">
+                    <label className="label">Fecha</label>
+                    <input className="input" type="time" value={horaFim}
+                           onChange={(e) => setHoraFim(e.target.value)} />
+                  </div>
+                </div>
+                <span className="hint" style={{ display: "block", marginTop: 8 }}>
+                  Lead que chega fora do expediente e atribuido na hora, mas o
+                  relogio so comeca quando abre. Sexta as 20h vira segunda as {horaIni}.
+                </span>
+              </>
+            )}
+          </div>
           <div className="row">
             <span className="spacer" />
             <button className="btn primary" type="submit" disabled={salvando || !nome.trim()}>

@@ -98,6 +98,7 @@ interface RespostaIngestao {
   contato_novo?: boolean;
   tenant_id?: string;
   assignment_id?: string | null;
+  sla_expira_em?: string | null;
   sla_segundos?: number | null;
   duplicado: boolean;
 }
@@ -153,13 +154,20 @@ export async function ingerir(
   // Lead distribuido: abre o Workflow que vai cobrar o aceite. O id da
   // instancia e derivado do assignment, entao uma reentrega do webhook nao
   // cria dois relogios para o mesmo lead.
-  if (!r.duplicado && r.assignment_id && r.sla_segundos) {
+  // Com horario de atendimento, o prazo pode vencer em minutos ou so na
+  // segunda-feira. Preferimos a DATA e calculamos os segundos aqui; o campo
+  // sla_segundos fica de reserva para bancos ainda sem a migration 0019.
+  const segundos = r.sla_expira_em
+    ? Math.max(Math.ceil((new Date(r.sla_expira_em).getTime() - Date.now()) / 1000), 30)
+    : (r.sla_segundos ?? 0);
+
+  if (!r.duplicado && r.assignment_id && segundos > 0) {
     try {
       await env.SLA.create({
         id: `assignment-${r.assignment_id}`,
         params: {
           assignmentId: r.assignment_id,
-          segundos: r.sla_segundos,
+          segundos,
           tentativa: 1,
         } satisfies ParametrosSla,
       });

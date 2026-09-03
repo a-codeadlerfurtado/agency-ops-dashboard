@@ -8,6 +8,7 @@ import { mensagemDeErro } from "../lib/supabase";
 import {
   Alerta, Card, Ico, TabelaCarregando, useAsync, useToast, Vazio,
 } from "../ui";
+import FotosImovel from "../FotosImovel";
 import type { Property, PropertyStatus, PropertyType, Sessao } from "../lib/types";
 
 const TIPOS: PropertyType[] = [
@@ -319,6 +320,15 @@ function FormImovel({
                      placeholder="piscina, academia" />
             </div>
           </div>
+
+          {p.id ? (
+            <div className="field">
+              <label className="label">Fotos</label>
+              <FotosImovel tenantId={sessao.tenant.id} propertyId={p.id} podeEditar />
+            </div>
+          ) : (
+            <span className="hint">Salve o imovel para poder anexar fotos.</span>
+          )}
 
           <div className="field">
             <label className="label">Descricao</label>

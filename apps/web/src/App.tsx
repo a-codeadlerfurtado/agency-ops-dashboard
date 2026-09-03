@@ -6,6 +6,7 @@ import { ImobiBoardLogo, ImobiBoardMark } from "./Marca";
 import type { Sessao } from "./lib/types";
 
 import Login from "./pages/Login";
+import Convite from "./pages/Convite";
 import VisaoGeral from "./pages/VisaoGeral";
 import Leads from "./pages/Leads";
 import LeadDetalhe from "./pages/LeadDetalhe";
@@ -226,6 +227,12 @@ function Carregando() {
 
 export default function App() {
   const { estado, entrar, sair } = useSessao();
+  const rota = useRota();
+
+  // Convite tem tela propria e precisa funcionar antes de existir sessao:
+  // a pessoa convidada normalmente ainda nao tem conta.
+  const convite = rota.startsWith("/convite/") ? rota.slice("/convite/".length) : null;
+  if (convite) return <Convite token={convite} />;
 
   if (estado.fase === "carregando") return <Carregando />;
   if (estado.fase === "deslogado") return <Login entrar={entrar} />;

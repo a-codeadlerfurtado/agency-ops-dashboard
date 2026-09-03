@@ -83,3 +83,42 @@ export async function definirStatusCorretor(membershipId: string, ativo: boolean
   });
   if (error) throw error;
 }
+
+/* ============================================================ convites === */
+
+export interface Convite {
+  id: string;
+  email: string;
+  role: "ADMIN" | "BROKER";
+  created_at: string;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+}
+
+export async function convites(tenantId: string): Promise<Convite[]> {
+  const { data, error } = await supabase
+    .from("invites")
+    .select("id, email, role, created_at, expires_at, accepted_at, revoked_at")
+    .eq("tenant_id", tenantId)
+    .is("accepted_at", null)
+    .is("revoked_at", null)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as Convite[];
+}
+
+/** Devolve o token UMA vez: ele nao e legivel por policy depois disso. */
+export async function convidarMembro(email: string, role: "ADMIN" | "BROKER") {
+  const { data, error } = await supabase.rpc("convidar_membro", {
+    p_email: email,
+    p_role: role,
+  });
+  if (error) throw error;
+  return data as { token: string; email: string; role: string };
+}
+
+export async function revogarConvite(id: string) {
+  const { error } = await supabase.rpc("revogar_convite", { p_id: id });
+  if (error) throw error;
+}
