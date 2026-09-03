@@ -216,7 +216,8 @@ export interface PainelAdmin {
     propostas: number; vendas: number; vgv: number | null; sla_perdido: number | null;
   };
   funil: { ord: number; etapa: string; kind: string; total: number }[];
-  origens: { origem: string; leads: number; vendas: number; qualificados: number }[];
+  origens: { origem: string; leads: number; vendas: number; qualificados: number; vgv: number }[];
+  campanhas: { campanha: string; vendas: number; vgv: number }[];
 }
 
 export async function painelAdmin(tenantId: string, dias: number): Promise<PainelAdmin> {
@@ -231,7 +232,8 @@ export async function painelAdmin(tenantId: string, dias: number): Promise<Paine
 
 export interface PainelBroker {
   novos: number; sem_aceite: number; followups_hoje: number;
-  followups_atrasados: number; em_proposta: number; vendas: number; parados_30d: number;
+  followups_atrasados: number; visitas_hoje: number; em_proposta: number;
+  vendas: number; vgv: number; parados_30d: number;
 }
 
 export async function painelBroker(tenantId: string): Promise<PainelBroker> {
@@ -242,8 +244,9 @@ export async function painelBroker(tenantId: string): Promise<PainelBroker> {
 
 export interface LinhaRanking {
   user_id: string; nome: string;
-  leads: number; aceitos: number; contatados: number; qualificados: number;
-  vendas: number; parados: number;
+  leads: number; aceitos: number; sla_perdido: number; contatados: number;
+  qualificados: number; visitas: number; propostas: number; vendas: number;
+  vgv: number; parados: number;
   min_ate_aceite: number | null; min_ate_contato: number | null; conversao: number | null;
 }
 

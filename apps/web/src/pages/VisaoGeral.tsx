@@ -60,15 +60,23 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
         <Stat rotulo="Propostas"    valor={carregando ? <Skeleton h={28} w={54} /> : numero(c?.propostas)} />
         <Stat rotulo="Vendas"       valor={carregando ? <Skeleton h={28} w={54} /> : numero(c?.vendas)}
               tom="up" />
-        <Stat rotulo="VGV"          valor={c?.vgv == null ? "--" : dinheiroCurto(c.vgv)}
-              rodape="Chega com o modulo de vendas" />
-        <Stat rotulo="SLA perdido"  valor={c?.sla_perdido == null ? "--" : numero(c.sla_perdido)}
-              rodape="Chega com a distribuicao" />
+        <Stat rotulo="VGV"          valor={carregando ? <Skeleton h={28} w={80} /> : dinheiroCurto(c?.vgv ?? 0)}
+              tom="up"
+              rodape={c?.vendas
+                ? `ticket ${dinheiroCurto((c.vgv ?? 0) / c.vendas)}`
+                : "sem venda no periodo"} />
+        <Stat rotulo="SLA perdido"  valor={carregando ? <Skeleton h={28} w={54} /> : numero(c?.sla_perdido ?? 0)}
+              tom={c && (c.sla_perdido ?? 0) > 0 ? "down" : undefined}
+              rodape="leads nao aceitos no prazo" />
       </div>
 
       <div className="grid cols-2">
         <Card>
-          <div className="card-head"><h2>Funil</h2></div>
+          <div className="card-head">
+            <h2>Funil</h2>
+            <span className="spacer" />
+            <span className="badge">leads que entraram no periodo</span>
+          </div>
           <div className="card-body">
             {carregando ? (
               <div className="col" style={{ gap: 12 }}>
@@ -81,7 +89,11 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
         </Card>
 
         <Card>
-          <div className="card-head"><h2>Origem</h2></div>
+          <div className="card-head">
+            <h2>Origem</h2>
+            <span className="spacer" />
+            <span className="badge">conversao da coorte</span>
+          </div>
           <div className="card-body flush">
             {carregando ? (
               <div style={{ padding: 16 }}><Skeleton h={80} /></div>
@@ -92,7 +104,8 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
                 <table className="tbl">
                   <thead>
                     <tr><th>Origem</th><th className="num">Leads</th>
-                        <th className="num">Qualif.</th><th className="num">Vendas</th></tr>
+                        <th className="num">Qualif.</th><th className="num">Vendas</th>
+                        <th className="num">VGV</th></tr>
                   </thead>
                   <tbody>
                     {painel.dado?.origens.map((o) => (
@@ -101,6 +114,9 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
                         <td className="num">{o.leads}</td>
                         <td className="num">{o.qualificados}</td>
                         <td className="num">{o.vendas}</td>
+                        <td className="num nowrap" style={{ color: o.vgv ? "var(--success)" : undefined }}>
+                          {o.vgv ? dinheiroCurto(o.vgv) : "--"}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -111,8 +127,51 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
         </Card>
       </div>
 
-      <CardParados parados={parados.dado} carregando={parados.carregando} />
+      <div className="grid cols-2">
+        <CardCampanhas campanhas={painel.dado?.campanhas ?? []} carregando={carregando} />
+        <CardParados parados={parados.dado} carregando={parados.carregando} />
+      </div>
     </>
+  );
+}
+
+/* Atribuicao de venda por campanha (spec 46/54): fecha o ciclo anuncio -> venda. */
+function CardCampanhas({ campanhas, carregando }: {
+  campanhas: { campanha: string; vendas: number; vgv: number }[]; carregando: boolean;
+}) {
+  return (
+    <Card>
+      <div className="card-head">
+        <h2>VGV por campanha</h2>
+        <span className="spacer" />
+        <span className="badge">vendas fechadas no periodo</span>
+      </div>
+      <div className="card-body flush">
+        {carregando ? (
+          <div style={{ padding: 16 }}><Skeleton h={70} /></div>
+        ) : campanhas.length === 0 ? (
+          <Vazio titulo="Sem venda no periodo"
+                 texto="Quando uma venda for registrada, a campanha que a originou aparece aqui." />
+        ) : (
+          <div className="table-wrap">
+            <table className="tbl">
+              <thead><tr><th>Campanha</th><th className="num">Vendas</th><th className="num">VGV</th></tr></thead>
+              <tbody>
+                {campanhas.map((c) => (
+                  <tr key={c.campanha}>
+                    <td className="truncate">{c.campanha}</td>
+                    <td className="num">{c.vendas}</td>
+                    <td className="num nowrap" style={{ fontWeight: 600, color: "var(--success)" }}>
+                      {dinheiroCurto(c.vgv)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 
@@ -188,7 +247,13 @@ function PainelCorretor({ sessao }: { sessao: Sessao }) {
         <Stat rotulo="Atrasados"     valor={p.carregando ? sk : numero(d?.followups_atrasados)}
               tom={d && d.followups_atrasados > 0 ? "down" : undefined}
               rodape={d && d.followups_atrasados > 0 ? "Prioridade" : "Em dia"} />
-        <Stat rotulo="Em proposta"   valor={p.carregando ? sk : numero(d?.em_proposta)} />
+        <Stat rotulo="Visitas hoje"  valor={p.carregando ? sk : numero(d?.visitas_hoje)} />
+      </div>
+
+      <div className="grid cols-2">
+        <Stat rotulo="Propostas abertas" valor={p.carregando ? sk : numero(d?.em_proposta)} />
+        <Stat rotulo="Meu VGV" valor={p.carregando ? sk : dinheiroCurto(d?.vgv ?? 0)} tom="up"
+              rodape={`${d?.vendas ?? 0} venda${(d?.vendas ?? 0) === 1 ? "" : "s"} fechada${(d?.vendas ?? 0) === 1 ? "" : "s"}`} />
       </div>
 
       <div className="grid cols-2">

@@ -55,6 +55,8 @@ cp .env.example .env          # preencha com os valores do seu projeto
 cp .env.example apps/web/.env
 ```
 
+Seeds, em ordem: `supabase/seed.sql` e depois `supabase/seed_imoveis.sql`.
+
 Variáveis mínimas para o frontend subir:
 
 ```
@@ -117,6 +119,12 @@ supabase db push
 | `0006_sla_nao_devolve_para_quem_perdeu` | correção de redistribuição |
 | `0007_ingest_sources` | credenciais e endpoint de ingestão |
 | `0008_agency_bridge` | contrato agregado para a agência |
+| `0009_fk_membership_profile` | FK que o PostgREST precisa para embutir perfis |
+| `0010_imoveis_interesse` | imóveis, empreendimentos, mídia, perfil de interesse |
+| `0011_matching` | score determinístico lead × imóvel |
+| `0012_visitas_propostas_vendas` | as três entidades + snapshot de atribuição |
+| `0013_rpc_visitas_propostas_vendas` | operações transacionais e a trava da venda explícita |
+| `0014_analytics_com_vgv` | VGV, SLA perdido e atribuição reais nos painéis |
 
 ---
 
@@ -124,12 +132,14 @@ supabase db push
 
 ```bash
 psql "$SUPABASE_DB_URL" -f supabase/tests/rls_test.sql
+psql "$SUPABASE_DB_URL" -f supabase/tests/rls_comercial_test.sql
 ```
 
-A suíte cobre visibilidade por papel, doze tentativas de escrita indevida
-(inclusive troca de `tenant_id` via payload), acesso a painel executivo por
-corretor, e normalização de telefone. Ver `docs/security.md` para o resultado
-esperado.
+**24 tentativas de acesso indevido, 24 bloqueios.** As suítes cobrem
+visibilidade por papel e por tenant, troca de `tenant_id` via payload,
+autopromoção a ADMIN, leitura de proposta e venda de colega, escrita direta em
+`sales` e `domain_events`, corretor mexendo no rodízio, venda fechada por
+arrastar card, e o score do matching. Ver `docs/security.md`.
 
 ---
 

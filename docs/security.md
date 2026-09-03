@@ -74,6 +74,10 @@ O `::uuid[]` não é decorativo: sem ele o parser lê `ANY (subquery)` em vez de
 | `audit_logs` | só lê | sem acesso |
 | `domain_events` | sem acesso | sem acesso |
 | `lead_assignments` | tudo do tenant | só as suas |
+| `properties` / `developments` | cria e edita | **só lê** o estoque |
+| `lead_interests` | tudo do tenant | só dos leads dele |
+| `visits` / `proposals` | tudo do tenant | só as suas |
+| `sales` | lê tudo, cancela | lê as suas, **não cancela** |
 
 Dois pontos que costumam passar batido:
 
@@ -139,7 +143,32 @@ E nos agregados:
 | Beatriz (ADMIN Horizonte) abre painel da Terra Concreta | `42501` |
 | João abre ranking | `42501` |
 
-Reproduza com `supabase/tests/rls_test.sql`.
+### Ataques nas tabelas comerciais
+
+Mais doze, todos bloqueados:
+
+| # | Tentativa | Como foi barrado |
+|---|---|---|
+| 1 | BROKER cadastra imovel | `42501` policy violation |
+| 2 | BROKER edita preco de imovel | 0 linhas |
+| 3 | BROKER apaga imovel | 0 linhas |
+| 4 | Corretor de outro tenant cadastra imovel aqui | `42501` policy violation |
+| 5 | Maria le proposta do Joao | 0 linhas |
+| 6 | Maria le venda do Joao | 0 linhas |
+| 7 | BROKER escreve direto em `sales` | `42501` permission denied |
+| 8 | BROKER cria fila de distribuicao | `42501` policy violation |
+| 9 | BROKER se coloca primeiro no rodizio | 0 linhas |
+| 10 | ADMIN de outro tenant le imovel daqui | 0 linhas |
+| 11 | Maria cria interesse em lead do Joao | 0 linhas |
+| 12 | BROKER cancela a propria venda | `42501` apenas o administrador |
+
+E a regra da spec 80: arrastar o card para a etapa Venda sem venda registrada
+devolve `P0001` pedindo a acao explicita.
+
+**Total: 24 tentativas, 24 bloqueios.**
+
+Reproduza com `supabase/tests/rls_test.sql` e
+`supabase/tests/rls_comercial_test.sql`.
 
 ---
 

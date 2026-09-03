@@ -1,54 +1,93 @@
 # Roadmap
 
-## Feito nesta sessao
+## V1 — completa
 
-Banco completo (15 tabelas), RLS testada, autenticacao, tenant e papeis,
-leads, pipeline Kanban, atividades, follow-ups, paineis de ADMIN e corretor,
-ranking, filas com round robin, SLA por Workflow, ingestao com deduplicacao e
-idempotencia, contrato do bridge da agencia.
+Toda a linha `anúncio → lead → distribuição → corretor → atendimento →
+qualificação → imóvel → visita → proposta → venda → VGV → atribuição` está
+implementada, testada e no ar.
 
-## Proximo passo imediato
-
-1. Expor o schema `imobi_board` no PostgREST (ver `supabase.md`) e validar a
-   vertical no navegador.
-2. `wrangler login` + deploy do `imobi-board-worker` em staging.
-3. Ligar o Workflow de ponta a ponta com timeout curto e observar a
-   redistribuicao acontecer sozinha.
-
-## Resto da V1
-
-| Passo | Item |
+| Passo | Entrega |
 |---|---|
-| 14 | `properties` / `developments` / `property_units` + midia |
-| 15 | `lead_interests` (perfil de interesse) |
-| 16 | matching deterministico com score explicavel |
-| 17 | visitas |
-| 18 | propostas |
-| 19 | vendas + snapshot de atribuicao (destrava VGV) |
-| 12b | telas de administracao de filas e corretores |
-| 22 | integracao real com Meta Lead Ads |
+| 1 | Auditoria do ambiente, produção existente mapeada e protegida |
+| 2 | Monorepo pnpm |
+| 3 | Schemas `imobi_board` / `imobi_board_priv` no projeto `imobi-pro` |
+| 4 | Banco base: tenants, perfis, contatos, oportunidades, funil, atividades, tarefas |
+| 5 | RLS em todas as tabelas, com suíte de testes |
+| 6 | Auth, resolução de tenant e papel |
+| 7 | Layout, sidebar por papel, roteamento |
+| 8 | Leads: lista, filtros, cadastro, ficha |
+| 9 | Kanban com drag & drop e histórico de etapa |
+| 10 | Follow-ups e painel pessoal do corretor |
+| 11 | Tela de corretores |
+| 12 | Filas, round robin, atribuição |
+| 13 | Workflow de SLA na Cloudflare, com redistribuição |
+| 14 | Imóveis, empreendimentos, mídia |
+| 15 | Perfil de interesse do lead |
+| 16 | Matching determinístico com score explicável |
+| 17 | Visitas |
+| 18 | Propostas |
+| 19 | Vendas com snapshot de atribuição |
+| 20 | Painéis, funil, ranking, VGV |
+| 21 | Ingestão genérica com deduplicação e idempotência |
+| 22 | Adapter da Meta Lead Ads (ver ressalva abaixo) |
+| 23 | Contrato do bridge da agência |
+| 24 | Hardening: RLS, índices, mobile, mensagens de erro |
 
-`vgv` e `sla_perdido` aparecem como `--` nos paineis hoje. Nao sao zeros
-falsos: as tabelas que os alimentam ainda nao existem.
+### Critério da §120, verificado
+
+```
+lead da Meta → Terra Concreta → fila → João → SLA → aceite →
+contato → qualificação → match com imóvel → visita → proposta →
+venda → VGV → ranking → atribuição da venda ao anúncio
+```
+
+Rodou de ponta a ponta. A venda de R$ 875.000 da Olivia Ramos aparece no VGV,
+no ranking do João e atribuída à campanha "Lancamento Vista Residence",
+anúncio "Video tour 30s".
+
+---
+
+## Pendências reais
+
+**Meta Lead Ads em produção.** O adapter existe, traduz o formato real
+(`field_data` com `name`/`values`) e o `leadgen_id` já garante idempotência.
+O handshake do webhook (`hub.challenge`) responde. Falta apenas conectar um app
+Meta real e assinar o formulário — nada disso é código.
+
+**Secret do Worker.** `SUPABASE_SERVICE_ROLE_KEY` não está configurado. Sem
+ele, a ingestão por HTTP e o Workflow de SLA não funcionam em produção. O
+`ingerir_lead` e o `expirar_assignment` foram testados direto no banco.
+
+**`working_hours` da fila.** A coluna existe, o valor é gravado, mas o motor
+ainda não a respeita: um lead que chega às 3h é distribuído e o SLA corre.
+
+**Convite de corretor por e-mail.** A tela lista a equipe real; criar usuário
+novo ainda passa pelo Supabase Auth na mão.
+
+**Upload de foto de imóvel.** `property_media` existe com RLS; falta o
+componente de upload para o Supabase Storage.
+
+---
 
 ## V1.1 / V2
 
 - controle de chaves (`property_keys`, `key_movements`)
-- selecao personalizada de imoveis com link para o cliente
-- pos-venda simples
+- seleção personalizada de imóveis com link para o cliente favoritar
+- pós-venda simples
+- estratégias de fila além do round robin (peso, região, performance)
+- calendário de visitas de verdade
 
-## Modulo de IA (fora do core)
+## Módulo de IA (fora do core)
 
-WhatsApp oficial, qualificacao automatica, follow-up e reativacao. O core nao
-depende disso e nao deve passar a depender: a integracao entra pela API, como
-qualquer outra origem.
+WhatsApp oficial, qualificação automática, follow-up e reativação. O core não
+depende disso e não deve passar a depender: a integração entra pela API de
+ingestão, como qualquer outra origem.
 
 ## Growth
 
-Atribuicao Meta completa, Google Ads, conexao real do bridge com o dashboard da
-agencia.
+Google Ads, conexão real do bridge com o dashboard da agência.
 
 ## Explicitamente fora
 
-Site imobiliario, CMS, portais (Zap/VivaReal/OLX), ERP de locacao, financeiro,
-permutas, inbox multicanal, automation builder visual, reciclagem automatica.
+Site imobiliário, CMS, portais (Zap/VivaReal/OLX), ERP de locação, financeiro,
+permutas, inbox multicanal, automation builder visual, reciclagem automática.

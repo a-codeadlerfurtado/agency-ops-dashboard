@@ -8,7 +8,10 @@ import { mensagemDeErro } from "../lib/supabase";
 import {
   Alerta, Avatar, Card, EtapaBadge, Ico, Skeleton, useAsync, useToast,
 } from "../ui";
-import type { Activity, ActivityType, Sessao } from "../lib/types";
+import {
+  AcoesComerciais, AvisoDeAceite, PainelInteresse, PainelMatching,
+} from "./LeadComercial";
+import type { Activity, ActivityType, Match, Sessao } from "../lib/types";
 
 const ICONE_ATIVIDADE: Record<ActivityType, () => React.ReactNode> = {
   NOTE: () => Ico.note({ size: 13 }),
@@ -31,6 +34,9 @@ const ROTULO_ATIVIDADE: Record<ActivityType, string> = {
 export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: string }) {
   const avisar = useToast();
   const [salvando, setSalvando] = useState(false);
+  const [sugerido, setSugerido] = useState<Match | null>(null);
+  // muda a cada salvamento de interesse para o matching recalcular
+  const [chaveMatch, setChaveMatch] = useState(0);
 
   const dados = useAsync(
     async () => ({
@@ -80,6 +86,8 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
 
   return (
     <>
+      <AvisoDeAceite oppId={oppId} aoAceitar={() => dados.recarregar()} />
+
       <div className="row" style={{ flexWrap: "wrap", gap: 10 }}>
         <button className="btn ghost sm" onClick={() => irPara("/leads")}>
           {Ico.back({ size: 15 })} Leads
@@ -132,6 +140,19 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
 
       <div className="detail">
         <div className="col" style={{ gap: 16 }}>
+          <AcoesComerciais
+            sessao={sessao} oppId={oppId} imovelSugerido={sugerido}
+            aoConcluir={() => { setSugerido(null); dados.recarregar(); }}
+          />
+
+          <PainelMatching
+            oppId={oppId} chave={chaveMatch}
+            aoEscolher={(m) => {
+              setSugerido(m);
+              avisar("info", m.titulo + " selecionado para a proxima acao.");
+            }}
+          />
+
           <NovaAtividade
             sessao={sessao} oppId={oppId} tenantId={opp.tenant_id}
             aoRegistrar={() => dados.recarregar()}
@@ -158,6 +179,11 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
         </div>
 
         <div className="col" style={{ gap: 16 }}>
+          <PainelInteresse
+            sessao={sessao} oppId={oppId}
+            aoSalvar={() => setChaveMatch((k) => k + 1)}
+          />
+
           <Card>
             <div className="card-head"><h2>Origem</h2></div>
             <div className="card-body">

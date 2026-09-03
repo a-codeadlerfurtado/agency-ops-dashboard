@@ -12,6 +12,11 @@ import Pipeline from "./pages/Pipeline";
 import FollowUps from "./pages/FollowUps";
 import Corretores from "./pages/Corretores";
 import Ranking from "./pages/Ranking";
+import Imoveis from "./pages/Imoveis";
+import Visitas from "./pages/Visitas";
+import Propostas from "./pages/Propostas";
+import Vendas from "./pages/Vendas";
+import Distribuicao from "./pages/Distribuicao";
 
 /* Router por hash: sem dependencia, sem servidor de rotas, funciona em
    qualquer host estatico. Para 8 telas, react-router seria peso morto. */
@@ -41,9 +46,17 @@ const NAV_COMERCIAL: ItemNav[] = [
   { rota: "/followups", rotulo: "Follow-ups",  icone: () => Ico.clock() },
 ];
 
+const NAV_PORTFOLIO: ItemNav[] = [
+  { rota: "/imoveis",   rotulo: "Imoveis",   icone: () => Ico.building() },
+  { rota: "/visitas",   rotulo: "Visitas",   icone: () => Ico.clock() },
+  { rota: "/propostas", rotulo: "Propostas", icone: () => Ico.note() },
+  { rota: "/vendas",    rotulo: "Vendas",    icone: () => Ico.trophy() },
+];
+
 const NAV_GESTAO: ItemNav[] = [
-  { rota: "/corretores", rotulo: "Corretores", icone: () => Ico.users(),  soAdmin: true },
-  { rota: "/ranking",    rotulo: "Ranking",    icone: () => Ico.trophy(), soAdmin: true },
+  { rota: "/corretores",   rotulo: "Corretores",   icone: () => Ico.users(),  soAdmin: true },
+  { rota: "/distribuicao", rotulo: "Distribuicao", icone: () => Ico.arrow(),  soAdmin: true },
+  { rota: "/ranking",      rotulo: "Ranking",      icone: () => Ico.trophy(), soAdmin: true },
 ];
 
 function Nav({ sessao, rota, aoNavegar }: {
@@ -69,6 +82,10 @@ function Nav({ sessao, rota, aoNavegar }: {
       <div className="nav-group">Comercial</div>
       {NAV_COMERCIAL.map((i) =>
         item(i.rota === "/leads" && !sessao.isAdmin ? { ...i, rotulo: "Meus Leads" } : i)
+      )}
+      <div className="nav-group">Portfolio</div>
+      {NAV_PORTFOLIO.map((i) =>
+        item(i.rota === "/vendas" && !sessao.isAdmin ? { ...i, rotulo: "Minhas Vendas" } : i)
       )}
       {gestao.length > 0 && (
         <>
@@ -108,6 +125,26 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
       case "/followups":
         titulo = "Follow-ups";
         pagina = <FollowUps sessao={sessao} />;
+        break;
+      case "/imoveis":
+        titulo = "Imoveis";
+        pagina = <Imoveis sessao={sessao} />;
+        break;
+      case "/visitas":
+        titulo = "Visitas";
+        pagina = <Visitas sessao={sessao} />;
+        break;
+      case "/propostas":
+        titulo = "Propostas";
+        pagina = <Propostas sessao={sessao} />;
+        break;
+      case "/vendas":
+        titulo = sessao.isAdmin ? "Vendas" : "Minhas Vendas";
+        pagina = <Vendas sessao={sessao} />;
+        break;
+      case "/distribuicao":
+        titulo = "Distribuicao";
+        pagina = sessao.isAdmin ? <Distribuicao sessao={sessao} /> : <SemPermissao />;
         break;
       case "/corretores":
         titulo = "Corretores";
