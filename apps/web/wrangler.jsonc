@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "imobi-board-app",
+  "compatibility_date": "2026-09-01",
+
+  // SPA estatica servida por Workers Assets: sem servidor, sem cold start,
+  // sem custo por request de asset. O roteamento e por hash, mas
+  // single-page-application garante que qualquer path caia no index.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+
+  "observability": { "enabled": true }
+
+  // As VITE_* entram no bundle em tempo de BUILD, nao aqui.
+  // Rode `pnpm build` com o .env preenchido antes de `wrangler deploy`.
+}

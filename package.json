@@ -14,7 +14,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "db:push": "node scripts/db-push.mjs",
-    "db:seed": "node scripts/db-seed.mjs"
+    "db:seed": "node scripts/db-seed.mjs",
+    "deploy": "node scripts/deploy-staging.mjs"
   },
   "devDependencies": {
     "typescript": "5.9.3"

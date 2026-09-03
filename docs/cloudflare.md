@@ -4,8 +4,9 @@
 
 | Nome | Tipo | Estado |
 |---|---|---|
-| `imobi-board-worker` | Worker | codigo pronto, **nao deployado** |
-| `imobi-board-sla` | Workflow | declarado no wrangler.jsonc |
+| `imobi-board-app` | Worker (assets) | **no ar** — https://imobi-board-app.lakassessoriadigital.workers.dev |
+| `imobi-board-worker` | Worker | **no ar** — https://imobi-board-worker.lakassessoriadigital.workers.dev |
+| `imobi-board-sla` | Workflow | registrado no deploy |
 | `LIMITE_INGEST` | Rate Limit | 120 req/60s por credencial |
 
 ## Recursos que NAO sao deste projeto
@@ -24,8 +25,13 @@ Nenhum comeca com `imobi-board`. **Confira o nome antes de qualquer deploy** —
 ## Deploy
 
 ```bash
+pnpm deploy    # build + deploy dos dois, com trava de nome
+```
+
+Secrets do worker:
+
+```bash
 cd workers/api
-wrangler login                       # acao sua: envolve credencial da conta
 wrangler secret put SUPABASE_URL
 wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 wrangler secret put AGENCY_BRIDGE_TOKEN

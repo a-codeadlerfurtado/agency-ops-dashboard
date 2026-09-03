@@ -2,6 +2,9 @@
 
 **CRM imobiliário que conecta anúncio, lead, corretor e venda.**
 
+> **Staging no ar:** https://imobi-board-app.lakassessoriadigital.workers.dev
+> API: https://imobi-board-worker.lakassessoriadigital.workers.dev
+
 SaaS multi-tenant para imobiliárias e corretores. O foco é a linha
 `anúncio → lead → distribuição → corretor → atendimento → qualificação → visita
 → proposta → venda`, preservando a atribuição de mídia do começo ao fim: quando
