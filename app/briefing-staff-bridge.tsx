@@ -6,9 +6,11 @@ import type { Session } from "@supabase/supabase-js";
 import { authenticatedFetch, SUPABASE_URL } from "./shared";
 
 type Row = Record<string, any>;
-type Tab = "overview" | "products" | "personas" | "materials";
+type Tab = "overview" | "products" | "personas" | "strategy" | "materials";
+type DetailTab = "strategy" | "briefing" | "history";
 
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-briefing-staff-api`;
+const STRATEGY_API = `${SUPABASE_URL}/functions/v1/agency-ops-briefing-strategy-api`;
 const ALLOWED_PEOPLE = new Set(["Adler Furtado", "Joel Antoniete", "Gustavo Lima"]);
 
 const STYLE = `
@@ -33,6 +35,7 @@ const STYLE = `
 .brief-staff-error{border:1px solid #6d3030;background:rgba(125,35,35,.12);border-radius:11px;padding:11px 12px;color:#ffaaaa;font-size:11px;margin-bottom:10px}
 .brief-staff-loading{padding:28px;text-align:center;color:#94a3ad;font-size:12px}.brief-staff-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff7a2f;margin-right:7px;animation:briefpulse 1s ease-in-out infinite}@keyframes briefpulse{50%{opacity:.35;transform:scale(.72)}}
 .brief-staff-drawer-bg{position:fixed;inset:0 0 0 var(--sidenav-width,224px);z-index:2147482500;background:rgba(0,0,0,.5);display:flex;justify-content:flex-end}.brief-staff-drawer{width:min(720px,94vw);height:100%;background:#0c1216;border-left:1px solid #33414b;overflow:auto;padding:20px;box-shadow:-20px 0 60px rgba(0,0,0,.35)}.brief-staff-drawer-head{position:sticky;top:-20px;background:#0c1216;border-bottom:1px solid #28343b;padding:20px 0 14px;z-index:2;display:flex;justify-content:space-between;gap:12px}.brief-staff-drawer h2{margin:4px 0 3px;font:800 22px/1.15 Inter Tight,Inter,sans-serif}.brief-staff-answer{padding:12px 0;border-bottom:1px solid #223039}.brief-staff-answer:last-child{border-bottom:0}.brief-staff-answer label{display:block;color:#96a5af;font-size:10px;font-weight:800;margin-bottom:5px}.brief-staff-answer div{font-size:12px;line-height:1.55;white-space:pre-wrap;color:#e0e7eb}.brief-staff-answer small{display:block;color:#71818b;font-size:9px;margin-top:5px}.brief-staff-section-chip{margin:16px 0 2px;color:#ff9b61;font:900 9px Inter,sans-serif;letter-spacing:.1em;text-transform:uppercase}
+.brief-staff-strategy{display:grid;gap:12px}.brief-staff-strategy-hero{border:1px solid #2d4553;border-radius:14px;padding:16px;background:linear-gradient(120deg,rgba(18,93,132,.16),rgba(13,21,27,.95) 55%)}.brief-staff-strategy-hero h3{margin:4px 0 8px;font:800 18px/1.2 Inter,sans-serif}.brief-staff-strategy-hero p{margin:0;color:#c3d0d8;font-size:12px;line-height:1.6;white-space:pre-wrap}.brief-staff-strategy-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.brief-staff-copy{border:1px solid #2d3d47;background:#10191f;border-radius:13px;padding:13px}.brief-staff-copy-head{display:flex;justify-content:space-between;gap:8px;align-items:start}.brief-staff-copy h4{margin:0;font:800 13px/1.3 Inter,sans-serif}.brief-staff-copy p{margin:9px 0 0;color:#c3d1d9;font-size:11px;line-height:1.55;white-space:pre-wrap}.brief-staff-copy strong{display:block;margin-top:9px;color:#eff6f8;font-size:11px}.brief-staff-copy small{display:block;margin-top:5px;color:#8b9ca7;font-size:10px;line-height:1.45}.brief-staff-copy-btn{border:1px solid #3a5666;background:#112331;color:#a9ddfa;border-radius:7px;padding:5px 7px;font:800 10px Inter,sans-serif;cursor:pointer}.brief-staff-plan{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.brief-staff-plan-item{border:1px solid #293a43;background:#0e151a;border-radius:10px;padding:11px}.brief-staff-plan-item small{display:block;color:#84bfea;font-size:9px;font-weight:850;letter-spacing:.07em;text-transform:uppercase}.brief-staff-plan-item div{margin-top:5px;color:#d9e3e9;font-size:11px;line-height:1.45;white-space:pre-wrap}.brief-staff-benchmark{border:1px solid #26485a;background:rgba(28,95,132,.11);border-radius:10px;padding:10px 12px;color:#b8dbe9;font-size:11px;line-height:1.45}.brief-staff-map-wrap{overflow:auto;border:1px solid #2b3a44;border-radius:13px}.brief-staff-map{width:100%;min-width:620px;border-collapse:collapse;background:#0e151a}.brief-staff-map th,.brief-staff-map td{padding:11px;border-bottom:1px solid #23313a;border-right:1px solid #23313a;text-align:left;font-size:11px}.brief-staff-map th{color:#9fcff0;background:#101c24;font-size:10px;text-transform:uppercase;letter-spacing:.05em}.brief-staff-map td:first-child{font-weight:750;color:#eff5f7;min-width:170px}.brief-staff-map-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#44525a}.brief-staff-map-dot.linked{background:#63d6a4;box-shadow:0 0 0 3px rgba(99,214,164,.12)}.brief-staff-history{display:grid;gap:0;border:1px solid #293943;border-radius:12px;overflow:hidden}.brief-staff-history-item{padding:12px;border-bottom:1px solid #24323b}.brief-staff-history-item:last-child{border-bottom:0}.brief-staff-history-item b{display:block;font-size:12px}.brief-staff-history-item p{margin:4px 0 0;color:#a6b5be;font-size:11px;line-height:1.45}.brief-staff-history-item small{display:block;margin-top:5px;color:#71828e;font-size:10px}
 @media(max-width:850px){.brief-staff-shell{left:58px;padding:18px 14px 36px}.brief-staff-drawer-bg{left:58px}.brief-staff-head{flex-direction:column}.brief-staff-picker{grid-template-columns:1fr}.brief-staff-stats{grid-template-columns:1fr 1fr}.brief-staff-drive{grid-template-columns:1fr}.brief-staff-drawer{width:100%}}
 `;
 
@@ -56,6 +59,26 @@ function valueText(answer: Row | undefined) {
 function statusClass(value: unknown) {
   const v=String(value||"").toUpperCase(); return v.includes("COMPLE")||v.includes("COMPLETE") ? "ok" : "warn";
 }
+function summaryText(value: unknown) {
+  if (value === null || value === undefined || value === "") return "";
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(summaryText).filter(Boolean).join("\n");
+  if (typeof value === "object") return Object.values(value as Row).map(summaryText).filter(Boolean).join("\n");
+  return String(value);
+}
+function titleCase(value: string) {
+  return value.replace(/[_-]+/g," ").replace(/\b\w/g,(letter)=>letter.toUpperCase());
+}
+function planEntries(value: unknown, prefix = ""): Array<[string,string]> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return prefix ? [[prefix, summaryText(value)]] : [];
+  const rows: Array<[string,string]> = [];
+  for (const [key, nested] of Object.entries(value as Row)) {
+    const label = prefix ? `${prefix} · ${titleCase(key)}` : titleCase(key);
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) rows.push(...planEntries(nested,label));
+    else { const text = summaryText(nested); if (text) rows.push([label,text]); }
+  }
+  return rows;
+}
 
 export default function BriefingStaffBridge({ session: _session }: { session: Session }) {
   const [authorized,setAuthorized]=useState<boolean|null>(null);
@@ -68,6 +91,11 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
   const [error,setError]=useState("");
   const [detail,setDetail]=useState<Row|null>(null);
   const [detailLoading,setDetailLoading]=useState(false);
+  const [detailTab,setDetailTab]=useState<DetailTab>("strategy");
+  const [strategy,setStrategy]=useState<Row|null>(null);
+  const [strategyLoading,setStrategyLoading]=useState(false);
+  const [relationMap,setRelationMap]=useState<Record<string,Set<string>>>({});
+  const [mapLoading,setMapLoading]=useState(false);
   const buttonRef=useRef<HTMLButtonElement|null>(null);
 
   const call=useCallback(async(params:Record<string,string>)=>{
@@ -83,12 +111,28 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
     finally{setLoading(false);}
   },[call]);
 
+  const loadStrategy=useCallback(async(type:"PRODUCT"|"PERSONA",id:string,forClient=clientId)=>{
+    if(!forClient) return;
+    setStrategyLoading(true); setStrategy(null);
+    try{
+      const r=await authenticatedFetch(STRATEGY_API,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({client_id:forClient,type,id}),cache:"no-store"});
+      const body=await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(body.detail||body.error||`API ${r.status}`);
+      setStrategy(body);
+    }catch(e){setStrategy({error:e instanceof Error?e.message:"Não foi possível gerar a estratégia agora."});}
+    finally{setStrategyLoading(false);}
+  },[clientId]);
+
   const openEntity=useCallback(async(type:"PRODUCT"|"PERSONA",id:string)=>{
-    setDetailLoading(true); setError("");
-    try{setDetail(await call({action:"entity",type,id}));}
+    setDetailLoading(true); setError(""); setDetailTab("strategy"); setStrategy(null);
+    try{
+      const body=await call({action:"entity",type,id});
+      setDetail(body);
+      void loadStrategy(type,id);
+    }
     catch(e){setError(e instanceof Error?e.message:"Falha ao carregar briefing");}
     finally{setDetailLoading(false);}
-  },[call]);
+  },[call,loadStrategy]);
 
   useEffect(()=>{
     let active=true;
@@ -154,6 +198,32 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
 
   const answersByKey=useMemo(()=>new Map((detail?.answers||[]).map((a:Row)=>[String(a.question_key),a])),[detail]);
   const questions=detail?.questions||[];
+  const history=detail?.history||[];
+  const strategySummary=summaryText(strategy?.strategic_summary||strategy?.summary||strategy?.insight);
+  const copyVariants=Array.isArray(strategy?.copies)?strategy.copies:[];
+  const plan=planEntries(strategy?.media_plan||strategy?.plan||strategy?.campaign_plan);
+  const loadRelationMap=useCallback(async()=>{
+    if(!products.length||!personas.length) return;
+    setMapLoading(true);
+    try{
+      const rows=await Promise.all(products.map(async(product:Row)=>({id:String(product.id),detail:await call({action:"entity",type:"PRODUCT",id:String(product.id)})})));
+      const next:Record<string,Set<string>>={};
+      for(const row of rows){
+        const linked=new Set<string>();
+        for(const link of row.detail?.links||[]){
+          const raw=String(link.id||link.entity_id||link.persona_id||link.linked_entity_id||"");
+          const byId=personas.find((persona:Row)=>String(persona.id)===raw);
+          const byName=personas.find((persona:Row)=>String(persona.name||"").trim().toLowerCase()===String(link.name||link.entity_name||"").trim().toLowerCase());
+          if(byId) linked.add(String(byId.id));
+          if(byName) linked.add(String(byName.id));
+        }
+        next[row.id]=linked;
+      }
+      setRelationMap(next);
+    }catch(e){setError(e instanceof Error?e.message:"Não foi possível montar o mapa Produto × Persona.");}
+    finally{setMapLoading(false);}
+  },[call,products,personas]);
+  useEffect(()=>{if(tab==="strategy"&&selected)void loadRelationMap();},[tab,selected,loadRelationMap]);
 
   if(authorized!==true) return <style dangerouslySetInnerHTML={{__html:STYLE}}/>;
   if(typeof document==="undefined")return <style dangerouslySetInnerHTML={{__html:STYLE}}/>;
@@ -175,7 +245,7 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
         {!selected&&!loading&&<div className="brief-staff-empty">Selecione um cliente para abrir seus briefings, personas e materiais.</div>}
         {selected&&<>
           <div className="brief-staff-clientbar"><div><div className="brief-staff-clientname">{selected.display_name}</div><div className="brief-staff-clientmeta">{selected.lifecycle} · GT: {selected.gt_owner||"não definido"} · CS: {selected.cs_owner||"não definido"}</div></div>{drive?.external_id&&<a className="brief-staff-btn" href={`https://drive.google.com/drive/folders/${drive.external_id}`} target="_blank" rel="noreferrer">Abrir Drive ↗</a>}</div>
-          <nav className="brief-staff-tabs" aria-label="Áreas do Briefing Hub">{([['overview','Resumo'],['products','Produtos'],['personas','Personas'],['materials','Materiais']] as [Tab,string][]).map(([k,label])=><button key={k} className={`brief-staff-tab${tab===k?' active':''}`} onClick={()=>setTab(k)}>{label}</button>)}</nav>
+          <nav className="brief-staff-tabs" aria-label="Áreas do Briefing Hub">{([['overview','Resumo'],['products','Produtos'],['personas','Personas'],['strategy','Estratégia'],['materials','Materiais']] as [Tab,string][]).map(([k,label])=><button key={k} className={`brief-staff-tab${tab===k?' active':''}`} onClick={()=>setTab(k)}>{label}</button>)}</nav>
 
           {tab==="overview"&&<>
             <div className="brief-staff-stats"><div className="brief-staff-stat"><small>Produtos</small><b>{products.length}</b><span>{completeProducts} completos</span></div><div className="brief-staff-stat"><small>Personas</small><b>{personas.length}</b><span>{completePersonas} completas</span></div><div className="brief-staff-stat"><small>Materiais</small><b>{materials.length}</b><span>registros recentes</span></div><div className="brief-staff-stat"><small>Drive</small><b>{drive?.external_id?'OK':'—'}</b><span>{drive?.external_name||'pasta não mapeada'}</span></div></div>
@@ -187,11 +257,32 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
 
           {tab==="personas"&&<><div className="brief-staff-section-title"><h2>Personas</h2><span>{personas.length} personas</span></div>{personas.length?<div className="brief-staff-grid">{personas.map((x:Row)=><button key={x.id} className="brief-staff-card clickable" onClick={()=>void openEntity('PERSONA',x.id)}><div className="brief-staff-card-top"><span className="brief-staff-type">Persona</span><span className={`brief-staff-pill ${statusClass(x.completion_status)}`}>{String(x.completion_status||'Pendente').replaceAll('_',' ')}</span></div><h3>{x.name||'Sem nome'}</h3><div className="brief-staff-muted">Atualizada {fmtDate(x.updated_at)}</div></button>)}</div>:<div className="brief-staff-empty">Nenhuma persona cadastrada.</div>}</>}
 
+          {tab==="strategy"&&<>
+            <div className="brief-staff-section-title"><h2>Mapa Produto × Persona</h2><span>{mapLoading?"Lendo vínculos…":"Relações que já estão no briefing"}</span></div>
+            {!products.length||!personas.length?<div className="brief-staff-empty">Cadastre ao menos um produto e uma persona para visualizar o mapa estratégico.</div>:<div className="brief-staff-map-wrap"><table className="brief-staff-map"><thead><tr><th>Produto</th>{personas.map((persona:Row)=><th key={persona.id}>{persona.name||"Sem nome"}</th>)}</tr></thead><tbody>{products.map((product:Row)=><tr key={product.id}><td>{product.name||"Sem nome"}</td>{personas.map((persona:Row)=><td key={persona.id} title={relationMap[String(product.id)]?.has(String(persona.id))?"Vinculada":"Sem vínculo"}><span className={`brief-staff-map-dot ${relationMap[String(product.id)]?.has(String(persona.id))?"linked":""}`}/></td>)}</tr>)}</tbody></table></div>}
+            <div className="brief-staff-benchmark">O mapa é montado a partir dos vínculos salvos no próprio Briefing Hub. Estratégia, cópias e configurações de campanha aparecem ao abrir um Produto ou Persona.</div>
+          </>}
+
           {tab==="materials"&&<><div className="brief-staff-drive"><div><b>{drive?.external_name||'Pasta do Drive'}</b><code>{drive?.external_id||'Este cliente ainda não possui pasta DRIVE mapeada.'}</code></div>{drive?.external_id&&<a className="brief-staff-btn primary" href={`https://drive.google.com/drive/folders/${drive.external_id}`} target="_blank" rel="noreferrer">Abrir pasta</a>}</div><div className="brief-staff-upload-note"><strong>Materiais do cliente</strong><p>Os arquivos permanecem no Google Drive; o dashboard guarda somente metadados para histórico e notificações. A seleção de subpasta e o upload resumível serão habilitados aqui pelo mesmo bridge de Drive usado no portal do cliente.</p></div><div className="brief-staff-section-title"><h2>Arquivos registrados</h2><span>{materials.length} recentes</span></div>{materials.length?<div className="brief-staff-card">{materials.map((x:Row)=><div className="brief-staff-file" key={x.id}><div><b>{x.file_name}</b><span>{x.file_kind||'ARQUIVO'} {fmtBytes(x.file_size_bytes)?`· ${fmtBytes(x.file_size_bytes)}`:''} · {fmtDate(x.drive_uploaded_at||x.detected_at)}</span></div>{x.drive_file_id&&<a href={`https://drive.google.com/open?id=${x.drive_file_id}`} target="_blank" rel="noreferrer">Abrir ↗</a>}</div>)}</div>:<div className="brief-staff-empty">Nenhum material indexado para este cliente ainda.</div>}</>}
         </>}
       </div>
     </main>,document.body)}
-    {detail&&createPortal(<div className="brief-staff-drawer-bg" onMouseDown={(e)=>{if(e.target===e.currentTarget)setDetail(null)}}><aside className="brief-staff-drawer"><div className="brief-staff-drawer-head"><div><div className="brief-staff-kicker">{detail.type==='PRODUCT'?'Produto':'Persona'}</div><h2>{detail.entity?.name||'Briefing'}</h2><div className="brief-staff-muted">{questions.length} perguntas · atualizado {fmtDate(detail.entity?.updated_at)}</div></div><button className="brief-staff-close" onClick={()=>setDetail(null)}>Fechar</button></div>{detail.links?.length>0&&<div className="brief-staff-section-title"><h2>Relacionados</h2><span>{detail.links.map((x:Row)=>x.name).join(' · ')}</span></div>}{questions.map((q:Row,i:number)=>{const section=q.section?.title||'Informações';const prev=i?questions[i-1]?.section?.title:null;const a=answersByKey.get(String(q.question_key)) as Row|undefined;return <div key={q.question_key}>{section!==prev&&<div className="brief-staff-section-chip">{section}</div>}<div className="brief-staff-answer"><label>{q.label||q.question_key}</label><div>{valueText(a)}</div>{a?.updated_at&&<small>Atualizado {fmtDate(a.updated_at)}{a.updated_by_name?` por ${a.updated_by_name}`:''}</small>}</div></div>})}{!questions.length&&<div className="brief-staff-empty">Nenhuma pergunta compartilhada encontrada.</div>}</aside></div>,document.body)}
+    {detail&&createPortal(<div className="brief-staff-drawer-bg" onMouseDown={(e)=>{if(e.target===e.currentTarget)setDetail(null)}}><aside className="brief-staff-drawer"><div className="brief-staff-drawer-head"><div><div className="brief-staff-kicker">{detail.type==='PRODUCT'?'Produto':'Persona'}</div><h2>{detail.entity?.name||'Briefing'}</h2><div className="brief-staff-muted">{questions.length} perguntas · atualizado {fmtDate(detail.entity?.updated_at)}</div></div><button className="brief-staff-close" onClick={()=>setDetail(null)}>Fechar</button></div>
+      <nav className="brief-staff-tabs" aria-label="Detalhes do briefing"><button className={`brief-staff-tab${detailTab==="strategy"?" active":""}`} onClick={()=>setDetailTab("strategy")}>Estratégia</button><button className={`brief-staff-tab${detailTab==="briefing"?" active":""}`} onClick={()=>setDetailTab("briefing")}>Briefing completo</button><button className={`brief-staff-tab${detailTab==="history"?" active":""}`} onClick={()=>setDetailTab("history")}>Histórico</button></nav>
+      {detailTab==="strategy"&&<section className="brief-staff-strategy">
+        {strategyLoading&&<div className="brief-staff-loading"><span className="brief-staff-dot"/>Cruzando briefing, contexto e benchmark interno…</div>}
+        {strategy?.error&&<div className="brief-staff-error">{strategy.error}</div>}
+        {!strategyLoading&&!strategy?.error&&<><div className="brief-staff-strategy-hero"><div className="brief-staff-kicker">Resumo estratégico vivo</div><h3>Leitura para criação e mídia</h3><p>{strategySummary||"Ainda não há contexto suficiente neste briefing para montar uma recomendação segura."}</p></div>
+          {strategy?.benchmark&&<div className="brief-staff-benchmark">{summaryText(strategy.benchmark.methodology||strategy.benchmark.summary||strategy.benchmark)}</div>}
+          <div className="brief-staff-section-title"><h2>3 versões de copy Meta</h2><span>Baseadas no briefing atual</span></div>
+          {copyVariants.length?<div className="brief-staff-strategy-grid">{copyVariants.map((copy:Row,index:number)=>{const copyText=[copy.primary_text||copy.text||copy.copy,copy.headline&&`Título: ${copy.headline}`,copy.description&&`Descrição: ${copy.description}`].filter(Boolean).join("\n\n");return <article className="brief-staff-copy" key={index}><div className="brief-staff-copy-head"><h4>{copy.title||`Variação ${index+1}`}</h4><button className="brief-staff-copy-btn" onClick={()=>void navigator.clipboard?.writeText(copyText)}>Copiar</button></div><p>{copy.primary_text||copy.text||copy.copy||"Copy não disponível."}</p>{copy.headline&&<strong>{copy.headline}</strong>}{copy.description&&<small>{copy.description}</small>}{copy.cta&&<small>CTA: {copy.cta}</small>}</article>})}</div>:<div className="brief-staff-empty">As cópias aparecem quando o briefing tiver produto, público e diferencial suficientes.</div>}
+          <div className="brief-staff-section-title"><h2>Plano de campanha Meta</h2><span>Campanha, conjunto e distribuição</span></div>
+          {plan.length?<div className="brief-staff-plan">{plan.map(([label,value])=><div className="brief-staff-plan-item" key={label}><small>{label}</small><div>{value}</div></div>)}</div>:<div className="brief-staff-empty">A configuração detalhada aparece com contexto suficiente de produto, região e ticket.</div>}
+        </>}
+      </section>}
+      {detailTab==="briefing"&&<>{detail.links?.length>0&&<div className="brief-staff-section-title"><h2>Relacionados</h2><span>{detail.links.map((x:Row)=>x.name).join(' · ')}</span></div>}{questions.map((q:Row,i:number)=>{const section=q.section?.title||'Informações';const prev=i?questions[i-1]?.section?.title:null;const a=answersByKey.get(String(q.question_key)) as Row|undefined;return <div key={q.question_key}>{section!==prev&&<div className="brief-staff-section-chip">{section}</div>}<div className="brief-staff-answer"><label>{q.label||q.question_key}</label><div>{valueText(a)}</div>{a?.updated_at&&<small>Atualizado {fmtDate(a.updated_at)}{a.updated_by_name?` por ${a.updated_by_name}`:''}</small>}</div></div>})}{!questions.length&&<div className="brief-staff-empty">Nenhuma pergunta compartilhada encontrada.</div>}</>}
+      {detailTab==="history"&&<>{history.length?<div className="brief-staff-history">{history.map((entry:Row,index:number)=><article className="brief-staff-history-item" key={entry.id||index}><b>{entry.action||entry.event||entry.title||"Atualização do briefing"}</b><p>{entry.description||entry.summary||entry.detail||"Alteração registrada no histórico."}</p><small>{fmtDate(entry.created_at||entry.updated_at||entry.at)}{entry.actor_name||entry.updated_by_name?` · ${entry.actor_name||entry.updated_by_name}`:''}</small></article>)}</div>:<div className="brief-staff-empty">Ainda não há eventos de histórico disponíveis para este briefing.</div>}</>}
+    </aside></div>,document.body)}
     {detailLoading&&createPortal(<div className="brief-staff-drawer-bg"><aside className="brief-staff-drawer"><div className="brief-staff-loading"><span className="brief-staff-dot"/>Abrindo briefing…</div></aside></div>,document.body)}
   </>;
 }
