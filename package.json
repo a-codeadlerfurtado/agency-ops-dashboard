@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "description": "Imobi-Board - CRM imobiliario que conecta anuncio, lead, corretor e venda.",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "dev": "pnpm --filter @imobi-board/web dev",
     "dev:api": "pnpm --filter @imobi-board/worker dev",
