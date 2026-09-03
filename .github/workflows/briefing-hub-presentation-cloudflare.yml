@@ -114,3 +114,5 @@ export default {{
           echo "Presentation Worker did not become healthy" >&2
           head -c 500 /tmp/live.html || true
           exit 1
+
+# automation retry trigger 2026-09-02T21:45:45-03:00
