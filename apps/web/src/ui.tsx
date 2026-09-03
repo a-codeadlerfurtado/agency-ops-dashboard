@@ -1,6 +1,6 @@
 import {
   createContext, useCallback, useContext, useEffect, useRef, useState,
-  type ReactNode,
+  type ButtonHTMLAttributes, type ReactNode,
 } from "react";
 import { classeEtapa, iniciais } from "./lib/format";
 import type { StageKind } from "./lib/types";
@@ -40,6 +40,8 @@ export const Ico = {
   alert: (p: IcoProps = {}) => svg(<><circle cx="12" cy="12" r="9" /><path d="M12 7.5v5M12 16.2v.01" /></>, p.size, p.className),
   arrow: (p: IcoProps = {}) => svg(<path d="M5 12h13M13 7l5 5-5 5" />, p.size, p.className),
   mail: (p: IcoProps = {}) => svg(<><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3.5 7 8.5 6 8.5-6" /></>, p.size, p.className),
+  close: (p: IcoProps = {}) => svg(<path d="M6 6l12 12M18 6L6 18" />, p.size, p.className),
+  check2: (p: IcoProps = {}) => svg(<path d="m5 12.5 4.5 4.5L19 7.5" />, p.size, p.className),
   phone: (p: IcoProps = {}) => svg(<path d="M6 3h3l1.5 4.5-2 1.5a12 12 0 0 0 6.5 6.5l1.5-2L21 15v3a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4 5.2 2 2 0 0 1 6 3z" />, p.size, p.className),
 };
 
@@ -88,17 +90,45 @@ export const Skeleton = ({ h = 16, w = "100%" }: { h?: number; w?: number | stri
   <div className="skel" style={{ height: h, width: w }} />
 );
 
+/**
+ * Skeleton com a FORMA da linha real: avatar redondo, titulo, subtitulo e
+ * colunas numericas a direita. Quando os dados chegam nada salta de lugar,
+ * que e o ponto do skeleton - retangulo cinza generico so avisa que esta
+ * carregando, nao prepara o olho.
+ */
 export function TabelaCarregando({ linhas = 5, colunas = 5 }: { linhas?: number; colunas?: number }) {
   return (
-    <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
+    <div>
       {Array.from({ length: linhas }, (_, i) => (
-        <div key={i} className="row" style={{ gap: 14 }}>
-          {Array.from({ length: colunas }, (_, j) => (
-            <Skeleton key={j} h={14} w={j === 0 ? "26%" : "16%"} />
+        <div key={i} className="skel-linha"
+             style={{ borderBottom: i < linhas - 1 ? "1px solid var(--line-soft)" : undefined }}>
+          <Skeleton h={26} w={26} />
+          <div className="skel-col" style={{ maxWidth: 220 }}>
+            <Skeleton h={12} w={`${58 + ((i * 13) % 30)}%`} />
+            <Skeleton h={10} w="40%" />
+          </div>
+          <span className="spacer" />
+          {Array.from({ length: Math.max(colunas - 2, 1) }, (_, j) => (
+            <Skeleton key={j} h={12} w={54} />
           ))}
         </div>
       ))}
     </div>
+  );
+}
+
+/** Skeleton dos cards de KPI: mesma altura e ritmo do Stat de verdade. */
+export function CardsCarregando({ n = 4 }: { n?: number }) {
+  return (
+    <>
+      {Array.from({ length: n }, (_, i) => (
+        <Card key={i} className="skel-card">
+          <Skeleton h={10} w="46%" />
+          <Skeleton h={26} w="58%" />
+          <Skeleton h={10} w="36%" />
+        </Card>
+      ))}
+    </>
   );
 }
 
@@ -126,7 +156,7 @@ export function Alerta({ tipo = "err", children }: { tipo?: "err" | "warn" | "";
 
 /* ============================================================== toasts === */
 
-type Toast = { id: number; tipo: "ok" | "err" | "info"; texto: string };
+type Toast = { id: number; tipo: "ok" | "err" | "info"; texto: string; saindo?: boolean };
 const ToastCtx = createContext<(tipo: Toast["tipo"], texto: string) => void>(() => {});
 export const useToast = () => useContext(ToastCtx);
 
@@ -137,7 +167,10 @@ export function ProvedorDeToasts({ children }: { children: ReactNode }) {
   const avisar = useCallback((tipo: Toast["tipo"], texto: string) => {
     const id = ++seq.current;
     setLista((l) => [...l, { id, tipo, texto }]);
-    setTimeout(() => setLista((l) => l.filter((t) => t.id !== id)), 4200);
+    // marca a saida, deixa a transicao correr, so entao tira do DOM: sem os
+    // dois tempos o toast simplesmente pisca para fora
+    setTimeout(() => setLista((l) => l.map((t) => (t.id === id ? { ...t, saindo: true } : t))), 4200);
+    setTimeout(() => setLista((l) => l.filter((t) => t.id !== id)), 4200 + 260);
   }, []);
 
   return (
@@ -145,7 +178,7 @@ export function ProvedorDeToasts({ children }: { children: ReactNode }) {
       {children}
       <div className="toasts" role="status" aria-live="polite">
         {lista.map((t) => (
-          <div key={t.id} className={`toast ${t.tipo}`}>
+          <div key={t.id} className={`toast ${t.tipo} ${t.saindo ? "saindo" : ""}`.trim()}>
             <span style={{ flexShrink: 0, marginTop: 1 }}>
               {t.tipo === "ok" ? Ico.check({ size: 15 }) : Ico.alert({ size: 15 })}
             </span>
@@ -179,4 +212,110 @@ export function useAsync<T>(fn: () => Promise<T>, deps: unknown[]) {
   }, [...deps, gatilho]);
 
   return { ...estado, recarregar: () => setGatilho((g) => g + 1) };
+}
+
+/* ================================================ botao com estado === */
+
+/**
+ * Botão que assume os próprios estados: parado → salvando → salvo.
+ *
+ * O padrão anterior era trocar o texto ("Salvar" / "Salvando..."), o que faz a
+ * largura do botão pular e não confirma nada ao terminar. Aqui a largura fica
+ * travada durante a transição e o check segura 1,2s: é o tempo de o olho
+ * registrar que deu certo antes de a UI voltar ao normal.
+ */
+export function BotaoAcao({
+  children, aoClicar, className = "btn primary", ...resto
+}: {
+  children: ReactNode;
+  aoClicar: () => Promise<unknown>;
+  className?: string;
+} & Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick" | "children">) {
+  const [estado, setEstado] = useState<"parado" | "indo" | "ok">("parado");
+  const ref = useRef<HTMLButtonElement>(null);
+  const vivo = useRef(true);
+  useEffect(() => () => { vivo.current = false; }, []);
+
+  async function clicar() {
+    if (estado !== "parado") return;
+    // trava a largura: sem isso o botão encolhe e o layout ao lado pula
+    if (ref.current) ref.current.style.minWidth = `${ref.current.offsetWidth}px`;
+    setEstado("indo");
+    try {
+      await aoClicar();
+      if (!vivo.current) return;
+      setEstado("ok");
+      setTimeout(() => vivo.current && setEstado("parado"), 1200);
+    } catch {
+      if (vivo.current) setEstado("parado");   // o erro aparece no toast
+    }
+  }
+
+  return (
+    <button
+      ref={ref}
+      className={`${className} btn-estado est-${estado}`}
+      onClick={clicar}
+      disabled={estado !== "parado" || resto.disabled}
+      {...resto}
+    >
+      <span className="be-conteudo">{children}</span>
+      <span className="be-giro" aria-hidden="true" />
+      <span className="be-ok" aria-hidden="true">{Ico.check2({ size: 15 })}</span>
+      <span className="sr-only" aria-live="polite">
+        {estado === "indo" ? "Salvando" : estado === "ok" ? "Salvo" : ""}
+      </span>
+    </button>
+  );
+}
+
+/* ============================================ numeros que transicionam === */
+
+/**
+ * Conta até o valor em vez de trocar de número seco.
+ *
+ * Escrito com rAF e textContent real — não com `counter()` do CSS, que geraria
+ * texto não selecionável e mal lido por leitor de tela. Num CRM alguém vai
+ * querer copiar o VGV.
+ *
+ * Só anima quando o valor MUDA depois de já ter sido exibido: na primeira
+ * carga o número aparece pronto, senão toda navegação vira um cassino.
+ */
+export function Numero({
+  valor, formatar = (n) => String(Math.round(n)), duracao = 420,
+}: {
+  valor: number;
+  formatar?: (n: number) => string;
+  duracao?: number;
+}) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const anterior = useRef<number | null>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+
+    const de = anterior.current;
+    anterior.current = valor;
+
+    const reduzido = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (de === null || de === valor || reduzido) {
+      el.textContent = formatar(valor);
+      return;
+    }
+
+    let raf = 0;
+    const inicio = performance.now();
+    const passo = (agora: number) => {
+      const t = Math.min((agora - inicio) / duracao, 1);
+      // easeOutExpo: quase todo o movimento acontece no começo
+      const e = t === 1 ? 1 : 1 - Math.pow(2, -10 * t);
+      el.textContent = formatar(de + (valor - de) * e);
+      if (t < 1) raf = requestAnimationFrame(passo);
+    };
+    raf = requestAnimationFrame(passo);
+    return () => cancelAnimationFrame(raf);
+  }, [valor, formatar, duracao]);
+
+  return <span ref={ref} className="num">{formatar(valor)}</span>;
 }

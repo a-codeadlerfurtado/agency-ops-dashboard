@@ -3,6 +3,7 @@ import { irPara } from "../App";
 import { data, relativo, rotuloOrigem } from "../lib/format";
 import { corretores, criarOportunidade, etapas, oportunidades, type FiltrosLead } from "../lib/queries";
 import { mensagemDeErro } from "../lib/supabase";
+import Dialogo from "../Dialogo";
 import {
   Alerta, Avatar, Card, EtapaBadge, Ico, TabelaCarregando, useAsync, useToast, Vazio,
 } from "../ui";
@@ -124,14 +125,13 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
         </button>
       </div>
 
-      {novo && (
-        <NovoLead
-          sessao={sessao}
-          pessoas={meta.dado?.pessoas ?? []}
-          aoFechar={() => setNovo(false)}
-          aoCriar={() => { setNovo(false); lista.recarregar(); }}
-        />
-      )}
+      <NovoLead
+        aberto={novo}
+        sessao={sessao}
+        pessoas={meta.dado?.pessoas ?? []}
+        aoFechar={() => setNovo(false)}
+        aoCriar={() => { setNovo(false); lista.recarregar(); }}
+      />
 
       {lista.erro && <Alerta>{lista.erro}</Alerta>}
 
@@ -228,9 +228,10 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
 /* ---------------------------------------------------------- novo lead --- */
 
 function NovoLead({
-  sessao, pessoas, aoFechar, aoCriar,
+  aberto, sessao, pessoas, aoFechar, aoCriar,
 }: {
-  sessao: Sessao; pessoas: Profile[]; aoFechar: () => void; aoCriar: () => void;
+  aberto: boolean; sessao: Sessao; pessoas: Profile[];
+  aoFechar: () => void; aoCriar: () => void;
 }) {
   const avisar = useToast();
   const [nome, setNome] = useState("");
@@ -261,14 +262,8 @@ function NovoLead({
   }
 
   return (
-    <Card>
-      <div className="card-head">
-        <h2>Novo lead</h2>
-        <span className="spacer" />
-        <button className="btn ghost sm" onClick={aoFechar}>Cancelar</button>
-      </div>
-      <div className="card-body">
-        <form onSubmit={salvar} className="col" style={{ gap: 13 }}>
+    <Dialogo aberto={aberto} titulo="Novo lead" aoFechar={aoFechar}>
+      <form onSubmit={salvar} className="col" style={{ gap: 13 }}>
           <div className="grid cols-2">
             <div className="field">
               <label className="label" htmlFor="n">Nome completo</label>
@@ -306,14 +301,14 @@ function NovoLead({
             </div>
           </div>
 
-          <div className="row">
-            <span className="spacer" />
-            <button className="btn primary" type="submit" disabled={salvando || !nome.trim()}>
-              {salvando ? "Salvando..." : "Criar lead"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </Card>
+        <div className="row">
+          <button className="btn ghost" type="button" onClick={aoFechar}>Cancelar</button>
+          <span className="spacer" />
+          <button className="btn primary" type="submit" disabled={salvando || !nome.trim()}>
+            {salvando ? "Salvando..." : "Criar lead"}
+          </button>
+        </div>
+      </form>
+    </Dialogo>
   );
 }

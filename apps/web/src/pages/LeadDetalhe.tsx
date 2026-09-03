@@ -6,7 +6,7 @@ import {
 } from "../lib/queries";
 import { mensagemDeErro } from "../lib/supabase";
 import {
-  Alerta, Avatar, Card, EtapaBadge, Ico, Skeleton, useAsync, useToast,
+  Alerta, Avatar, BotaoAcao, Card, EtapaBadge, Ico, Skeleton, useAsync, useToast,
 } from "../ui";
 import {
   AcoesComerciais, AvisoDeAceite, PainelInteresse, PainelMatching,
@@ -237,7 +237,7 @@ function LinhaHistorico({ a, autor, nomeEtapa }: {
     : a.body;
 
   return (
-    <div className="tl-item">
+    <div className="tl-item entra">
       <div className="tl-dot">{ICONE_ATIVIDADE[a.type]()}</div>
       <div className="tl-body">
         <div className="tl-head">
@@ -261,27 +261,22 @@ function NovaAtividade({ sessao, oppId, tenantId, aoRegistrar }: {
   const avisar = useToast();
   const [tipo, setTipo] = useState<ActivityType>("NOTE");
   const [texto, setTexto] = useState("");
-  const [salvando, setSalvando] = useState(false);
 
-  async function enviar(e: React.FormEvent) {
-    e.preventDefault();
-    setSalvando(true);
+  async function enviar() {
     try {
       await registrarAtividade(tenantId, oppId, tipo, texto.trim(), sessao.userId);
       setTexto("");
-      avisar("ok", "Registrado.");
       aoRegistrar();
     } catch (err) {
       avisar("err", mensagemDeErro(err));
-    } finally {
-      setSalvando(false);
+      throw err;   // o botao volta ao estado parado
     }
   }
 
   return (
     <Card>
       <div className="card-body">
-        <form onSubmit={enviar} className="col" style={{ gap: 10 }}>
+        <div className="col" style={{ gap: 10 }}>
           <div className="row" style={{ gap: 5, flexWrap: "wrap" }}>
             {TIPOS_MANUAIS.map((t) => (
               <button
@@ -301,11 +296,9 @@ function NovaAtividade({ sessao, oppId, tenantId, aoRegistrar }: {
           <div className="row">
             <span className="hint">O registro entra no historico e nao pode ser apagado.</span>
             <span className="spacer" />
-            <button className="btn primary" type="submit" disabled={salvando || !texto.trim()}>
-              {salvando ? "Salvando..." : "Registrar"}
-            </button>
+            <BotaoAcao aoClicar={enviar} disabled={!texto.trim()}>Registrar</BotaoAcao>
           </div>
-        </form>
+        </div>
       </div>
     </Card>
   );

@@ -3,6 +3,7 @@ import { irPara } from "../App";
 import { classeEtapa, relativo, rotuloOrigem } from "../lib/format";
 import { corretores, etapas, moverEtapa, oportunidadesDoQuadro } from "../lib/queries";
 import { mensagemDeErro } from "../lib/supabase";
+import { useFlip } from "../lib/flip";
 import { Alerta, Avatar, Ico, Skeleton, useAsync, useToast, Vazio } from "../ui";
 import type { Opportunity, Sessao, Stage } from "../lib/types";
 
@@ -13,6 +14,8 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
   const [colunaAtiva, setColunaAtiva] = useState<string | null>(null);
   // otimista: o card pula de coluna antes da resposta do servidor
   const [ajuste, setAjuste] = useState<Record<string, string>>({});
+  // FLIP: sem isto o card desaparece de uma coluna e reaparece na outra
+  const { container: quadro, capturar } = useFlip<HTMLDivElement>();
 
   const dados = useAsync(
     async () => ({
@@ -66,11 +69,13 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
     }
 
     const anterior = etapaDe(opp);
+    capturar();                       // mede onde o card esta AGORA
     setAjuste((a) => ({ ...a, [id]: etapaId }));
     try {
       await moverEtapa(id, etapaId, nota);
       avisar("ok", `Movido para ${alvo?.name}.`);
     } catch (e) {
+      capturar();                                   // o card volta animando tambem
       setAjuste((a) => ({ ...a, [id]: anterior }));  // desfaz o otimismo
       avisar("err", mensagemDeErro(e));
     }
@@ -104,7 +109,7 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
           texto="Nenhuma oportunidade aberta com esse filtro."
         />
       ) : (
-        <div className="kanban">
+        <div className="kanban" ref={quadro}>
           {colunas.map((etapa) => {
             const daColuna = opps.filter((o) => etapaDe(o) === etapa.id);
             return (
@@ -162,6 +167,7 @@ function CardLead({
 
   return (
     <article
+      data-flip-id={o.id}
       className={`kcard ${arrastando ? "dragging" : ""}`.trim()}
       draggable
       onDragStart={aoArrastar}

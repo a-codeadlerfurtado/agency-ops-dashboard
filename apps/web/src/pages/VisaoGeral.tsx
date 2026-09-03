@@ -2,7 +2,9 @@ import { useState } from "react";
 import { irPara } from "../App";
 import { dinheiroCurto, numero, primeiroNome, rotuloOrigem } from "../lib/format";
 import { leadsParados, painelAdmin, painelBroker } from "../lib/queries";
-import { Alerta, Card, Ico, Skeleton, Stat, useAsync, Vazio } from "../ui";
+import {
+  Alerta, Card, CardsCarregando, Ico, Numero, Skeleton, Stat, useAsync, Vazio,
+} from "../ui";
 import type { Sessao } from "../lib/types";
 
 const PERIODOS = [
@@ -51,23 +53,29 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
         </div>
       </div>
 
+      {/* Numero conta ate o valor ao TROCAR de periodo, nao na primeira carga:
+          a transicao existe para mostrar que o dado mudou, nao para enfeitar
+          a chegada. */}
       <div className="grid cols-4">
-        <Stat rotulo="Leads"        valor={carregando ? <Skeleton h={28} w={54} /> : numero(c?.leads)} />
-        <Stat rotulo="Atendidos"    valor={carregando ? <Skeleton h={28} w={54} /> : numero(c?.atendidos)}
-              rodape={c && c.leads > 0 ? `${Math.round((c.atendidos / c.leads) * 100)}% dos leads` : undefined} />
-        <Stat rotulo="Qualificados" valor={carregando ? <Skeleton h={28} w={54} /> : numero(c?.qualificados)} />
-        <Stat rotulo="Visitas"      valor={carregando ? <Skeleton h={28} w={54} /> : numero(c?.visitas)} />
-        <Stat rotulo="Propostas"    valor={carregando ? <Skeleton h={28} w={54} /> : numero(c?.propostas)} />
-        <Stat rotulo="Vendas"       valor={carregando ? <Skeleton h={28} w={54} /> : numero(c?.vendas)}
-              tom="up" />
-        <Stat rotulo="VGV"          valor={carregando ? <Skeleton h={28} w={80} /> : dinheiroCurto(c?.vgv ?? 0)}
-              tom="up"
-              rodape={c?.vendas
-                ? `ticket ${dinheiroCurto((c.vgv ?? 0) / c.vendas)}`
-                : "sem venda no periodo"} />
-        <Stat rotulo="SLA perdido"  valor={carregando ? <Skeleton h={28} w={54} /> : numero(c?.sla_perdido ?? 0)}
-              tom={c && (c.sla_perdido ?? 0) > 0 ? "down" : undefined}
-              rodape="leads nao aceitos no prazo" />
+        {carregando ? <CardsCarregando n={8} /> : (
+          <>
+            <Stat rotulo="Leads"        valor={<Numero valor={c?.leads ?? 0} formatar={numero} />} />
+            <Stat rotulo="Atendidos"    valor={<Numero valor={c?.atendidos ?? 0} formatar={numero} />}
+                  rodape={c && c.leads > 0 ? `${Math.round((c.atendidos / c.leads) * 100)}% dos leads` : undefined} />
+            <Stat rotulo="Qualificados" valor={<Numero valor={c?.qualificados ?? 0} formatar={numero} />} />
+            <Stat rotulo="Visitas"      valor={<Numero valor={c?.visitas ?? 0} formatar={numero} />} />
+            <Stat rotulo="Propostas"    valor={<Numero valor={c?.propostas ?? 0} formatar={numero} />} />
+            <Stat rotulo="Vendas"       valor={<Numero valor={c?.vendas ?? 0} formatar={numero} />} tom="up" />
+            <Stat rotulo="VGV"          valor={<Numero valor={c?.vgv ?? 0} formatar={dinheiroCurto} />}
+                  tom="up"
+                  rodape={c?.vendas
+                    ? `ticket ${dinheiroCurto((c.vgv ?? 0) / c.vendas)}`
+                    : "sem venda no periodo"} />
+            <Stat rotulo="SLA perdido"  valor={<Numero valor={c?.sla_perdido ?? 0} formatar={numero} />}
+                  tom={c && (c.sla_perdido ?? 0) > 0 ? "down" : undefined}
+                  rodape="leads nao aceitos no prazo" />
+          </>
+        )}
       </div>
 
       <div className="grid cols-2">
@@ -225,7 +233,7 @@ function PainelCorretor({ sessao }: { sessao: Sessao }) {
   const d = p.dado;
   const hora = new Date().getHours();
   const saudacao = hora < 12 ? "Bom dia" : hora < 18 ? "Boa tarde" : "Boa noite";
-  const sk = <Skeleton h={28} w={44} />;
+  const N = (v: number | undefined) => <Numero valor={v ?? 0} formatar={numero} />;
 
   return (
     <>
@@ -241,18 +249,18 @@ function PainelCorretor({ sessao }: { sessao: Sessao }) {
       </div>
 
       <div className="grid cols-4">
-        <Stat rotulo="Novos leads"   valor={p.carregando ? sk : numero(d?.novos)}
+        <Stat rotulo="Novos leads"   valor={p.carregando ? <Skeleton h={28} w={44} /> : N(d?.novos)}
               rodape={d?.sem_aceite ? `${d.sem_aceite} sem aceite` : "Tudo aceito"} />
-        <Stat rotulo="Follow-ups hoje" valor={p.carregando ? sk : numero(d?.followups_hoje)} />
-        <Stat rotulo="Atrasados"     valor={p.carregando ? sk : numero(d?.followups_atrasados)}
+        <Stat rotulo="Follow-ups hoje" valor={p.carregando ? <Skeleton h={28} w={44} /> : N(d?.followups_hoje)} />
+        <Stat rotulo="Atrasados"     valor={p.carregando ? <Skeleton h={28} w={44} /> : N(d?.followups_atrasados)}
               tom={d && d.followups_atrasados > 0 ? "down" : undefined}
               rodape={d && d.followups_atrasados > 0 ? "Prioridade" : "Em dia"} />
-        <Stat rotulo="Visitas hoje"  valor={p.carregando ? sk : numero(d?.visitas_hoje)} />
+        <Stat rotulo="Visitas hoje"  valor={p.carregando ? <Skeleton h={28} w={44} /> : N(d?.visitas_hoje)} />
       </div>
 
       <div className="grid cols-2">
-        <Stat rotulo="Propostas abertas" valor={p.carregando ? sk : numero(d?.em_proposta)} />
-        <Stat rotulo="Meu VGV" valor={p.carregando ? sk : dinheiroCurto(d?.vgv ?? 0)} tom="up"
+        <Stat rotulo="Propostas abertas" valor={p.carregando ? <Skeleton h={28} w={44} /> : N(d?.em_proposta)} />
+        <Stat rotulo="Meu VGV" valor={p.carregando ? <Skeleton h={28} w={80} /> : <Numero valor={d?.vgv ?? 0} formatar={dinheiroCurto} />} tom="up"
               rodape={`${d?.vendas ?? 0} venda${(d?.vendas ?? 0) === 1 ? "" : "s"} fechada${(d?.vendas ?? 0) === 1 ? "" : "s"}`} />
       </div>
 

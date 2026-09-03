@@ -42,15 +42,40 @@
   --shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
   --shadow-hover: 0 18px 48px rgba(0, 0, 0, 0.26);
 
-  /* ---- derivados: escala, ritmo e movimento ---- */
+  /* ---- derivados: escala e ritmo ---- */
   --r-sm: 6px;
   --r: 10px;
   --r-lg: 14px;
   --sidebar-w: 236px;
+  --sidebar-w-min: 58px;
   --topbar-h: 60px;
+
+  /* ===================== MOTION SYSTEM =====================
+     Tres duracoes e quatro curvas. Nenhum componente inventa a
+     propria: duracao aleatoria por componente e o que faz uma
+     interface parecer remendada.
+
+     A escala segue a distancia percorrida, nao a importancia:
+     micro (cor, opacidade) e instantaneo; algo que atravessa a
+     tela precisa de tempo para o olho acompanhar.               */
+
+  --d-instant: 90ms;   /* cor, opacidade, borda: feedback puro   */
+  --d-fast:   160ms;   /* hover, foco, press, badge              */
+  --d-base:   240ms;   /* drawer, modal, item entrando na lista  */
+  --d-slow:   420ms;   /* FLIP no Kanban, reordenacao, numeros   */
+
+  /* Padrao. Sai rapido, chega devagar: a UI parece responder no
+     clique e assentar com calma.                                */
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
-  --t-fast: 120ms var(--ease);
-  --t: 180ms var(--ease);
+  /* Entrada: comeca imovel e acelera - coisa que aparece         */
+  --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
+  /* Saida: sai rapido. Ninguem quer esperar algo desaparecer     */
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  /* Overshoot discreto, so para confirmacao de acao             */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --t-fast: var(--d-fast) var(--ease);
+  --t: var(--d-base) var(--ease);
 
   --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
@@ -653,9 +678,243 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
   .stat-value { font-size: 24px; }
 }
 
+
+/* ================================================= modal e drawer ==== */
+/* <dialog> nativo em vez de div com z-index: focus trap, Esc, backdrop e
+   top layer vem do browser. @starting-style + allow-discrete dao entrada E
+   saida em CSS puro - e o que o AnimatePresence resolveria com 30 kB. */
+
+dialog.mdl {
+  padding: 0;
+  border: 0;
+  color: var(--text);
+  background: transparent;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+}
+dialog.mdl::backdrop {
+  background: rgba(4, 7, 9, 0.62);
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  transition:
+    opacity var(--d-base) var(--ease-exit),
+    overlay var(--d-base) allow-discrete,
+    display var(--d-base) allow-discrete;
+}
+dialog.mdl[open]::backdrop { opacity: 1; }
+@starting-style { dialog.mdl[open]::backdrop { opacity: 0; } }
+
+.mdl-caixa {
+  background: var(--panel);
+  border: 1px solid var(--line-card);
+  box-shadow: var(--shadow-hover);
+  display: flex;
+  flex-direction: column;
+  max-height: 100%;
+}
+.mdl-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--line-soft);
+  flex-shrink: 0;
+}
+.mdl-body { padding: 18px; overflow-y: auto; }
+
+/* --------- centro: dialogo de acao --------- */
+dialog.mdl.centro {
+  margin: auto;
+  width: min(680px, calc(100vw - 32px));
+}
+dialog.mdl.centro .mdl-caixa {
+  border-radius: var(--r-lg);
+  max-height: calc(100dvh - 64px);
+}
+dialog.mdl.centro .mdl-caixa {
+  opacity: 0;
+  transform: translateY(10px) scale(0.985);
+  transition:
+    opacity var(--d-base) var(--ease-exit),
+    transform var(--d-base) var(--ease-exit);
+}
+dialog.mdl.centro[open] .mdl-caixa {
+  opacity: 1;
+  transform: none;
+  transition-timing-function: var(--ease-enter);
+}
+@starting-style {
+  dialog.mdl.centro[open] .mdl-caixa {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
+}
+
+/* --------- lateral: contexto sem perder a tela de tras --------- */
+dialog.mdl.lateral {
+  margin: 0 0 0 auto;
+  height: 100dvh;
+  width: min(520px, 100vw);
+}
+dialog.mdl.lateral .mdl-caixa {
+  height: 100dvh;
+  border-radius: 0;
+  border-right: 0;
+  border-top: 0;
+  border-bottom: 0;
+}
+dialog.mdl.lateral .mdl-caixa {
+  transform: translateX(100%);
+  transition: transform var(--d-base) var(--ease-exit);
+}
+dialog.mdl.lateral[open] .mdl-caixa {
+  transform: none;
+  transition-timing-function: var(--ease-enter);
+}
+@starting-style {
+  dialog.mdl.lateral[open] .mdl-caixa { transform: translateX(100%); }
+}
+
+/* no celular a lateral vira folha de baixo: o polegar alcanca */
+@media (max-width: 640px) {
+  dialog.mdl.lateral {
+    margin: auto 0 0 0;
+    width: 100vw;
+    height: auto;
+    max-height: 88dvh;
+  }
+  dialog.mdl.lateral .mdl-caixa {
+    height: auto;
+    max-height: 88dvh;
+    border-radius: var(--r-lg) var(--r-lg) 0 0;
+    border: 1px solid var(--line-card);
+    border-bottom: 0;
+  }
+  dialog.mdl.lateral .mdl-caixa { transform: translateY(100%); }
+  dialog.mdl.lateral[open] .mdl-caixa { transform: none; }
+  @starting-style {
+    dialog.mdl.lateral[open] .mdl-caixa { transform: translateY(100%); }
+  }
+  dialog.mdl.centro { width: 100vw; margin: auto 0 0 0; }
+  dialog.mdl.centro .mdl-caixa { border-radius: var(--r-lg) var(--r-lg) 0 0; }
+}
+
+/* ========================================== botao com estado proprio ==== */
+
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+.btn-estado { position: relative; }
+.btn-estado .be-conteudo,
+.btn-estado .be-giro,
+.btn-estado .be-ok {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  transition: opacity var(--d-fast) var(--ease), transform var(--d-fast) var(--ease);
+}
+.btn-estado .be-giro,
+.btn-estado .be-ok {
+  position: absolute; inset: 0;
+  opacity: 0; transform: scale(0.7);
+  pointer-events: none;
+}
+.btn-estado .be-giro::after {
+  content: "";
+  width: 14px; height: 14px;
+  border-radius: 99px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  animation: girar 620ms linear infinite;
+}
+@keyframes girar { to { transform: rotate(360deg); } }
+
+.btn-estado.est-indo .be-conteudo { opacity: 0; transform: scale(0.9); }
+.btn-estado.est-indo .be-giro     { opacity: 1; transform: none; }
+.btn-estado.est-ok  .be-conteudo  { opacity: 0; transform: scale(0.9); }
+/* o unico overshoot do sistema: confirmacao merece um respiro */
+.btn-estado.est-ok  .be-ok        { opacity: 1; transform: none; transition-timing-function: var(--ease-spring); }
+.btn-estado.est-ok  { border-color: var(--success); }
+.btn-estado:disabled { opacity: 1; }   /* estado proprio ja comunica; nao apagar */
+
+/* ================================================ skeleton com forma ==== */
+/* Skeleton generico e retangulo cinza. O bom skeleton tem a FORMA do conteudo
+   que vai chegar: quando os dados entram, nada salta de lugar. */
+
+.skel-linha { display: flex; align-items: center; gap: 12px; padding: 11px 14px; }
+.skel-col { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; }
+.skel-circ { border-radius: 99px; flex-shrink: 0; }
+.skel-card { padding: 15px 16px; display: flex; flex-direction: column; gap: 9px; }
+
+/* ================================== entrada de item novo em lista ==== */
+/* Atividade que chega, notificacao, card recem-criado: aparece deslizando
+   um pouco em vez de piscar no lugar. @starting-style faz isso sem JS. */
+
+.entra {
+  transition: opacity var(--d-base) var(--ease-enter),
+              transform var(--d-base) var(--ease-enter);
+}
+@starting-style {
+  .entra { opacity: 0; transform: translateY(-6px); }
+}
+
+/* ------- toast agora sai, nao some ------- */
+.toast {
+  transition: opacity var(--d-base) var(--ease-exit),
+              transform var(--d-base) var(--ease-exit);
+}
+.toast.saindo { opacity: 0; transform: translateX(16px); }
+
+/* ============================================ realce de atualizacao ==== */
+/* Numero que mudou por evento de outra pessoa (realtime) pisca de leve uma
+   vez. Sem isso o valor troca e ninguem percebe que trocou. */
+@keyframes realce {
+  from { background: var(--accent-soft); }
+  to   { background: transparent; }
+}
+.atualizado { animation: realce 1.1s var(--ease) 1; border-radius: var(--r-sm); }
+
+/* ============================================ sidebar: barra ativa ==== */
+/* A barrinha do item ativo cresce em vez de aparecer pronta. Detalhe de 90ms
+   que faz a navegacao parecer contínua. */
+.nav-item[aria-current="page"]::before {
+  animation: barra-ativa var(--d-fast) var(--ease-enter);
+}
+@keyframes barra-ativa {
+  from { height: 0; opacity: 0; }
+  to   { height: 16px; opacity: 1; }
+}
+
+/* ================================================== press feedback ==== */
+/* Toque no celular precisa de resposta imediata: 90ms, so transform. */
+.btn:active:not(:disabled),
+.kcard:active,
+.nav-item:active { transform: scale(0.985); }
+.btn, .nav-item { transition: background var(--d-fast) var(--ease),
+                              border-color var(--d-fast) var(--ease),
+                              color var(--d-fast) var(--ease),
+                              transform var(--d-instant) var(--ease); }
+
+/* ==================================================== reduced motion ====
+   POR ULTIMO no arquivo, de proposito: precisa vencer tudo o que veio antes.
+   Ja me esqueci disso uma vez nesta sessao e as animacoes novas passavam por
+   cima da preferencia do usuario.
+
+   Nao e so acelerar: giro infinito e realce piscando incomodam quem pediu
+   menos movimento, entao sao desligados de vez. O FLIP e o ticker de numero
+   ja checam a media query no JS.                                          */
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
+  .skel { animation: none !important; background: var(--panel-2) !important; }
+  .btn-estado .be-giro::after { animation: none !important; border-top-color: currentColor; opacity: 0.4; }
+  .atualizado { animation: none !important; }
+  .btn:active:not(:disabled), .kcard:active, .nav-item:active { transform: none; }
 }
