@@ -654,7 +654,6 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 
 /* ==================================================== responsivo ==== */
 
-.mobile-only { display: none; }
 
 @media (max-width: 1080px) {
   .grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -663,7 +662,6 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
 
 @media (max-width: 860px) {
   .app { grid-template-columns: 1fr; }
-  .mobile-only { display: inline-flex; }
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
@@ -674,11 +672,6 @@ table.tbl tbody tr:last-child td { border-bottom: 0; }
     box-shadow: var(--shadow-hover);
   }
   .sidebar.open { transform: none; }
-  .scrim {
-    position: fixed; inset: 0; z-index: 50;
-    background: rgba(4, 7, 9, 0.6);
-    backdrop-filter: blur(2px);
-  }
   .content { padding: 15px; }
   .topbar { padding: 0 15px; }
   .grid.cols-3, .grid.cols-2 { grid-template-columns: minmax(0, 1fr); }
@@ -1201,6 +1194,37 @@ table.tbl th { background: #061626; }
   .login-regua { display: none; }
   .login-frase { display: none; }
   .login-form-lado { padding: 28px 20px 44px; }
+}
+
+/* ========================================= sidebar em overlay (mobile) ====
+
+   BUG corrigido aqui: o .scrim so tinha estilos dentro da media query de
+   mobile. No desktop ele renderizava SEM estilo, e como .app e display:grid
+   ele virava um ITEM DO GRID de 250px - empurrava a sidebar para a coluna do
+   conteudo e o conteudo para fora da tela. Clicar no menu desmontava o layout
+   inteiro.
+
+   Duas defesas:
+   1. position:fixed ja na regra base. Mesmo que a media query falhe ou alguem
+      reordene o CSS, o elemento sai do fluxo e nao pode ocupar coluna.
+   2. display:none por padrao, e as regras vem DEPOIS de .ctrl para vencer a
+      cascata - era o segundo bug: .ctrl{display:inline-flex} sobrescrevia
+      .mobile-only{display:none} e o hamburguer aparecia no desktop.          */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: none;
+  background: #010509a8;
+  backdrop-filter: blur(2px);
+}
+
+.mobile-only { display: none; }
+
+@media (max-width: 860px) {
+  .scrim { display: block; }
+  .mobile-only { display: inline-flex; }
 }
 
 @media (prefers-reduced-motion: reduce) {
