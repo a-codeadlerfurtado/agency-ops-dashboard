@@ -18,7 +18,7 @@ export function AvisoDeAceite({ oppId, aoAceitar }: { oppId: string; aoAceitar: 
   const [aceitando, setAceitando] = useState(false);
   const p = useAsync(() => atribuicaoPendente(oppId), [oppId]);
 
-  if (p.carregando || !p.dado) return null;
+  if (!p.dado) return null;
 
   const restam = Math.max(0, Math.round((new Date(p.dado.expires_at).getTime() - Date.now()) / 1000));
 
@@ -96,7 +96,7 @@ export function PainelInteresse({
     }
   }
 
-  if (atual.carregando) {
+  if (atual.carregando && !atual.dado) {
     return <Card><div className="card-body"><Skeleton h={80} /></div></Card>;
   }
 

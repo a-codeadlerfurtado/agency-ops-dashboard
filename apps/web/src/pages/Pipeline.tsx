@@ -31,7 +31,7 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
 
   if (dados.erro) return <Alerta>{dados.erro}</Alerta>;
 
-  if (dados.carregando || !dados.dado) {
+  if (!dados.dado) {
     return (
       <div className="kanban">
         {[0, 1, 2, 3, 4, 5].map((i) => (

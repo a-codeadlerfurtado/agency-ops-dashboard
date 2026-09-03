@@ -19,6 +19,10 @@ export interface Foto {
  *
  * O caminho é `{tenant_id}/{property_id}/{arquivo}` — o primeiro segmento é o
  * que a policy do Storage usa para decidir de quem é o arquivo.
+ *
+ * Todo botão daqui leva `type="button"` explícito: este componente é montado
+ * dentro do `<form>` do cadastro de imóvel, e sem isso o default do HTML é
+ * `submit` — clicar em "Adicionar fotos" salvava e fechava o cadastro.
  */
 async function listar(tenantId: string, propertyId: string): Promise<Foto[]> {
   const { data, error } = await supabase
@@ -94,7 +98,7 @@ export default function FotosImovel({
     }
   }
 
-  if (lista.carregando) return <Skeleton h={72} />;
+  if (lista.carregando && !lista.dado) return <Skeleton h={72} />;
 
   const fotos = lista.dado ?? [];
 
@@ -118,6 +122,7 @@ export default function FotosImovel({
               )}
               {podeEditar && (
                 <button
+                  type="button"
                   className="ctrl"
                   onClick={() => remover(f)}
                   aria-label="Remover foto"
@@ -141,7 +146,8 @@ export default function FotosImovel({
             ref={input} type="file" accept="image/jpeg,image/png,image/webp,image/avif"
             multiple hidden onChange={(e) => enviar(e.target.files)}
           />
-          <button className="btn sm" disabled={enviando} onClick={() => input.current?.click()}>
+          <button type="button" className="btn sm" disabled={enviando}
+                  onClick={() => input.current?.click()}>
             {Ico.plus({ size: 14 })} {enviando ? "Enviando..." : "Adicionar fotos"}
           </button>
           <span className="hint" style={{ marginLeft: 10 }}>

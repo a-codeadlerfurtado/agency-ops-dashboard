@@ -246,7 +246,7 @@ export default function Corretores({ sessao }: { sessao: Sessao }) {
 
   if (dados.erro) return <Alerta>{dados.erro}</Alerta>;
 
-  if (dados.carregando || !dados.dado) {
+  if (!dados.dado) {
     return (
       <Card>
         <div className="card-body flush"><TabelaCarregando linhas={4} colunas={5} /></div>

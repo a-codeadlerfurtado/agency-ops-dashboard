@@ -23,7 +23,7 @@ export default function FollowUps({ sessao }: { sessao: Sessao }) {
     }
   }
 
-  if (lista.carregando) {
+  if (lista.carregando && !lista.dado) {
     return <Card><div className="card-body flush"><TabelaCarregando linhas={5} colunas={3} /></div></Card>;
   }
 

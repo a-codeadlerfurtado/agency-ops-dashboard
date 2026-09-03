@@ -50,7 +50,7 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
 
   if (dados.erro) return <Alerta>{dados.erro}</Alerta>;
 
-  if (dados.carregando || !dados.dado) {
+  if (!dados.dado) {
     return (
       <div className="detail">
         <Card><div className="card-body"><Skeleton h={220} /></div></Card>
