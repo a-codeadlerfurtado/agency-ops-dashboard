@@ -36,11 +36,10 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
   return (
     <>
       <div className="row" style={{ flexWrap: "wrap" }}>
-        <div>
+        <div className="page-head">
+          <span className="eyebrow">{"Operacao comercial · " + dias + " dias"}</span>
           <h1>Bom trabalho, {primeiroNome(sessao.nome)}.</h1>
-          <div style={{ color: "var(--text-subtle)", fontSize: 13, marginTop: 2 }}>
-            Desempenho comercial de {sessao.tenant.name}.
-          </div>
+          <p>Acompanhe leads, atendimento e vendas da operacao.</p>
         </div>
         <div className="spacer" />
         <div className="row" style={{ gap: 4 }}>
@@ -61,10 +60,10 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
           está no funil logo abaixo, e mostrar o mesmo número duas vezes gasta
           a tela sem informar. Antes eram oito caixas de peso idêntico — o VGV
           do mês tinha o mesmo destaque de "Visitas: 0". */}
-      <div className="grid kpi">
-        {carregando ? <CardsCarregando n={3} /> : (
+      <div className="kpis">
+        {carregando ? <CardsCarregando n={6} /> : (
           <>
-            <Card className="stat stat-hero">
+            <Card className="stat metric acento destaque">
               <div className="stat-label">VGV no periodo</div>
               <div className={`stat-value${zerado(c?.vgv)}`}>
                 <Numero valor={c?.vgv ?? 0} formatar={dinheiroCurto} />
@@ -76,7 +75,7 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
               </div>
             </Card>
 
-            <Card className="stat stat-hero">
+            <Card className="stat metric">
               <div className="stat-label">Vendas</div>
               <div className={`stat-value${zerado(c?.vendas)}`}>
                 <Numero valor={c?.vendas ?? 0} formatar={numero} />
@@ -88,7 +87,7 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
               </div>
             </Card>
 
-            <Card className="stat stat-hero">
+            <Card className="stat metric calmo">
               <div className="stat-label">SLA perdido</div>
               <div
                 className={`stat-value${zerado(c?.sla_perdido)}`}
@@ -102,24 +101,26 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
                   : "todo lead aceito no prazo"}
               </div>
             </Card>
+
+            <Card className="stat metric">
+              <div className="stat-label">Leads</div>
+              <div className={"stat-value" + zerado(c?.leads)}>
+                <Numero valor={c?.leads ?? 0} formatar={numero} />
+              </div>
+              <div className="stat-foot">entraram no periodo</div>
+            </Card>
+
+            <Card className="stat metric acento">
+              <div className="stat-label">Atendimento</div>
+              <div className={"stat-value" + zerado(c?.atendidos)}>
+                {c?.leads ? Math.round((c.atendidos / c.leads) * 100) + "%" : "--"}
+              </div>
+              <div className="stat-foot">
+                {c ? numero(c.atendidos) + " de " + numero(c.leads) : "--"}
+              </div>
+            </Card>
           </>
         )}
-      </div>
-
-      {/* Faixa de apoio: números que o funil não dá, sem virar mais quatro caixas. */}
-      <div className="faixa">
-        <FaixaItem rotulo="Leads no periodo" valor={carregando ? "--" : numero(c?.leads)}
-                   vazio={!c?.leads} />
-        <FaixaItem
-          rotulo="Taxa de atendimento"
-          valor={carregando || !c?.leads ? "--" : `${Math.round((c.atendidos / c.leads) * 100)}%`}
-          nota={carregando || !c ? undefined : `${numero(c.atendidos)} de ${numero(c.leads)}`}
-          vazio={!c?.atendidos}
-        />
-        <FaixaItem rotulo="Propostas" valor={carregando ? "--" : numero(c?.propostas)}
-                   vazio={!c?.propostas} />
-        <FaixaItem rotulo="Visitas" valor={carregando ? "--" : numero(c?.visitas)}
-                   vazio={!c?.visitas} />
       </div>
 
       <div className="grid cols-2">

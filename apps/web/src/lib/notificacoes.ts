@@ -33,6 +33,7 @@ async function buscar(): Promise<Notificacao[]> {
 export function useNotificacoes(userId: string) {
   const [lista, setLista] = useState<Notificacao[]>([]);
   const [erro, setErro] = useState(false);
+  const [conectado, setConectado] = useState(false);
 
   const recarregar = useCallback(() => {
     buscar().then(setLista).catch(() => setErro(true));
@@ -53,9 +54,9 @@ export function useNotificacoes(userId: string) {
         },
         (msg) => setLista((l) => [msg.new as Notificacao, ...l].slice(0, 30))
       )
-      .subscribe();
+      .subscribe((estado) => setConectado(estado === "SUBSCRIBED"));
 
-    return () => { void supabase.removeChannel(canal); };
+    return () => { setConectado(false); void supabase.removeChannel(canal); };
   }, [userId, recarregar]);
 
   const marcarLidas = useCallback(async () => {
@@ -67,6 +68,8 @@ export function useNotificacoes(userId: string) {
   return {
     lista,
     erro,
+    /** estado REAL do canal - nao um indicador decorativo */
+    conectado,
     naoLidas: lista.filter((n) => !n.read_at).length,
     marcarLidas,
     recarregar,

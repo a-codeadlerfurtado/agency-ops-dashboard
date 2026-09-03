@@ -17,7 +17,7 @@ import Visitas from "./pages/Visitas";
 import Propostas from "./pages/Propostas";
 import Vendas from "./pages/Vendas";
 import Distribuicao from "./pages/Distribuicao";
-import Notificacoes from "./Notificacoes";
+import Topbar from "./Topbar";
 
 /* Router por hash: sem dependencia, sem servidor de rotas, funciona em
    qualquer host estatico. Para 8 telas, react-router seria peso morto. */
@@ -171,7 +171,10 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
       <aside className={`sidebar ${menuAberto ? "open" : ""}`.trim()}>
         <div className="brand">
           <div className="brand-mark"><MarcaImobiBoard /></div>
-          <div className="brand-name">Imobi-Board</div>
+          <div className="col" style={{ gap: 0, minWidth: 0 }}>
+            <div className="brand-name">Imobi-Board</div>
+            <div className="brand-sub">CRM Imobiliario</div>
+          </div>
         </div>
 
         <Nav sessao={sessao} rota={rota} aoNavegar={() => setMenuAberto(false)} />
@@ -195,19 +198,7 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
       </aside>
 
       <div className="main">
-        <header className="topbar">
-          <button
-            className="btn ghost sm mobile-only"
-            onClick={() => setMenuAberto(true)}
-            aria-label="Abrir menu"
-          >
-            {Ico.menu()}
-          </button>
-          <div className="topbar-title">{titulo}</div>
-          <div className="topbar-sub">{sessao.tenant.name}</div>
-          <span className="spacer" />
-          <Notificacoes userId={sessao.userId} />
-        </header>
+        <Topbar sessao={sessao} titulo={titulo} aoAbrirMenu={() => setMenuAberto(true)} />
         <main className="content">{pagina}</main>
       </div>
     </div>
@@ -244,8 +235,8 @@ export default function App() {
 
   if (estado.fase === "erro") {
     return (
-      <div className="login-shell">
-        <div className="login-card">
+      <div className="login-shell" style={{ gridTemplateColumns: "1fr" }}>
+        <div className="login-card" style={{ margin: "auto", padding: 24 }}>
           <Alerta>{estado.mensagem}</Alerta>
           <div style={{ height: 12 }} />
           <button className="btn wide" onClick={sair}>Sair e tentar de novo</button>
@@ -256,8 +247,8 @@ export default function App() {
 
   if (estado.fase === "sem-tenant") {
     return (
-      <div className="login-shell">
-        <div className="login-card">
+      <div className="login-shell" style={{ gridTemplateColumns: "1fr" }}>
+        <div className="login-card" style={{ margin: "auto", padding: 24 }}>
           <Card>
             <div className="empty">
               <div className="empty-icon">{Ico.building({ size: 20 })}</div>
