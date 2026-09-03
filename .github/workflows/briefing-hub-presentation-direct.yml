@@ -1,0 +1,67 @@
+name: Deploy Briefing Hub presentation direct
+
+on:
+  push:
+    branches:
+      - briefing-hub-drive-deploy-20260901
+    paths:
+      - '.github/workflows/briefing-hub-presentation-direct.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN || secrets.CLOUDFLARE_TOKEN }}
+      ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || vars.CF_ACCOUNT_ID || 'c3e4211c99f0c7d71701a6f59a23befb' }}
+      WORKER_NAME: agency-briefing-hub-presentation
+      PUBLIC_URL: https://agency-briefing-hub-presentation.lakassessoriadigital.workers.dev/
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify Cloudflare credential
+        run: |
+          set -euo pipefail
+          test -n "${CF_API_TOKEN:-}"
+          HTTP=$(curl -sS -o /tmp/cf.json -w '%{http_code}' "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/agency-briefing-hub/deployments" -H "Authorization: Bearer $CF_API_TOKEN")
+          test "$HTTP" = "200"
+          jq -e '.success == true' /tmp/cf.json >/dev/null
+
+      - name: Build presentation Worker
+        run: |
+          set -euo pipefail
+          git fetch origin main:refs/remotes/origin/main
+          git show origin/main:app/briefing-hub-demo/route.ts > /tmp/demo-route.ts
+          python - <<'PY'
+          from pathlib import Path
+          import json,re
+          src=Path('/tmp/demo-route.ts').read_text(encoding='utf-8')
+          ms=re.search(r'const DEMO_SCRIPT = String\\.raw`(.*?)`;\\s*\\n\\s*const DEMO_STYLE',src,re.S)
+          mt=re.search(r'const DEMO_STYLE = String\\.raw`(.*?)`;\\s*\\n\\s*function injectPresentationMode',src,re.S)
+          if not ms or not mt: raise SystemExit('demo layer not found')
+          script,style=ms.group(1),mt.group(1)
+          worker=f'''const PRIMARY="https://agency-briefing-hub.lakassessoriadigital.workers.dev/cliente";\nconst DEMO_SCRIPT={json.dumps(script,ensure_ascii=False)};\nconst DEMO_STYLE={json.dumps(style,ensure_ascii=False)};\nfunction inject(html){{let out=html.replace(/<title>Briefing Hub<\\/title>/i,"<title>Briefing Hub · Modo apresentação</title>");const payload=DEMO_STYLE+"<script>"+DEMO_SCRIPT+"<\\/script>";if(/<body[^>]*>/i.test(out))return out.replace(/<body[^>]*>/i,m=>m+payload);return out.replace(/<\\/head>/i,payload+"</head>");}}\nexport default{{async fetch(request){{const u=new URL(request.url);if(request.method!=="GET"||!["/","/apresentacao","/cliente"].includes(u.pathname))return new Response("Not found",{{status:404}});const upstream=await fetch(PRIMARY,{{headers:{{accept:"text/html,application/xhtml+xml"}}}});if(!upstream.ok)return new Response("Briefing Hub indisponível",{{status:502}});return new Response(inject(await upstream.text()),{{status:200,headers:{{"content-type":"text/html; charset=utf-8","cache-control":"no-store","x-robots-tag":"noindex, nofollow"}}}});}}}};'''
+          Path('/tmp/presentation-worker.mjs').write_text(worker,encoding='utf-8')
+          PY
+
+      - name: Deploy presentation Worker
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@4 deploy /tmp/presentation-worker.mjs --name "$WORKER_NAME" --compatibility-date 2026-09-03
+
+      - name: Verify public URL
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6 7 8; do
+            CODE=$(curl -L -sS -o /tmp/live.html -w '%{http_code}' "$PUBLIC_URL" || true)
+            if [ "$CODE" = "200" ] && grep -q 'Briefing Hub' /tmp/live.html && grep -q 'bh-demo-badge' /tmp/live.html; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
