@@ -17,6 +17,7 @@ import Visitas from "./pages/Visitas";
 import Propostas from "./pages/Propostas";
 import Vendas from "./pages/Vendas";
 import Distribuicao from "./pages/Distribuicao";
+import Notificacoes from "./Notificacoes";
 
 /* Router por hash: sem dependencia, sem servidor de rotas, funciona em
    qualquer host estatico. Para 8 telas, react-router seria peso morto. */
@@ -204,6 +205,8 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
           </button>
           <div className="topbar-title">{titulo}</div>
           <div className="topbar-sub">{sessao.tenant.name}</div>
+          <span className="spacer" />
+          <Notificacoes userId={sessao.userId} />
         </header>
         <main className="content">{pagina}</main>
       </div>

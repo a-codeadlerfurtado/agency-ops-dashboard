@@ -8,7 +8,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "deploy": "pnpm build && wrangler deploy"
+    "deploy": "pnpm build && wrangler deploy",
+    "test": "vitest run"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.58.0",
@@ -21,6 +22,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "typescript": "5.9.3",
     "vite": "^7.1.0",
-    "wrangler": "^4.40.0"
+    "wrangler": "^4.40.0",
+    "vitest": "^3.2.0"
   }
 }

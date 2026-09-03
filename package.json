@@ -12,7 +12,7 @@
     "dev:api": "pnpm --filter @imobi-board/worker dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
+    "test": "pnpm --filter @imobi-board/web test",
     "db:push": "node scripts/db-push.mjs",
     "db:seed": "node scripts/db-seed.mjs",
     "deploy": "node scripts/deploy-staging.mjs"

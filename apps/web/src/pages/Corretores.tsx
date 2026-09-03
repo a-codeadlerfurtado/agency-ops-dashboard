@@ -1,7 +1,8 @@
 import { ranking } from "../lib/queries";
-import { supabase } from "../lib/supabase";
+import { definirStatusCorretor } from "../lib/notificacoes";
+import { mensagemDeErro, supabase } from "../lib/supabase";
 import {
-  Alerta, Avatar, Card, Ico, TabelaCarregando, useAsync, Vazio,
+  Alerta, Avatar, Card, Ico, TabelaCarregando, useAsync, useToast, Vazio,
 } from "../ui";
 import type { Role, Sessao } from "../lib/types";
 
@@ -24,6 +25,7 @@ async function membros(tenantId: string): Promise<Membro[]> {
 }
 
 export default function Corretores({ sessao }: { sessao: Sessao }) {
+  const avisar = useToast();
   const dados = useAsync(
     async () => ({
       membros: await membros(sessao.tenant.id),
@@ -39,14 +41,23 @@ export default function Corretores({ sessao }: { sessao: Sessao }) {
   }
 
   const { membros: lista, desempenho } = dados.dado;
+
+  async function alternar(id: string, ativo: boolean) {
+    try {
+      await definirStatusCorretor(id, ativo);
+      avisar("ok", ativo ? "Corretor reativado." : "Corretor desativado e retirado das filas.");
+      dados.recarregar();
+    } catch (e) {
+      avisar("err", mensagemDeErro(e));
+    }
+  }
   const porUsuario = new Map(desempenho.map((d) => [d.user_id, d]));
 
   return (
     <>
       <Alerta tipo="warn">
-        Convite por e-mail, ativar/desativar e gestao de filas entram no proximo
-        passo, junto com o motor de distribuicao. Esta tela ja mostra a equipe real
-        vinda do banco.
+        Convite por e-mail ainda passa pelo Supabase Auth na mao. Desativar aqui
+        tira o corretor das filas na hora: ele para de receber lead novo.
       </Alerta>
 
       <Card>
@@ -68,6 +79,7 @@ export default function Corretores({ sessao }: { sessao: Sessao }) {
                     <th className="num">Leads (30d)</th>
                     <th className="num">Vendas</th>
                     <th className="num">Parados</th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -103,6 +115,16 @@ export default function Corretores({ sessao }: { sessao: Sessao }) {
                         <td className="num">{d ? d.vendas : "--"}</td>
                         <td className="num" style={{ color: d && d.parados > 0 ? "var(--warning)" : undefined }}>
                           {d ? d.parados : "--"}
+                        </td>
+                        <td className="nowrap" style={{ width: 1 }}>
+                          {m.user_id !== sessao.userId && (
+                            <button
+                              className={m.status === "ACTIVE" ? "btn ghost sm" : "btn sm"}
+                              onClick={() => alternar(m.id, m.status !== "ACTIVE")}
+                            >
+                              {m.status === "ACTIVE" ? "Desativar" : "Reativar"}
+                            </button>
+                          )}
                         </td>
                       </tr>
                     );

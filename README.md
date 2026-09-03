@@ -75,6 +75,7 @@ secret do Worker — ver `docs/security.md`.
 pnpm dev          # frontend em http://localhost:5173
 pnpm dev:api      # worker em http://localhost:8787
 pnpm typecheck    # checagem de tipos de todos os pacotes
+pnpm test         # testes unitários (vitest)
 pnpm build        # build de produção
 ```
 
@@ -125,6 +126,9 @@ supabase db push
 | `0012_visitas_propostas_vendas` | as três entidades + snapshot de atribuição |
 | `0013_rpc_visitas_propostas_vendas` | operações transacionais e a trava da venda explícita |
 | `0014_analytics_com_vgv` | VGV, SLA perdido e atribuição reais nos painéis |
+| `0015_corretor_inativo_auditoria_notificacoes` | **corrige:** corretor desativado recebia lead; auditoria e notificações |
+| `0016_realtime_e_gestao_de_corretor` | Realtime seletivo, ativar/desativar corretor |
+| `0017_perfil_de_membro_inativo` | **corrige:** nome sumia ao desativar corretor |
 
 ---
 
