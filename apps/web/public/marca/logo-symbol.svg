@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Imobi-Board">
+  <defs>
+    <linearGradient id="a" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#76c6ff"/><stop offset="1" stop-color="#2f79c7"/>
+    </linearGradient>
+    <linearGradient id="l" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ff9a4f"/><stop offset="1" stop-color="#e9621d"/>
+    </linearGradient>
+  </defs>
+  <circle cx="7.7" cy="7.4" r="3" fill="url(#a)"/>
+  <rect x="5" y="13.3" width="5.4" height="13.2" rx="2.7" fill="url(#a)"/>
+  <rect x="12.8" y="4.3" width="5.4" height="22.2" rx="2.7" fill="url(#l)"/>
+  <circle cx="21.5" cy="19.6" r="5.2" fill="none" stroke="url(#l)" stroke-width="5"/>
+</svg>

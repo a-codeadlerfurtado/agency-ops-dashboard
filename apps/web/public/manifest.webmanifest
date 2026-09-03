@@ -1,0 +1,12 @@
+{
+  "name": "Imobi-Board",
+  "short_name": "Imobi-Board",
+  "description": "CRM imobiliario que conecta anuncio, lead, corretor e venda.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#030b14",
+  "theme_color": "#030b14",
+  "icons": [
+    { "src": "/marca/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

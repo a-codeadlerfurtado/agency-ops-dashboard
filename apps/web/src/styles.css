@@ -1227,6 +1227,40 @@ table.tbl th { background: #061626; }
   .mobile-only { display: inline-flex; }
 }
 
+/* ================================================================ marca ==
+   Monograma ib. O simbolo nao ganha caixa colorida: ele JA e a cor. A marca
+   antiga era um icone de casa dentro de um quadrado laranja - decisao de
+   imobiliaria; esta e de software. */
+
+.marca { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.marca-simbolo {
+  display: grid; place-items: center; flex-shrink: 0;
+  transition: transform var(--t-fast), filter var(--t-fast);
+}
+/* microinteracao contida: sobe 1px e ganha um brilho minimo. Sem girar,
+   sem pulsar. */
+.marca:hover .marca-simbolo {
+  transform: translateY(-1px);
+  filter: drop-shadow(0 3px 10px #f26b2140) drop-shadow(0 0 8px #3e92dc33);
+}
+.marca-texto { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.marca-nome {
+  font-size: 14.5px; font-weight: 700; letter-spacing: -0.022em;
+  color: var(--text-heading); white-space: nowrap;
+}
+.marca-sub {
+  font-size: 9.5px; font-weight: 700; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--text-subtle); white-space: nowrap;
+}
+
+/* painel de marca do login: aqui o nome vai em caixa alta com tracking largo,
+   acompanhando a composicao da familia */
+.login-simbolo {
+  width: auto; height: auto; border: 0; border-radius: 0;
+  margin-bottom: 22px;
+  filter: drop-shadow(0 8px 26px #00000059);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

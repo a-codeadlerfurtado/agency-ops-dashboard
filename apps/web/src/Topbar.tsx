@@ -1,7 +1,8 @@
 import { useNotificacoes } from "./lib/notificacoes";
 import { relativo } from "./lib/format";
 import { irPara } from "./App";
-import { Avatar, Ico, MarcaImobiBoard } from "./ui";
+import { Avatar, Ico } from "./ui";
+import { ImobiBoardMark } from "./Marca";
 import { useEffect, useRef, useState } from "react";
 import type { Sessao } from "./lib/types";
 
@@ -43,9 +44,7 @@ export default function Topbar({
       </button>
 
       <div className="topbar-marca">
-        <div className="brand-mark" style={{ width: 24, height: 24, borderRadius: 6 }}>
-          <MarcaImobiBoard size={13} />
-        </div>
+        <ImobiBoardMark size={24} />
       </div>
 
       <div className="topbar-ctx">

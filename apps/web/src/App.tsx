@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useSessao } from "./lib/session";
 import { primeiroNome } from "./lib/format";
-import { Alerta, Avatar, Card, Ico, MarcaImobiBoard, Skeleton } from "./ui";
+import { Alerta, Avatar, Card, Ico, Skeleton } from "./ui";
+import { ImobiBoardLogo, ImobiBoardMark } from "./Marca";
 import type { Sessao } from "./lib/types";
 
 import Login from "./pages/Login";
@@ -170,11 +171,7 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
 
       <aside className={`sidebar ${menuAberto ? "open" : ""}`.trim()}>
         <div className="brand">
-          <div className="brand-mark"><MarcaImobiBoard /></div>
-          <div className="col" style={{ gap: 0, minWidth: 0 }}>
-            <div className="brand-name">Imobi-Board</div>
-            <div className="brand-sub">CRM Imobiliario</div>
-          </div>
+          <ImobiBoardLogo size={26} />
         </div>
 
         <Nav sessao={sessao} rota={rota} aoNavegar={() => setMenuAberto(false)} />
@@ -251,7 +248,7 @@ export default function App() {
         <div className="login-card" style={{ margin: "auto", padding: 24 }}>
           <Card>
             <div className="empty">
-              <div className="empty-icon">{Ico.building({ size: 20 })}</div>
+              <div style={{ marginBottom: 12 }}><ImobiBoardMark size={34} /></div>
               <h3>Conta sem imobiliaria</h3>
               <p>
                 {estado.email} entrou, mas ainda nao esta vinculado a nenhuma

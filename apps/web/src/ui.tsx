@@ -45,14 +45,6 @@ export const Ico = {
   phone: (p: IcoProps = {}) => svg(<path d="M6 3h3l1.5 4.5-2 1.5a12 12 0 0 0 6.5 6.5l1.5-2L21 15v3a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4 5.2 2 2 0 0 1 6 3z" />, p.size, p.className),
 };
 
-export const MarcaImobiBoard = ({ size = 15 }: { size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
-    <path d="M3 20V9.2L12 3l9 6.2V20" stroke="#1b0d04" strokeWidth="2.4"
-          strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M8.5 20v-5.5h7V20" stroke="#1b0d04" strokeWidth="2.4"
-          strokeLinecap="round" strokeLinejoin="round" />
-  </svg>
-);
 
 /* ============================================================== atomos === */
 

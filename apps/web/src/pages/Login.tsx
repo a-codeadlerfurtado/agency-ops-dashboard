@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
-import { Alerta, MarcaImobiBoard } from "../ui";
+import { Alerta } from "../ui";
+import { ImobiBoardMark } from "../Marca";
 
 const DEMO = [
   { papel: "ADMIN",  email: "carlos@terraconcreta.demo" },
@@ -43,7 +44,7 @@ export default function Login({
     <div className="login-shell">
       <aside className="login-marca">
         <div className="login-simbolo">
-          <MarcaImobiBoard size={44} />
+          <ImobiBoardMark size={96} />
         </div>
         <div className="login-nome">IMOBI-BOARD</div>
         <div className="login-tagline">CRM Imobiliario</div>
