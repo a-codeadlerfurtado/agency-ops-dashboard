@@ -86,8 +86,11 @@
   --t:      var(--d-base) var(--ease);
 
   /* ---- marca ----
-     Gradientes do monograma ib. Ficam SO na marca: o design system continua
-     com laranja = acao e azul = informacao. A logo apenas combina os dois. */
+     A marca e o funil, monocromatico, como na arte de referencia. A arte
+     original e azul-marinho; aqui ela vira azul-claro porque a interface e
+     escura e marinho sobre marinho nao aparece. As variaveis de laranja
+     ficam: o design system continua com laranja = acao e azul = informacao,
+     e o laranja segue nos botoes e acentos, so nao entra mais na logo. */
   --marca-azul:         #76c6ff;
   --marca-azul-fundo:   #2f79c7;
   --marca-laranja:      #ff9a4f;

@@ -91,7 +91,7 @@ export default function Convite({ token }: { token: string }) {
   return (
     <div className="login-shell">
       <aside className="login-marca">
-        <div className="login-simbolo"><ImobiBoardMark size={96} /></div>
+        <div className="login-simbolo"><ImobiBoardMark size={96} mono="#fff" /></div>
         <div className="login-nome">IMOBI-BOARD</div>
         <div className="login-tagline">CRM Imobiliario</div>
         <div className="login-regua" />

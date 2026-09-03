@@ -1,22 +1,11 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Imobi-Board">
   <defs>
-    <linearGradient id="a" x1="0" y1="0" x2="1" y2="1">
+    <linearGradient id="a" x1="0" y1="0" x2="0.55" y2="1">
       <stop offset="0" stop-color="#76c6ff"/><stop offset="1" stop-color="#2f79c7"/>
     </linearGradient>
-    <linearGradient id="l" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#ff9a4f"/><stop offset="1" stop-color="#e9621d"/>
-    </linearGradient>
-    <radialGradient id="g" cx="0.2" cy="0.05" r="0.9">
-      <stop offset="0" stop-color="#0359a6" stop-opacity=".38"/>
-      <stop offset="1" stop-color="#0359a6" stop-opacity="0"/>
-    </radialGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="#0c1115"/>
-  <rect width="512" height="512" rx="112" fill="url(#g)"/>
-  <g transform="translate(96 96) scale(10)">
-    <circle cx="7.7" cy="7.4" r="3" fill="url(#a)"/>
-    <rect x="5" y="13.3" width="5.4" height="13.2" rx="2.7" fill="url(#a)"/>
-    <rect x="12.8" y="4.3" width="5.4" height="22.2" rx="2.7" fill="url(#l)"/>
-    <circle cx="21.5" cy="19.6" r="5.2" fill="none" stroke="url(#l)" stroke-width="5"/>
+  <rect width="512" height="512" rx="112" fill="#01172a"/>
+  <g transform="translate(56 56) scale(12.5)">
+    <path d="M4.37 4.3 H27.63 A1.49 1.49 0 0 1 28.83 6.7 L21.36 16.58 C20.73 17.41 18.36 19.68 18.36 22.04 L18.36 24.45 C18.36 24.85 17.78 26.77 14.18 27.73 A0.84 0.84 0 0 1 13.28 26.89 L13.28 22.59 C13.28 17.22 20.53 13.35 25.56 8.61 C19.38 11.95 13.34 15.39 12.3 18.76 L3.18 6.7 A1.49 1.49 0 0 1 4.37 4.3 Z" fill="url(#a)"/>
   </g>
 </svg>

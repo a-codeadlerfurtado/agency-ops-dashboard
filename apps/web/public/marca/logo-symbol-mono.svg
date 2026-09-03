@@ -1,6 +1,3 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" fill="currentColor" role="img" aria-label="Imobi-Board">
-  <circle cx="7.7" cy="7.4" r="3"/>
-  <rect x="5" y="13.3" width="5.4" height="13.2" rx="2.7"/>
-  <rect x="12.8" y="4.3" width="5.4" height="22.2" rx="2.7"/>
-  <circle cx="21.5" cy="19.6" r="5.2" fill="none" stroke="currentColor" stroke-width="5"/>
+  <path d="M4.37 4.3 H27.63 A1.49 1.49 0 0 1 28.83 6.7 L21.36 16.58 C20.73 17.41 18.36 19.68 18.36 22.04 L18.36 24.45 C18.36 24.85 17.78 26.77 14.18 27.73 A0.84 0.84 0 0 1 13.28 26.89 L13.28 22.59 C13.28 17.22 20.53 13.35 25.56 8.61 C19.38 11.95 13.34 15.39 12.3 18.76 L3.18 6.7 A1.49 1.49 0 0 1 4.37 4.3 Z"/>
 </svg>

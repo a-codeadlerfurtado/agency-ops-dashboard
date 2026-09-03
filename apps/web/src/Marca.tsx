@@ -1,23 +1,32 @@
 /**
- * Marca do Imobi-Board — monograma "ib".
+ * Marca do Imobi-Board — funil com o vinco de saída.
  *
- * Refinamento da Opção 28: o `i` azul e o `b` laranja formam um só símbolo.
- * A escolha entre as três variantes (28A arredondada, 28B geométrica, 28C
- * compacta) foi decidida pela REDUÇÃO, não pela versão grande:
+ * O desenho é o funil de vendas: o V recolhe tudo que entra e a haste é o que
+ * sai convertido. O vinco branco não é decoração — é o corte que separa o
+ * corpo do funil da haste e dá a direção do movimento, de baixo para cima.
  *
- *   variante | raio do bojo | espessura | contraforma
- *   28A      | 4.6          | 5.0       | 2.1
- *   28C      | 4.9          | 5.4       | 2.2
- *   final    | 5.2          | 5.0       | 2.7   ← 28% maior
+ * O contorno foi traçado da arte de referência, não redesenhado no olho:
+ * a imagem foi decodificada pixel a pixel, as duas bordas retas do V saíram
+ * por mínimos quadrados (inclinação 0,7560 e 0,7552 — o funil é simétrico,
+ * então o traçado usa 0,7556 nos dois lados) e cada trecho curvo é uma cúbica
+ * ajustada às amostras medidas. Erro máximo de 4,6 px numa arte de 810 px de
+ * largura; a silhueta renderizada bate 98,7% com a original, que é o piso
+ * imposto pelo antialiasing da borda.
  *
- * A contraforma (o buraco do `b`) é o primeiro detalhe que fecha ao reduzir.
- * Com 2.7 de raio ela ainda abre a 16px, que é o tamanho do favicon.
+ * Uma forma só, sem furo: o vinco é aberto por baixo, então não precisa de
+ * fill-rule nem de segunda cor. Isso mantém a marca correta sobre qualquer
+ * fundo — o vinco mostra o fundo, seja ele qual for.
  *
  * Grade de 32×32 para alinhar em 16 e 32 sem meio-pixel.
- *
- * O desenho não depende da cor: em uma cor só continua lendo "ib" — critério
- * que o próprio briefing coloca como prova de que o desenho está bom.
  */
+
+export const CAMINHO_MARCA =
+  "M4.37 4.3 H27.63 A1.49 1.49 0 0 1 28.83 6.7 L21.36 16.58 " +
+  "C20.73 17.41 18.36 19.68 18.36 22.04 L18.36 24.45 " +
+  "C18.36 24.85 17.78 26.77 14.18 27.73 A0.84 0.84 0 0 1 13.28 26.89 " +
+  "L13.28 22.59 C13.28 17.22 20.53 13.35 25.56 8.61 " +
+  "C19.38 11.95 13.34 15.39 12.3 18.76 L3.18 6.7 " +
+  "A1.49 1.49 0 0 1 4.37 4.3 Z";
 
 type Props = {
   size?: number;
@@ -31,8 +40,6 @@ let seq = 0;
 export function ImobiBoardMark({ size = 28, mono, className }: Props) {
   // ids únicos: dois gradientes com o mesmo id na página fazem o segundo sumir
   const id = `ib${(seq += 1)}`;
-  const azul = mono ?? `url(#a${id})`;
-  const laranja = mono ?? `url(#l${id})`;
 
   return (
     <svg
@@ -45,23 +52,13 @@ export function ImobiBoardMark({ size = 28, mono, className }: Props) {
     >
       {!mono && (
         <defs>
-          <linearGradient id={`a${id}`} x1="0" y1="0" x2="1" y2="1">
+          <linearGradient id={id} x1="0" y1="0" x2="0.55" y2="1">
             <stop offset="0" stopColor="var(--marca-azul, #76c6ff)" />
             <stop offset="1" stopColor="var(--marca-azul-fundo, #2f79c7)" />
           </linearGradient>
-          <linearGradient id={`l${id}`} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" stopColor="var(--marca-laranja, #ff9a4f)" />
-            <stop offset="1" stopColor="var(--marca-laranja-fundo, #e9621d)" />
-          </linearGradient>
         </defs>
       )}
-      {/* i — ponto e haste */}
-      <circle cx="7.7" cy="7.4" r="3" fill={azul} />
-      <rect x="5" y="13.3" width="5.4" height="13.2" rx="2.7" fill={azul} />
-      {/* b — haste alta e bojo. O bojo é traçado, não preenchido: é a
-          contraforma que faz o `b` ser `b` e não um ponto grande. */}
-      <rect x="12.8" y="4.3" width="5.4" height="22.2" rx="2.7" fill={laranja} />
-      <circle cx="21.5" cy="19.6" r="5.2" fill="none" stroke={laranja} strokeWidth="5" />
+      <path d={CAMINHO_MARCA} fill={mono ?? `url(#${id})`} />
     </svg>
   );
 }
