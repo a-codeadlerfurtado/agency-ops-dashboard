@@ -159,15 +159,27 @@ processamento deixa `error` preenchido e `processed_at` nulo, para retry.
 
 ### `client_finance_controls` — recalculada, não criada
 
-Tabela existente. Passa a ser preenchida por
-`agency_ops.recalc_client_finance_controls(p_client_id uuid)`, chamada após cada
-evento processado:
+Tabela existente, recalculada após cada evento processado:
 
-- `payment_status` — `EM_DIA` | `ATRASADO` | `INADIMPLENTE` | `PAUSADO`
+- `payment_status` — `CURRENT` | `DUE_SOON` | `OVERDUE` | `DELINQUENT`
 - `overdue_since` — `due_date` da cobrança vencida em aberto mais antiga
 - `next_due_date` — próximo vencimento em aberto
 - `last_payment_at` — pagamento confirmado mais recente
 - `monthly_value` — espelho do termo comercial vigente
+
+**O vocabulário é o que a tabela já impõe, não um novo.** A
+`client_finance_controls` tem CHECK constraint com
+`UNKNOWN | CURRENT | DUE_SOON | OVERDUE | NEGOTIATING | PAID | CANCELLED` em
+`payment_status`, e `RELEASED | PAUSE_REQUESTED | PAUSED` em
+`operational_status`. Usamos `CURRENT`, `DUE_SOON` e `OVERDUE` como já existem
+e **acrescentamos `DELINQUENT`** ao check, para separar o atraso curto (D+1 a
+D+4) da inadimplência (D+5 ou mais) — distinção que a agência precisa e o
+vocabulário atual não tem. `NEGOTIATING`, `PAID` e `CANCELLED` continuam
+disponíveis para marcação manual; o sistema não os escreve.
+
+**Pausa é eixo separado.** Cliente pausado não é um estado de pagamento: vive
+em `operational_status = 'PAUSED'`, que já existe. A derivação de
+`payment_status` ignora pausa; quem lê a tela é que combina os dois.
 
 ### RLS
 
@@ -215,11 +227,14 @@ cobrança ou assinatura.
 
 Cortes (configuráveis, com estes defaults aprovados):
 
-- `ATRASADO` — cobrança vencida em aberto há 1 a 4 dias
-- `INADIMPLENTE` — cobrança vencida em aberto há **5 dias ou mais**
-- `PAUSADO` — cobrança suspensa por decisão registrada (`pause_reason`)
+- `CURRENT` — nada vencido em aberto
+- `DUE_SOON` — próximo vencimento em aberto dentro de 3 dias
+- `OVERDUE` — cobrança vencida em aberto há 1 a 4 dias
+- `DELINQUENT` — cobrança vencida em aberto há **5 dias ou mais**
 
-`INADIMPLENTE` espelha para `client_operational_status` chamando a
+Pausa não aparece nesta lista: é `operational_status = 'PAUSED'`, eixo próprio.
+
+`DELINQUENT` espelha para `client_operational_status` chamando a
 `set_client_financial_legal_status` existente, com `p_actor = 'SISTEMA'`. Assim
 a tela atual, o histórico `since`/`resolved_at` e as notificações continuam
 funcionando sem alteração. O status `juridico` **permanece decisão humana** e
