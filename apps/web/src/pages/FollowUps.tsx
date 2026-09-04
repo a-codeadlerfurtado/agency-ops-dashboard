@@ -3,7 +3,8 @@ import { dataHora, relativo } from "../lib/format";
 import { concluirTarefa, tarefas } from "../lib/queries";
 import { mensagemDeErro } from "../lib/supabase";
 import {
-  Alerta, Card, Ico, TabelaCarregando, useAsync, useToast, Vazio,
+  Alerta, CabecalhoDaPagina, Card, Ico, TabelaCarregando, useAsync, useToast,
+  Vazio,
 } from "../ui";
 import type { Sessao, Task } from "../lib/types";
 
@@ -24,7 +25,16 @@ export default function FollowUps({ sessao }: { sessao: Sessao }) {
   }
 
   if (lista.carregando && !lista.dado) {
-    return <Card><div className="card-body flush"><TabelaCarregando linhas={5} colunas={3} /></div></Card>;
+    return (
+      <>
+      <CabecalhoDaPagina
+        contexto="Sua agenda"
+        titulo="Follow-ups"
+        descricao="O que voce prometeu retornar. Atrasado primeiro, porque e o que custa lead."
+      />
+      <Card><div className="card-body flush"><TabelaCarregando linhas={5} colunas={3} /></div></Card>
+      </>
+    );
   }
 
   const itens = lista.dado ?? [];
@@ -40,6 +50,12 @@ export default function FollowUps({ sessao }: { sessao: Sessao }) {
 
   if (itens.length === 0) {
     return (
+      <>
+      <CabecalhoDaPagina
+        contexto="Sua agenda"
+        titulo="Follow-ups"
+        descricao="O que voce prometeu retornar. Atrasado primeiro, porque e o que custa lead."
+      />
       <Card>
         <Vazio
           icone={Ico.check({ size: 20 })}
@@ -48,11 +64,17 @@ export default function FollowUps({ sessao }: { sessao: Sessao }) {
           acao={<button className="btn" onClick={() => irPara("/leads")}>Ir para os leads</button>}
         />
       </Card>
+      </>
     );
   }
 
   return (
     <>
+      <CabecalhoDaPagina
+        contexto="Sua agenda"
+        titulo="Follow-ups"
+        descricao="O que voce prometeu retornar. Atrasado primeiro, porque e o que custa lead."
+      />
       <Grupo titulo="Atrasados" itens={atrasados} tom="err" aoConcluir={concluir} />
       <Grupo titulo="Hoje" itens={hoje} tom="warn" aoConcluir={concluir} />
       <Grupo titulo="Proximos" itens={futuros} aoConcluir={concluir} />

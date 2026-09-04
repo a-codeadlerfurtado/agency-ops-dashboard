@@ -6,9 +6,11 @@ import {
 } from "../lib/comercial";
 import { mensagemDeErro } from "../lib/supabase";
 import {
-  Alerta, Card, Ico, TabelaCarregando, useAsync, useToast, Vazio,
+  Alerta, CabecalhoDaPagina, Card, Ico, TabelaCarregando, useAsync, useToast,
+  Vazio,
 } from "../ui";
 import FotosImovel from "../FotosImovel";
+import Dialogo from "../Dialogo";
 import type { Property, PropertyStatus, PropertyType, Sessao } from "../lib/types";
 
 const TIPOS: PropertyType[] = [
@@ -54,6 +56,11 @@ export default function Imoveis({ sessao }: { sessao: Sessao }) {
 
   return (
     <>
+      <CabecalhoDaPagina
+        contexto="Portfolio"
+        titulo="Imoveis"
+        descricao="O que a imobiliaria tem para vender. E daqui que sai o match do lead."
+      />
       <div className="row" style={{ flexWrap: "wrap", gap: 10 }}>
         <input
           className="input" style={{ width: "auto", flex: "1 1 200px", maxWidth: 280 }}
@@ -206,14 +213,14 @@ function FormImovel({
   }
 
   return (
-    <Card>
-      <div className="card-head">
-        <h2>{p.id ? "Editar imovel" : "Novo imovel"}</h2>
-        <span className="spacer" />
-        <button className="btn ghost sm" onClick={aoFechar}>Cancelar</button>
-      </div>
-      <div className="card-body">
-        <form onSubmit={enviar} className="col" style={{ gap: 13 }}>
+    <Dialogo
+      aberto
+      variante="lateral"
+      largura={720}
+      titulo={p.id ? "Editar imovel" : "Novo imovel"}
+      aoFechar={aoFechar}
+    >
+      <form onSubmit={enviar} className="col" style={{ gap: 13 }}>
           <div className="grid cols-3">
             <div className="field" style={{ gridColumn: "span 2" }}>
               <label className="label">Titulo</label>
@@ -339,13 +346,13 @@ function FormImovel({
           <div className="row">
             {p.price != null && <span className="hint">Preco: {dinheiro(p.price)}</span>}
             <span className="spacer" />
+            <button className="btn ghost" type="button" onClick={aoFechar}>Cancelar</button>
             <button className="btn primary" type="submit" disabled={salvando || !p.title}>
               {salvando ? "Salvando..." : "Salvar imovel"}
             </button>
           </div>
-        </form>
-      </div>
-    </Card>
+      </form>
+    </Dialogo>
   );
 }
 

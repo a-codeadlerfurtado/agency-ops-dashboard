@@ -3,7 +3,7 @@ import { irPara } from "../App";
 import { dinheiroCurto, numero, primeiroNome, rotuloOrigem } from "../lib/format";
 import { leadsParados, painelAdmin, painelBroker } from "../lib/queries";
 import {
-  Alerta, Card, CardsCarregando, Ico, Numero, Skeleton, useAsync, Vazio,
+  Alerta, Card, CardsCarregando, FaixaItem, Ico, Numero, Skeleton, useAsync, Vazio,
 } from "../ui";
 import type { Sessao } from "../lib/types";
 
@@ -194,18 +194,6 @@ function PainelAdmin({ sessao }: { sessao: Sessao }) {
         <CardParados parados={parados.dado} carregando={parados.carregando} />
       </div>
     </>
-  );
-}
-
-function FaixaItem({
-  rotulo, valor, nota, vazio,
-}: { rotulo: string; valor: string; nota?: string; vazio?: boolean }) {
-  return (
-    <div className="faixa-item">
-      <div className="faixa-rotulo">{rotulo}</div>
-      <div className={`faixa-valor${vazio ? " zerado" : ""}`}>{valor}</div>
-      {nota && <div className="faixa-nota">{nota}</div>}
-    </div>
   );
 }
 

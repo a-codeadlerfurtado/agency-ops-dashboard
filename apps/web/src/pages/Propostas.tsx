@@ -3,8 +3,10 @@ import { irPara } from "../App";
 import { data, dinheiro, dinheiroCurto } from "../lib/format";
 import { atualizarProposta, propostas, registrarVenda } from "../lib/comercial";
 import { mensagemDeErro } from "../lib/supabase";
+import Dialogo from "../Dialogo";
 import {
-  Alerta, Card, Ico, TabelaCarregando, useAsync, useToast, Vazio,
+  Alerta, CabecalhoDaPagina, Card, Ico, TabelaCarregando, useAsync, useToast,
+  Vazio,
 } from "../ui";
 import type { Proposal, ProposalStatus, Sessao } from "../lib/types";
 
@@ -45,6 +47,11 @@ export default function Propostas({ sessao }: { sessao: Sessao }) {
 
   return (
     <>
+      <CabecalhoDaPagina
+        contexto="Negociacao"
+        titulo="Propostas"
+        descricao="Proposta em aberto e dinheiro parado. Aceita vira venda; recusada, aprendizado."
+      />
       <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
         <button className={`btn sm ${soAbertas ? "" : "ghost"}`.trim()} onClick={() => setSoAbertas(true)}>
           Em aberto
@@ -179,14 +186,8 @@ function RegistrarVenda({
   }
 
   return (
-    <Card>
-      <div className="card-head">
-        <h2>Registrar venda</h2>
-        <span className="spacer" />
-        <button className="btn ghost sm" onClick={aoFechar}>Cancelar</button>
-      </div>
-      <div className="card-body">
-        <form onSubmit={enviar} className="col" style={{ gap: 12 }}>
+    <Dialogo aberto titulo="Registrar venda" aoFechar={aoFechar} largura={520}>
+      <form onSubmit={enviar} className="col" style={{ gap: 12 }}>
           <div style={{ fontSize: 13.5, color: "var(--muted)" }}>
             <b style={{ color: "var(--text-heading)" }}>{proposta.contact?.full_name}</b>
             {proposta.property?.title ? ` · ${proposta.property.title}` : ""}
@@ -208,8 +209,7 @@ function RegistrarVenda({
               {salvando ? "Registrando..." : "Confirmar venda"}
             </button>
           </div>
-        </form>
-      </div>
-    </Card>
+      </form>
+    </Dialogo>
   );
 }

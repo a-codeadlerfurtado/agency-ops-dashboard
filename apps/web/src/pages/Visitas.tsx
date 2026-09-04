@@ -4,7 +4,8 @@ import { dataHora, relativo } from "../lib/format";
 import { atualizarVisita, visitas } from "../lib/comercial";
 import { mensagemDeErro } from "../lib/supabase";
 import {
-  Alerta, Card, Ico, TabelaCarregando, useAsync, useToast, Vazio,
+  Alerta, CabecalhoDaPagina, Card, Ico, TabelaCarregando, useAsync, useToast,
+  Vazio,
 } from "../ui";
 import type { Sessao, VisitStatus } from "../lib/types";
 
@@ -42,6 +43,11 @@ export default function Visitas({ sessao }: { sessao: Sessao }) {
 
   return (
     <>
+      <CabecalhoDaPagina
+        contexto="Agenda comercial"
+        titulo="Visitas"
+        descricao="Visita agendada e o sinal mais forte de intencao. Nao deixe furar."
+      />
       <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
         {(["SCHEDULED", "COMPLETED", "NO_SHOW", ""] as const).map((s) => (
           <button key={s || "todas"}

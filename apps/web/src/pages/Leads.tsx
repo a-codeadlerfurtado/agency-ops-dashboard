@@ -2,10 +2,12 @@ import { useEffect, useState } from "react";
 import { irPara } from "../App";
 import { data, relativo, rotuloOrigem } from "../lib/format";
 import { corretores, criarOportunidade, etapas, oportunidades, type FiltrosLead } from "../lib/queries";
+import { empreendimentos } from "../lib/comercial";
 import { mensagemDeErro } from "../lib/supabase";
 import Dialogo from "../Dialogo";
 import {
-  Alerta, Avatar, Card, EtapaBadge, Ico, TabelaCarregando, useAsync, useToast, Vazio,
+  Alerta, Avatar, CabecalhoDaPagina, Card, EtapaBadge, Ico, TabelaCarregando, useAsync,
+  useToast, Vazio,
 } from "../ui";
 import type { Opportunity, Profile, Sessao, Stage } from "../lib/types";
 
@@ -23,6 +25,7 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
     async () => ({
       etapas: await etapas(sessao.tenant.id),
       pessoas: await corretores(sessao.tenant.id),
+      produtos: await empreendimentos(sessao.tenant.id),
     }),
     [sessao.tenant.id]
   );
@@ -37,7 +40,8 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
   const filtrosCompletos = { ...filtros, busca: buscaAplicada };
   const lista = useAsync(
     () => oportunidades(sessao.tenant.id, filtrosCompletos),
-    [sessao.tenant.id, buscaAplicada, filtros.etapaId, filtros.corretorId, filtros.origem, filtros.status]
+    [sessao.tenant.id, buscaAplicada, filtros.etapaId, filtros.corretorId, filtros.origem,
+     filtros.status, filtros.empreendimentoId]
   );
 
   useEffect(() => {
@@ -61,10 +65,28 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
 
   const nomePorId = new Map((meta.dado?.pessoas ?? []).map((p) => [p.id, p.full_name]));
   const etapaPorId = new Map((meta.dado?.etapas ?? []).map((e) => [e.id, e]));
-  const temFiltro = Boolean(buscaAplicada || filtros.etapaId || filtros.corretorId || filtros.origem);
+  const temFiltro = Boolean(
+    buscaAplicada || filtros.etapaId || filtros.corretorId || filtros.origem ||
+    filtros.empreendimentoId
+  );
 
   return (
     <>
+      <CabecalhoDaPagina
+        contexto={sessao.isAdmin ? "Carteira da operacao" : "Sua carteira"}
+        titulo={sessao.isAdmin ? "Leads" : "Meus leads"}
+        descricao={
+          sessao.isAdmin
+            ? "Todo lead da imobiliaria, de onde veio e com quem esta."
+            : "Os leads sob sua responsabilidade."
+        }
+        acoes={
+          <button className="btn primary" onClick={() => setNovo(true)}>
+            {Ico.plus({ size: 15 })} Novo lead
+          </button>
+        }
+      />
+
       <div className="row" style={{ flexWrap: "wrap", gap: 10 }}>
         <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 340 }}>
           <span style={{
@@ -113,16 +135,27 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
           {ORIGENS.map((o) => <option key={o} value={o}>{rotuloOrigem(o)}</option>)}
         </select>
 
+        {/* Produto (spec 71). O vinculo lead->empreendimento nasce da visita,
+            da proposta ou da venda; "Sem produto" e o filtro que interessa na
+            pratica: e a fila de quem ainda nao foi ancorado em nada. */}
+        {(meta.dado?.produtos.length ?? 0) > 0 && (
+          <select
+            className="select" style={{ width: "auto", minWidth: 150 }}
+            value={filtros.empreendimentoId ?? ""}
+            onChange={(e) => setFiltros((f) => ({ ...f, empreendimentoId: e.target.value || undefined }))}
+            aria-label="Filtrar por empreendimento"
+          >
+            <option value="">Todos os produtos</option>
+            {meta.dado?.produtos.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+            <option value="__sem">Sem produto</option>
+          </select>
+        )}
+
         {temFiltro && (
           <button className="btn ghost sm" onClick={() => { setFiltros({}); setBusca(""); }}>
             Limpar
           </button>
         )}
-
-        <span className="spacer" />
-        <button className="btn primary" onClick={() => setNovo(true)}>
-          {Ico.plus({ size: 15 })} Novo lead
-        </button>
       </div>
 
       <NovoLead
@@ -159,6 +192,7 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
                     <th>Nome</th>
                     <th>Origem</th>
                     {sessao.isAdmin && <th>Corretor</th>}
+                    <th>Produto</th>
                     <th>Etapa</th>
                     <th>Entrada</th>
                     <th>Ultima interacao</th>
@@ -190,6 +224,19 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
                             </div>
                           </td>
                         )}
+                        <td>
+                          {o.development?.name ? (
+                            <span className="truncate" style={{ maxWidth: 150, display: "block" }}>
+                              {o.development.name}
+                            </span>
+                          ) : o.property?.title ? (
+                            <span className="truncate" style={{ maxWidth: 150, display: "block" }}>
+                              {o.property.title}
+                            </span>
+                          ) : (
+                            <span style={{ color: "var(--text-subtle)" }}>--</span>
+                          )}
+                        </td>
                         <td className="nowrap">
                           {etapa
                             ? <EtapaBadge kind={etapa.kind} nome={etapa.name} />

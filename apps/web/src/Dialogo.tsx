@@ -20,6 +20,7 @@ export default function Dialogo({
   children,
   variante = "centro",
   rodape,
+  largura,
 }: {
   aberto: boolean;
   titulo: string;
@@ -27,6 +28,8 @@ export default function Dialogo({
   children: ReactNode;
   variante?: "centro" | "lateral";
   rodape?: ReactNode;
+  /** largura em px; o CSS ja limita ao viewport */
+  largura?: number;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
 
@@ -51,6 +54,7 @@ export default function Dialogo({
       ref={ref}
       className={`mdl ${variante}`}
       aria-label={titulo}
+      style={largura ? ({ "--mdl-w": largura + "px" } as React.CSSProperties) : undefined}
       // clique fora fecha; o alvo só é o próprio <dialog> quando é o backdrop
       onClick={(e) => { if (e.target === ref.current) aoFechar(); }}
     >

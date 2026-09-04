@@ -311,3 +311,55 @@ export function Numero({
 
   return <span ref={ref} className="num">{formatar(valor)}</span>;
 }
+
+/* ==================================== composicao de pagina === */
+
+/**
+ * Cabecalho de tela.
+ *
+ * O Agency Ops nunca abre uma tela na barra de filtros: sempre tem um
+ * cabecalho que diz onde voce esta, o que aquilo e, e so entao a ferramenta.
+ * A Visao Geral ja fazia isso e as outras dez telas nao; e a diferenca de
+ * composicao que sobrava depois de os tokens ja estarem iguais.
+ */
+export function CabecalhoDaPagina({
+  contexto, titulo, descricao, acoes,
+}: {
+  contexto: string;
+  titulo: string;
+  descricao?: string;
+  acoes?: ReactNode;
+}) {
+  return (
+    <div className="row" style={{ flexWrap: "wrap" }}>
+      <div className="page-head">
+        <span className="eyebrow">{contexto}</span>
+        <h1>{titulo}</h1>
+        {descricao && <p>{descricao}</p>}
+      </div>
+      {acoes && (
+        <>
+          <div className="spacer" />
+          <div className="row" style={{ gap: 6 }}>{acoes}</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Faixa de numeros-resumo, logo abaixo do cabecalho. */
+export function Faixa({ children }: { children: ReactNode }) {
+  return <div className="faixa">{children}</div>;
+}
+
+export function FaixaItem({
+  rotulo, valor, nota, vazio,
+}: { rotulo: string; valor: string; nota?: string; vazio?: boolean }) {
+  return (
+    <div className="faixa-item">
+      <div className="faixa-rotulo">{rotulo}</div>
+      <div className={`faixa-valor${vazio ? " zerado" : ""}`}>{valor}</div>
+      {nota && <div className="faixa-nota">{nota}</div>}
+    </div>
+  );
+}

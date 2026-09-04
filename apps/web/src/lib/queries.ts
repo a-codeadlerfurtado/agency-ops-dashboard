@@ -5,7 +5,10 @@ const OPP_COLS =
   "id, tenant_id, contact_id, assigned_user_id, stage_id, status, source, source_detail," +
   " campaign_name, adset_name, ad_name, created_at, accepted_at, first_contact_at," +
   " qualified_at, closed_at, last_interaction_at, lost_reason," +
-  " contact:contacts(id, full_name, phone, phone_normalized, email)";
+  " property_id, development_id," +
+  " contact:contacts(id, full_name, phone, phone_normalized, email)," +
+  " property:properties(id, code, title)," +
+  " development:developments(id, name)";
 
 export async function etapas(tenantId: string): Promise<Stage[]> {
   const { data, error } = await supabase
@@ -37,6 +40,8 @@ export interface FiltrosLead {
   corretorId?: string;
   origem?: string;
   status?: string;
+  /** empreendimento; "__sem" filtra os leads que ainda nao tem produto */
+  empreendimentoId?: string;
 }
 
 /**
@@ -61,6 +66,8 @@ export async function oportunidades(
   if (filtros.corretorId) q = q.eq("assigned_user_id", filtros.corretorId);
   if (filtros.origem) q = q.eq("source", filtros.origem);
   if (filtros.status) q = q.eq("status", filtros.status);
+  if (filtros.empreendimentoId === "__sem") q = q.is("development_id", null);
+  else if (filtros.empreendimentoId) q = q.eq("development_id", filtros.empreendimentoId);
 
   const { data, error } = await q;
   if (error) throw error;

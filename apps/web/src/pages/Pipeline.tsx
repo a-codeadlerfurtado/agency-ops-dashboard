@@ -4,7 +4,9 @@ import { classeEtapa, relativo, rotuloOrigem } from "../lib/format";
 import { corretores, etapas, moverEtapa, oportunidadesDoQuadro } from "../lib/queries";
 import { mensagemDeErro } from "../lib/supabase";
 import { useFlip } from "../lib/flip";
-import { Alerta, Avatar, Ico, Skeleton, useAsync, useToast, Vazio } from "../ui";
+import {
+  Alerta, Avatar, CabecalhoDaPagina, Ico, Skeleton, useAsync, useToast, Vazio,
+} from "../ui";
 import type { Opportunity, Sessao, Stage } from "../lib/types";
 
 export default function Pipeline({ sessao }: { sessao: Sessao }) {
@@ -85,12 +87,11 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
 
   return (
     <>
-      <div className="row" style={{ flexWrap: "wrap", gap: 10 }}>
-        <div style={{ color: "var(--muted)", fontSize: 13 }}>
-          {total} oportunidade{total === 1 ? "" : "s"} aberta{total === 1 ? "" : "s"}
-        </div>
-        <span className="spacer" />
-        {sessao.isAdmin && (
+      <CabecalhoDaPagina
+        contexto={total + " oportunidade" + (total === 1 ? "" : "s") + " em aberto"}
+        titulo="Pipeline"
+        descricao="Arraste o card para mover a etapa. A ordem conta a historia do lead."
+        acoes={sessao.isAdmin && (
           <select
             className="select" style={{ width: "auto", minWidth: 150 }}
             value={corretorId} onChange={(e) => setCorretorId(e.target.value)}
@@ -100,7 +101,7 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
             {pessoas.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}
           </select>
         )}
-      </div>
+      />
 
       {total === 0 ? (
         <Vazio

@@ -112,7 +112,23 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
               </div>
             </div>
             <span className="spacer" />
-            <div className="row" style={{ gap: 8 }}>
+            <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+              {/* Produto do lead (spec 72). So aparece depois que o lead foi
+                  ancorado em um imovel por visita, proposta ou venda -- e o
+                  que responde "esse lead e de qual produto?" sem obrigar
+                  ninguem a preencher um campo a mais. */}
+              {(opp.development?.name || opp.property?.title) && (
+                <span
+                  className="badge visit"
+                  title={opp.property?.title ?? undefined}
+                  style={{ maxWidth: 220 }}
+                >
+                  {Ico.building({ size: 12 })}
+                  <span className="truncate">
+                    {opp.development?.name ?? opp.property?.title}
+                  </span>
+                </span>
+              )}
               {etapaAtual && <EtapaBadge kind={etapaAtual.kind} nome={etapaAtual.name} />}
               <div className="row" style={{ gap: 6 }}>
                 <Avatar nome={opp.assigned_user_id ? nomePorId.get(opp.assigned_user_id) : null} />

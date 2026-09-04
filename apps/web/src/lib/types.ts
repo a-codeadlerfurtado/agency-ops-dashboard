@@ -66,7 +66,13 @@ export interface Opportunity {
   closed_at: string | null;
   last_interaction_at: string;
   lost_reason: string | null;
+  /* Produto da oportunidade (spec 71/72). Carimbado pela trigger da 0023
+     quando o lead ganha visita, proposta ou venda. */
+  property_id: string | null;
+  development_id: string | null;
   contact?: Contact | null;
+  property?: { id: string; code: string | null; title: string } | null;
+  development?: { id: string; name: string } | null;
 }
 
 export interface Activity {

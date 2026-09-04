@@ -8,7 +8,8 @@ import { mensagemDeErro, supabase } from "../lib/supabase";
 import { dataHora } from "../lib/format";
 import Dialogo from "../Dialogo";
 import {
-  Alerta, Avatar, Card, Ico, TabelaCarregando, useAsync, useToast, Vazio,
+  Alerta, Avatar, CabecalhoDaPagina, Card, Ico, TabelaCarregando, useAsync,
+  useToast, Vazio,
 } from "../ui";
 import type { Role, Sessao } from "../lib/types";
 
@@ -269,6 +270,11 @@ export default function Corretores({ sessao }: { sessao: Sessao }) {
 
   return (
     <>
+      <CabecalhoDaPagina
+        contexto="Gestao de pessoas"
+        titulo="Corretores"
+        descricao="Quem esta no time, quanto cada um produz e quem entra no rodizio de leads."
+      />
       <Card>
         <div className="card-head">
           <h2>Equipe</h2>

@@ -732,7 +732,7 @@ dialog.mdl[open]::backdrop { opacity: 1; }
 /* --------- centro: dialogo de acao --------- */
 dialog.mdl.centro {
   margin: auto;
-  width: min(680px, calc(100vw - 32px));
+  width: min(var(--mdl-w, 680px), calc(100vw - 32px));
 }
 dialog.mdl.centro .mdl-caixa {
   border-radius: var(--r-lg);
@@ -761,7 +761,7 @@ dialog.mdl.centro[open] .mdl-caixa {
 dialog.mdl.lateral {
   margin: 0 0 0 auto;
   height: 100dvh;
-  width: min(520px, 100vw);
+  width: min(var(--mdl-w, 520px), 100vw);
 }
 dialog.mdl.lateral .mdl-caixa {
   height: 100dvh;

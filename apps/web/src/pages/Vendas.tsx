@@ -3,7 +3,8 @@ import { data, dinheiro, dinheiroCurto, rotuloOrigem } from "../lib/format";
 import { cancelarVenda, vendas } from "../lib/comercial";
 import { mensagemDeErro } from "../lib/supabase";
 import {
-  Alerta, Card, Ico, Stat, TabelaCarregando, useAsync, useToast, Vazio,
+  Alerta, CabecalhoDaPagina, Card, Ico, Stat, TabelaCarregando, useAsync,
+  useToast, Vazio,
 } from "../ui";
 import type { Sessao } from "../lib/types";
 
@@ -34,6 +35,11 @@ export default function Vendas({ sessao }: { sessao: Sessao }) {
 
   return (
     <>
+      <CabecalhoDaPagina
+        contexto={sessao.isAdmin ? "Resultado da operacao" : "Seu resultado"}
+        titulo={sessao.isAdmin ? "Vendas" : "Minhas vendas"}
+        descricao="O fim do funil: o que virou contrato e quanto disso veio de anuncio."
+      />
       <div className="grid cols-3">
         <Stat rotulo={sessao.isAdmin ? "VGV" : "Meu VGV"} valor={dinheiroCurto(vgv)} tom="up"
               rodape={`${ativas.length} venda${ativas.length === 1 ? "" : "s"}`} />

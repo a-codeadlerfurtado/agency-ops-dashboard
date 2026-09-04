@@ -2,8 +2,10 @@ import { useState } from "react";
 import { corretores } from "../lib/queries";
 import { definirMembros, filas, membrosDaFila, salvarFila } from "../lib/comercial";
 import { mensagemDeErro } from "../lib/supabase";
+import Dialogo from "../Dialogo";
 import {
-  Alerta, Avatar, Card, Ico, Skeleton, useAsync, useToast, Vazio,
+  Alerta, Avatar, CabecalhoDaPagina, Card, Ico, Skeleton, useAsync, useToast,
+  Vazio,
 } from "../ui";
 import type { Fila, HorarioFila, Sessao } from "../lib/types";
 
@@ -15,17 +17,18 @@ export default function Distribuicao({ sessao }: { sessao: Sessao }) {
 
   return (
     <>
-      <div className="row">
-        <div style={{ color: "var(--muted)", fontSize: 13, maxWidth: 620 }}>
-          Fila distribui em rodizio. Quem nao aceitar dentro do prazo perde o lead,
-          e ele passa para o proximo — sem cron: um relogio por lead, que so acorda
-          na hora.
-        </div>
-        <span className="spacer" />
-        <button className="btn primary" onClick={() => setEditando({ acceptance_timeout_seconds: 300 })}>
-          {Ico.plus({ size: 15 })} Nova fila
-        </button>
-      </div>
+      <CabecalhoDaPagina
+        contexto="Motor de distribuicao"
+        titulo="Distribuicao"
+        descricao={"Fila distribui em rodizio. Quem nao aceitar dentro do prazo perde o " +
+                   "lead, e ele passa para o proximo — sem cron: um relogio por lead, " +
+                   "que so acorda na hora."}
+        acoes={
+          <button className="btn primary" onClick={() => setEditando({ acceptance_timeout_seconds: 300 })}>
+            {Ico.plus({ size: 15 })} Nova fila
+          </button>
+        }
+      />
 
       {editando && (
         <FormFila
@@ -256,14 +259,14 @@ function FormFila({
   }
 
   return (
-    <Card>
-      <div className="card-head">
-        <h2>{inicial.id ? "Configurar fila" : "Nova fila"}</h2>
-        <span className="spacer" />
-        <button className="btn ghost sm" onClick={aoFechar}>Cancelar</button>
-      </div>
-      <div className="card-body">
-        <form onSubmit={enviar} className="col" style={{ gap: 13 }}>
+    <Dialogo
+      aberto
+      variante="lateral"
+      largura={620}
+      titulo={inicial.id ? "Configurar fila" : "Nova fila"}
+      aoFechar={aoFechar}
+    >
+      <form onSubmit={enviar} className="col" style={{ gap: 13 }}>
           <div className="grid cols-3">
             <div className="field" style={{ gridColumn: "span 2" }}>
               <label className="label">Nome da fila</label>
@@ -327,12 +330,12 @@ function FormFila({
           </div>
           <div className="row">
             <span className="spacer" />
+            <button className="btn ghost" type="button" onClick={aoFechar}>Cancelar</button>
             <button className="btn primary" type="submit" disabled={salvando || !nome.trim()}>
               {salvando ? "Salvando..." : "Salvar fila"}
             </button>
           </div>
-        </form>
-      </div>
-    </Card>
+      </form>
+    </Dialogo>
   );
 }

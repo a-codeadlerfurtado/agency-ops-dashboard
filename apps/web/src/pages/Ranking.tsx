@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { dinheiroCurto } from "../lib/format";
-import { ranking } from "../lib/queries";
-import { Alerta, Avatar, Card, TabelaCarregando, useAsync, Vazio } from "../ui";
+import { ranking, type LinhaRanking } from "../lib/queries";
+import { useFlip } from "../lib/flip";
+import {
+  Alerta, Avatar, CabecalhoDaPagina, Card, TabelaCarregando, useAsync, Vazio,
+} from "../ui";
 import type { Sessao } from "../lib/types";
 
 const PERIODOS = [
@@ -17,41 +20,47 @@ export default function Ranking({ sessao }: { sessao: Sessao }) {
   const [dias, setDias] = useState(30);
   const lista = useAsync(() => ranking(sessao.tenant.id, dias), [sessao.tenant.id, dias]);
 
+  /* Trocar o periodo reordena a tabela. Sem animacao, os corretores trocam
+     de lugar num piscar e o olho perde quem subiu e quem caiu -- que e
+     exatamente a informacao do ranking. O FLIP e o mesmo do Kanban.
+
+     A lista fica em estado local para haver um momento em que a ordem
+     ANTIGA ainda esta no DOM: e nele que capturar() mede. Renderizar
+     lista.dado direto nao daria essa brecha. */
+  const { container: corpo, capturar } = useFlip<HTMLTableSectionElement>();
+  const [linhas, setLinhas] = useState<LinhaRanking[]>([]);
+  useEffect(() => {
+    if (!lista.dado) return;
+    capturar();
+    setLinhas(lista.dado);
+  }, [lista.dado, capturar]);
+
   if (lista.erro) return <Alerta>{lista.erro}</Alerta>;
 
-  const total = (lista.dado ?? []).reduce((s, r) => s + Number(r.vgv ?? 0), 0);
+  const total = linhas.reduce((s, r) => s + Number(r.vgv ?? 0), 0);
 
   return (
     <>
-      <div className="row" style={{ flexWrap: "wrap" }}>
-        <div style={{ color: "var(--muted)", fontSize: 13 }}>
-          Desempenho por corretor. Visivel apenas para a administracao.
-          {total > 0 && (
-            <>
-              {" "}VGV do periodo:{" "}
-              <b style={{ color: "var(--success)" }}>{dinheiroCurto(total)}</b>.
-            </>
-          )}
-        </div>
-        <span className="spacer" />
-        <div className="row" style={{ gap: 4 }}>
-          {PERIODOS.map((p) => (
-            <button
-              key={p.dias}
-              className={`btn sm ${dias === p.dias ? "" : "ghost"}`.trim()}
-              onClick={() => setDias(p.dias)}
-            >
-              {p.rotulo}
-            </button>
-          ))}
-        </div>
-      </div>
+      <CabecalhoDaPagina
+        contexto={total > 0 ? "VGV do periodo " + dinheiroCurto(total) : "Administracao"}
+        titulo="Ranking"
+        descricao="Desempenho por corretor. Visivel apenas para a administracao."
+        acoes={PERIODOS.map((p) => (
+          <button
+            key={p.dias}
+            className={`btn sm ${dias === p.dias ? "" : "ghost"}`.trim()}
+            onClick={() => setDias(p.dias)}
+          >
+            {p.rotulo}
+          </button>
+        ))}
+      />
 
       <Card>
         <div className="card-body flush">
-          {lista.carregando ? (
+          {lista.carregando && linhas.length === 0 ? (
             <TabelaCarregando linhas={4} colunas={8} />
-          ) : (lista.dado?.length ?? 0) === 0 ? (
+          ) : linhas.length === 0 ? (
             <Vazio
               titulo="Nenhum corretor ativo"
               texto="Cadastre corretores para acompanhar o desempenho da equipe."
@@ -77,9 +86,9 @@ export default function Ranking({ sessao }: { sessao: Sessao }) {
                     <th className="num">Parados</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {lista.dado?.map((r, i) => (
-                    <tr key={r.user_id}>
+                <tbody ref={corpo}>
+                  {linhas.map((r, i) => (
+                    <tr key={r.user_id} data-flip-id={r.user_id}>
                       <td>
                         <div className="row" style={{ gap: 9 }}>
                           <span className="num" style={{
