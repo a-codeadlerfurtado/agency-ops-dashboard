@@ -64,6 +64,9 @@ const rotulos: Record<string, string> = {
   papel_invalido: "Papel inválido.",
   falha_ao_definir_senha: "Não foi possível alterar a senha desse usuário.",
   vault_key_missing: "A chave criptográfica do cofre não está disponível.",
+  sem_item_no_cofre:
+    "Esse usuário ainda não tem senha no cofre — defina uma primeiro para poder vê-la.",
+  cofre_decifra_falhou: "Não foi possível abrir essa credencial.",
   origin_not_allowed: "Origem não autorizada.",
 };
 const rotulo = (codigo: unknown) =>
@@ -74,6 +77,28 @@ function quando(valor?: string | null) {
   const d = new Date(valor);
   if (Number.isNaN(d.getTime())) return "—";
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(d);
+}
+
+/** Linha de credencial revelada: valor em fonte mono, com copiar ao lado. */
+function Campo({ rotulo: nome, valor, aoCopiar }: {
+  rotulo: string; valor: string; aoCopiar: () => void;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <span style={{ color: "var(--muted)", minWidth: 52, fontSize: 12 }}>{nome}</span>
+      <code style={{
+        flex: 1, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+        wordBreak: "break-all", userSelect: "all",
+      }}>{valor || "—"}</code>
+      {valor && (
+        <button type="button"
+          onClick={() => { void navigator.clipboard.writeText(valor); aoCopiar(); }}
+          style={{ border: "1px solid var(--line)", background: "transparent", color: "var(--text)", borderRadius: 7, padding: "3px 9px", cursor: "pointer", fontSize: 11 }}>
+          Copiar
+        </button>
+      )}
+    </div>
+  );
 }
 
 export default function ImobiBoardCentralBridge() {
@@ -98,6 +123,12 @@ export default function ImobiBoardCentralBridge() {
   const [emailConvite, setEmailConvite] = useState("");
   const [papelConvite, setPapelConvite] = useState("BROKER");
   const [linkGerado, setLinkGerado] = useState("");
+
+  // revelação: pede a senha do dashboard, mostra por tempo limitado
+  const [revelando, setRevelando] = useState<{ t: Imobiliaria; u: Usuario } | null>(null);
+  const [reveladas, setReveladas] = useState<Record<string, { login: string; senha: string }>>({});
+  const [expiraEm, setExpiraEm] = useState<Record<string, number>>({});
+  const [agora, setAgora] = useState(() => Date.now());
 
   const chamar = useCallback(async (corpo: Record<string, unknown>) => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -191,6 +222,32 @@ export default function ImobiBoardCentralBridge() {
     return () => window.clearTimeout(t);
   }, [aviso]);
 
+  /* Senha revelada some sozinha. Sem isto ela ficaria na tela até alguém
+     fechar o modal — e a tela costuma ficar aberta enquanto se resolve
+     outra coisa. */
+  useEffect(() => {
+    if (!Object.keys(expiraEm).length) return;
+    const id = window.setInterval(() => {
+      const t = Date.now();
+      setAgora(t);
+      const vencidos = Object.entries(expiraEm).filter(([, ate]) => ate <= t).map(([k]) => k);
+      if (vencidos.length) {
+        setReveladas((r) => { const c = { ...r }; vencidos.forEach((k) => delete c[k]); return c; });
+        setExpiraEm((e) => { const c = { ...e }; vencidos.forEach((k) => delete c[k]); return c; });
+      }
+    }, 500);
+    return () => window.clearInterval(id);
+  }, [expiraEm]);
+
+  // sair da aba esconde tudo
+  useEffect(() => {
+    const aoOcultar = () => {
+      if (document.hidden) { setReveladas({}); setExpiraEm({}); }
+    };
+    document.addEventListener("visibilitychange", aoOcultar);
+    return () => document.removeEventListener("visibilitychange", aoOcultar);
+  }, []);
+
   const totais = useMemo(() => ({
     imobiliarias: imobiliarias.length,
     usuarios: imobiliarias.reduce((s, t) => s + t.usuarios.length, 0),
@@ -249,10 +306,50 @@ export default function ImobiBoardCentralBridge() {
     }
   }
 
+  async function revelar() {
+    if (!revelando) return;
+    setSalvando(true); setErro("");
+    try {
+      const j = await chamar({
+        action: "REVELAR",
+        tenant_id: revelando.t.tenant_id,
+        user_id: revelando.u.user_id,
+        dashboard_password: senhaDoPainel,
+      });
+      const c = j.credencial || {};
+      const chave = revelando.u.user_id;
+      setReveladas((r) => ({
+        ...r,
+        [chave]: { login: String(c.login ?? ""), senha: String(c.senha ?? "") },
+      }));
+      setExpiraEm((e) => ({
+        ...e,
+        [chave]: Date.now() + Number(c.expira_em_segundos || 180) * 1000,
+      }));
+      setRevelando(null); setSenhaDoPainel("");
+    } catch (e) {
+      setErro(rotulo((e as Error).message));
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  function esconder(userId: string) {
+    setReveladas((r) => { const c = { ...r }; delete c[userId]; return c; });
+    setExpiraEm((e) => { const c = { ...e }; delete c[userId]; return c; });
+  }
+
   async function ligar(t: Imobiliaria, clientId: string) {
     setErro("");
+    if (!senhaDoPainel) {
+      setErro("Digite a senha do seu Dashboard no campo abaixo antes de ligar a imobiliária.");
+      return;
+    }
     try {
-      await chamar({ action: "LIGAR_CLIENTE", tenant_id: t.tenant_id, client_id: clientId || null });
+      await chamar({
+        action: "LIGAR_CLIENTE", tenant_id: t.tenant_id, client_id: clientId || null,
+        dashboard_password: senhaDoPainel,
+      });
       setAviso("Imobiliária ligada ao cliente.");
       await carregar();
     } catch (e) {
@@ -342,16 +439,21 @@ export default function ImobiBoardCentralBridge() {
             {!t.agency_client_id && (
               <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)" }}>
                 Sem cliente do Agency Ops, o acesso não tem cofre onde ser guardado.
-                <select
-                  defaultValue=""
-                  onChange={(e) => { if (e.target.value) void ligar(t, e.target.value); }}
-                  style={{ marginLeft: 8, background: "var(--panel)", color: "var(--text)", border: "1px solid var(--line)", borderRadius: 8, padding: "5px 8px" }}
-                >
-                  <option value="">Ligar a um cliente…</option>
-                  {clientes.map((c) => (
-                    <option key={c.client_id} value={c.client_id}>{c.display_name}</option>
-                  ))}
-                </select>
+                <div style={{ display: "flex", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
+                  <input type="password" placeholder="Sua senha do Dashboard"
+                    value={senhaDoPainel} onChange={(e) => setSenhaDoPainel(e.target.value)}
+                    style={{ background: "var(--panel)", color: "var(--text)", border: "1px solid var(--line)", borderRadius: 8, padding: "5px 9px" }} />
+                  <select
+                    defaultValue=""
+                    onChange={(e) => { if (e.target.value) void ligar(t, e.target.value); }}
+                    style={{ background: "var(--panel)", color: "var(--text)", border: "1px solid var(--line)", borderRadius: 8, padding: "5px 8px" }}
+                  >
+                    <option value="">Ligar a um cliente…</option>
+                    {clientes.map((c) => (
+                      <option key={c.client_id} value={c.client_id}>{c.display_name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
             )}
 
@@ -383,11 +485,46 @@ export default function ImobiBoardCentralBridge() {
                       <span style={chip}>fora do cofre</span>
                     )}
                     <span style={{ flex: 1 }} />
+
+                    {u.no_cofre && !reveladas[u.user_id] && (
+                      <button type="button"
+                        onClick={() => { setRevelando({ t, u }); setSenhaDoPainel(""); setErro(""); }}
+                        style={{ border: "1px solid var(--line)", background: "transparent", color: "var(--text)", borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 12 }}>
+                        Ver
+                      </button>
+                    )}
                     <button type="button"
                       onClick={() => { setAlvo({ t, u }); setNovaSenha(""); setSenhaDoPainel(""); setErro(""); }}
                       style={{ border: "1px solid var(--line)", background: "transparent", color: "var(--text)", borderRadius: 8, padding: "5px 10px", cursor: "pointer", fontSize: 12 }}>
                       Definir senha
                     </button>
+
+                    {reveladas[u.user_id] && (
+                      <div style={{
+                        flexBasis: "100%", marginTop: 8, padding: 10, borderRadius: 10,
+                        background: "var(--wash)", border: "1px solid var(--line)",
+                        display: "grid", gap: 6, fontSize: 13,
+                      }}>
+                        <Campo rotulo="Login" valor={reveladas[u.user_id].login}
+                          aoCopiar={() => setAviso("Login copiado.")} />
+                        <Campo rotulo="Senha" valor={reveladas[u.user_id].senha}
+                          aoCopiar={() => setAviso("Senha copiada.")} />
+                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                          <small style={{ color: "var(--muted)" }}>
+                            some em {Math.max(0, Math.ceil(((expiraEm[u.user_id] ?? agora) - agora) / 1000))}s
+                          </small>
+                          <button type="button" onClick={() => esconder(u.user_id)}
+                            style={{ border: "1px solid var(--line)", background: "transparent", color: "var(--text)", borderRadius: 8, padding: "3px 9px", cursor: "pointer", fontSize: 11 }}>
+                            Esconder agora
+                          </button>
+                          {u.senha_desatualizada && (
+                            <small style={{ color: "var(--danger, #f87171)" }}>
+                              atenção: esta senha foi trocada pelo usuário e provavelmente não abre mais
+                            </small>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ))}
 
@@ -406,6 +543,35 @@ export default function ImobiBoardCentralBridge() {
             )}
           </section>
         ))}
+
+        {/* ---------------------------------------------------- revelar --- */}
+        {revelando && (
+          <div style={{ ...caixa, borderColor: "var(--accent, #60a5fa)" }}>
+            <strong style={{ fontSize: 14 }}>Ver o acesso de {revelando.u.email}</strong>
+            <p style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 10px" }}>
+              Confirme sua senha do Dashboard. O login e a senha ficam visíveis por 3 minutos
+              e a consulta fica registrada na auditoria do cofre.
+            </p>
+            <div style={{ display: "grid", gap: 8, maxWidth: 420 }}>
+              <input type="password" placeholder="Sua senha do Dashboard"
+                value={senhaDoPainel} onChange={(e) => setSenhaDoPainel(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter" && senhaDoPainel) void revelar(); }}
+                autoFocus
+                style={{ background: "var(--panel)", color: "var(--text)", border: "1px solid var(--line)", borderRadius: 9, padding: "9px 11px" }} />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" disabled={salvando || !senhaDoPainel}
+                  onClick={() => void revelar()}
+                  style={{ border: 0, background: "var(--accent, #2563eb)", color: "#fff", borderRadius: 9, padding: "9px 14px", cursor: "pointer" }}>
+                  {salvando ? "Abrindo…" : "Mostrar login e senha"}
+                </button>
+                <button type="button" onClick={() => { setRevelando(null); setSenhaDoPainel(""); }}
+                  style={{ border: "1px solid var(--line)", background: "transparent", color: "var(--text)", borderRadius: 9, padding: "9px 14px", cursor: "pointer" }}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ----------------------------------------------- definir senha -- */}
         {alvo && (
