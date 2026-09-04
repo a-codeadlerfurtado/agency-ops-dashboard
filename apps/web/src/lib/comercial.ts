@@ -444,3 +444,16 @@ export async function conectarPagina(pageId: string, label: string, queueId: str
   if (error) throw error;
   return data as { id: string; nonce: string; page_name: string };
 }
+
+/** Token de usuario de sistema da BM: caminho que dispensa App Review. */
+export async function salvarTokenDeSistema(token: string): Promise<string> {
+  const { data, error } = await supabase.rpc("salvar_token_de_sistema", { p_token: token });
+  if (error) throw error;
+  return data as string;
+}
+
+export async function situacaoDoTokenDeSistema(): Promise<{ tem: boolean; atualizado_em?: string }> {
+  const { data, error } = await supabase.rpc("situacao_do_token_de_sistema");
+  if (error) throw error;
+  return data as { tem: boolean; atualizado_em?: string };
+}

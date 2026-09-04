@@ -121,6 +121,79 @@ export async function callbackOAuth(url: URL, env: EnvMeta): Promise<Response> {
 }
 
 /**
+ * POST /v1/meta/paginas?n=<state>
+ *
+ * Caminho do token de usuario de sistema da Business Manager: em vez de login,
+ * o ADMIN cola um token que ja tem acesso as paginas dos clientes da BM. O
+ * worker usa esse token para listar as paginas e guarda cada page token.
+ *
+ * Vale a pena porque nao depende de App Review: a Meta so exige revisao para
+ * usar permissao em nome de quem nao tem papel no aplicativo, e um usuario de
+ * sistema da mesma BM do app pode ter papel nele.
+ *
+ * Duas listas somadas: /me/accounts traz as paginas do proprio usuario de
+ * sistema; client_pages traz as que a BM administra para clientes. Uma
+ * agencia costuma ter as paginas na segunda.
+ */
+export async function listarPaginas(url: URL, env: EnvMeta): Promise<Response> {
+  const state = url.searchParams.get("n");
+  if (!state) return json({ erro: "Autorizacao ausente." }, 400);
+
+  let token: string | null;
+  try {
+    token = await rpc<string | null>(env, "token_de_sistema", { p_state: state });
+  } catch {
+    return json({ erro: "Autorizacao expirada. Salve o token de novo." }, 403);
+  }
+  if (!token) return json({ erro: "Nenhum token de sistema salvo." }, 409);
+
+  try {
+    const paginas = new Map<string, PaginaDaMeta>();
+
+    const proprias = await fetch(
+      `${GRAPH}/me/accounts?fields=id,name,access_token&limit=200` +
+      `&access_token=${encodeURIComponent(token)}`
+    );
+    const dp = await proprias.json() as { data?: PaginaDaMeta[]; error?: { message?: string } };
+    if (!proprias.ok) throw new Error(dp.error?.message ?? "Nao foi possivel listar as paginas.");
+    for (const p of dp.data ?? []) if (p.access_token) paginas.set(p.id, p);
+
+    // paginas que a BM administra para clientes
+    const negocios = await fetch(
+      `${GRAPH}/me/businesses?fields=id&limit=50&access_token=${encodeURIComponent(token)}`
+    );
+    const dn = await negocios.json() as { data?: { id: string }[] };
+    for (const b of dn.data ?? []) {
+      for (const borda of ["client_pages", "owned_pages"]) {
+        const r = await fetch(
+          `${GRAPH}/${b.id}/${borda}?fields=id,name,access_token&limit=200` +
+          `&access_token=${encodeURIComponent(token)}`
+        );
+        if (!r.ok) continue;
+        const d = await r.json() as { data?: PaginaDaMeta[] };
+        for (const p of d.data ?? []) if (p.access_token) paginas.set(p.id, p);
+      }
+    }
+
+    if (paginas.size === 0) {
+      return json({
+        erro: "O token nao enxerga nenhuma pagina. Confira se a PAGINA (nao so " +
+              "a conta de anuncios) esta atribuida ao usuario de sistema, e se o " +
+              "cliente liberou o acesso a leads.",
+      }, 409);
+    }
+
+    const r = await rpc<{ paginas: number }>(env, "salvar_paginas_da_meta", {
+      p_state: state,
+      p_paginas: [...paginas.values()],
+    });
+    return json({ ok: true, paginas: r?.paginas ?? paginas.size });
+  } catch (e) {
+    return json({ erro: e instanceof Error ? e.message : String(e) }, 502);
+  }
+}
+
+/**
  * POST /v1/meta/assinar?n=<nonce>
  *
  * Inscreve a pagina no webhook do app. O nonce e emitido pelo banco quando o

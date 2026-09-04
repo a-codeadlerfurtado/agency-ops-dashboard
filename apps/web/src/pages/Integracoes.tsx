@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { dataHora, relativo } from "../lib/format";
 import {
   atualizarFonte, conectarPagina, criarFonte, filas, fontesDeLead, iniciarConexaoMeta,
-  paginasDaMeta, regerarTokenDaFonte,
+  paginasDaMeta, regerarTokenDaFonte, salvarTokenDeSistema, situacaoDoTokenDeSistema,
   type FonteDeLead, type PaginaDaMeta,
 } from "../lib/comercial";
 import { mensagemDeErro } from "../lib/supabase";
@@ -137,6 +137,7 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
       fontes: await fontesDeLead(),
       listaDeFilas: await filas(sessao.tenant.id),
       paginas: await paginasDaMeta(),
+      sistema: await situacaoDoTokenDeSistema(),
     }),
     [sessao.tenant.id]
   );
@@ -159,7 +160,7 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
   if (dados.erro) return <Alerta>{dados.erro}</Alerta>;
   if (!dados.dado) return <CardsCarregando n={3} />;
 
-  const { fontes, listaDeFilas, paginas } = dados.dado;
+  const { fontes, listaDeFilas, paginas, sistema } = dados.dado;
 
   /**
    * Manda a pessoa para o dialogo da Meta.
@@ -214,13 +215,16 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
       {!APP_META && (
         <Alerta tipo="warn">
           <b>Conectar com login do Facebook ainda nao esta ligado.</b> Falta o
-          aplicativo Meta desta instalacao: id no <code>VITE_META_APP_ID</code>,
-          segredo no worker, e a permissao <code>leads_retrieval</code> aprovada
-          pela Meta em App Review — sem a aprovacao, a Meta so autoriza contas
-          que sejam desenvolvedoras do proprio aplicativo. Ate la, a conexao
-          manual abaixo funciona e recebe lead do mesmo jeito.
+          aplicativo Meta desta instalacao: id no <code>VITE_META_APP_ID</code> e
+          segredo no worker. O login para o cliente final ainda depende de App
+          Review; o token de sistema abaixo <b>nao depende</b>.
         </Alerta>
       )}
+
+      <TokenDeSistema
+        situacao={sistema}
+        aoImportar={() => { dados.recarregar(); setEscolhendo(true); }}
+      />
 
       {/* canais disponiveis */}
       <div className="grid cols-3">
@@ -704,5 +708,114 @@ function EscolherPagina({
         </form>
       )}
     </Dialogo>
+  );
+}
+
+/* ------------------------------------------- token de usuario de sistema --- */
+
+/**
+ * Caminho da agencia: um token de usuario de sistema da Business Manager, que
+ * ja enxerga as paginas dos clientes.
+ *
+ * E o unico caminho que funciona ANTES do App Review, porque a Meta so exige
+ * revisao para usar permissao em nome de quem nao tem papel no aplicativo -- e
+ * um usuario de sistema da mesma BM do app pode ter papel nele.
+ *
+ * O token e digitado aqui e vai direto para o banco pela RPC. Ele nunca volta:
+ * a tela so sabe que existe e de quando e.
+ */
+function TokenDeSistema({
+  situacao, aoImportar,
+}: {
+  situacao: { tem: boolean; atualizado_em?: string };
+  aoImportar: () => void;
+}) {
+  const avisar = useToast();
+  const [aberto, setAberto] = useState(false);
+  const [token, setToken] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+
+  async function importar() {
+    setOcupado(true);
+    try {
+      const state = await salvarTokenDeSistema(token.trim());
+      const r = await fetch(`${BASE}/v1/meta/paginas?n=${encodeURIComponent(state)}`, {
+        method: "POST",
+      });
+      const corpo = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error((corpo as { erro?: string }).erro ?? "Falha ao listar paginas.");
+      setToken("");
+      setAberto(false);
+      avisar("ok", `${(corpo as { paginas?: number }).paginas ?? 0} pagina(s) importada(s).`);
+      aoImportar();
+    } catch (e) {
+      avisar("err", mensagemDeErro(e));
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  return (
+    <Card>
+      <div className="card-head">
+        <h2>Conectar pela Business Manager</h2>
+        {situacao.tem
+          ? <span className="badge won"><span className="dot" />token salvo</span>
+          : <span className="badge">sem token</span>}
+        <span className="spacer" />
+        {situacao.atualizado_em && (
+          <span className="hint some-no-mobile">
+            atualizado em {dataHora(situacao.atualizado_em)}
+          </span>
+        )}
+        <button className="btn ghost sm" onClick={() => setAberto(!aberto)}>
+          {aberto ? "Fechar" : situacao.tem ? "Trocar token" : "Usar token de sistema"}
+        </button>
+      </div>
+
+      {aberto && (
+        <div className="card-body col" style={{ gap: 14 }}>
+          <div style={{ color: "var(--muted)", fontSize: 13.5 }}>
+            Se as paginas dos clientes ja estao na sua Business Manager, este e o
+            caminho mais curto: um token so, e todas as paginas aparecem para
+            escolher. <b>Nao depende de App Review.</b>
+          </div>
+
+          <div className="col" style={{ gap: 11 }}>
+            <Passo n={1} titulo="Na Business Manager, crie um usuario de sistema (Administrador)." />
+            <Passo n={2} titulo="Atribua a ele a PAGINA de cada cliente, nao so a conta de anuncios.">
+              <span className="hint">
+                E o erro mais comum: com so a conta de anuncios o token lista zero
+                paginas.
+              </span>
+            </Passo>
+            <Passo n={3} titulo="Gere o token escolhendo o seu aplicativo e marque leads_retrieval, pages_show_list, pages_read_engagement, pages_manage_metadata e ads_management." />
+            <Passo n={4} titulo="Se o cliente restringiu o acesso a leads, peca para liberar sua BM no Gerenciador de Acesso a Leads da pagina dele." />
+          </div>
+
+          <div className="field">
+            <label className="label" htmlFor="tk-sistema">Token de usuario de sistema</label>
+            <input
+              id="tk-sistema" className="input" type="password" value={token}
+              onChange={(e) => setToken(e.target.value)} placeholder="EAAG..."
+              style={{ fontFamily: "ui-monospace, monospace" }}
+            />
+            <span className="hint">
+              Vai direto para o servidor e nunca volta para esta tela. Token de
+              usuario de sistema nao expira.
+            </span>
+          </div>
+
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn primary" disabled={ocupado || !token.trim()} onClick={importar}>
+              {ocupado ? "Importando..." : "Salvar e importar paginas"}
+            </button>
+            <button className="btn ghost" onClick={() => { setToken(""); setAberto(false); }}>
+              Cancelar
+            </button>
+          </div>
+        </div>
+      )}
+    </Card>
   );
 }

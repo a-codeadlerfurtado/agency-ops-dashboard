@@ -1,5 +1,7 @@
 import { ingerir, json, tokenDoRequest, webhookDoApp } from "./rotas/ingest";
-import { assinarPagina, callbackOAuth, verificarWebhookDoApp, type EnvMeta } from "./rotas/meta-oauth";
+import {
+  assinarPagina, callbackOAuth, listarPaginas, verificarWebhookDoApp, type EnvMeta,
+} from "./rotas/meta-oauth";
 import { rpc, sha256Hex, type Env } from "./lib/db";
 
 export { WorkflowSla } from "./sla-workflow";
@@ -50,6 +52,11 @@ export default {
       if (partes[0] === "v1" && partes[1] === "meta") {
         // retorno do dialogo de login
         if (partes[2] === "oauth") return callbackOAuth(url, env);
+
+        // lista as paginas usando o token de sistema da BM
+        if (partes[2] === "paginas" && req.method === "POST") {
+          return listarPaginas(url, env);
+        }
 
         // inscricao da pagina no webhook, autorizada por nonce de uso unico
         if (partes[2] === "assinar" && req.method === "POST") {
