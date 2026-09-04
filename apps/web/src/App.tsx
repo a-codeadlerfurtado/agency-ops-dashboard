@@ -19,6 +19,7 @@ import Visitas from "./pages/Visitas";
 import Propostas from "./pages/Propostas";
 import Vendas from "./pages/Vendas";
 import Distribuicao from "./pages/Distribuicao";
+import Integracoes from "./pages/Integracoes";
 import Topbar from "./Topbar";
 
 /* Router por hash: sem dependencia, sem servidor de rotas, funciona em
@@ -59,6 +60,7 @@ const NAV_PORTFOLIO: ItemNav[] = [
 const NAV_GESTAO: ItemNav[] = [
   { rota: "/corretores",   rotulo: "Corretores",   icone: () => Ico.users(),  soAdmin: true },
   { rota: "/distribuicao", rotulo: "Distribuicao", icone: () => Ico.arrow(),  soAdmin: true },
+  { rota: "/integracoes",  rotulo: "Integracoes",  icone: () => Ico.gear(),   soAdmin: true },
   { rota: "/ranking",      rotulo: "Ranking",      icone: () => Ico.trophy(), soAdmin: true },
 ];
 
@@ -148,6 +150,10 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
       case "/distribuicao":
         titulo = "Distribuicao";
         pagina = sessao.isAdmin ? <Distribuicao sessao={sessao} /> : <SemPermissao />;
+        break;
+      case "/integracoes":
+        titulo = "Integracoes";
+        pagina = sessao.isAdmin ? <Integracoes sessao={sessao} /> : <SemPermissao />;
         break;
       case "/corretores":
         titulo = "Corretores";

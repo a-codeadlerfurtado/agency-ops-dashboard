@@ -1,5 +1,5 @@
-import { ingerir, json } from "./rotas/ingest";
-import { rpc, type Env } from "./lib/db";
+import { ingerir, json, tokenDoRequest } from "./rotas/ingest";
+import { rpc, sha256Hex, type Env } from "./lib/db";
 
 export { WorkflowSla } from "./sla-workflow";
 
@@ -34,8 +34,10 @@ export default {
 
         // Rate limit por credencial, nao por IP: a Meta chama de muitos IPs, e
         // limitar por IP puniria o cliente certo e deixaria passar o errado.
+        // Le pela mesma funcao da ingestao: a Meta manda o token na URL, e
+        // olhar so o header jogaria todas as imobiliarias no balde "anon".
         if (env.LIMITE_INGEST) {
-          const chave = (req.headers.get("authorization") ?? req.headers.get("x-imobi-token") ?? "anon").slice(-32);
+          const chave = (tokenDoRequest(req) ?? "anon").slice(-32);
           const { success } = await env.LIMITE_INGEST.limit({ key: chave });
           if (!success) return json({ erro: "Muitas requisicoes." }, 429);
         }
@@ -64,14 +66,46 @@ export default {
   },
 } satisfies ExportedHandler<EnvComLimite>;
 
-function verificarWebhookMeta(url: URL, env: EnvComLimite): Response {
+/**
+ * Handshake de verificacao da Meta.
+ *
+ * A pessoa cola a URL de callback (que ja carrega ?k=<token>) e, no campo
+ * "Token de verificacao", o MESMO token. Um valor so para copiar, em vez de
+ * dois segredos diferentes -- era o pedido de "facil".
+ *
+ * Os dois lados sao checados: o token tem que bater com o da URL e tem que
+ * existir como fonte ativa no banco. Sem a segunda checagem a Meta diria
+ * "conectado" para um token que ja foi regerado aqui, e o ADMIN so descobriria
+ * quando o lead nao chegasse.
+ */
+async function verificarWebhookMeta(url: URL, env: EnvComLimite): Promise<Response> {
   const modo = url.searchParams.get("hub.mode");
-  const token = url.searchParams.get("hub.verify_token");
+  const informado = url.searchParams.get("hub.verify_token");
   const desafio = url.searchParams.get("hub.challenge");
+  const daUrl = url.searchParams.get("k");
 
-  if (modo === "subscribe" && env.META_VERIFY_TOKEN && token === env.META_VERIFY_TOKEN) {
+  if (modo !== "subscribe" || !informado) {
+    return json({ erro: "Verificacao recusada." }, 403);
+  }
+
+  // caminho por fonte: o token da URL e o do campo precisam ser o mesmo
+  if (daUrl && informado === daUrl) {
+    try {
+      const ativa = await rpc<boolean>(env, "fonte_ativa", {
+        p_token_sha256: await sha256Hex(daUrl),
+      });
+      if (ativa) return new Response(desafio ?? "", { status: 200 });
+      return json({ erro: "Conexao nao encontrada ou desativada no Imobi-Board." }, 403);
+    } catch {
+      return json({ erro: "Nao foi possivel validar a conexao agora." }, 503);
+    }
+  }
+
+  // compatibilidade: instalacao antiga com um verify token global no worker
+  if (env.META_VERIFY_TOKEN && informado === env.META_VERIFY_TOKEN) {
     return new Response(desafio ?? "", { status: 200 });
   }
+
   return json({ erro: "Verificacao recusada." }, 403);
 }
 

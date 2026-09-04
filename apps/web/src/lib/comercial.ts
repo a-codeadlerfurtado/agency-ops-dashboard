@@ -342,3 +342,66 @@ function achatarContato(linha: unknown): unknown {
   const l = linha as { opportunity?: { contact?: unknown } | null };
   return { ...(l as object), contact: l.opportunity?.contact ?? null };
 }
+
+/* ============================================== integracoes (spec 51/53) === */
+
+export interface FonteDeLead {
+  id: string;
+  integration: "META_ADS" | "SITE" | "WEBHOOK";
+  label: string;
+  queue_id: string | null;
+  queue_nome: string | null;
+  active: boolean;
+  last_used_at: string | null;
+  created_at: string;
+  last_error: string | null;
+  last_error_at: string | null;
+  page_id: string | null;
+  tem_token_da_pagina: boolean;
+  leads: number;
+}
+
+export async function fontesDeLead(): Promise<FonteDeLead[]> {
+  const { data, error } = await supabase.rpc("fontes_de_lead");
+  if (error) throw error;
+  return (data ?? []) as FonteDeLead[];
+}
+
+/** Devolve o token EM CLARO uma unica vez. Depois so o hash existe. */
+export async function criarFonte(
+  integration: "META_ADS" | "SITE" | "WEBHOOK",
+  label: string,
+  queueId: string | null
+) {
+  const { data, error } = await supabase.rpc("criar_fonte", {
+    p_integration: integration,
+    p_label: label,
+    p_queue_id: queueId,
+  });
+  if (error) throw error;
+  return data as { id: string; token: string };
+}
+
+export async function regerarTokenDaFonte(id: string) {
+  const { data, error } = await supabase.rpc("regerar_token_da_fonte", { p_id: id });
+  if (error) throw error;
+  return data as { token: string };
+}
+
+export async function atualizarFonte(id: string, campos: {
+  label?: string;
+  queueId?: string | null;
+  ativa?: boolean;
+  tokenDaPagina?: string;
+  pageId?: string;
+}) {
+  const { error } = await supabase.rpc("atualizar_fonte", {
+    p_id: id,
+    p_label: campos.label ?? null,
+    p_queue_id: campos.queueId ?? null,
+    p_active: campos.ativa ?? null,
+    p_page_access_token: campos.tokenDaPagina ?? null,
+    p_page_id: campos.pageId ?? null,
+  });
+  if (error) throw error;
+}

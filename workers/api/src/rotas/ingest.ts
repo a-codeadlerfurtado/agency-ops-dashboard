@@ -1,4 +1,5 @@
 import { rpc, sha256Hex, ErroDeBanco, type Env } from "../lib/db";
+import { anotarErro, avisosDeLead, buscarLead, tokenDaPagina } from "./meta";
 import type { ParametrosSla } from "../sla-workflow";
 
 export interface LeadNormalizado {
@@ -125,15 +126,76 @@ export async function ingerir(
     return json({ erro: "Corpo da requisicao nao e JSON valido." }, 400);
   }
 
+  const tokenSha = await sha256Hex(token);
+
+  // Envelope real da Meta: e um aviso, nao um lead. Precisa buscar na Graph.
+  const avisos = avisosDeLead(corpo);
+  if (avisos) {
+    return ingerirAvisosDaMeta(avisos, env, tokenSha, integracao);
+  }
+
   const lead = adaptador(corpo);
   if (!lead.telefone && !lead.email) {
     return json({ erro: "Lead sem telefone e sem e-mail: nao da para atender." }, 422);
   }
 
+  const salvo = await salvarLead(env, tokenSha, lead, integracao);
+  if ("erro" in salvo) return json({ erro: salvo.erro }, salvo.status);
+  const r = salvo.r;
+
+  return json(
+    { ok: true, duplicado: r.duplicado, opportunity_id: r.opportunity_id },
+    r.duplicado ? 200 : 201
+  );
+}
+
+/**
+ * Onde a credencial pode vir.
+ *
+ * Header e o caminho certo e e o que integracao propria deve usar. A query
+ * "?k=" existe porque a Meta nao manda header nenhum no webhook: la a URL de
+ * callback E a credencial. Por isso ela fica por ultimo -- quem puder mandar
+ * header, manda header.
+ */
+export function tokenDoRequest(req: Request): string | null {
+  const auth = req.headers.get("authorization");
+  if (auth?.toLowerCase().startsWith("bearer ")) return auth.slice(7).trim();
+  const header = req.headers.get("x-imobi-token");
+  if (header) return header;
+  const k = new URL(req.url).searchParams.get("k");
+  return k && k.trim() !== "" ? k.trim() : null;
+}
+
+function limpar(o: Record<string, string | undefined>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(o).filter(([, v]) => v != null && v !== "")
+  ) as Record<string, string>;
+}
+
+export function json(corpo: unknown, status = 200): Response {
+  return new Response(JSON.stringify(corpo), {
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+  });
+}
+
+/* ============================================ nucleo reutilizavel ===
+   O mesmo caminho serve para o webhook generico e para cada lead que a Meta
+   devolve num aviso. Extrair isto e o que permite processar um lote sem
+   duplicar a criacao do Workflow de SLA. */
+
+type Salvo = { r: RespostaIngestao } | { erro: string; status: number };
+
+async function salvarLead(
+  env: Env,
+  tokenSha: string,
+  lead: LeadNormalizado,
+  integracao: string
+): Promise<Salvo> {
   let r: RespostaIngestao;
   try {
     r = await rpc<RespostaIngestao>(env, "ingerir_lead", {
-      p_token_sha256: await sha256Hex(token),
+      p_token_sha256: tokenSha,
       p_full_name: lead.nome,
       p_phone: lead.telefone ?? null,
       p_email: lead.email ?? null,
@@ -142,13 +204,13 @@ export async function ingerir(
     });
   } catch (e) {
     if (e instanceof ErroDeBanco && e.codigo === "42501") {
-      return json({ erro: "Credencial de ingestao invalida." }, 401);
+      return { erro: "Credencial de ingestao invalida.", status: 401 };
     }
     console.error(JSON.stringify({
       evento: "ingest.falhou", integracao,
       erro: e instanceof Error ? e.message : String(e),
     }));
-    return json({ erro: "Nao foi possivel registrar o lead." }, 502);
+    return { erro: "Nao foi possivel registrar o lead.", status: 502 };
   }
 
   // Lead distribuido: abre o Workflow que vai cobrar o aceite. O id da
@@ -164,7 +226,7 @@ export async function ingerir(
   if (!r.duplicado && r.assignment_id && segundos > 0) {
     try {
       await env.SLA.create({
-        id: `assignment-${r.assignment_id}`,
+        id: "assignment-" + r.assignment_id,
         params: {
           assignmentId: r.assignment_id,
           segundos,
@@ -190,27 +252,53 @@ export async function ingerir(
     contato_novo: r.contato_novo,
   }));
 
-  return json(
-    { ok: true, duplicado: r.duplicado, opportunity_id: r.opportunity_id },
-    r.duplicado ? 200 : 201
-  );
+  return { r };
 }
 
-function tokenDoRequest(req: Request): string | null {
-  const auth = req.headers.get("authorization");
-  if (auth?.toLowerCase().startsWith("bearer ")) return auth.slice(7).trim();
-  return req.headers.get("x-imobi-token");
-}
+/**
+ * Lote de avisos da Meta.
+ *
+ * Sempre responde 200, mesmo quando nao consegue montar nenhum lead. A Meta
+ * reenvia o webhook em cima de qualquer status de erro e desativa a inscricao
+ * depois de reenviar muito; devolver 500 aqui transformaria uma falha de
+ * configuracao (token de pagina faltando) em integracao desligada. O que
+ * aconteceu fica no last_error da fonte, que a tela mostra.
+ */
+async function ingerirAvisosDaMeta(
+  avisos: { leadgen_id?: string }[],
+  env: Env,
+  tokenSha: string,
+  integracao: string
+): Promise<Response> {
+  const pagina = await tokenDaPagina(env, tokenSha).catch(() => null);
+  if (!pagina) {
+    await anotarErro(env, tokenSha,
+      "Chegou aviso de lead da Meta, mas falta o token de pagina para ler os dados.");
+    console.warn(JSON.stringify({ evento: "meta.sem_token_de_pagina", avisos: avisos.length }));
+    return json({ ok: true, ignorados: avisos.length, motivo: "sem token de pagina" });
+  }
 
-function limpar(o: Record<string, string | undefined>): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(o).filter(([, v]) => v != null && v !== "")
-  ) as Record<string, string>;
-}
+  let criados = 0, duplicados = 0, falhas = 0;
+  for (const aviso of avisos) {
+    try {
+      const bruto = await buscarLead(aviso, pagina);
+      if (!bruto) { falhas++; continue; }
+      const lead = adaptadorMeta(bruto);
+      if (!lead.telefone && !lead.email) { falhas++; continue; }
 
-export function json(corpo: unknown, status = 200): Response {
-  return new Response(JSON.stringify(corpo), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8" },
-  });
+      const salvo = await salvarLead(env, tokenSha, lead, integracao);
+      if ("erro" in salvo) { falhas++; continue; }
+      if (salvo.r.duplicado) duplicados++; else criados++;
+    } catch (e) {
+      falhas++;
+      await anotarErro(env, tokenSha, e instanceof Error ? e.message : String(e));
+      console.error(JSON.stringify({
+        evento: "meta.aviso_falhou",
+        leadgen_id: aviso.leadgen_id,
+        erro: e instanceof Error ? e.message : String(e),
+      }));
+    }
+  }
+
+  return json({ ok: true, criados, duplicados, falhas });
 }
