@@ -1261,6 +1261,113 @@ table.tbl th { background: #061626; }
   filter: drop-shadow(0 8px 26px #00000059);
 }
 
+/* ==================================================== gradientes ====
+   Bloco unico e final de propriedade. Vem depois de tudo de proposito: assim
+   ganha por ordem, sem precisar de !important nem de especificidade inflada,
+   e some inteiro se for apagado.
+
+   Nada aqui muda layout, tamanho, cor de texto ou estrutura. So entram
+   background-image, que se deposita sobre a cor ja definida em cada regra.
+   Um badge "won" continua verde; ele so ganha volume. */
+
+/* ---- superficies grandes ---- */
+
+/* A sidebar era chapada de cima a baixo. Agora escurece na descida e recebe
+   o azul da marca no topo, onde fica a logo: da fundo para o simbolo sem
+   colocar nenhuma caixa em volta dele. */
+.sidebar {
+  background-image:
+    radial-gradient(110% 32% at 22% 0%, #0359a62e, transparent 68%),
+    linear-gradient(180deg, #08192c 0%, #051220 42%, #030d18 100%);
+}
+
+/* O header ganha o mesmo azul, na mesma direcao, para ler como continuacao
+   da sidebar e nao como uma segunda barra. */
+.topbar {
+  background-image:
+    linear-gradient(90deg, #0359a61f, transparent 46%),
+    var(--luz-topo);
+}
+
+/* ---- cards e paineis ---- */
+
+/* O card ja tinha luz, mas em 2% de branco: existia no codigo e nao na tela.
+   Agora tem 5% no canto alto e uma sombra propria embaixo, que e o que separa
+   um card do outro quando eles ficam lado a lado. */
+.card,
+.kcard,
+.mdl-caixa {
+  background-image: var(--luz-card);
+}
+
+/* Cabecalho de card com um fio de luz: separa titulo de conteudo sem precisar
+   de mais uma borda. */
+.card-head {
+  background-image: var(--luz-topo);
+}
+
+/* A faixa de numeros e uma peca larga e baixa; o brilho azul na ponta
+   esquerda dá a ela o mesmo eixo de luz do resto. */
+.faixa {
+  background-image: var(--brilho-azul), var(--luz-card);
+}
+
+/* Metrica: alem do brilho circular que ja existia no canto, ganha o gradiente
+   diagonal. O card do heroi recebe azul; o de acento, laranja. E o gradiente
+   que faz o numero grande parecer apoiado em alguma coisa. */
+.stat.metric        { background-image: var(--brilho-azul), var(--luz-card); }
+.stat.metric.acento { background-image: var(--brilho-laranja), var(--luz-card); }
+.stat.stat-hero     { background-image: var(--brilho-azul), var(--luz-card); }
+
+/* Coluna do Kanban: leve, so para o fundo da coluna nao competir com o card
+   que esta dentro dela. */
+.kcol      { background-image: var(--luz-suave); }
+.kcol-head { background-image: var(--luz-topo); }
+
+/* ---- pecas pequenas ---- */
+
+/* Badge, avatar e icone de vazio: overlay neutro, entao cada variante mantem
+   a propria cor. E o truque que deixa aplicar gradiente em tudo sem ter que
+   escrever uma regra por variante. */
+.badge,
+.avatar,
+.empty-icon,
+.ctrl {
+  background-image: var(--luz-suave);
+}
+
+/* Cabecalho de tabela: escurece para o topo, o oposto dos cards. A inversao e
+   proposital -- th e uma regua, nao uma superficie, e recuar ajuda a linha de
+   dados a vir para frente. */
+table.tbl th {
+  background-image: linear-gradient(180deg, #00000026, #ffffff05);
+}
+
+/* Campo de formulario afunda em vez de subir: sombra no topo, luz embaixo.
+   E o oposto do card de proposito -- input e buraco, card e placa. */
+.input, .select, .textarea {
+  background-image: var(--luz-campo);
+}
+
+/* Botao comum ganha volume; o primario ja tinha gradiente proprio e nao e
+   tocado aqui, para nao empilhar dois. */
+.btn:not(.primary):not(.ghost) {
+  background-image: var(--luz-suave);
+}
+
+/* ---- fundo da aplicacao ----
+   Os dois radiais que ja existiam ficam; entra um terceiro, embaixo e a
+   direita, para a tela nao morrer em preto chapado no rodape das listas
+   longas. */
+body {
+  /* background-color continua sendo var(--bg): trocar so background-image
+     preserva a cor de base definida la em cima. */
+  background-image:
+    radial-gradient(circle at 12% -10%, #0359a657, transparent 30rem),
+    radial-gradient(circle at 92% 2%,   #f26b2117, transparent 26rem),
+    radial-gradient(90% 55% at 78% 100%, #0359a61a, transparent 62%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;

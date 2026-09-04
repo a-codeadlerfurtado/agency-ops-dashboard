@@ -59,9 +59,25 @@
   --shadow:       0 18px 50px #0000006b;
   --shadow-hover: 0 22px 65px #0000004d;
 
-  /* Detalhe que faltava: cards têm um gradiente de luz de cima-esquerda.
-     Sem ele a superfície fica chapada, que foi a crítica exata recebida. */
-  --luz-card: linear-gradient(145deg, #ffffff05, #0000 55%);
+  /* ---- luz e gradientes ----
+     Regra da casa: gradiente entra como background-IMAGE por cima da cor que
+     ja existe, nunca no lugar dela. E o que permite dar profundidade ao badge
+     sem que o "won" deixe de ser verde e o "lost" de ser vermelho, e o que
+     torna tudo isto revertivel apagando um bloco.
+
+     Amplitude baixa de proposito: 6% a 10% de branco. Acima disso a interface
+     escura comeca a parecer plastico, e o texto perde contraste no topo do
+     gradiente, que e justamente onde ele fica mais claro. */
+  --luz-card:   linear-gradient(157deg, #ffffff0d 0%, #ffffff03 42%, #00000017 100%);
+  --luz-suave:  linear-gradient(160deg, #ffffff08, #0000 62%);
+  --luz-topo:   linear-gradient(180deg, #ffffff0a, #0000 72%);
+  --luz-campo:  linear-gradient(180deg, #00000024, #ffffff05 62%);
+
+  /* brilhos de marca: azul entra pela esquerda-alta, laranja pela direita-alta.
+     A direcao e fixa em toda a interface para o olho ler como uma fonte de luz
+     so, e nao como enfeite espalhado. */
+  --brilho-azul:    radial-gradient(125% 150% at 0% 0%, #3e92dc1c, transparent 58%);
+  --brilho-laranja: radial-gradient(125% 150% at 100% 0%, #f26b2114, transparent 55%);
 
   /* ---- geometria ---- */
   --r-sm: 10px;   /* botões e inputs no Agency Ops são 10px */
