@@ -31,6 +31,24 @@
 const APRESENTACAO =
   "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/briefing-hub-presentation";
 
+/**
+ * O Hub não declara favicon — nem aqui, nem no portal real. A aba fica com o
+ * ícone genérico do navegador, o que numa apresentação aparece o tempo todo,
+ * ao lado das outras abas abertas.
+ *
+ * Como esta rota já serve o HTML, dá para injetar o `<link>`. Corrige a
+ * demonstração, não o portal: lá a mesma linha precisa entrar no `<head>` do
+ * fonte do Hub, e está documentada em docs/briefing-hub-marca-na-sidebar.md.
+ */
+const FAVICON =
+  '<link rel="icon" href="/brand/briefing-hub-favicon.svg" type="image/svg+xml">';
+
+function comFavicon(html: string) {
+  if (/<link[^>]*rel=["'][^"']*icon/i.test(html)) return html;   // já tem, não duplica
+  if (/<head[^>]*>/i.test(html)) return html.replace(/<head[^>]*>/i, (m) => m + FAVICON);
+  return html.replace(/<html[^>]*>/i, (m) => m + FAVICON);
+}
+
 const CABECALHOS = {
   "content-type": "text/html; charset=utf-8",
   "cache-control": "no-store, max-age=0",
@@ -73,5 +91,5 @@ export async function GET(request: Request): Promise<Response> {
     return indisponivel("A apresentação não devolveu uma página HTML.");
   }
 
-  return new Response(html, { status: 200, headers: CABECALHOS });
+  return new Response(comFavicon(html), { status: 200, headers: CABECALHOS });
 }
