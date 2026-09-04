@@ -33,6 +33,7 @@ export function mapAsaasPaymentToCharge(
   return {
     asaas_payment_id,
     client_id: clientId,
+    asaas_customer_id: text(payment.customer),
     asaas_subscription_id,
     kind: classifyChargeKind({ subscriptionId: asaas_subscription_id, description }),
     value,

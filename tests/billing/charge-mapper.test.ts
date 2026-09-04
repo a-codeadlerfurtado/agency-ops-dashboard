@@ -40,6 +40,17 @@ describe("mapAsaasPaymentToCharge", () => {
     expect(mapAsaasPaymentToCharge(PAGAMENTO, null).client_id).toBeNull();
   });
 
+  it("preserva o customer do Asaas mesmo sem client_id, para a cobranca nao ficar orfa", () => {
+    const row = mapAsaasPaymentToCharge(PAGAMENTO, null);
+    expect(row.asaas_customer_id).toBe("cus_1");
+    expect(row.client_id).toBeNull();
+  });
+
+  it("customer ausente vira null, nao string vazia", () => {
+    expect(mapAsaasPaymentToCharge({ ...PAGAMENTO, customer: undefined }, "c1").asaas_customer_id).toBeNull();
+    expect(mapAsaasPaymentToCharge({ ...PAGAMENTO, customer: "" }, "c1").asaas_customer_id).toBeNull();
+  });
+
   it("normaliza ausencia para null em vez de string vazia", () => {
     const row = mapAsaasPaymentToCharge(
       { id: "pay_9", dueDate: "2026-09-10", status: "PENDING", value: 100, subscription: "", description: "" },

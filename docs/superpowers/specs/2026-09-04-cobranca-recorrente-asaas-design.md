@@ -234,6 +234,19 @@ Cortes (configuráveis, com estes defaults aprovados):
 
 Pausa não aparece nesta lista: é `operational_status = 'PAUSED'`, eixo próprio.
 
+**A derivação precisa de dois gatilhos, não de um.** O gatilho por evento (§5.1)
+não basta, e essa é a correção mais importante feita a este desenho: o Asaas emite
+`PAYMENT_OVERDUE` **uma única vez, em D+1**. Se a derivação só rodar quando chega
+evento, nada acontece em D+5 — a linha de controle segue dizendo `OVERDUE` enquanto
+o cliente está 5, 20 ou 40 dias atrasado, até que um evento não relacionado apareça.
+A tela de inadimplentes ficaria **vazia enquanto há gente devendo**, e a falha parece
+boa notícia.
+
+Portanto: além do recálculo disparado por evento, um **`pg_cron` diário** reexecuta a
+derivação para todo cliente com cobrança em aberto. Os dois gatilhos chamam a mesma
+função pura; o tempo é apenas a segunda razão para chamá-la. Sem o gatilho diário,
+nenhum valor de `payment_status` é confiável.
+
 `DELINQUENT` espelha para `client_operational_status` chamando a
 `set_client_financial_legal_status` existente, com `p_actor = 'SISTEMA'`. Assim
 a tela atual, o histórico `since`/`resolved_at` e as notificações continuam

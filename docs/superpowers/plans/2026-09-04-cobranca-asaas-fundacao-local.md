@@ -1452,14 +1452,43 @@ git commit -m "feat: casca HTTP do webhook do Asaas sobre os modulos testados"
 O que fica pronto e o que continua dependendo dele. Nada aqui é executado por este plano.
 
 1. **Criar os três secrets** no Supabase: `ASAAS_API_KEY`, `ASAAS_WEBHOOK_TOKEN`, `ASAAS_ENV=sandbox`.
-2. **Aplicar a migration** `20260904120000_billing_asaas_foundation.sql`. É a primeira execução real de SQL do projeto — vale rodar em transação e conferir as quatro tabelas antes de confirmar.
-3. **Conferir a lista canônica de eventos e status do Asaas** contra a documentação oficial, comparando com os conjuntos `PAGO` e `ENCERRADO` em `payment-status.ts`. É a única parte do código escrita de memória sobre uma API de terceiro; um status faltando no conjunto `PAGO` marca cliente pago como inadimplente.
-4. **Fazer deploy** da função e cadastrar a URL do webhook no painel do Asaas, em **sandbox**.
-5. Só então rodar o ciclo simulado da Fase 0: criar → vencer → pagar.
+2. **Aplicar a migration** `20260904120000_billing_asaas_foundation.sql`, **dentro de uma transação explícita**. Antes do `COMMIT`, afirmar que o novo CHECK aceita `'DELINQUENT'` — o `drop constraint if exists` é silencioso quando erra o nome, e a migration "teria sucesso" deixando a constraint estreita no lugar, rejeitando todo insert de inadimplente. O nome foi conferido em produção (`client_finance_controls_payment_status_check`, única CHECK naquela coluna), mas a asserção antes do commit é o que transforma isso em garantia.
+3. **Conferir a lista canônica de eventos e status do Asaas** contra a documentação oficial, comparando com **os dois conjuntos**, `PAGO` **e** `ENCERRADO`, em `payment-status.ts`. É a única parte do código escrita de memória sobre uma API de terceiro. Um status faltando no `PAGO` marca cliente pago como inadimplente; um faltando no `ENCERRADO` faz o mesmo, porque tudo que não está nos dois conjuntos é tratado como cobrança em aberto.
+4. **Conferir a RLS da `client_finance_controls`.** Esta migration protege as quatro tabelas novas, mas a inadimplência derivada aterrissa numa tabela **pré-existente** cujo estado de RLS ela não checa nem altera. Sem isso, a promessa do §8 do spec — "a chave anon nunca alcança dado financeiro" — vale para o espelho e é falsa para a conclusão.
+5. **Fazer deploy** da função e cadastrar a URL do webhook no painel do Asaas, em **sandbox**.
+6. Só então rodar o ciclo simulado da Fase 0: criar → vencer → pagar.
+
+### Bloqueante para a Fase 1, deliberadamente não resolvido nesta branch
+
+**A derivação precisa de um gatilho por tempo, e ainda não tem um.** O Asaas emite
+`PAYMENT_OVERDUE` **uma única vez**, em D+1. A `derivePaymentStatus` recebe `today`
+como parâmetro e só roda quando chega evento — então nada dispara em D+5, e a linha de
+controle continua dizendo `OVERDUE` enquanto o cliente está 5, 20 ou 40 dias atrasado,
+até que algum evento não relacionado daquele cliente apareça (na prática, o
+`PAYMENT_CREATED` do mês seguinte).
+
+Consequência: a tela "Inadimplentes" do §7 do spec — o pedido original — apareceria
+**vazia enquanto há gente devendo**. A falha é silenciosa e parece boa notícia.
+
+Não foi corrigido aqui porque a correção exige invocação agendada de edge function, e
+reimplementar a derivação em SQL contradiz a arquitetura inteira: a regra vive em um
+lugar só, com testes. A Fase 1 precisa incluir um `pg_cron` diário (convenção
+`agency_ops_*`) que reexecute a derivação para todo cliente com cobrança em aberto.
+**Nenhum valor de `payment_status` é confiável antes disso.**
+
+### Também para a Fase 1
+
+**Drenar `billing_webhook_events`.** O índice parcial `billing_webhook_events_pendentes_idx`
+existe para um consumidor que ainda não foi escrito. Enquanto ele não existir, um evento
+que falhou no processamento fica parado indefinidamente — e a decisão da Task 4, de
+recusar payload malformado em vez de fabricar R$ 0, apoia-se justamente em alguém
+esvaziar essa fila.
 
 ## Verificação final
 
-- [ ] `npm test` — 45 testes passando
-- [ ] `npm run typecheck` — sem erro
+- [ ] `npm test` — suíte verde (o total cresceu além dos 45 previstos: as revisões
+      acrescentaram testes discriminadores, de limite e de composição)
+- [ ] `npm run typecheck` — **nenhum erro novo** além do pré-existente
+      `app/briefing-staff-bridge.tsx(62,10)`, que pertence a outra frente de trabalho
 - [ ] `git log --oneline origin/main..HEAD` — todos os commits locais, nenhum publicado
 - [ ] Nenhuma tabela criada, alterada ou populada em `bfzdetibfcwihfkltbkp`

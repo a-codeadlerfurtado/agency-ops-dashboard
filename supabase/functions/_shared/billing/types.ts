@@ -56,6 +56,8 @@ export interface AsaasPayment {
 export interface BillingChargeRow {
   asaas_payment_id: string;
   client_id: string | null;
+  /** Elo independente de client_id: sobrevive ao elo ainda nao confirmado. */
+  asaas_customer_id: string | null;
   asaas_subscription_id: string | null;
   kind: ChargeKind;
   value: number;

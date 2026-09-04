@@ -41,6 +41,10 @@ create index if not exists billing_subscriptions_client_idx
 create table if not exists agency_ops.billing_charges (
   asaas_payment_id      text primary key,
   client_id             uuid references agency_ops.clients(id) on delete set null,
+  -- Elo direto com o customer do Asaas. client_id nasce nulo enquanto a Fase 2
+  -- nao confirma o elo, e volta a nulo se o cliente for apagado; sem esta
+  -- coluna a cobranca ficaria orfa, so alcancavel por raw->>'customer'.
+  asaas_customer_id     text,
   asaas_subscription_id text,
   kind                  text not null check (kind in ('MENSALIDADE','IMPLANTACAO','EXTRA')),
   value                 numeric(12,2) not null,
@@ -49,6 +53,10 @@ create table if not exists agency_ops.billing_charges (
   status                text not null,
   billing_type          text,
   payment_date          date,
+  -- Capacidade futura da visao "tempo medio entre vencimento e pagamento"
+  -- (spec 6). O mapper nao escreve aqui: payment_date date continua sendo o
+  -- campo gravado pelo webhook.
+  paid_at               timestamptz,
   invoice_url           text,
   bank_slip_url         text,
   description           text,
@@ -63,6 +71,8 @@ create index if not exists billing_charges_status_due_idx
   on agency_ops.billing_charges (status, due_date);
 create index if not exists billing_charges_subscription_idx
   on agency_ops.billing_charges (asaas_subscription_id);
+create index if not exists billing_charges_asaas_customer_idx
+  on agency_ops.billing_charges (asaas_customer_id);
 
 -- 4. Idempotencia do webhook. A unicidade de asaas_event_id e o que impede
 --    que reprocessar a fila conte um pagamento duas vezes.
