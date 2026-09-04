@@ -46,16 +46,34 @@ Deno.serve(async (req: Request) => {
   const ops = db.schema("agency_ops");
 
   // Grava o bruto primeiro. Conflito no asaas_event_id significa evento ja
-  // recebido: e sucesso, nao erro — o Asaas nao deve reenviar.
+  // recebido; se ele ja foi processado, e sucesso e nao erro — mas se ficou
+  // pendente, o reenvio precisa reprocessar (ver o tratamento do 23505).
   const { data: stored, error: storeError } = await ops
     .from("billing_webhook_events")
     .insert({ asaas_event_id: eventId, event, payment_id: payment?.id ?? null, payload: body })
     .select("id")
     .maybeSingle();
 
+  // Id da linha do evento: a recem-inserida, ou a ja existente quando o evento
+  // reentra pela unicidade de asaas_event_id.
+  let eventRowId: number | null = stored?.id ?? null;
+
   if (storeError) {
-    if (storeError.code === "23505") return json({ ok: true, duplicate: true });
-    return json({ error: "store_failed" }, 500);
+    if (storeError.code !== "23505") return json({ error: "store_failed" }, 500);
+
+    // Duplicata nao e necessariamente evento ja resolvido. Quem falhou no
+    // processamento respondeu 200 com deferred, entao o Asaas nunca reenvia
+    // sozinho; o reenvio manual pelo painel precisa reprocessar em vez de ser
+    // descartado. Um PAYMENT_RECEIVED descartado deixa quem pagou marcado
+    // inadimplente para sempre.
+    const { data: existing, error: existingError } = await ops
+      .from("billing_webhook_events")
+      .select("id,processed_at")
+      .eq("asaas_event_id", eventId)
+      .maybeSingle();
+    if (existingError || !existing) return json({ error: "store_failed" }, 500);
+    if (existing.processed_at) return json({ ok: true, duplicate: true });
+    eventRowId = existing.id;
   }
 
   try {
@@ -90,23 +108,40 @@ Deno.serve(async (req: Request) => {
           today: todayInSaoPaulo(),
         });
 
-        const { error: controlError } = await ops.from("client_finance_controls").upsert(
-          {
-            client_id: row.client_id,
-            payment_status: derived.payment_status,
-            overdue_since: derived.overdue_since,
-            next_due_date: derived.next_due_date,
-            last_payment_at: derived.last_payment_at,
-            updated_by: "SISTEMA",
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "client_id" },
-        );
+        // monthly_value e espelho do termo comercial vigente (spec 4) e e a
+        // coluna que a tela de financeiro soma no tile de MRR. Sem espelhar,
+        // a tela passaria a mostrar "N clientes, MRR R$ 0".
+        const { data: terms, error: termsError } = await ops
+          .from("client_commercial_terms")
+          .select("monthly_value")
+          .eq("client_id", row.client_id)
+          .maybeSingle();
+        if (termsError) throw new Error(termsError.message);
+
+        const control: Record<string, unknown> = {
+          client_id: row.client_id,
+          payment_status: derived.payment_status,
+          overdue_since: derived.overdue_since,
+          next_due_date: derived.next_due_date,
+          last_payment_at: derived.last_payment_at,
+          updated_by: "SISTEMA",
+          updated_at: new Date().toISOString(),
+        };
+        // Sem termo comercial o campo e OMITIDO: o upsert do PostgREST so
+        // atualiza as colunas presentes no objeto, entao omitir preserva o
+        // valor ja gravado em vez de sobrescrever com null ou 0.
+        if (terms?.monthly_value !== null && terms?.monthly_value !== undefined) {
+          control.monthly_value = terms.monthly_value;
+        }
+
+        const { error: controlError } = await ops
+          .from("client_finance_controls")
+          .upsert(control, { onConflict: "client_id" });
         if (controlError) throw new Error(controlError.message);
       }
     }
 
-    await ops.from("billing_webhook_events").update({ processed_at: new Date().toISOString() }).eq("id", stored?.id);
+    await ops.from("billing_webhook_events").update({ processed_at: new Date().toISOString() }).eq("id", eventRowId);
     return json({ ok: true });
   } catch (caught) {
     // O evento ja esta persistido: registra a falha e responde 200 para o Asaas
@@ -114,7 +149,7 @@ Deno.serve(async (req: Request) => {
     await ops
       .from("billing_webhook_events")
       .update({ error: caught instanceof Error ? caught.message : "unknown" })
-      .eq("id", stored?.id);
+      .eq("id", eventRowId);
     return json({ ok: true, deferred: true });
   }
 });
