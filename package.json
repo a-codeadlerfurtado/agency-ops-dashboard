@@ -7,7 +7,8 @@
     "dev": "vinext dev",
     "build": "vinext build && node -e \"const f=require('fs');f.mkdirSync('dist/.openai',{recursive:true});f.copyFileSync('.openai/hosting.json','dist/.openai/hosting.json')\"",
     "start": "vinext start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
@@ -24,6 +25,7 @@
     "@vitejs/plugin-react": "6.0.5",
     "@vitejs/plugin-rsc": "0.5.34",
     "typescript": "5.8.2",
-    "vite": "8.2.1"
+    "vite": "8.2.1",
+    "vitest": "^5.0.0"
   }
 }
