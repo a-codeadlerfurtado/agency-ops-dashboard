@@ -1,9 +1,10 @@
-import { ingerir, json, tokenDoRequest } from "./rotas/ingest";
+import { ingerir, json, tokenDoRequest, webhookDoApp } from "./rotas/ingest";
+import { assinarPagina, callbackOAuth, verificarWebhookDoApp, type EnvMeta } from "./rotas/meta-oauth";
 import { rpc, sha256Hex, type Env } from "./lib/db";
 
 export { WorkflowSla } from "./sla-workflow";
 
-interface EnvComLimite extends Env {
+interface EnvComLimite extends EnvMeta {
   /** Rate limiting nativo da Cloudflare: sem Redis, sem KV, sem custo extra. */
   LIMITE_INGEST?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   META_VERIFY_TOKEN?: string;
@@ -43,6 +44,24 @@ export default {
         }
 
         return ingerir(req, env, integracao);
+      }
+
+      // ------------------------------------------- conexao com a Meta
+      if (partes[0] === "v1" && partes[1] === "meta") {
+        // retorno do dialogo de login
+        if (partes[2] === "oauth") return callbackOAuth(url, env);
+
+        // inscricao da pagina no webhook, autorizada por nonce de uso unico
+        if (partes[2] === "assinar" && req.method === "POST") {
+          return assinarPagina(url, env);
+        }
+
+        // webhook do app: uma URL para todas as imobiliarias
+        if (partes[2] === "webhook") {
+          if (req.method === "GET") return verificarWebhookDoApp(url, env);
+          if (req.method === "POST") return webhookDoApp(req, env);
+          return json({ erro: "Metodo nao permitido." }, 405);
+        }
       }
 
       // ------------------- GET /internal/agency/tenants/:id/performance

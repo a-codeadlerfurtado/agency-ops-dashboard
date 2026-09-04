@@ -1,5 +1,6 @@
 import { rpc, sha256Hex, ErroDeBanco, type Env } from "../lib/db";
 import { anotarErro, avisosDeLead, buscarLead, tokenDaPagina } from "./meta";
+import { fonteDaPagina } from "./meta-oauth";
 import type { ParametrosSla } from "../sla-workflow";
 
 export interface LeadNormalizado {
@@ -301,4 +302,75 @@ async function ingerirAvisosDaMeta(
   }
 
   return json({ ok: true, criados, duplicados, falhas });
+}
+
+/**
+ * Webhook do app da Meta (uma URL para todas as imobiliarias).
+ *
+ * Diferenca para o caminho com ?k=: aqui nao existe credencial na URL. Quem
+ * diz de quem e o lead e o page_id que vem dentro do proprio evento -- por
+ * isso uma pagina so pode estar ligada a uma conexao (indice unico na 0027).
+ *
+ * Aviso de pagina que ninguem conectou e ignorado em silencio com 200: a
+ * inscricao pode ter sobrado de uma conexao removida, e responder erro faria
+ * a Meta reenviar para sempre.
+ */
+export async function webhookDoApp(req: Request, env: Env): Promise<Response> {
+  let corpo: unknown;
+  try {
+    corpo = await req.json();
+  } catch {
+    return json({ erro: "Corpo invalido." }, 400);
+  }
+
+  const c = corpo as { object?: string; entry?: { id?: string; changes?: unknown[] }[] };
+  if (c?.object !== "page" || !Array.isArray(c.entry)) {
+    return json({ ok: true, ignorado: "evento sem paginas" });
+  }
+
+  let criados = 0, duplicados = 0, falhas = 0, semDestino = 0;
+
+  for (const entrada of c.entry) {
+    const avisos = (entrada.changes ?? [])
+      .filter((ch): ch is { field: string; value: { leadgen_id?: string; page_id?: string } } => {
+        const x = ch as { field?: string; value?: { leadgen_id?: string } };
+        return x?.field === "leadgen" && Boolean(x.value?.leadgen_id);
+      })
+      .map((ch) => ch.value);
+    if (avisos.length === 0) continue;
+
+    const pageId = avisos[0]?.page_id ?? entrada.id;
+    if (!pageId) { semDestino += avisos.length; continue; }
+
+    const fonte = await fonteDaPagina(env, pageId);
+    if (!fonte?.token_sha256) { semDestino += avisos.length; continue; }
+    if (!fonte.page_access_token) {
+      await anotarErro(env, fonte.token_sha256,
+        "Chegou lead da Meta, mas a conexao esta sem token de pagina.");
+      falhas += avisos.length;
+      continue;
+    }
+
+    for (const aviso of avisos) {
+      try {
+        const bruto = await buscarLead(aviso, fonte.page_access_token);
+        if (!bruto) { falhas++; continue; }
+        const lead = adaptadorMeta(bruto);
+        if (!lead.telefone && !lead.email) { falhas++; continue; }
+
+        const salvo = await salvarLead(env, fonte.token_sha256, lead, "meta");
+        if ("erro" in salvo) { falhas++; continue; }
+        if (salvo.r.duplicado) duplicados++; else criados++;
+      } catch (e) {
+        falhas++;
+        await anotarErro(env, fonte.token_sha256, e instanceof Error ? e.message : String(e));
+      }
+    }
+  }
+
+  console.log(JSON.stringify({
+    evento: "meta.webhook_app", criados, duplicados, falhas, semDestino,
+  }));
+  // 200 sempre: erro faz a Meta reenviar e acabar desligando a inscricao
+  return json({ ok: true, criados, duplicados, falhas, semDestino });
 }

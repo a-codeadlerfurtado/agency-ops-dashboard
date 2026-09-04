@@ -405,3 +405,42 @@ export async function atualizarFonte(id: string, campos: {
   });
   if (error) throw error;
 }
+
+/* ------------------------------------ conexao com a Meta por login (0027) --- */
+
+export interface PaginaDaMeta {
+  page_id: string;
+  page_name: string;
+  conectada: boolean;
+}
+
+/** Passo 1: pede um state de uso unico antes de mandar a pessoa para a Meta. */
+export async function iniciarConexaoMeta(): Promise<string> {
+  const { data, error } = await supabase.rpc("iniciar_conexao_meta", {
+    p_finalidade: "CONECTAR",
+    p_ref_id: null,
+  });
+  if (error) throw error;
+  return data as string;
+}
+
+/** Passo 4: paginas que a Meta devolveu. Nunca traz token. */
+export async function paginasDaMeta(): Promise<PaginaDaMeta[]> {
+  const { data, error } = await supabase.rpc("paginas_da_meta");
+  if (error) throw error;
+  return (data ?? []) as PaginaDaMeta[];
+}
+
+/**
+ * Passo 5: promove a pagina a fonte de lead e devolve o nonce que autoriza o
+ * worker a inscrever a pagina no webhook.
+ */
+export async function conectarPagina(pageId: string, label: string, queueId: string | null) {
+  const { data, error } = await supabase.rpc("conectar_pagina", {
+    p_page_id: pageId,
+    p_label: label || null,
+    p_queue_id: queueId,
+  });
+  if (error) throw error;
+  return data as { id: string; nonce: string; page_name: string };
+}

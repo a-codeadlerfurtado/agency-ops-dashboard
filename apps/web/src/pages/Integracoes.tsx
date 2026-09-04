@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { dataHora, relativo } from "../lib/format";
 import {
-  atualizarFonte, criarFonte, filas, fontesDeLead, regerarTokenDaFonte,
-  type FonteDeLead,
+  atualizarFonte, conectarPagina, criarFonte, filas, fontesDeLead, iniciarConexaoMeta,
+  paginasDaMeta, regerarTokenDaFonte,
+  type FonteDeLead, type PaginaDaMeta,
 } from "../lib/comercial";
 import { mensagemDeErro } from "../lib/supabase";
 import Dialogo from "../Dialogo";
@@ -12,6 +13,12 @@ import {
 import type { Sessao } from "../lib/types";
 
 const BASE = (import.meta.env.VITE_INGEST_URL ?? "").replace(/\/+$/, "");
+const APP_META = import.meta.env.VITE_META_APP_ID ?? "";
+
+/* Permissoes minimas: listar as paginas, inscrever a pagina no webhook e ler
+   o conteudo do formulario. `leads_retrieval` e a que exige App Review -- sem
+   ela aprovada a Meta so autoriza contas de desenvolvedor do proprio app. */
+const ESCOPO = "pages_show_list,pages_manage_metadata,leads_retrieval";
 
 const CANAIS = {
   META_ADS: {
@@ -106,24 +113,76 @@ function situacao(f: FonteDeLead) {
 
 /* ------------------------------------------------------------ tela --- */
 
+/** Le e limpa o ?meta=ok|erro|vazio com que o worker devolve o navegador. */
+function retornoDaMeta(): { estado: string; motivo?: string } | null {
+  const bruto = location.hash.split("?")[1];
+  if (!bruto) return null;
+  const q = new URLSearchParams(bruto);
+  const estado = q.get("meta");
+  if (!estado) return null;
+  const motivo = q.get("motivo") ?? undefined;
+  history.replaceState(null, "", location.pathname + "#/integracoes");
+  return { estado, motivo };
+}
+
 export default function Integracoes({ sessao }: { sessao: Sessao }) {
   const avisar = useToast();
   const [novo, setNovo] = useState<Canal | null>(null);
   const [aberta, setAberta] = useState<string | null>(null);
   const [tokenNovo, setTokenNovo] = useState<{ id: string; token: string } | null>(null);
+  const [escolhendo, setEscolhendo] = useState(false);
 
   const dados = useAsync(
     async () => ({
       fontes: await fontesDeLead(),
       listaDeFilas: await filas(sessao.tenant.id),
+      paginas: await paginasDaMeta(),
     }),
     [sessao.tenant.id]
   );
 
+  // volta do dialogo da Meta: avisa e ja abre a escolha de pagina
+  useEffect(() => {
+    const r = retornoDaMeta();
+    if (!r) return;
+    if (r.estado === "ok") {
+      avisar("ok", "Conta do Facebook conectada. Escolha a pagina.");
+      setEscolhendo(true);
+    } else if (r.estado === "vazio") {
+      avisar("err", r.motivo ?? "Nenhuma pagina encontrada nessa conta.");
+    } else {
+      avisar("err", r.motivo ?? "Nao foi possivel conectar com a Meta.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   if (dados.erro) return <Alerta>{dados.erro}</Alerta>;
   if (!dados.dado) return <CardsCarregando n={3} />;
 
-  const { fontes, listaDeFilas } = dados.dado;
+  const { fontes, listaDeFilas, paginas } = dados.dado;
+
+  /**
+   * Manda a pessoa para o dialogo da Meta.
+   *
+   * O `state` sai do banco e vale uma vez: e ele que amarra o retorno da Meta
+   * a esta imobiliaria. Sem isso qualquer um que descobrisse a URL de callback
+   * poderia pendurar as proprias paginas em outro tenant.
+   */
+  async function entrarComFacebook() {
+    try {
+      const state = await iniciarConexaoMeta();
+      const redirect = `${BASE}/v1/meta/oauth`;
+      location.href =
+        "https://www.facebook.com/v21.0/dialog/oauth" +
+        `?client_id=${encodeURIComponent(APP_META)}` +
+        `&redirect_uri=${encodeURIComponent(redirect)}` +
+        `&state=${encodeURIComponent(state)}` +
+        `&scope=${encodeURIComponent(ESCOPO)}` +
+        "&response_type=code";
+    } catch (e) {
+      avisar("err", mensagemDeErro(e));
+    }
+  }
 
   async function conectar(canal: Canal, nome: string, queueId: string | null) {
     try {
@@ -152,6 +211,17 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
         </Alerta>
       )}
 
+      {!APP_META && (
+        <Alerta tipo="warn">
+          <b>Conectar com login do Facebook ainda nao esta ligado.</b> Falta o
+          aplicativo Meta desta instalacao: id no <code>VITE_META_APP_ID</code>,
+          segredo no worker, e a permissao <code>leads_retrieval</code> aprovada
+          pela Meta em App Review — sem a aprovacao, a Meta so autoriza contas
+          que sejam desenvolvedoras do proprio aplicativo. Ate la, a conexao
+          manual abaixo funciona e recebe lead do mesmo jeito.
+        </Alerta>
+      )}
+
       {/* canais disponiveis */}
       <div className="grid cols-3">
         {(Object.keys(CANAIS) as Canal[]).map((c) => {
@@ -169,16 +239,38 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
                     <div style={{ fontWeight: 600 }}>{CANAIS[c].nome}</div>
                     <div style={{ fontSize: 11.5, color: "var(--text-subtle)" }}>
                       {ativas === 0 ? "nao conectado"
-                        : ativas + " conexao" + (ativas === 1 ? "" : "es")}
+                        : ativas === 1 ? "1 conexao"
+                        : ativas + " conexoes"}
                     </div>
                   </div>
                 </div>
                 <p style={{ color: "var(--muted)", fontSize: 13, margin: "0 0 12px" }}>
                   {CANAIS[c].resumo}
                 </p>
-                <button className="btn sm primary" onClick={() => setNovo(c)}>
-                  {Ico.plus({ size: 14 })} Conectar
-                </button>
+                {c === "META_ADS" ? (
+                  <div className="row" style={{ gap: 7, flexWrap: "wrap" }}>
+                    <button
+                      className="btn sm primary" disabled={!APP_META || !BASE}
+                      onClick={entrarComFacebook}
+                      title={!APP_META ? "Falta o id do aplicativo Meta nesta instalacao." : undefined}
+                      style={!APP_META ? undefined : { background: "#1877f2", borderColor: "#1877f2" }}
+                    >
+                      Conectar conta do Facebook
+                    </button>
+                    {paginas.length > 0 && (
+                      <button className="btn sm ghost" onClick={() => setEscolhendo(true)}>
+                        Escolher pagina
+                      </button>
+                    )}
+                    <button className="btn sm ghost" onClick={() => setNovo(c)}>
+                      Manual
+                    </button>
+                  </div>
+                ) : (
+                  <button className="btn sm primary" onClick={() => setNovo(c)}>
+                    {Ico.plus({ size: 14 })} Conectar
+                  </button>
+                )}
               </div>
             </Card>
           );
@@ -208,6 +300,29 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
           />
         ))
       )}
+
+      <EscolherPagina
+        aberto={escolhendo}
+        paginas={paginas}
+        filas={listaDeFilas}
+        aoFechar={() => setEscolhendo(false)}
+        aoConectar={async (pageId, nome, queueId) => {
+          const r = await conectarPagina(pageId, nome, queueId);
+          // o worker inscreve a pagina no webhook usando o nonce de uso unico
+          const resp = await fetch(`${BASE}/v1/meta/assinar?n=${encodeURIComponent(r.nonce)}`, {
+            method: "POST",
+          });
+          const corpo = await resp.json().catch(() => ({}));
+          setEscolhendo(false);
+          dados.recarregar();
+          if (!resp.ok) {
+            avisar("err", (corpo as { erro?: string }).erro ??
+              "Pagina salva, mas a inscricao no webhook falhou.");
+          } else {
+            avisar("ok", `${r.page_name} conectada. Lead novo ja cai aqui.`);
+          }
+        }}
+      />
 
       <FormularioDeConexao
         canal={novo}
@@ -472,6 +587,119 @@ function FormularioDeConexao({
               {salvando ? "Criando..." : "Criar conexao"}
             </button>
             <button className="btn ghost" type="button" onClick={fechar}>Cancelar</button>
+          </div>
+        </form>
+      )}
+    </Dialogo>
+  );
+}
+
+/* ------------------------------------------------- escolher pagina --- */
+
+/**
+ * Lista as paginas que a Meta devolveu depois do login.
+ *
+ * Nao ha token nenhum nesta tela: `paginas_da_meta()` devolve so id e nome. O
+ * token de pagina ficou no servidor desde o retorno do OAuth, e e de la que
+ * `conectar_pagina` o copia para a conexao.
+ */
+function EscolherPagina({
+  aberto, paginas, filas: listaDeFilas, aoFechar, aoConectar,
+}: {
+  aberto: boolean;
+  paginas: PaginaDaMeta[];
+  filas: { id: string; name: string }[];
+  aoFechar: () => void;
+  aoConectar: (pageId: string, nome: string, queueId: string | null) => Promise<void>;
+}) {
+  const avisar = useToast();
+  const [pageId, setPageId] = useState("");
+  const [nome, setNome] = useState("");
+  const [queueId, setQueueId] = useState("");
+  const [salvando, setSalvando] = useState(false);
+
+  const escolhida = paginas.find((p) => p.page_id === pageId);
+
+  return (
+    <Dialogo
+      aberto={aberto}
+      titulo="Escolher a pagina do Facebook"
+      aoFechar={aoFechar}
+      largura={560}
+    >
+      {paginas.length === 0 ? (
+        <div style={{ color: "var(--muted)", fontSize: 13.5 }}>
+          Nenhuma pagina foi trazida ainda. Clique em "Conectar conta do Facebook"
+          e autorize o acesso.
+        </div>
+      ) : (
+        <form
+          className="col" style={{ gap: 13 }}
+          onSubmit={async (e) => {
+            e.preventDefault();
+            setSalvando(true);
+            try {
+              await aoConectar(pageId, nome.trim() || escolhida?.page_name || "", queueId || null);
+              setPageId(""); setNome(""); setQueueId("");
+            } catch (err) {
+              avisar("err", mensagemDeErro(err));
+            } finally {
+              setSalvando(false);
+            }
+          }}
+        >
+          <div className="field">
+            <label className="label">Pagina</label>
+            <div className="col" style={{ gap: 6 }}>
+              {paginas.map((p) => (
+                <label
+                  key={p.page_id}
+                  className="row"
+                  style={{
+                    gap: 10, padding: "9px 11px", cursor: "pointer",
+                    borderRadius: "var(--r-sm)",
+                    border: "1px solid " + (pageId === p.page_id ? "var(--blue)" : "var(--line-soft)"),
+                    background: pageId === p.page_id ? "var(--blue-soft)" : "transparent",
+                  }}
+                >
+                  <input
+                    type="radio" name="pagina" value={p.page_id}
+                    checked={pageId === p.page_id}
+                    onChange={() => { setPageId(p.page_id); setNome(p.page_name); }}
+                  />
+                  <span style={{ fontWeight: 550, flex: 1 }}>{p.page_name}</span>
+                  {p.conectada && <span className="badge won">ja conectada</span>}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="field">
+            <label className="label" htmlFor="pg-nome">Nome da conexao</label>
+            <input
+              id="pg-nome" className="input" value={nome}
+              onChange={(e) => setNome(e.target.value)}
+              placeholder={escolhida?.page_name ?? "Nome que aparece na origem do lead"}
+            />
+          </div>
+
+          <div className="field">
+            <label className="label" htmlFor="pg-fila">Fila que recebe</label>
+            <select id="pg-fila" className="select" value={queueId}
+                    onChange={(e) => setQueueId(e.target.value)}>
+              <option value="">Sem fila (lead fica sem dono)</option>
+              {listaDeFilas.map((q) => <option key={q.id} value={q.id}>{q.name}</option>)}
+            </select>
+            <span className="hint">
+              Com fila o lead ja entra com corretor e prazo. Sem fila ele fica parado.
+            </span>
+          </div>
+
+          <div className="row" style={{ gap: 8 }}>
+            <button className="btn primary" type="submit" disabled={salvando || !pageId}>
+              {salvando ? "Conectando..." : "Conectar pagina"}
+            </button>
+            <button className="btn ghost" type="button" onClick={aoFechar}>Cancelar</button>
           </div>
         </form>
       )}
