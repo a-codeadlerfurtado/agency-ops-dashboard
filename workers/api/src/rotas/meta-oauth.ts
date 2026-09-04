@@ -1,5 +1,6 @@
 import { rpc, type Env } from "../lib/db";
 import { json } from "./ingest";
+import { checarPagina, LINK_ACESSO_A_LEADS } from "./meta-diagnostico";
 
 /**
  * Conexao com a Meta por login, no lugar de copiar token na mao.
@@ -291,7 +292,26 @@ export async function assinarPagina(url: URL, env: EnvMeta): Promise<Response> {
     }
 
     await rpc(env, "marcar_assinada", { p_id: fonte.id, p_erro: null });
-    return json({ ok: true });
+
+    // Assinar so garante que o aviso vai chegar. Ler o lead e outra
+    // permissao, e e a que costuma faltar -- entao conferimos agora, e nao
+    // na primeira captacao real.
+    const checagem = await checarPagina(fonte.page_id, fonte.page_access_token);
+    if (!checagem.ok) {
+      await rpc(env, "registrar_diagnostico", {
+        p_id: fonte.id,
+        p_erro: checagem.acao ?? "Conexao incompleta.",
+      }).catch(() => {});
+      return json({
+        ok: true,
+        assinada: true,
+        aviso: checagem.acao,
+        link: LINK_ACESSO_A_LEADS,
+        passos: checagem.passos,
+      });
+    }
+
+    return json({ ok: true, assinada: true, passos: checagem.passos });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     await rpc(env, "marcar_assinada", { p_id: fonte.id, p_erro: msg }).catch(() => {});

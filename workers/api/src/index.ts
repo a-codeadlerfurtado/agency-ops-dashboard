@@ -72,8 +72,10 @@ async function rotear(req: Request, env: EnvComLimite): Promise<Response> {
           return listarPaginas(url, env);
         }
 
-        // inscricao da pagina no webhook, autorizada por nonce de uso unico
-        if (partes[2] === "assinar" && req.method === "POST") {
+        // inscricao da pagina no webhook, autorizada por nonce de uso unico.
+        // "testar" e a mesma coisa: reassina e confere o acesso a leads, entao
+        // testar tambem conserta uma inscricao que tenha caido.
+        if ((partes[2] === "assinar" || partes[2] === "testar") && req.method === "POST") {
           return assinarPagina(url, env);
         }
 

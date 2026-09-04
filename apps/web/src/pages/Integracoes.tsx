@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { dataHora, relativo } from "../lib/format";
 import {
   atualizarFonte, conectarPagina, criarFonte, filas, fontesDeLead, iniciarConexaoMeta,
-  paginasDaMeta, regerarTokenDaFonte, salvarTokenDeSistema, situacaoDoTokenDeSistema,
+  paginasDaMeta, prepararTeste, regerarTokenDaFonte, salvarTokenDeSistema,
+  situacaoDoTokenDeSistema,
   type FonteDeLead, type PaginaDaMeta,
 } from "../lib/comercial";
 import { mensagemDeErro } from "../lib/supabase";
@@ -316,14 +317,20 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
           const resp = await fetch(`${BASE}/v1/meta/assinar?n=${encodeURIComponent(r.nonce)}`, {
             method: "POST",
           });
-          const corpo = await resp.json().catch(() => ({}));
+          const corpo = await resp.json().catch(() => ({})) as {
+            erro?: string; aviso?: string; link?: string;
+          };
           setEscolhendo(false);
           dados.recarregar();
           if (!resp.ok) {
-            avisar("err", (corpo as { erro?: string }).erro ??
-              "Pagina salva, mas a inscricao no webhook falhou.");
+            avisar("err", corpo.erro ?? "Pagina salva, mas a inscricao no webhook falhou.");
+          } else if (corpo.aviso) {
+            // assinou, mas a leitura do lead ainda nao esta liberada. O aviso
+            // fica gravado na conexao, entao a tela continua mostrando depois
+            // que o toast some.
+            avisar("err", corpo.aviso);
           } else {
-            avisar("ok", `${r.page_name} conectada. Lead novo ja cai aqui.`);
+            avisar("ok", `${r.page_name} conectada e testada. Lead novo ja cai aqui.`);
           }
         }}
       />
@@ -480,6 +487,30 @@ function Conexao({
           </div>
 
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+            {/* Testar percorre o mesmo caminho de um lead real: acessa a
+                pagina, lista os formularios e tenta LER um lead. E o terceiro
+                passo que exige o acesso a leads liberado, e e o que a
+                Ferramenta de Teste da Meta nao prova. */}
+            {fonte.integration === "META_ADS" && fonte.page_id && (
+              <button
+                className="btn sm" disabled={salvando}
+                onClick={() => mexer(async () => {
+                  const nonce = await prepararTeste(fonte.id);
+                  const r = await fetch(
+                    `${BASE}/v1/meta/testar?n=${encodeURIComponent(nonce)}`,
+                    { method: "POST" }
+                  );
+                  const c = await r.json().catch(() => ({})) as {
+                    erro?: string; aviso?: string;
+                  };
+                  if (!r.ok) throw new Error(c.erro ?? "Falha ao testar.");
+                  if (c.aviso) throw new Error(c.aviso);
+                  avisar("ok", "Conexao pronta: leitura de lead autorizada.");
+                })}
+              >
+                Testar conexao
+              </button>
+            )}
             <button
               className="btn ghost sm" disabled={salvando}
               onClick={() => mexer(async () => {

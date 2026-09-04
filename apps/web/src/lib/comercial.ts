@@ -492,3 +492,10 @@ export async function criarImobiliaria(nome: string, emailAdmin: string) {
     tenant_id: string; nome: string; slug: string; email: string; token: string;
   };
 }
+
+/** Autorização de uso único para o worker checar/reassinar uma conexão. */
+export async function prepararTeste(sourceId: string): Promise<string> {
+  const { data, error } = await supabase.rpc("preparar_teste", { p_source_id: sourceId });
+  if (error) throw error;
+  return data as string;
+}
