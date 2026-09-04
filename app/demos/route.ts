@@ -26,7 +26,7 @@ const DEMOS = [
       "oferta e estratégia. Nada é gravado — os dados são fabricados na hora, então " +
       "dá para clicar em tudo sem medo.",
     href: "/briefing-hub-demo",
-    icone: "/briefing-hub-mark.svg",
+    icone: "/brand/briefing-hub-icon.svg",
   },
   {
     nome: "Imobi-Board",
@@ -36,7 +36,7 @@ const DEMOS = [
       "escolhe o perfil: administrador vê a operação inteira, corretor vê só os " +
       "próprios leads — e uma imobiliária não enxerga a outra.",
     href: "https://imobi-board-app.lakassessoriadigital.workers.dev/#/demo",
-    icone: "/imobi-board-mark.svg",
+    icone: "/brand/imobi-board-icon.svg",
   },
 ];
 
