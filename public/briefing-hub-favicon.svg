@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Briefing Hub">
+  <title>Briefing Hub</title>
+  <!--
+    Variante reduzida, para a aba do navegador.
+
+    A marca completa tem tres respostas e seis nos. Em 16px isso vira borrao.
+    Aqui ficam duas respostas e so o eixo do grafo: no azul, anel, no laranja.
+    As tres saidas de baixo somem porque, nesse tamanho, viravam sujeira na
+    base sem acrescentar leitura.
+
+    Tentei antes uma silhueta cheia em degrade. Era mais legivel e dizia outra
+    coisa: documento com um alvo, sem o grafo que da nome ao produto. Contorno
+    com traco mais grosso mantem a identidade e ainda le.
+  -->
+  <defs>
+    <linearGradient id="bhf" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2E90FA"/>
+      <stop offset="1" stop-color="#F97316"/>
+    </linearGradient>
+  </defs>
+
+  <!-- documento -->
+  <path d="M9 2.5h9.5L24 8v11.5A2.5 2.5 0 0 1 21.5 22h-10A2.5 2.5 0 0 1 9 19.5V5A2.5 2.5 0 0 1 11.5 2.5Z"
+        fill="none" stroke="#7E8798" stroke-width="2.4" stroke-linejoin="round"/>
+  <path d="M18.5 2.5v3.2A2.4 2.4 0 0 0 20.9 8H24" fill="none" stroke="#7E8798"
+        stroke-width="2.4" stroke-linejoin="round"/>
+
+  <!-- duas respostas -->
+  <path d="M12.5 9.5h8" stroke="#2E90FA" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M12.5 14.5h8" stroke="#F97316" stroke-width="2.6" stroke-linecap="round"/>
+
+  <!-- eixo do grafo, atravessando a base -->
+  <path d="M3.5 23h6" stroke="#2E90FA" stroke-width="2.6" stroke-linecap="round"/>
+  <path d="M22.5 23h6" stroke="#F97316" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="3" cy="23" r="2.6" fill="#2E90FA"/>
+  <circle cx="29" cy="23" r="2.6" fill="#F97316"/>
+  <circle cx="16" cy="23" r="6" fill="#0B0F16"/>
+  <circle cx="16" cy="23" r="4.4" fill="none" stroke="url(#bhf)" stroke-width="2.6"/>
+</svg>

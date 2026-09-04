@@ -19,6 +19,7 @@ const DEMOS = [
       "oferta e estratégia. Nada é gravado — os dados são fabricados na hora, então " +
       "dá para clicar em tudo sem medo.",
     href: "/briefing-hub-demo",
+    icone: "/briefing-hub-mark.svg",
     marca: "BH",
   },
   {
@@ -29,6 +30,7 @@ const DEMOS = [
       "escolhe o perfil: administrador vê a operação inteira, corretor vê só os " +
       "próprios leads — e uma imobiliária não enxerga a outra.",
     href: "https://imobi-board-app.lakassessoriadigital.workers.dev/#/demo",
+    icone: null,
     marca: "IB",
   },
 ];
@@ -36,7 +38,9 @@ const DEMOS = [
 function pagina() {
   const cartoes = DEMOS.map((d) => `
     <a class="cartao" href="${d.href}"${d.href.startsWith("http") ? ' target="_blank" rel="noopener"' : ""}>
-      <span class="marca">${d.marca}</span>
+      <span class="marca${d.icone ? " marca-img" : ""}">${
+        d.icone ? `<img src="${d.icone}" alt="" width="30" height="30">` : d.marca
+      }</span>
       <span class="corpo">
         <strong>${d.nome}</strong>
         <small>${d.para}</small>
@@ -51,6 +55,7 @@ function pagina() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="/briefing-hub-favicon.svg" type="image/svg+xml">
 <title>Demonstrações · LAK</title>
 <style>
   :root{color-scheme:dark;--bg:#0b0f16;--panel:#121824;--line:#1f2937;--text:#e5e7eb;--muted:#94a3b8;--accent:#f97316}
@@ -67,6 +72,8 @@ function pagina() {
   .cartao:hover{border-color:var(--accent);transform:translateY(-1px)}
   .marca{flex:none;width:44px;height:44px;border-radius:12px;display:grid;place-items:center;
          background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;font-weight:700;font-size:14px}
+  /* quando ha marca propria, o quadrado laranja daria dois logotipos brigando */
+  .marca-img{background:#0f1622;border:1px solid var(--line)}
   .corpo{display:block}
   .corpo strong{font-size:16px;display:block}
   .corpo small{color:var(--muted);font-size:12px;display:block;margin-top:2px}
