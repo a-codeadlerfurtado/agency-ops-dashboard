@@ -16,7 +16,9 @@ import { rpc, type Env } from "../lib/db";
  *   ] } ] }
  */
 
-const GRAPH = "https://graph.facebook.com/v21.0";
+// v26.0: mesma versao em que o webhook do app foi assinado. Manter as duas
+// pontas na mesma versao evita diferenca de formato de payload entre elas.
+const GRAPH = "https://graph.facebook.com/v26.0";
 
 const CAMPOS = [
   "id", "created_time", "form_id",

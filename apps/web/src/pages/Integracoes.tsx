@@ -733,20 +733,24 @@ function TokenDeSistema({
   const avisar = useToast();
   const [aberto, setAberto] = useState(false);
   const [token, setToken] = useState("");
+  const [pageId, setPageId] = useState("");
   const [ocupado, setOcupado] = useState(false);
 
   async function importar() {
     setOcupado(true);
     try {
       const state = await salvarTokenDeSistema(token.trim());
-      const r = await fetch(`${BASE}/v1/meta/paginas?n=${encodeURIComponent(state)}`, {
-        method: "POST",
-      });
+      const r = await fetch(
+        `${BASE}/v1/meta/paginas?n=${encodeURIComponent(state)}` +
+        `&page_id=${encodeURIComponent(pageId.trim())}`,
+        { method: "POST" }
+      );
       const corpo = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error((corpo as { erro?: string }).erro ?? "Falha ao listar paginas.");
+      if (!r.ok) throw new Error((corpo as { erro?: string }).erro ?? "Falha ao buscar a pagina.");
       setToken("");
+      setPageId("");
       setAberto(false);
-      avisar("ok", `${(corpo as { paginas?: number }).paginas ?? 0} pagina(s) importada(s).`);
+      avisar("ok", "Pagina " + ((corpo as { nome?: string }).nome ?? "") + " importada.");
       aoImportar();
     } catch (e) {
       avisar("err", mensagemDeErro(e));
@@ -783,7 +787,7 @@ function TokenDeSistema({
 
           <div className="col" style={{ gap: 11 }}>
             <Passo n={1} titulo="Na Business Manager, crie um usuario de sistema (Administrador)." />
-            <Passo n={2} titulo="Atribua a ele a PAGINA de cada cliente, nao so a conta de anuncios.">
+            <Passo n={2} titulo="Atribua a ele a PAGINA do cliente, nao so a conta de anuncios.">
               <span className="hint">
                 E o erro mais comum: com so a conta de anuncios o token lista zero
                 paginas.
@@ -806,11 +810,30 @@ function TokenDeSistema({
             </span>
           </div>
 
+          <div className="field">
+            <label className="label" htmlFor="tk-pagina">ID da pagina</label>
+            <input
+              id="tk-pagina" className="input" value={pageId} inputMode="numeric"
+              onChange={(e) => setPageId(e.target.value)} placeholder="102938475601234"
+              style={{ fontFamily: "ui-monospace, monospace" }}
+            />
+            <span className="hint">
+              So numeros. Voce acha em Configuracoes da Pagina &gt; Sobre, no
+              campo Identificacao da Pagina. Pedimos o ID em vez de listar tudo
+              porque um token de agencia enxerga as paginas de todos os
+              clientes -- e a lista apareceria para o admin de um so.
+            </span>
+          </div>
+
           <div className="row" style={{ gap: 8 }}>
-            <button className="btn primary" disabled={ocupado || !token.trim()} onClick={importar}>
-              {ocupado ? "Importando..." : "Salvar e importar paginas"}
+            <button
+              className="btn primary"
+              disabled={ocupado || !token.trim() || !pageId.trim()}
+              onClick={importar}
+            >
+              {ocupado ? "Importando..." : "Salvar e importar pagina"}
             </button>
-            <button className="btn ghost" onClick={() => { setToken(""); setAberto(false); }}>
+            <button className="btn ghost" onClick={() => { setToken(""); setPageId(""); setAberto(false); }}>
               Cancelar
             </button>
           </div>

@@ -16,7 +16,9 @@ import { json } from "./ingest";
  *   permissao para qualquer conta que nao seja de desenvolvedor do app.
  */
 
-const GRAPH = "https://graph.facebook.com/v21.0";
+// v26.0: mesma versao em que o webhook do app foi assinado. Manter as duas
+// pontas na mesma versao evita diferenca de formato de payload entre elas.
+const GRAPH = "https://graph.facebook.com/v26.0";
 
 /**
  * Sem a chave de servico o worker nao fala com o banco, e todo erro daqui sai
@@ -177,47 +179,48 @@ export async function listarPaginas(url: URL, env: EnvMeta): Promise<Response> {
   }
   if (!token) return json({ erro: "Nenhum token de sistema salvo." }, 409);
 
-  try {
-    const paginas = new Map<string, PaginaDaMeta>();
+  // Uma pagina, informada por id -- e nao a lista do que o token enxerga.
+  //
+  // O token de uma agencia enxerga as paginas de TODOS os clientes dela.
+  // Listar isso devolveria para o admin de uma imobiliaria o nome de todas as
+  // outras. Pedir o id troca uma comodidade por nao vazar carteira alheia.
+  const pageId = (url.searchParams.get("page_id") ?? "").trim();
+  if (!pageId) {
+    return json({ erro: "Informe o ID da pagina do Facebook." }, 400);
+  }
+  if (!/^\d{5,25}$/.test(pageId)) {
+    return json({
+      erro: "ID da pagina invalido: e so numero, sem espaco nem URL. " +
+            "Voce encontra em Configuracoes da Pagina > Sobre.",
+    }, 400);
+  }
 
-    const proprias = await fetch(
-      `${GRAPH}/me/accounts?fields=id,name,access_token&limit=200` +
+  try {
+    const r = await fetch(
+      `${GRAPH}/${encodeURIComponent(pageId)}?fields=id,name,access_token` +
       `&access_token=${encodeURIComponent(token)}`
     );
-    const dp = await proprias.json() as { data?: PaginaDaMeta[]; error?: { message?: string } };
-    if (!proprias.ok) throw new Error(dp.error?.message ?? "Nao foi possivel listar as paginas.");
-    for (const p of dp.data ?? []) if (p.access_token) paginas.set(p.id, p);
+    const p = await r.json() as PaginaDaMeta & { error?: { message?: string } };
 
-    // paginas que a BM administra para clientes
-    const negocios = await fetch(
-      `${GRAPH}/me/businesses?fields=id&limit=50&access_token=${encodeURIComponent(token)}`
-    );
-    const dn = await negocios.json() as { data?: { id: string }[] };
-    for (const b of dn.data ?? []) {
-      for (const borda of ["client_pages", "owned_pages"]) {
-        const r = await fetch(
-          `${GRAPH}/${b.id}/${borda}?fields=id,name,access_token&limit=200` +
-          `&access_token=${encodeURIComponent(token)}`
-        );
-        if (!r.ok) continue;
-        const d = await r.json() as { data?: PaginaDaMeta[] };
-        for (const p of d.data ?? []) if (p.access_token) paginas.set(p.id, p);
-      }
+    if (!r.ok || !p?.id) {
+      throw new Error(p?.error?.message ?? `A Meta respondeu ${r.status} para essa pagina.`);
     }
-
-    if (paginas.size === 0) {
+    if (!p.access_token) {
+      // A pagina existe e o token a enxerga, mas nao recebeu token proprio:
+      // quase sempre e a PAGINA nao atribuida ao usuario de sistema -- so a
+      // conta de anuncios foi.
       return json({
-        erro: "O token nao enxerga nenhuma pagina. Confira se a PAGINA (nao so " +
-              "a conta de anuncios) esta atribuida ao usuario de sistema, e se o " +
-              "cliente liberou o acesso a leads.",
+        erro: "A Meta encontrou a pagina mas nao devolveu token de acesso a ela. " +
+              "Confira se a PAGINA (nao so a conta de anuncios) esta atribuida ao " +
+              "usuario de sistema, com permissao de leads.",
       }, 409);
     }
 
-    const r = await rpc<{ paginas: number }>(env, "salvar_paginas_da_meta", {
+    const salvo = await rpc<{ paginas: number }>(env, "salvar_paginas_da_meta", {
       p_state: state,
-      p_paginas: [...paginas.values()],
+      p_paginas: [{ id: p.id, name: p.name, access_token: p.access_token }],
     });
-    return json({ ok: true, paginas: r?.paginas ?? paginas.size });
+    return json({ ok: true, paginas: salvo?.paginas ?? 1, nome: p.name });
   } catch (e) {
     return json({ erro: e instanceof Error ? e.message : String(e) }, 502);
   }
@@ -248,15 +251,20 @@ export async function assinarPagina(url: URL, env: EnvMeta): Promise<Response> {
   }
 
   try {
+    // Formulario, e nao JSON: a Graph aceita JSON em algumas bordas e ignora
+    // em outras, e `subscribed_apps` e das antigas. Form-encoded e o formato
+    // que a documentacao usa e o que se comporta igual em todas as versoes.
+    const corpoDaAssinatura = new URLSearchParams({
+      subscribed_fields: "leadgen",
+      access_token: fonte.page_access_token,
+    });
+
     const r = await fetch(
       `${GRAPH}/${encodeURIComponent(fonte.page_id)}/subscribed_apps`,
       {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          subscribed_fields: "leadgen",
-          access_token: fonte.page_access_token,
-        }),
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: corpoDaAssinatura.toString(),
       }
     );
     const corpo = await r.json() as { success?: boolean; error?: { message?: string } };
