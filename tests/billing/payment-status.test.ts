@@ -75,6 +75,52 @@ describe("derivePaymentStatus", () => {
     expect(result.payment_status).toBe("CURRENT");
   });
 
+  it("o ciclo de estorno inteiro encerra a cobranca, nao gera inadimplencia", () => {
+    for (const status of ["REFUND_IN_PROGRESS", "PARTIALLY_REFUNDED"]) {
+      const result = derivePaymentStatus({
+        charges: [{ due_date: "2026-07-01", status, payment_date: "2026-07-02" }],
+        today: HOJE,
+      });
+      expect(result.payment_status, status).toBe("CURRENT");
+      expect(result.overdue_since, status).toBeNull();
+      expect(result.days_late, status).toBe(0);
+    }
+  });
+
+  it("o ciclo de chargeback e o boleto cancelado tambem encerram a cobranca", () => {
+    for (const status of ["CHARGEBACK_DISPUTE", "AWAITING_CHARGEBACK_REVERSAL", "BANK_SLIP_CANCELLED"]) {
+      const result = derivePaymentStatus({
+        charges: [{ due_date: "2026-06-01", status, payment_date: null }],
+        today: HOJE,
+      });
+      expect(result.payment_status, status).toBe("CURRENT");
+    }
+  });
+
+  it("DUNNING_RECEIVED e dinheiro recebido: quem pagou na negativacao nao e inadimplente", () => {
+    const result = derivePaymentStatus({
+      charges: [{ due_date: "2026-06-01", status: "DUNNING_RECEIVED", payment_date: "2026-07-20" }],
+      today: HOJE,
+    });
+    expect(result.payment_status).toBe("CURRENT");
+    expect(result.overdue_since).toBeNull();
+    expect(result.last_payment_at).toBe("2026-07-20");
+  });
+
+  it("dueSoonDays configuravel muda a janela de aviso de vencimento", () => {
+    const charges = [{ due_date: "2026-09-16", status: "PENDING", payment_date: null }];
+    expect(derivePaymentStatus({ charges, today: HOJE, dueSoonDays: 3 }).payment_status).toBe("CURRENT");
+    expect(derivePaymentStatus({ charges, today: HOJE, dueSoonDays: 6 }).payment_status).toBe("DUE_SOON");
+    expect(derivePaymentStatus({ charges, today: HOJE, dueSoonDays: 0 }).payment_status).toBe("CURRENT");
+    expect(
+      derivePaymentStatus({
+        charges: [{ due_date: HOJE, status: "PENDING", payment_date: null }],
+        today: HOJE,
+        dueSoonDays: 0,
+      }).payment_status,
+    ).toBe("DUE_SOON");
+  });
+
   it("usa a cobranca vencida MAIS ANTIGA para contar o atraso", () => {
     const result = derivePaymentStatus({
       charges: [

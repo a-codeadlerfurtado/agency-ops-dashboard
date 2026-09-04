@@ -3,8 +3,24 @@ import type { ChargeSnapshot, DeriveStatusInput, DerivedFinanceControl } from ".
 /** Status do Asaas que significam dinheiro recebido. */
 const PAGO = new Set(["RECEIVED", "CONFIRMED", "RECEIVED_IN_CASH", "DUNNING_RECEIVED"]);
 
-/** Status que encerram a cobranca sem divida: nao geram inadimplencia. */
-const ENCERRADO = new Set(["DELETED", "REFUNDED", "REFUND_REQUESTED", "CHARGEBACK_REQUESTED"]);
+/**
+ * Status que encerram a cobranca sem divida: nao geram inadimplencia.
+ * Os ciclos de estorno e de chargeback entram inteiros — fechar
+ * REFUND_REQUESTED mas nao REFUND_IN_PROGRESS marcaria como inadimplente quem
+ * ja pagou, e inadimplencia aqui significa pausar entrega de quem esta quite.
+ * Esta lista e conferida contra a documentacao do Asaas no deploy.
+ */
+const ENCERRADO = new Set([
+  "DELETED",
+  "REFUNDED",
+  "REFUND_REQUESTED",
+  "REFUND_IN_PROGRESS",
+  "PARTIALLY_REFUNDED",
+  "CHARGEBACK_REQUESTED",
+  "CHARGEBACK_DISPUTE",
+  "AWAITING_CHARGEBACK_REVERSAL",
+  "BANK_SLIP_CANCELLED",
+]);
 
 const DIA_MS = 86_400_000;
 
