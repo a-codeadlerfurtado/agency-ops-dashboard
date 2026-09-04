@@ -232,8 +232,12 @@ Deno.serve(async (req) => {
     const userId = limpo(body.user_id, 80);
     if (!tenant || !userId) return json(req, { ok: false, error: "tenant_e_usuario_obrigatorios" }, 400);
 
-    const cliente = await clienteDoTenant(db, tenant);
-    if (!cliente) return json(req, { ok: false, error: "imobiliaria_sem_cliente" }, 409);
+    const lig = await clienteDoTenant(db, tenant);
+    if (!lig.ok) {
+      return json(req, { ok: false, error: "falha_ao_ler_imobiliaria", detalhe: lig.erro }, 500);
+    }
+    if (!lig.id) return json(req, { ok: false, error: "imobiliaria_sem_cliente" }, 409);
+    const cliente = lig.id;
 
     const reauth = await reautenticar(db, ator, cliente, body.dashboard_password);
     if (!reauth.ok) return json(req, { ok: false, error: reauth.error }, reauth.status);
@@ -296,7 +300,11 @@ Deno.serve(async (req) => {
     if (!tenant || !email) return json(req, { ok: false, error: "tenant_e_email_obrigatorios" }, 400);
     if (!["ADMIN", "BROKER"].includes(papel)) return json(req, { ok: false, error: "papel_invalido" }, 400);
 
-    const cliente = await clienteDoTenant(db, tenant);
+    const lig = await clienteDoTenant(db, tenant);
+    if (!lig.ok) {
+      return json(req, { ok: false, error: "falha_ao_ler_imobiliaria", detalhe: lig.erro }, 500);
+    }
+    const cliente = lig.id;
     const reauth = await reautenticar(db, ator, cliente, body.dashboard_password);
     if (!reauth.ok) return json(req, { ok: false, error: reauth.error }, reauth.status);
 
@@ -323,14 +331,18 @@ Deno.serve(async (req) => {
     }
     if (senha.length > 200) return json(req, { ok: false, error: "senha_longa" }, 400);
 
-    const cliente = await clienteDoTenant(db, tenant);
-    if (!cliente) {
+    const lig = await clienteDoTenant(db, tenant);
+    if (!lig.ok) {
+      return json(req, { ok: false, error: "falha_ao_ler_imobiliaria", detalhe: lig.erro }, 500);
+    }
+    if (!lig.id) {
       return json(req, {
         ok: false,
         error: "imobiliaria_sem_cliente",
         detalhe: "Ligue a imobiliaria a um cliente do Agency Ops antes: sem isso nao ha cofre onde guardar o acesso.",
       }, 409);
     }
+    const cliente = lig.id;
 
     const reauth = await reautenticar(db, ator, cliente, body.dashboard_password);
     if (!reauth.ok) return json(req, { ok: false, error: reauth.error }, reauth.status);
@@ -416,8 +428,35 @@ Deno.serve(async (req) => {
   return json(req, { ok: false, error: "invalid_action" }, 400);
 });
 
-async function clienteDoTenant(db: Admin, tenantId: string): Promise<string | null> {
-  const { data } = await db.schema("imobi_board").from("tenants")
-    .select("agency_client_id").eq("id", tenantId).maybeSingle();
-  return (data?.agency_client_id as string | null) ?? null;
+/**
+ * Lê a ligação imobiliária -> cliente do Agency Ops.
+ *
+ * Isto lia `imobi_board.tenants` direto pelo PostgREST e falhava sempre:
+ * service_role nao tem SELECT nessa tabela (os grants sao postgres e
+ * authenticated; a 0031 concedeu USAGE no schema e nunca as tabelas).
+ * service_role ignora RLS, mas ignorar RLS nao ajuda quando falta o GRANT.
+ *
+ * Pior que falhar: o codigo antigo descartava o erro e devolvia null, e null
+ * significa "nao ha ligacao". A tela dizia "ligue a imobiliaria a um cliente"
+ * enquanto o card ao lado exibia o nome do cliente -- porque a listagem usa
+ * central_do_crm(), que e SECURITY DEFINER e le como postgres.
+ *
+ * Agora le pela mesma porta do resto do console (RPC) e separa os tres casos:
+ * deu erro, nao ha ligacao, ha ligacao. Confundir os dois primeiros foi o que
+ * escondeu a falha.
+ */
+type Ligacao =
+  | { ok: true; id: string | null; cliente: string | null }
+  | { ok: false; erro: string };
+
+async function clienteDoTenant(db: Admin, tenantId: string): Promise<Ligacao> {
+  const { data, error } = await db.schema("imobi_board")
+    .rpc("cliente_do_tenant", { p_tenant: tenantId });
+  if (error) return { ok: false, erro: error.message };
+  const r = (data ?? {}) as Record<string, unknown>;
+  return {
+    ok: true,
+    id: (r.agency_client_id as string | null) ?? null,
+    cliente: (r.cliente as string | null) ?? null,
+  };
 }
