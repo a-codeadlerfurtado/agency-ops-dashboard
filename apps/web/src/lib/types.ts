@@ -105,6 +105,8 @@ export interface Sessao {
   tenant: Tenant;
   role: Role;
   isAdmin: boolean;
+  /** dono da operacao: pode criar imobiliaria */
+  ehOperador?: boolean;
 }
 
 /* ---------------------------------------------- imoveis e pos-qualificacao */

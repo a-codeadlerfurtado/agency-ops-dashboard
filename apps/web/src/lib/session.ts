@@ -5,6 +5,10 @@ import type { Role, Sessao } from "./types";
 type Estado =
   | { fase: "carregando" }
   | { fase: "deslogado" }
+  /* Operador sem imobiliaria propria: e o caso normal do dono da operacao.
+     Sem esta fase ele cairia na tela "conta sem imobiliaria" e nao teria por
+     onde criar a primeira. */
+  | { fase: "operador"; email: string }
   | { fase: "sem-tenant"; email: string }
   | { fase: "erro"; mensagem: string }
   | { fase: "pronto"; sessao: Sessao };
@@ -15,16 +19,23 @@ type Estado =
  * filtrar por tenant aqui, e nao daria para confiar se precisasse.
  */
 async function resolverSessao(userId: string, email: string): Promise<Estado> {
-  const { data, error } = await supabase
-    .from("memberships")
-    .select("role, tenant:tenants(id, name, slug), profile:profiles(full_name)")
-    .eq("user_id", userId)
-    .eq("status", "ACTIVE")
-    .limit(1)
-    .maybeSingle();
+  const [vinculo, operador] = await Promise.all([
+    supabase
+      .from("memberships")
+      .select("role, tenant:tenants(id, name, slug), profile:profiles(full_name)")
+      .eq("user_id", userId)
+      .eq("status", "ACTIVE")
+      .limit(1)
+      .maybeSingle(),
+    supabase.rpc("sou_operador"),
+  ]);
+  const { data, error } = vinculo;
+  const ehOperador = operador.data === true;
 
   if (error) return { fase: "erro", mensagem: mensagemDeErro(error) };
-  if (!data?.tenant) return { fase: "sem-tenant", email };
+  if (!data?.tenant) {
+    return ehOperador ? { fase: "operador", email } : { fase: "sem-tenant", email };
+  }
 
   const tenant = data.tenant as unknown as { id: string; name: string; slug: string };
   const profile = data.profile as unknown as { full_name: string | null } | null;
@@ -39,6 +50,7 @@ async function resolverSessao(userId: string, email: string): Promise<Estado> {
       tenant,
       role,
       isAdmin: role === "ADMIN",
+      ehOperador,
     },
   };
 }

@@ -7,6 +7,8 @@ import type { Sessao } from "./lib/types";
 
 import Login from "./pages/Login";
 import Convite from "./pages/Convite";
+import NovaSenha from "./pages/NovaSenha";
+import Operacao from "./pages/Operacao";
 import VisaoGeral from "./pages/VisaoGeral";
 import Leads from "./pages/Leads";
 import LeadDetalhe from "./pages/LeadDetalhe";
@@ -81,6 +83,12 @@ function Nav({ sessao, rota, aoNavegar }: {
 
   const gestao = NAV_GESTAO.filter((i) => !i.soAdmin || sessao.isAdmin);
 
+  /* Operacao nao entra em NAV_GESTAO porque nao e mais permissao dentro da
+     imobiliaria: e outro nivel, e quem o tem normalmente nem pertence a uma. */
+  const operacao: ItemNav[] = sessao.ehOperador
+    ? [{ rota: "/operacao", rotulo: "Imobiliarias", icone: () => Ico.building() }]
+    : [];
+
   return (
     <nav className="nav">
       {NAV_TOPO.map(item)}
@@ -96,6 +104,12 @@ function Nav({ sessao, rota, aoNavegar }: {
         <>
           <div className="nav-group">Gestao</div>
           {gestao.map(item)}
+        </>
+      )}
+      {operacao.length > 0 && (
+        <>
+          <div className="nav-group">Operacao</div>
+          {operacao.map(item)}
         </>
       )}
     </nav>
@@ -155,6 +169,10 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
         titulo = "Integracoes";
         pagina = sessao.isAdmin ? <Integracoes sessao={sessao} /> : <SemPermissao />;
         break;
+      case "/operacao":
+        titulo = "Operacao";
+        pagina = sessao.ehOperador ? <Operacao /> : <SemPermissao />;
+        break;
       case "/corretores":
         titulo = "Corretores";
         pagina = sessao.isAdmin
@@ -209,6 +227,38 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
   );
 }
 
+/**
+ * Casca do operador que não pertence a nenhuma imobiliária — que é o caso
+ * normal de quem toca a operação. Sem isto ele cairia na tela "conta sem
+ * imobiliária" e não teria por onde criar a primeira.
+ *
+ * Sem sidebar de propósito: aqui não existe pipeline, lead nem imóvel. Uma
+ * barra e uma tela.
+ */
+function ConsoleDaOperacao({ email, sair }: { email: string; sair: () => Promise<void> }) {
+  return (
+    <div className="app" style={{ gridTemplateColumns: "1fr" }}>
+      <div className="main">
+        <header className="topbar">
+          <span className="topbar-marca" style={{ display: "flex" }}>
+            <ImobiBoardMark size={24} />
+          </span>
+          <div>
+            <div className="eyebrow">Imobi-Board</div>
+            <div className="topbar-title">Operacao</div>
+          </div>
+          <span className="spacer" />
+          <span className="topbar-sub some-no-mobile">{email}</span>
+          <button className="btn ghost sm" onClick={sair} title="Sair" aria-label="Sair">
+            {Ico.out({ size: 15 })}
+          </button>
+        </header>
+        <main className="content"><Operacao /></main>
+      </div>
+    </div>
+  );
+}
+
 const SemPermissao = () => (
   <Card>
     <div className="empty">
@@ -240,6 +290,10 @@ export default function App() {
   const convite = rota.startsWith("/convite/") ? rota.slice("/convite/".length) : null;
   if (convite) return <Convite token={convite} />;
 
+  // Recuperacao de senha: o link do e-mail traz a sessao, entao vem antes da
+  // checagem normal de login.
+  if (rota.startsWith("/nova-senha")) return <NovaSenha />;
+
   if (estado.fase === "carregando") return <Carregando />;
   if (estado.fase === "deslogado") return <Login entrar={entrar} />;
 
@@ -254,6 +308,8 @@ export default function App() {
       </div>
     );
   }
+
+  if (estado.fase === "operador") return <ConsoleDaOperacao sair={sair} email={estado.email} />;
 
   if (estado.fase === "sem-tenant") {
     return (

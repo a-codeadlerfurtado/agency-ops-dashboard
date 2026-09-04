@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { Alerta } from "../ui";
+import { supabase } from "../lib/supabase";
 import { ImobiBoardMark } from "../Marca";
 
 const DEMO = [
@@ -20,7 +21,39 @@ export default function Login({
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState<string | null>(null);
+  const [aviso, setAviso] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
+  const [recuperando, setRecuperando] = useState(false);
+
+  /**
+   * Recuperação de senha.
+   *
+   * A resposta é sempre a mesma, tenha o e-mail conta ou não: dizer "esse
+   * e-mail não existe" entregaria a lista de quem usa o sistema para quem
+   * ficasse testando endereços.
+   */
+  async function recuperar() {
+    const alvo = email.trim();
+    if (!alvo) {
+      setErro("Escreva seu e-mail no campo acima e clique de novo.");
+      return;
+    }
+    setErro(null);
+    setRecuperando(true);
+    try {
+      await supabase.auth.resetPasswordForEmail(alvo, {
+        redirectTo: `${location.origin}${location.pathname}#/nova-senha`,
+      });
+    } catch {
+      /* mesma resposta em qualquer caso */
+    } finally {
+      setRecuperando(false);
+      setAviso(
+        `Se ${alvo} tiver conta, o link para criar senha nova chega em instantes. ` +
+        "Confira tambem o spam."
+      );
+    }
+  }
 
   async function enviar(e: FormEvent) {
     e.preventDefault();
@@ -74,7 +107,21 @@ export default function Login({
             </div>
 
             <div className="field">
-              <label className="label" htmlFor="senha">Senha</label>
+              <div className="row" style={{ gap: 8 }}>
+                <label className="label" htmlFor="senha" style={{ margin: 0 }}>Senha</label>
+                <span className="spacer" />
+                <button
+                  type="button"
+                  onClick={recuperar}
+                  disabled={recuperando}
+                  style={{
+                    background: "none", border: 0, padding: 0, cursor: "pointer",
+                    color: "var(--blue)", font: "inherit", fontSize: 12,
+                  }}
+                >
+                  {recuperando ? "Enviando..." : "Esqueci minha senha"}
+                </button>
+              </div>
               <input
                 id="senha" className="input" type="password" autoComplete="current-password"
                 value={senha} onChange={(e) => setSenha(e.target.value)}
@@ -83,6 +130,7 @@ export default function Login({
             </div>
 
             {erro && <Alerta>{erro}</Alerta>}
+            {aviso && <Alerta tipo="warn">{aviso}</Alerta>}
 
             <button className="btn primary wide" type="submit" disabled={enviando}>
               {enviando ? "Entrando..." : "Entrar no CRM"}

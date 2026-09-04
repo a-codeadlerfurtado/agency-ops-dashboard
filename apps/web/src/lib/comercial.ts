@@ -457,3 +457,38 @@ export async function situacaoDoTokenDeSistema(): Promise<{ tem: boolean; atuali
   if (error) throw error;
   return data as { tem: boolean; atualizado_em?: string };
 }
+
+/* ================================================= operacao (spec 0029) === */
+
+export interface Imobiliaria {
+  id: string;
+  nome: string;
+  slug: string;
+  criada_em: string;
+  membros: number;
+  leads: number;
+  filas: number;
+  convites_pendentes: number;
+}
+
+export async function imobiliarias(): Promise<Imobiliaria[]> {
+  const { data, error } = await supabase.rpc("imobiliarias");
+  if (error) throw error;
+  return (data ?? []) as Imobiliaria[];
+}
+
+/**
+ * Cria a imobiliaria completa: funil, etapas, fila de atendimento e o convite
+ * do primeiro ADMIN. O token volta uma vez so, como todo convite.
+ */
+export async function criarImobiliaria(nome: string, emailAdmin: string) {
+  const { data, error } = await supabase.rpc("criar_imobiliaria", {
+    p_nome: nome,
+    p_email_admin: emailAdmin,
+    p_slug: null,
+  });
+  if (error) throw error;
+  return data as {
+    tenant_id: string; nome: string; slug: string; email: string; token: string;
+  };
+}
