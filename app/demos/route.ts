@@ -8,7 +8,14 @@
  *
  * Rota pública, como a do Briefing Hub: numa apresentação não dá para pedir
  * login antes de mostrar o produto. `noindex` para não aparecer em busca.
+ *
+ * Paleta do manual da Leonardo Imobi: laranja #FD6801, marinho #071C3D e azul
+ * #03549B. O fundo continua escuro, os cartões passam a ser marinho e o
+ * laranja fica reservado a link e acento — que é o papel dele no manual, não
+ * de superfície.
  */
+
+const MARCA_LEONARDO = "/brand/leonardo-imobi.svg";
 
 const DEMOS = [
   {
@@ -20,7 +27,6 @@ const DEMOS = [
       "dá para clicar em tudo sem medo.",
     href: "/briefing-hub-demo",
     icone: "/briefing-hub-mark.svg",
-    marca: "BH",
   },
   {
     nome: "Imobi-Board",
@@ -30,17 +36,14 @@ const DEMOS = [
       "escolhe o perfil: administrador vê a operação inteira, corretor vê só os " +
       "próprios leads — e uma imobiliária não enxerga a outra.",
     href: "https://imobi-board-app.lakassessoriadigital.workers.dev/#/demo",
-    icone: null,
-    marca: "IB",
+    icone: "/imobi-board-mark.svg",
   },
 ];
 
 function pagina() {
   const cartoes = DEMOS.map((d) => `
     <a class="cartao" href="${d.href}"${d.href.startsWith("http") ? ' target="_blank" rel="noopener"' : ""}>
-      <span class="marca${d.icone ? " marca-img" : ""}">${
-        d.icone ? `<img src="${d.icone}" alt="" width="30" height="30">` : d.marca
-      }</span>
+      <span class="marca"><img src="${d.icone}" alt="" width="30" height="30"></span>
       <span class="corpo">
         <strong>${d.nome}</strong>
         <small>${d.para}</small>
@@ -55,37 +58,65 @@ function pagina() {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<link rel="icon" href="/briefing-hub-favicon.svg" type="image/svg+xml">
-<title>Demonstrações · LAK</title>
+<link rel="icon" href="${MARCA_LEONARDO}" type="image/svg+xml">
+<title>Demonstrações · Leonardo Imobi</title>
 <style>
-  :root{color-scheme:dark;--bg:#0b0f16;--panel:#121824;--line:#1f2937;--text:#e5e7eb;--muted:#94a3b8;--accent:#f97316}
+  :root{
+    color-scheme:dark;
+    --laranja:#FD6801;
+    --marinho:#071C3D;
+    --azul:#03549B;
+    --bg:#040A14;
+    --line:#0E2C55;
+    --text:#E8EEF7;
+    --muted:#8FA5C2;
+  }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
        display:flex;align-items:center;justify-content:center;min-height:100vh;padding:32px 20px}
   main{width:min(760px,100%)}
-  .eyebrow{font-size:11px;letter-spacing:.14em;color:var(--accent);text-transform:uppercase}
-  h1{font-size:26px;margin:6px 0 4px;font-weight:650}
+
+  .topo{display:flex;align-items:center;gap:11px;margin-bottom:14px}
+  .topo img{display:block;height:30px;width:auto}
+  /* Fallback do logotipo: enquanto o arquivo nao existir, o nome ocupa o lugar
+     dele em vez de deixar um icone quebrado no topo da apresentacao. */
+  .topo .nome{font-size:11px;letter-spacing:.16em;color:var(--laranja);
+              text-transform:uppercase;font-weight:700}
+
+  h1{font-size:26px;margin:6px 0 4px;font-weight:650;letter-spacing:-.01em}
   .sub{color:var(--muted);margin:0 0 22px;font-size:14px}
-  .cartao{display:flex;gap:16px;padding:18px;margin-bottom:12px;border:1px solid var(--line);
-          border-radius:16px;background:var(--panel);text-decoration:none;color:inherit;
-          transition:border-color .15s ease,transform .15s ease}
-  .cartao:hover{border-color:var(--accent);transform:translateY(-1px)}
+
+  .cartao{display:flex;gap:16px;padding:18px;margin-bottom:12px;
+          border:1px solid var(--line);border-radius:16px;background:var(--marinho);
+          text-decoration:none;color:inherit;
+          transition:border-color .15s ease,transform .15s ease,box-shadow .15s ease}
+  .cartao:hover{border-color:var(--laranja);transform:translateY(-1px);
+                box-shadow:0 10px 30px rgba(3,84,155,.28)}
+
+  /* fundo neutro atras do icone: o marinho do cartao ja e a superficie, e um
+     segundo bloco colorido faria dois logotipos brigando */
   .marca{flex:none;width:44px;height:44px;border-radius:12px;display:grid;place-items:center;
-         background:linear-gradient(135deg,#f97316,#ea580c);color:#fff;font-weight:700;font-size:14px}
-  /* quando ha marca propria, o quadrado laranja daria dois logotipos brigando */
-  .marca-img{background:#0f1622;border:1px solid var(--line)}
+         background:rgba(3,84,155,.16);border:1px solid var(--line)}
+  .marca img{display:block}
+
   .corpo{display:block}
   .corpo strong{font-size:16px;display:block}
   .corpo small{color:var(--muted);font-size:12px;display:block;margin-top:2px}
   .corpo p{margin:9px 0 0;color:var(--muted);font-size:13px}
-  .abrir{display:inline-block;margin-top:11px;font-size:13px;color:var(--accent)}
+  .abrir{display:inline-block;margin-top:11px;font-size:13px;color:var(--laranja);font-weight:600}
+
   footer{margin-top:20px;color:var(--muted);font-size:12px;line-height:1.6}
   @media(prefers-reduced-motion:reduce){.cartao{transition:none}}
 </style>
 </head>
 <body>
 <main>
-  <div class="eyebrow">LAK Assessoria Digital</div>
+  <div class="topo">
+    <img src="${MARCA_LEONARDO}" alt="Leonardo Imobi"
+         onerror="this.remove();document.getElementById('nome-marca').hidden=false">
+    <span class="nome" id="nome-marca" hidden>Leonardo Imobi</span>
+  </div>
   <h1>Demonstrações</h1>
   <p class="sub">Escolha o que apresentar. Os dois ambientes são fictícios.</p>
   ${cartoes}
