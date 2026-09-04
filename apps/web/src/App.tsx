@@ -7,6 +7,7 @@ import type { Sessao } from "./lib/types";
 
 import Login from "./pages/Login";
 import Convite from "./pages/Convite";
+import { Privacidade, Termos } from "./pages/Publicas";
 import NovaSenha from "./pages/NovaSenha";
 import Operacao from "./pages/Operacao";
 import VisaoGeral from "./pages/VisaoGeral";
@@ -287,6 +288,15 @@ export default function App() {
 
   // Convite tem tela propria e precisa funcionar antes de existir sessao:
   // a pessoa convidada normalmente ainda nao tem conta.
+  /* Paginas publicas vem antes de qualquer checagem de sessao.
+     Respondem tanto em /privacidade quanto em #/privacidade: a Meta valida a
+     URL da politica ao aprovar o aplicativo, e um validador que cai em tela
+     de login reprova. O `not_found_handling: single-page-application` do
+     Workers Assets faz o caminho sem hash chegar aqui. */
+  const publica = location.pathname.replace(/\/+$/, "") || rota.replace(/\/+$/, "");
+  if (publica === "/privacidade" || rota === "/privacidade") return <Privacidade />;
+  if (publica === "/termos" || rota === "/termos") return <Termos />;
+
   const convite = rota.startsWith("/convite/") ? rota.slice("/convite/".length) : null;
   if (convite) return <Convite token={convite} />;
 

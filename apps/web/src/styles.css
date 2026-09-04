@@ -1368,6 +1368,78 @@ body {
     radial-gradient(90% 55% at 78% 100%, #0359a61a, transparent 62%);
 }
 
+/* ==================================================== paginas publicas ====
+   Privacidade e termos. Sao texto longo lido por alguem que chegou de fora,
+   as vezes do painel da Meta -- entao a medida de linha e curta, o corpo e
+   maior que o do app, e nada aqui depende de sessao. */
+
+.legal-shell {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.legal-topo {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--line-soft);
+  background-image: linear-gradient(90deg, #0359a61f, transparent 46%), var(--luz-topo);
+}
+.legal-marca {
+  display: flex; align-items: center; gap: 9px;
+  color: var(--text-heading); text-decoration: none;
+  font-weight: 650; letter-spacing: -0.01em;
+}
+.legal-nav { margin-left: auto; display: flex; gap: 16px; }
+.legal-nav a { color: var(--muted); text-decoration: none; font-size: 13.5px; }
+.legal-nav a:hover { color: var(--blue); }
+
+.legal {
+  flex: 1;
+  width: 100%;
+  max-width: 72ch;          /* medida de linha, nao largura de tela */
+  margin: 0 auto;
+  padding: 40px 24px 64px;
+  font-size: 15px;
+  line-height: 1.72;
+  color: var(--text);
+}
+.legal h1 { font-size: 30px; letter-spacing: -0.03em; margin: 0; }
+.legal-data { color: var(--text-subtle); font-size: 13px; margin: 6px 0 28px; }
+.legal-resumo {
+  background: var(--panel);
+  background-image: var(--brilho-azul), var(--luz-card);
+  border: 1px solid var(--line-card);
+  border-radius: var(--r-lg);
+  padding: 16px 18px;
+  margin: 0 0 32px;
+}
+.legal h2 {
+  font-size: 17px; font-weight: 650; letter-spacing: -0.018em;
+  margin: 34px 0 10px; color: var(--text-heading);
+}
+.legal p  { margin: 0 0 14px; }
+.legal ul { margin: 0 0 14px; padding-left: 20px; }
+.legal li { margin-bottom: 7px; }
+.legal li > ul { margin-top: 7px; }
+.legal b  { color: var(--text-heading); font-weight: 600; }
+.legal a  { color: var(--blue); }
+
+.legal-rodape {
+  border-top: 1px solid var(--line-soft);
+  padding: 18px 24px;
+  color: var(--text-subtle);
+  font-size: 13px;
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .legal { padding: 28px 18px 48px; font-size: 14.5px; }
+  .legal h1 { font-size: 25px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
