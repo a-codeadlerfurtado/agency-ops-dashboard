@@ -1,0 +1,13 @@
+{
+  "name": "Briefing Hub",
+  "short_name": "Briefing Hub",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#071C3D",
+  "theme_color": "#071C3D",
+  "icons": [
+    { "src": "/favicon.svg",          "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/favicon-32.png",       "sizes": "32x32",   "type": "image/png" },
+    { "src": "/apple-touch-icon.png", "sizes": "180x180", "type": "image/png" }
+  ]
+}
