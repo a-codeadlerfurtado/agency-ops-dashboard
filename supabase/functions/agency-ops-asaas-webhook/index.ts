@@ -60,12 +60,13 @@ Deno.serve(async (req: Request) => {
 
   try {
     if (payment?.id) {
-      const { data: link } = await ops
+      const { data: link, error: linkError } = await ops
         .from("asaas_customers")
         .select("client_id")
         .eq("asaas_customer_id", String(payment.customer || ""))
         .not("confirmed_at", "is", null)
         .maybeSingle();
+      if (linkError) throw new Error(linkError.message);
 
       const row = mapAsaasPaymentToCharge(payment, link?.client_id ?? null);
       const { error: upsertError } = await ops
