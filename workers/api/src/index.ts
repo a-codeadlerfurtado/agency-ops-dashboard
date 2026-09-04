@@ -3,6 +3,7 @@ import {
   assinarPagina, callbackOAuth, listarPaginas, verificarWebhookDoApp, type EnvMeta,
 } from "./rotas/meta-oauth";
 import { rpc, sha256Hex, type Env } from "./lib/db";
+import { comCors, preflight } from "./lib/cors";
 
 export { WorkflowSla } from "./sla-workflow";
 
@@ -14,9 +15,22 @@ interface EnvComLimite extends EnvMeta {
 
 export default {
   async fetch(req: Request, env: EnvComLimite): Promise<Response> {
-    const url = new URL(req.url);
-    const partes = url.pathname.split("/").filter(Boolean);
+    // O preflight vem antes de tudo: nao passa por rota nem por autorizacao,
+    // e o worker respondia 404 nele, que o navegador le como recusa.
+    const antes = preflight(req, env);
+    if (antes) return antes;
 
+    // O CORS entra num lugar so, na saida. Espalhar cabecalho por rota
+    // garantiria esquecer de alguma -- foi assim que este bug nasceu.
+    return comCors(await rotear(req, env), req, env);
+  },
+} satisfies ExportedHandler<EnvComLimite>;
+
+async function rotear(req: Request, env: EnvComLimite): Promise<Response> {
+  const url = new URL(req.url);
+  const partes = url.pathname.split("/").filter(Boolean);
+
+  {
     try {
       // ---------------------------------------------------------- saude
       if (url.pathname === "/health") {
@@ -89,8 +103,8 @@ export default {
       }));
       return json({ erro: "Erro interno." }, 500);
     }
-  },
-} satisfies ExportedHandler<EnvComLimite>;
+  }
+}
 
 /**
  * Handshake de verificacao da Meta.

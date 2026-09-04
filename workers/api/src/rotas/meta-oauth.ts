@@ -18,6 +18,20 @@ import { json } from "./ingest";
 
 const GRAPH = "https://graph.facebook.com/v21.0";
 
+/**
+ * Sem a chave de servico o worker nao fala com o banco, e todo erro daqui sai
+ * disfarçado de outra coisa — 401 do PostgREST vira "autorizacao expirada" e
+ * manda a pessoa mexer no token, que nao e o problema. Melhor dizer na cara.
+ */
+function semChaveDeServico(env: EnvMeta): Response | null {
+  if (env.SUPABASE_SERVICE_ROLE_KEY) return null;
+  return json({
+    erro: "O servidor ainda nao tem a chave de servico do Supabase " +
+          "(SUPABASE_SERVICE_ROLE_KEY). Enquanto ela faltar, nada que dependa " +
+          "do banco funciona -- inclusive esta importacao.",
+  }, 503);
+}
+
 export interface EnvMeta extends Env {
   META_APP_ID?: string;
   META_APP_SECRET?: string;
@@ -52,6 +66,13 @@ export async function callbackOAuth(url: URL, env: EnvMeta): Promise<Response> {
 
   if (erroMeta) return voltarPara(env, { meta: "erro", motivo: erroMeta });
   if (!state || !code) return voltarPara(env, { meta: "erro", motivo: "Autorizacao incompleta." });
+
+  if (!env.SUPABASE_SERVICE_ROLE_KEY) {
+    return voltarPara(env, {
+      meta: "erro",
+      motivo: "O servidor esta sem a chave de servico do Supabase; a conexao nao pode ser salva.",
+    });
+  }
 
   if (!env.META_APP_ID || !env.META_APP_SECRET) {
     return voltarPara(env, {
@@ -139,11 +160,20 @@ export async function listarPaginas(url: URL, env: EnvMeta): Promise<Response> {
   const state = url.searchParams.get("n");
   if (!state) return json({ erro: "Autorizacao ausente." }, 400);
 
+  const falta = semChaveDeServico(env);
+  if (falta) return falta;
+
   let token: string | null;
   try {
     token = await rpc<string | null>(env, "token_de_sistema", { p_state: state });
-  } catch {
-    return json({ erro: "Autorizacao expirada. Salve o token de novo." }, 403);
+  } catch (e) {
+    // Distinguir os dois casos importa: "autorizacao expirada" manda a pessoa
+    // salvar o token de novo, e se o problema for outro ela repete para sempre.
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/Autorizacao expirada/i.test(msg)) {
+      return json({ erro: "Autorizacao expirada. Salve o token de novo." }, 403);
+    }
+    return json({ erro: `Nao foi possivel falar com o banco: ${msg}` }, 502);
   }
   if (!token) return json({ erro: "Nenhum token de sistema salvo." }, 409);
 
@@ -203,6 +233,9 @@ export async function listarPaginas(url: URL, env: EnvMeta): Promise<Response> {
 export async function assinarPagina(url: URL, env: EnvMeta): Promise<Response> {
   const nonce = url.searchParams.get("n");
   if (!nonce) return json({ erro: "Autorizacao ausente." }, 400);
+
+  const falta = semChaveDeServico(env);
+  if (falta) return falta;
 
   let fonte: { id: string; page_id: string; page_access_token: string };
   try {
