@@ -35,4 +35,9 @@ describe("classifyChargeKind", () => {
     expect(classifyChargeKind({ subscriptionId: null, description: null })).toBe("EXTRA");
     expect(classifyChargeKind({ subscriptionId: "", description: "" })).toBe("EXTRA");
   });
+
+  it("discrimina acento dentro da raiz da palavra implanta", () => {
+    expect(classifyChargeKind({ subscriptionId: null, description: "ÍMPLANTAÇÃO" }))
+      .toBe("IMPLANTACAO");
+  });
 });
