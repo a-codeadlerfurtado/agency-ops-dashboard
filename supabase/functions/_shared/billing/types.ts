@@ -35,3 +35,37 @@ export interface MatchResult {
   clients_without_customer: string[];
   customers_without_client: string[];
 }
+
+export interface AsaasPayment {
+  id: string;
+  customer?: string | null;
+  subscription?: string | null;
+  value?: number | string | null;
+  netValue?: number | string | null;
+  dueDate?: string | null;
+  status?: string | null;
+  billingType?: string | null;
+  paymentDate?: string | null;
+  clientPaymentDate?: string | null;
+  confirmedDate?: string | null;
+  invoiceUrl?: string | null;
+  bankSlipUrl?: string | null;
+  description?: string | null;
+}
+
+export interface BillingChargeRow {
+  asaas_payment_id: string;
+  client_id: string | null;
+  asaas_subscription_id: string | null;
+  kind: ChargeKind;
+  value: number;
+  net_value: number | null;
+  due_date: string;
+  status: string;
+  billing_type: string | null;
+  payment_date: string | null;
+  invoice_url: string | null;
+  bank_slip_url: string | null;
+  description: string | null;
+  raw: unknown;
+}
