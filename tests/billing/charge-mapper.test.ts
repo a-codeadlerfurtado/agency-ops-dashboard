@@ -68,4 +68,47 @@ describe("mapAsaasPaymentToCharge", () => {
     expect(() => mapAsaasPaymentToCharge({ ...PAGAMENTO, id: "" }, "c1")).toThrow("asaas_payment_id");
     expect(() => mapAsaasPaymentToCharge({ ...PAGAMENTO, dueDate: null }, "c1")).toThrow("due_date");
   });
+
+  it("recusa pagamento quando value esta ausente", () => {
+    expect(() =>
+      mapAsaasPaymentToCharge(
+        { id: "pay_1", dueDate: "2026-09-10", status: "PENDING" },
+        "c1"
+      )
+    ).toThrow("value ausente ou invalido no payload");
+  });
+
+  it("recusa pagamento quando value e null", () => {
+    expect(() => mapAsaasPaymentToCharge({ ...PAGAMENTO, value: null }, "c1")).toThrow(
+      "value ausente ou invalido no payload"
+    );
+  });
+
+  it("recusa pagamento quando value e string vazia", () => {
+    expect(() => mapAsaasPaymentToCharge({ ...PAGAMENTO, value: "" }, "c1")).toThrow(
+      "value ausente ou invalido no payload"
+    );
+  });
+
+  it("recusa pagamento quando value e apenas espaco em branco", () => {
+    expect(() => mapAsaasPaymentToCharge({ ...PAGAMENTO, value: "   " }, "c1")).toThrow(
+      "value ausente ou invalido no payload"
+    );
+  });
+
+  it("recusa pagamento quando value nao e numerico", () => {
+    expect(() => mapAsaasPaymentToCharge({ ...PAGAMENTO, value: "abc" }, "c1")).toThrow(
+      "value ausente ou invalido no payload"
+    );
+  });
+
+  it("aceita valor zero legitimamente", () => {
+    const row = mapAsaasPaymentToCharge({ ...PAGAMENTO, value: 0 }, "c1");
+    expect(row.value).toBe(0);
+  });
+
+  it("aceita valor zero como string", () => {
+    const row = mapAsaasPaymentToCharge({ ...PAGAMENTO, value: "0" }, "c1");
+    expect(row.value).toBe(0);
+  });
 });
