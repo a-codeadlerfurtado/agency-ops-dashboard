@@ -69,3 +69,26 @@ export interface BillingChargeRow {
   description: string | null;
   raw: unknown;
 }
+
+export interface ChargeSnapshot {
+  due_date: string;
+  status: string;
+  payment_date: string | null;
+}
+
+export interface DeriveStatusInput {
+  charges: ChargeSnapshot[];
+  today: string;
+  /** Dias de atraso a partir dos quais o cliente e DELINQUENT. Default 5. */
+  overdueDays?: number;
+  /** Antecedencia que marca DUE_SOON. Default 3. */
+  dueSoonDays?: number;
+}
+
+export interface DerivedFinanceControl {
+  payment_status: PaymentStatus;
+  overdue_since: string | null;
+  next_due_date: string | null;
+  last_payment_at: string | null;
+  days_late: number;
+}
