@@ -746,7 +746,15 @@ function TokenDeSistema({
         { method: "POST" }
       );
       const corpo = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error((corpo as { erro?: string }).erro ?? "Falha ao buscar a pagina.");
+      if (!r.ok) {
+        const c = corpo as { erro?: string; detalhe?: string };
+        // o detalhe e o texto cru da Meta: some da frase principal mas fica
+        // visivel, senao o caso raro vira adivinhacao
+        throw new Error(
+          (c.erro ?? "Falha ao buscar a pagina.") +
+          (c.detalhe ? ` (Meta: ${c.detalhe})` : "")
+        );
+      }
       setToken("");
       setPageId("");
       setAberto(false);

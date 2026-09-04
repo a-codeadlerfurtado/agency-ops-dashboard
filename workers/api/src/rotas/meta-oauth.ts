@@ -154,9 +154,14 @@ export async function callbackOAuth(url: URL, env: EnvMeta): Promise<Response> {
  * usar permissao em nome de quem nao tem papel no aplicativo, e um usuario de
  * sistema da mesma BM do app pode ter papel nele.
  *
- * Duas listas somadas: /me/accounts traz as paginas do proprio usuario de
- * sistema; client_pages traz as que a BM administra para clientes. Uma
- * agencia costuma ter as paginas na segunda.
+ * UMA pagina, buscada por id. Este fluxo ja listou tudo que o token enxerga
+ * (/me/accounts + client_pages da BM) e isso estava errado: o token de uma
+ * agencia alcanca as paginas de todos os clientes dela, e a lista aparecia
+ * inteira para o admin de uma imobiliaria so. Pedir o id custa um campo a
+ * mais e nao expoe carteira alheia.
+ *
+ * O login do Facebook (callbackOAuth, acima) continua listando -- la a pessoa
+ * entra com a conta dela e as paginas listadas sao dela mesma.
  */
 export async function listarPaginas(url: URL, env: EnvMeta): Promise<Response> {
   const state = url.searchParams.get("n");
@@ -200,19 +205,30 @@ export async function listarPaginas(url: URL, env: EnvMeta): Promise<Response> {
       `${GRAPH}/${encodeURIComponent(pageId)}?fields=id,name,access_token` +
       `&access_token=${encodeURIComponent(token)}`
     );
-    const p = await r.json() as PaginaDaMeta & { error?: { message?: string } };
+    const p = await r.json() as PaginaDaMeta & {
+      error?: { message?: string; code?: number };
+    };
 
-    if (!r.ok || !p?.id) {
-      throw new Error(p?.error?.message ?? `A Meta respondeu ${r.status} para essa pagina.`);
-    }
-    if (!p.access_token) {
-      // A pagina existe e o token a enxerga, mas nao recebeu token proprio:
-      // quase sempre e a PAGINA nao atribuida ao usuario de sistema -- so a
-      // conta de anuncios foi.
+    // Os dois jeitos de a Meta dizer "esse token nao manda nessa pagina":
+    //
+    //  - erro 100 / "does not exist, cannot be loaded due to missing
+    //    permissions" -- o mesmo texto para id errado e para falta de acesso,
+    //    de proposito, para nao revelar se a pagina existe;
+    //  - resposta 200 com id e nome, mas SEM access_token -- acontece quando
+    //    a conta de anuncios foi atribuida ao usuario de sistema e a Pagina
+    //    nao. E o tropeco mais comum desta configuracao.
+    //
+    // Na pratica os dois pedem a mesma acao, entao a mensagem e uma so. O
+    // texto original da Meta vai junto como detalhe, senao fica impossivel
+    // diagnosticar o caso raro.
+    const semAcesso = !r.ok || !p?.id || !p.access_token;
+    if (semAcesso) {
+      const daMeta = p?.error?.message;
       return json({
-        erro: "A Meta encontrou a pagina mas nao devolveu token de acesso a ela. " +
-              "Confira se a PAGINA (nao so a conta de anuncios) esta atribuida ao " +
-              "usuario de sistema, com permissao de leads.",
+        erro: "Pagina nao esta atribuida ao usuario de sistema na BM. " +
+              "Em Configuracoes do Negocio > Usuarios de sistema, atribua a " +
+              "PAGINA (nao apenas a conta de anuncios) e gere o token de novo.",
+        detalhe: daMeta ?? (p?.id ? "A Meta devolveu a pagina sem token de acesso." : undefined),
       }, 409);
     }
 
