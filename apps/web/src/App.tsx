@@ -305,15 +305,17 @@ export default function App() {
   // checagem normal de login.
   if (rota.startsWith("/nova-senha")) return <NovaSenha />;
 
-  if (estado.fase === "carregando") return <Carregando />;
-
   /* Demonstracao em endereco proprio. Os perfis de mentira sairam da tela de
      login -- o cliente real nao precisa ver conta ficticia toda vez que entra
      para trabalhar -- e viraram este link, que e o que se compartilha numa
-     apresentacao. Vem antes do Login para funcionar sem sessao. */
-  if (estado.fase === "deslogado" && rota.replace(/\/+$/, "") === "/demo") {
-    return <Demo entrar={entrar} />;
-  }
+     apresentacao.
+
+     Vale COM ou SEM sessao, e por isso vem antes de tudo: quem abre o link
+     para apresentar quase sempre ja esta logado na propria conta, e cair no
+     proprio CRM em vez da demonstracao e o oposto do que o link promete. */
+  if (rota.replace(/\/+$/, "") === "/demo") return <Demo entrar={entrar} />;
+
+  if (estado.fase === "carregando") return <Carregando />;
   if (estado.fase === "deslogado") return <Login entrar={entrar} />;
 
   if (estado.fase === "erro") {

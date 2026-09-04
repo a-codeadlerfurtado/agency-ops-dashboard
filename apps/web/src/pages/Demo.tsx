@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Alerta } from "../ui";
+import { supabase } from "../lib/supabase";
 import { ImobiBoardMark } from "../Marca";
 
 /**
@@ -54,7 +55,13 @@ export default function Demo({
     setErro(null);
     setEntrando(email);
     try {
+      // quem abre este link para apresentar costuma estar logado na propria
+      // conta; sem derrubar a sessao, o "entrar" cairia no CRM dele
+      await supabase.auth.signOut();
       await entrar(email, SENHA);
+      // a rota /demo vale com sessao aberta, entao sem sair dela a tela
+      // continuaria mostrando a escolha de perfil depois de entrar
+      location.hash = "/";
     } catch (e) {
       setErro((e as Error).message);
       setEntrando(null);
