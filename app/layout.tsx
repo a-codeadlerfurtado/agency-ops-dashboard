@@ -58,6 +58,8 @@ import NotificationLeadClickOverride from "./notification-lead-click-override";
 import ClientNotificationsBridge from "./client-notifications-bridge";
 import ClientCommercialProfileBridge from "./client-commercial-profile-bridge";
 import ClientAccessVaultBridge from "./client-access-vault-bridge";
+import AdlerPasswordManagerBridge from "./adler-password-manager-bridge";
+import ImobiBoardCentralBridge from "./imobi-board-central-bridge";
 import ClientMetaAssetsBridge from "./client-meta-assets-bridge";
 import ClientContextUploadBridge from "./client-context-upload-bridge";
 import Client360Bridge from "./client-360-bridge";
@@ -161,6 +163,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <Client360Bridge />
         <ClientCommercialProfileBridge />
         <ClientAccessVaultBridge />
+        {/* Cofre global e central do CRM: ambos se escondem sozinhos para
+            quem nao e o perfil MGMT do Adler. */}
+        <AdlerPasswordManagerBridge />
+        <ImobiBoardCentralBridge />
         <ClientMetaAssetsBridge />
         <ClientContextUploadBridge />
         <CreativeManualEditBridge />
