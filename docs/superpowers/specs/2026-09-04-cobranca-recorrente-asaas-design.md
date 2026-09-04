@@ -242,7 +242,9 @@ Views SQL sobre `billing_charges` — nenhum cálculo financeiro no frontend.
 ## 7. Telas
 
 `app/finance` ganha abas, consumindo uma nova edge function
-`agency-ops-billing-api`:
+`agency-ops-billing-api`. **Visível apenas para Adler e Leonardo** — regra
+detalhada em §8; o item de menu só é desenhado depois que o servidor confirma
+a autorização.
 
 1. **Cobranças do mês** — cliente, valor, vencimento, status, link do boleto;
    filtro por status e por responsável.
@@ -263,6 +265,32 @@ Bearer → `auth.getUser()` → `user_preferences.collaborator_person` →
 (`is_former = false`) → allowlist: `Adler Furtado` (MGMT) e `Leonardo Augusto`
 (COMMERCIAL). Não autorizado recebe **`404`**, não `403` — a rota não revela
 que existe.
+
+**Nenhum outro perfil vê esta área.** Requisito explícito do Adler
+(2026-09-04): a área financeira aparece para ele e para o Leonardo, e para mais
+ninguém. Isso vale em três camadas, e as três são obrigatórias:
+
+1. **Menu.** O item de navegação segue o padrão do
+   `adler-finance-nav-bridge.tsx`: o bridge chama `?probe=1` na
+   `agency-ops-billing-api` e **só insere o botão no DOM se o servidor
+   autorizar**. Resposta não-ok, sessão ausente ou troca de usuário removem o
+   botão imediatamente (`removeFinanceNav`). O cliente nunca decide sozinho
+   quem vê.
+2. **Rota.** `/finance` sem autorização não renderiza dado — a API responde
+   `404` e a tela mostra indisponibilidade, como já faz a
+   `app/finance/page.tsx` hoje. Acessar a URL na mão não contorna nada.
+3. **Dado.** As tabelas novas não têm policy de RLS: mesmo com a chave `anon`
+   em mãos, não há leitura possível fora do `service_role`.
+
+A allowlist existe em **um lugar só**, dentro da edge function. Ela não é
+duplicada no frontend, não vira variável de ambiente e não vira `if` em
+componente — senão passam a existir duas verdades sobre quem pode ver dinheiro,
+e uma delas vai ficar desatualizada.
+
+Adler e Leonardo recebem o **mesmo escopo** (carteira inteira), que é o que já
+vale hoje no `agency-ops-adler-finance-api`. Se em algum momento o Leonardo
+tiver de ver só a carteira dele, o ponto de mudança é a montagem da query na
+API — não a autorização.
 
 ### Segredos (ação do Adler)
 
@@ -330,6 +358,7 @@ confirmação. *Saída:* um mês inteiro fechando sem pendência inesperada.
 | Divergência silenciosa contrato × Asaas | Cron diário que só reporta; toda correção é aprovada na tela |
 | 9 clientes ativos sem documento fiscal | Fila visível na aba de conciliação; bloqueiam a saída da Fase 2 |
 | Dado financeiro exposto | RLS ligada sem policy; só `service_role`; API com allowlist e 404 |
+| Área financeira vazando para outro perfil | Menu desenhado só após `probe` do servidor; rota sem dado sem autorização; allowlist em um único lugar (§8) |
 | Sessão paralela de IA no mesmo repo | `git fetch` e conferir `HEAD..origin/main` antes de cada etapa; commit isolado por assunto e push imediato |
 
 ## 12. Critérios de sucesso
