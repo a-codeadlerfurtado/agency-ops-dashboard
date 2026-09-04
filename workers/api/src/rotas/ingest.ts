@@ -23,13 +23,24 @@ const texto = (v: unknown): string | undefined => {
   return s === "" ? undefined : s;
 };
 
-/** Formulario proprio / landing page / integracao generica. */
+/**
+ * Formulario proprio / landing page / integracao generica.
+ *
+ * A lista de apelidos e larga de proposito. Quem chega aqui normalmente e um
+ * repassador -- Zapier, Make, n8n, ou outro CRM com saida de lead -- e esses
+ * costumam repassar o campo com o nome ORIGINAL da Meta (`full_name`,
+ * `phone_number`), nao com o nosso. Aceitar so `telefone` fazia o lead ser
+ * recusado com 422 por diferenca de nome de campo, que e o pior tipo de falha:
+ * silenciosa do lado de quem manda.
+ */
 const adaptadorWebhook: Adaptador = (corpo) => {
   const c = corpo as Record<string, unknown>;
   return {
-    nome: texto(c.nome ?? c.name ?? c.full_name) ?? "Sem nome",
-    telefone: texto(c.telefone ?? c.phone ?? c.whatsapp),
-    email: texto(c.email),
+    nome: texto(c.nome ?? c.name ?? c.full_name ?? c.nome_completo) ?? "Sem nome",
+    telefone: texto(
+      c.telefone ?? c.phone ?? c.whatsapp ?? c.phone_number ?? c.celular ?? c.tel
+    ),
+    email: texto(c.email ?? c.e_mail ?? c.email_address),
     atribuicao: {
       utm_source: texto(c.utm_source),
       utm_medium: texto(c.utm_medium),
