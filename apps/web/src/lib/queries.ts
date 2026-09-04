@@ -95,23 +95,64 @@ export async function oportunidades(
   };
 }
 
-/** Kanban: uma consulta so, agrupada no cliente. Nao uma por coluna. */
-export async function oportunidadesDoQuadro(
+/**
+ * Kanban: uma consulta por coluna, com a contagem real de cada uma.
+ *
+ * Era uma consulta so, com limite de `porColuna * 7`, agrupada no cliente. O
+ * desenho supunha os leads espalhados pelas sete etapas -- e uma importacao de
+ * base historica desmente isso na hora: 1586 dos 1589 leads caem em
+ * "Contatado", as 350 linhas do limite global param todas na mesma coluna, e o
+ * resto some sem aviso.
+ *
+ * Pior que sumir: o cabecalho da coluna contava o array truncado, entao a tela
+ * afirmava um total errado com toda a confianca. Agora o numero vem do `count`
+ * do banco e nao depende de quantos cards foram carregados.
+ *
+ * Sete consultas pequenas em paralelo custam menos que uma que nao cabe.
+ */
+export interface ColunaDoQuadro {
+  etapaId: string;
+  itens: Opportunity[];
+  /** quantos existem de fato nesta etapa, nao quantos vieram */
+  total: number;
+}
+
+export async function colunaDoQuadro(
   tenantId: string,
+  etapaId: string,
   corretorId?: string,
-  porColuna = 50
-): Promise<Opportunity[]> {
+  inicio = 0,
+  quantos = 50
+): Promise<{ itens: Opportunity[]; total: number }> {
   let q = supabase
     .from("opportunities")
-    .select(OPP_COLS)
+    .select(OPP_COLS, { count: "exact" })
     .eq("tenant_id", tenantId)
     .eq("status", "OPEN")
+    .eq("stage_id", etapaId)
     .order("created_at", { ascending: false })
-    .limit(porColuna * 7);
+    .range(inicio, inicio + quantos - 1);
   if (corretorId) q = q.eq("assigned_user_id", corretorId);
-  const { data, error } = await q;
+
+  const { data, count, error } = await q;
   if (error) throw error;
-  return (data ?? []) as unknown as Opportunity[];
+  return { itens: (data ?? []) as unknown as Opportunity[], total: count ?? 0 };
+}
+
+export async function oportunidadesDoQuadro(
+  tenantId: string,
+  etapaIds: string[],
+  corretorId?: string,
+  porColuna = 50
+): Promise<ColunaDoQuadro[]> {
+  return Promise.all(
+    etapaIds.map((etapaId) =>
+      colunaDoQuadro(tenantId, etapaId, corretorId, 0, porColuna).then((r) => ({
+        etapaId,
+        ...r,
+      }))
+    )
+  );
 }
 
 export async function oportunidade(id: string): Promise<Opportunity> {

@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { irPara } from "../App";
 import { classeEtapa, relativo, rotuloOrigem } from "../lib/format";
-import { corretores, etapas, moverEtapa, oportunidadesDoQuadro } from "../lib/queries";
+import { colunaDoQuadro, corretores, etapas, moverEtapa, oportunidadesDoQuadro } from "../lib/queries";
 import { mensagemDeErro } from "../lib/supabase";
 import { useFlip } from "../lib/flip";
 import {
@@ -19,17 +19,26 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
   // FLIP: sem isto o card desaparece de uma coluna e reaparece na outra
   const { container: quadro, capturar } = useFlip<HTMLDivElement>();
 
-  const dados = useAsync(
-    async () => ({
-      etapas: await etapas(sessao.tenant.id),
-      opps: await oportunidadesDoQuadro(
+  // paginas extras carregadas sob demanda, por coluna
+  const [extras, setExtras] = useState<Record<string, Opportunity[]>>({});
+  const [buscandoMais, setBuscandoMais] = useState<string | null>(null);
+
+  const dados = useAsync(async () => {
+    const colunas = await etapas(sessao.tenant.id);
+    const filtro = sessao.isAdmin ? (corretorId || undefined) : sessao.userId;
+    return {
+      etapas: colunas,
+      colunasDoQuadro: await oportunidadesDoQuadro(
         sessao.tenant.id,
-        sessao.isAdmin ? (corretorId || undefined) : sessao.userId
+        colunas.map((e) => e.id),
+        filtro
       ),
       pessoas: sessao.isAdmin ? await corretores(sessao.tenant.id) : [],
-    }),
-    [sessao.tenant.id, corretorId]
-  );
+    };
+  }, [sessao.tenant.id, corretorId]);
+
+  // trocar de corretor recomeca a paginacao; senao sobram cards do filtro velho
+  useEffect(() => { setExtras({}); }, [corretorId, sessao.tenant.id]);
 
   if (dados.erro) return <Alerta>{dados.erro}</Alerta>;
 
@@ -48,10 +57,50 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
     );
   }
 
-  const { etapas: colunas, opps, pessoas } = dados.dado;
+  const { etapas: colunas, colunasDoQuadro, pessoas } = dados.dado;
   const nomePorId = new Map(pessoas.map((p) => [p.id, p.full_name ?? "--"]));
 
+  const carregados = (etapaId: string) => [
+    ...(colunasDoQuadro.find((c) => c.etapaId === etapaId)?.itens ?? []),
+    ...(extras[etapaId] ?? []),
+  ];
+  const opps = colunas.flatMap((e) => carregados(e.id));
+  const totalDoBanco = (etapaId: string) =>
+    colunasDoQuadro.find((c) => c.etapaId === etapaId)?.total ?? 0;
+
   const etapaDe = (o: Opportunity) => ajuste[o.id] ?? o.stage_id;
+
+  /* O card movido ainda nao existe na contagem do servidor, e o da origem
+     ainda existe. Sem corrigir, arrastar um card faz os dois numeros mentirem
+     ate o proximo carregamento. */
+  const deslocamento = (etapaId: string) => {
+    let d = 0;
+    for (const o of opps) {
+      const destino = ajuste[o.id];
+      if (!destino || destino === o.stage_id) continue;
+      if (destino === etapaId) d += 1;
+      if (o.stage_id === etapaId) d -= 1;
+    }
+    return d;
+  };
+
+  async function carregarMais(etapaId: string) {
+    setBuscandoMais(etapaId);
+    try {
+      const novos = await colunaDoQuadro(
+        sessao.tenant.id,
+        etapaId,
+        sessao.isAdmin ? (corretorId || undefined) : sessao.userId,
+        carregados(etapaId).length,
+        50
+      );
+      setExtras((x) => ({ ...x, [etapaId]: [...(x[etapaId] ?? []), ...novos.itens] }));
+    } catch (e) {
+      avisar("err", mensagemDeErro(e));
+    } finally {
+      setBuscandoMais(null);
+    }
+  }
 
   async function soltar(etapaId: string) {
     const id = arrastando;
@@ -83,7 +132,8 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
     }
   }
 
-  const total = opps.length;
+  // o cabecalho diz quantas existem, nao quantas couberam na tela
+  const total = colunasDoQuadro.reduce((s, c) => s + c.total, 0);
 
   return (
     <>
@@ -113,6 +163,8 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
         <div className="kanban" ref={quadro}>
           {colunas.map((etapa) => {
             const daColuna = opps.filter((o) => etapaDe(o) === etapa.id);
+            const quantos = totalDoBanco(etapa.id) + deslocamento(etapa.id);
+            const faltam = quantos - daColuna.length;
             return (
               <section
                 key={etapa.id}
@@ -127,7 +179,7 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
                     <span className="dot" />
                   </span>
                   <span className="kcol-name">{etapa.name}</span>
-                  <span className="kcol-count">{daColuna.length}</span>
+                  <span className="kcol-count">{quantos}</span>
                 </div>
                 <div className="kcol-body">
                   {daColuna.map((o) => (
@@ -147,6 +199,22 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
                     }}>
                       Arraste um card para ca
                     </div>
+                  )}
+
+                  {/* Sem isto a coluna diz "1586" e mostra 50, sem explicar a
+                      diferenca -- que foi exatamente como o problema apareceu. */}
+                  {faltam > 0 && (
+                    <button
+                      type="button"
+                      className="btn ghost"
+                      style={{ width: "100%", marginTop: 6, fontSize: 12 }}
+                      disabled={buscandoMais === etapa.id}
+                      onClick={() => void carregarMais(etapa.id)}
+                    >
+                      {buscandoMais === etapa.id
+                        ? "Carregando..."
+                        : `Mostrando ${daColuna.length} de ${quantos} — carregar mais`}
+                    </button>
                   )}
                 </div>
               </section>
