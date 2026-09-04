@@ -59,9 +59,11 @@ const cor = {
 };
 
 /* ------------------------------------------------------------- planilha --- */
-/* Um .xlsx e um zip com XML dentro. O export do Imobilead vem sem
-   sharedStrings (strings inline), entao o parse cabe em poucas linhas e nao
-   justifica uma dependencia nova so para isso. */
+/* Um .xlsx e um zip com XML dentro, e o parse cabe em poucas linhas -- nao
+   justifica uma dependencia nova. Precisa dar conta das duas formas que o
+   mesmo dado assume: o export direto do Imobilead escreve o texto na propria
+   celula, e o arquivo re-salvo pelo Google Sheets troca isso por um indice
+   para um dicionario a parte. */
 /**
  * Extrai um arquivo de dentro do zip, em Node puro.
  *
@@ -70,7 +72,7 @@ const cor = {
  * do PATH de quem roda -- exatamente o tipo de diferenca que so aparece na
  * maquina do outro. zlib ja vem no Node e nao tem essa ambiguidade.
  */
-function doZip(buf, alvo) {
+function doZip(buf, alvo, opcional = false) {
   // fim do diretorio central: assinatura 0x06054b50, procurada de tras pra frente
   let fim = -1;
   for (let i = buf.length - 22; i >= 0 && i > buf.length - 66000; i--) {
@@ -101,13 +103,29 @@ function doZip(buf, alvo) {
     }
     p += 46 + nomeLen + extraLen + comLen;
   }
+  if (opcional) return null;
   throw new Error(`"${alvo}" nao encontrado dentro do .xlsx.`);
 }
 
 function lerXlsx(caminho) {
   const buf = readFileSync(caminho);
   const xml = doZip(buf, "xl/worksheets/sheet1.xml").toString("utf8");
-  return interpretar(xml);
+
+  /* Dicionario de strings compartilhadas.
+     O export direto do Imobilead traz o texto embutido na celula
+     (t="inlineStr"). O mesmo arquivo re-salvo pelo Google Sheets traz um
+     indice para xl/sharedStrings.xml (t="s") -- e sem resolver esse indice
+     toda coluna de texto volta vazia, sem erro nenhum. */
+  const ssBuf = doZip(buf, "xl/sharedStrings.xml", true);
+  const compart = [];
+  if (ssBuf) {
+    for (const si of ssBuf.toString("utf8").matchAll(/<si>([\s\S]*?)<\/si>/g)) {
+      const partes = [...si[1].matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((t) => t[1]);
+      compart.push(desescapar(partes.join("")));
+    }
+  }
+
+  return interpretar(xml, compart);
 }
 
 const desescapar = (s) =>
@@ -127,11 +145,11 @@ function coluna(ref) {
   return n - 1;
 }
 
-function interpretar(xml) {
+function interpretar(xml, compart = []) {
   const linhas = [];
   for (const m of xml.matchAll(/<row[^>]*>([\s\S]*?)<\/row>/g)) {
     const celulas = [];
-    for (const c of m[1].matchAll(/<c r="([A-Z]+\d+)"([^>]*)\/?>(?:([\s\S]*?)<\/c>)?/g)) {
+    for (const c of m[1].matchAll(/<c r="([A-Z]+\d+)"([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
       const [, ref, attrs, corpo = ""] = c;
       const tipo = (attrs.match(/t="([^"]+)"/) || [])[1];
       let valor = null;
@@ -140,7 +158,11 @@ function interpretar(xml) {
         valor = partes.length ? desescapar(partes.join("")) : null;
       } else {
         const v = corpo.match(/<v>([\s\S]*?)<\/v>/);
-        if (v) valor = tipo === "str" ? desescapar(v[1]) : v[1];
+        if (v) {
+          if (tipo === "s") valor = compart[Number(v[1])] ?? null;
+          else if (tipo === "str") valor = desescapar(v[1]);
+          else valor = v[1];
+        }
       }
       celulas[coluna(ref)] = valor;
     }
