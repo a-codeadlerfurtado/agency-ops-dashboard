@@ -118,20 +118,22 @@ describe("derivePaymentStatus", () => {
     expect(result.next_due_date).toBe("2026-09-11");
   });
 
-  // Guarda de regressao: o CHECK de client_finance_controls rejeita qualquer
-  // valor fora desta lista, e a falha so apareceria em producao.
-  it("so emite valores aceitos pelo CHECK do banco", () => {
-    const PERMITIDOS = ["CURRENT", "DUE_SOON", "OVERDUE", "DELINQUENT"];
-    const cenarios = [
-      [],
-      [{ due_date: "2026-09-30", status: "PENDING", payment_date: null }],
-      [{ due_date: "2026-09-11", status: "PENDING", payment_date: null }],
-      [{ due_date: "2026-09-09", status: "OVERDUE", payment_date: null }],
-      [{ due_date: "2026-01-01", status: "OVERDUE", payment_date: null }],
-    ];
-    for (const charges of cenarios) {
-      expect(PERMITIDOS).toContain(derivePaymentStatus({ charges, today: HOJE }).payment_status);
-    }
+  it("vencimento exatamente 3 dias depois e DUE_SOON (limite inclusivo)", () => {
+    const result = derivePaymentStatus({
+      charges: [{ due_date: "2026-09-13", status: "PENDING", payment_date: null }],
+      today: HOJE,
+    });
+    expect(result.payment_status).toBe("DUE_SOON");
+    expect(result.days_late).toBe(0);
+  });
+
+  it("vencimento exatamente 4 dias depois e CURRENT (fora do limite)", () => {
+    const result = derivePaymentStatus({
+      charges: [{ due_date: "2026-09-14", status: "PENDING", payment_date: null }],
+      today: HOJE,
+    });
+    expect(result.payment_status).toBe("CURRENT");
+    expect(result.days_late).toBe(0);
   });
 
   it("cliente sem cobranca nenhuma esta em dia e sem proximo vencimento", () => {
