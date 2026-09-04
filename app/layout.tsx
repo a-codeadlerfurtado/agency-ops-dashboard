@@ -101,6 +101,27 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="pt-BR">
       <head>
+        {/* A aba nao tinha titulo nem icone: o navegador mostrava o icone
+            generico e a URL. "Central de Operacoes" e o nome que o proprio
+            produto usa no h1. */}
+        <title>Central de Operações</title>
+
+        {/* Icone inline como data URI, e nao arquivo, porque o projeto nao tem
+            diretorio publico -- todo asset sai do build do vinext. Sao 443
+            caracteres, servidos junto do HTML, sem requisicao extra. A CSP do
+            worker permite (img-src 'self' data:).
+
+            O traco do simbolo original tem 5% da largura da marca: meio pixel
+            a 16px, que e o tamanho real da aba. Aqui vai ~2x mais grosso e
+            sobre placa azul da marca. Renderizado em 16/20/32/64/128 sobre
+            fundo claro e sobre a barra de abas escura do Chrome: fiel ao
+            original vira mancha cinza no claro e some no escuro. */}
+        <link
+          rel="icon"
+          type="image/svg+xml"
+          href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230359a6'/><g fill='%23fff'><rect x='8.46' y='5.5' width='15.09' height='1.45'/><rect x='8.46' y='5.5' width='1.56' height='21.00'/><rect x='21.98' y='5.5' width='1.56' height='14.38'/><path d='M12.31 17.49 L23.54 19.07 L23.54 19.88 L12.31 19.88 Z'/><path d='M19.69 24.11 L8.46 25.69 L8.46 26.5 L19.69 26.5 Z'/></g></svg>"
+        />
+
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" />
