@@ -120,6 +120,14 @@ async function cifrar(db: Admin, valor: string | null) {
   return { ciphertext: bytesParaB64(new Uint8Array(cifrado)), iv: bytesParaB64(iv) };
 }
 
+async function decifrar(db: Admin, ciphertext: unknown, iv: unknown) {
+  if (!ciphertext || !iv) return null;
+  const chave = await chaveDoCofre(db);
+  const aberto = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: b64ParaBytes(String(iv)) }, chave, b64ParaBytes(String(ciphertext)));
+  return new TextDecoder().decode(aberto);
+}
+
 /* ----------------------------------------------------------------- ator --- */
 
 async function quemChama(db: Admin, req: Request): Promise<Ator | null> {
@@ -215,11 +223,64 @@ Deno.serve(async (req) => {
     return json(req, { ok: true, imobiliarias: data ?? [], crm_url: CRM_URL });
   }
 
+  /* --------------------------------------------------------- REVELAR ---- */
+  /* Ver login e senha sem sair da Central. O mesmo cuidado do cofre: confirma
+     a senha do dashboard a cada vez, registra na auditoria, e o cliente esconde
+     de novo depois de alguns minutos. */
+  if (acao === "REVELAR") {
+    const tenant = limpo(body.tenant_id, 80);
+    const userId = limpo(body.user_id, 80);
+    if (!tenant || !userId) return json(req, { ok: false, error: "tenant_e_usuario_obrigatorios" }, 400);
+
+    const cliente = await clienteDoTenant(db, tenant);
+    if (!cliente) return json(req, { ok: false, error: "imobiliaria_sem_cliente" }, 409);
+
+    const reauth = await reautenticar(db, ator, cliente, body.dashboard_password);
+    if (!reauth.ok) return json(req, { ok: false, error: reauth.error }, reauth.status);
+
+    const { data: itemId } = await db.schema("imobi_board")
+      .rpc("item_no_cofre", { p_user_id: userId });
+    if (!itemId) return json(req, { ok: false, error: "sem_item_no_cofre" }, 404);
+
+    const { data: item } = await db.schema("agency_ops").from("client_access_vault")
+      .select("id,system_name,login_url,login_ciphertext,login_iv,password_ciphertext,password_iv,notes_ciphertext,notes_iv")
+      .eq("id", String(itemId)).eq("client_id", cliente).maybeSingle();
+    if (!item) return json(req, { ok: false, error: "sem_item_no_cofre" }, 404);
+
+    try {
+      const [login, senha, notas] = await Promise.all([
+        decifrar(db, item.login_ciphertext, item.login_iv),
+        decifrar(db, item.password_ciphertext, item.password_iv),
+        decifrar(db, item.notes_ciphertext, item.notes_iv),
+      ]);
+      await auditar(db, ator, cliente, "CRM_REVELAR", String(item.id), { tenant_id: tenant });
+      return json(req, {
+        ok: true,
+        credencial: {
+          item_id: item.id, system_name: item.system_name, login_url: item.login_url,
+          login, senha, notas, expira_em_segundos: 180,
+        },
+      });
+    } catch (e) {
+      const codigo = e instanceof Error ? e.message : "cofre_decifra_falhou";
+      return json(req, {
+        ok: false,
+        error: codigo.startsWith("vault_key_") ? codigo : "cofre_decifra_falhou",
+      }, 500);
+    }
+  }
+
   /* ----------------------------------------------------- LIGAR_CLIENTE -- */
   if (acao === "LIGAR_CLIENTE") {
     const tenant = limpo(body.tenant_id, 80);
     const cliente = limpo(body.client_id, 80) || null;
     if (!tenant) return json(req, { ok: false, error: "tenant_id_required" }, 400);
+
+    // era a unica rota que alterava estado sem confirmar a senha; apontar a
+    // imobiliaria para o cliente errado manda o proximo acesso ao cofre errado
+    const reauth = await reautenticar(db, ator, cliente, body.dashboard_password);
+    if (!reauth.ok) return json(req, { ok: false, error: reauth.error }, reauth.status);
+
     const { data, error } = await db.schema("imobi_board")
       .rpc("ligar_ao_cliente", { p_tenant: tenant, p_cliente: cliente });
     if (error) return json(req, { ok: false, error: error.message }, 400);
