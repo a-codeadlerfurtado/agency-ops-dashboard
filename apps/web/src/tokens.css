@@ -76,8 +76,27 @@
   /* brilhos de marca: azul entra pela esquerda-alta, laranja pela direita-alta.
      A direcao e fixa em toda a interface para o olho ler como uma fonte de luz
      so, e nao como enfeite espalhado. */
-  --brilho-azul:    radial-gradient(125% 150% at 0% 0%, #3e92dc1c, transparent 58%);
-  --brilho-laranja: radial-gradient(125% 150% at 100% 0%, #f26b2114, transparent 55%);
+  --brilho-azul:    radial-gradient(125% 150% at 0% 0%, #3e92dc29, transparent 58%);
+  --brilho-laranja: radial-gradient(125% 150% at 100% 0%, #f26b211f, transparent 55%);
+
+  /* Azul claro: o mesmo #76c6ff da marca. O --blue e azul de informacao, para
+     link e estado; este e luz, e so aparece em gradiente. Separar os dois
+     evita o erro de usar cor de marca onde o usuario espera significado. */
+  --azul-claro: #76c6ff;
+  --brilho-azul-claro: radial-gradient(120% 140% at 0% 0%, #76c6ff1f, transparent 56%);
+
+  /* Duo: as duas pontas na mesma peca, azul a esquerda e laranja a direita.
+     Reservado a superficie larga -- topbar, faixa, cabecalho de card. Numa
+     peca estreita as duas fontes se encavalam e viram um borrao sujo. */
+  --duo-marca:
+    radial-gradient(120% 150% at 0% 0%,   #76c6ff1c, transparent 55%),
+    radial-gradient(120% 150% at 100% 0%, #f26b211c, transparent 52%);
+
+  /* Fio: gradiente de 1px na borda superior. Da a leitura de cor sem tingir a
+     superficie inteira, entao serve onde ja ha texto por cima e o contraste
+     nao pode cair. */
+  --fio-marca:
+    linear-gradient(90deg, #76c6ff59, #76c6ff14 34%, transparent 62%, #f26b2140);
 
   /* ---- geometria ---- */
   --r-sm: 10px;   /* botões e inputs no Agency Ops são 10px */

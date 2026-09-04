@@ -1277,16 +1277,23 @@ table.tbl th { background: #061626; }
    colocar nenhuma caixa em volta dele. */
 .sidebar {
   background-image:
-    radial-gradient(110% 32% at 22% 0%, #0359a62e, transparent 68%),
+    radial-gradient(110% 32% at 22% 0%, #0359a63d, transparent 68%),
+    radial-gradient(120% 26% at 50% 100%, #f26b2114, transparent 70%),
     linear-gradient(180deg, #08192c 0%, #051220 42%, #030d18 100%);
 }
 
 /* O header ganha o mesmo azul, na mesma direcao, para ler como continuacao
-   da sidebar e nao como uma segunda barra. */
+   da sidebar e nao como uma segunda barra -- e agora fecha em laranja na
+   ponta direita, onde ficam o sino e o avatar. A barra inteira passa a ser
+   um percurso de cor em vez de um azul que some no meio. */
 .topbar {
   background-image:
-    linear-gradient(90deg, #0359a61f, transparent 46%),
+    var(--fio-marca),
+    linear-gradient(90deg, #0359a626, transparent 44%),
+    radial-gradient(80% 180% at 100% 0%, #f26b2117, transparent 60%),
     var(--luz-topo);
+  background-repeat: no-repeat;
+  background-size: 100% 1px, auto, auto, auto;
 }
 
 /* ---- cards e paineis ---- */
@@ -1303,26 +1310,34 @@ table.tbl th { background: #061626; }
 /* Cabecalho de card com um fio de luz: separa titulo de conteudo sem precisar
    de mais uma borda. */
 .card-head {
-  background-image: var(--luz-topo);
+  background-image: var(--fio-marca), var(--duo-marca), var(--luz-topo);
+  background-repeat: no-repeat;
+  background-size: 100% 1px, auto, auto;
 }
 
 /* A faixa de numeros e uma peca larga e baixa; o brilho azul na ponta
    esquerda dá a ela o mesmo eixo de luz do resto. */
 .faixa {
-  background-image: var(--brilho-azul), var(--luz-card);
+  background-image: var(--fio-marca), var(--duo-marca), var(--luz-card);
+  background-repeat: no-repeat;
+  background-size: 100% 1px, auto, auto;
 }
 
 /* Metrica: alem do brilho circular que ja existia no canto, ganha o gradiente
    diagonal. O card do heroi recebe azul; o de acento, laranja. E o gradiente
    que faz o numero grande parecer apoiado em alguma coisa. */
-.stat.metric        { background-image: var(--brilho-azul), var(--luz-card); }
+.stat.metric        { background-image: var(--brilho-azul-claro), var(--luz-card); }
 .stat.metric.acento { background-image: var(--brilho-laranja), var(--luz-card); }
-.stat.stat-hero     { background-image: var(--brilho-azul), var(--luz-card); }
+.stat.stat-hero     { background-image: var(--fio-marca), var(--duo-marca), var(--luz-card);
+                      background-repeat: no-repeat;
+                      background-size: 100% 1px, auto, auto; }
 
 /* Coluna do Kanban: leve, so para o fundo da coluna nao competir com o card
    que esta dentro dela. */
-.kcol      { background-image: var(--luz-suave); }
-.kcol-head { background-image: var(--luz-topo); }
+.kcol      { background-image: var(--brilho-azul-claro), var(--luz-suave); }
+.kcol-head { background-image: var(--fio-marca), var(--luz-topo);
+             background-repeat: no-repeat;
+             background-size: 100% 1px, auto; }
 
 /* ---- pecas pequenas ---- */
 
@@ -1355,6 +1370,36 @@ table.tbl th {
   background-image: var(--luz-suave);
 }
 
+/* ---- pecas que carregam a leitura ---- */
+
+/* Barra do funil: era azul chapado. O degrade do azul claro para o azul da
+   marca da direcao a peca -- ela cresce da esquerda para a direita, e agora a
+   cor acompanha esse movimento. A etapa final continua verde chapado: ali a
+   cor tem significado (o que se quer alcancar) e significado ganha de estilo. */
+.funil-barra {
+  background-image: linear-gradient(90deg, var(--azul-claro), var(--blue) 78%);
+}
+.funil-linha:last-child .funil-barra { background-image: none; }
+
+/* Cabecalho do modal: o mesmo fio dos cards, para o dialogo pertencer a mesma
+   familia da tela que ficou atras dele. */
+.mdl-head {
+  background-image: var(--fio-marca), var(--duo-marca), var(--luz-topo);
+  background-repeat: no-repeat;
+  background-size: 100% 1px, auto, auto;
+}
+
+/* Painel de marca do login: ja era azul de cima a baixo. Entra o laranja no
+   canto inferior direito, fechando a diagonal -- e a unica peca da interface
+   onde as duas cores aparecem em forca total, porque nao ha texto de dados
+   por cima, so a marca. */
+.login-marca {
+  background-image:
+    radial-gradient(120% 90% at 18% 8%, #0a6cc4 0%, transparent 62%),
+    radial-gradient(90% 70% at 100% 100%, #f26b2136, transparent 58%),
+    linear-gradient(160deg, var(--brand-mid) 0%, var(--brand-deep) 58%, var(--brand-ink) 100%);
+}
+
 /* ---- fundo da aplicacao ----
    Os dois radiais que ja existiam ficam; entra um terceiro, embaixo e a
    direita, para a tela nao morrer em preto chapado no rodape das listas
@@ -1365,7 +1410,8 @@ body {
   background-image:
     radial-gradient(circle at 12% -10%, #0359a657, transparent 30rem),
     radial-gradient(circle at 92% 2%,   #f26b2117, transparent 26rem),
-    radial-gradient(90% 55% at 78% 100%, #0359a61a, transparent 62%);
+    radial-gradient(90% 55% at 78% 100%, #0359a626, transparent 62%),
+    radial-gradient(70% 40% at 8% 92%, #f26b210f, transparent 66%);
 }
 
 /* ==================================================== paginas publicas ====
