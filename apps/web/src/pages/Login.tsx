@@ -3,12 +3,6 @@ import { Alerta } from "../ui";
 import { supabase } from "../lib/supabase";
 import { ImobiBoardMark } from "../Marca";
 
-const DEMO = [
-  { papel: "ADMIN",  email: "carlos@terraconcreta.demo" },
-  { papel: "BROKER", email: "joao@terraconcreta.demo" },
-  { papel: "ADMIN",  email: "beatriz@horizonte.demo" },
-];
-
 /**
  * Login com a mesma arquitetura visual do Agency Ops: painel de marca à
  * esquerda em gradiente da marca, formulário à direita sobre superfície
@@ -65,12 +59,6 @@ export default function Login({
       setErro((err as Error).message);
       setEnviando(false);
     }
-  }
-
-  function preencher(mail: string) {
-    setEmail(mail);
-    setSenha("ImobiBoard#Demo2026");
-    setErro(null);
   }
 
   return (
@@ -136,17 +124,6 @@ export default function Login({
               {enviando ? "Entrando..." : "Entrar no CRM"}
             </button>
           </form>
-
-          <div className="login-demo">
-            <b>Ambiente de demonstracao.</b> Contas ficticias, dados gerados:
-            <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
-              {DEMO.map((d) => (
-                <button key={d.email} type="button" onClick={() => preencher(d.email)}>
-                  {d.email} <span style={{ opacity: 0.65 }}>({d.papel})</span>
-                </button>
-              ))}
-            </div>
-          </div>
         </div>
       </main>
     </div>

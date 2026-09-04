@@ -6,6 +6,7 @@ import { ImobiBoardLogo, ImobiBoardMark } from "./Marca";
 import type { Sessao } from "./lib/types";
 
 import Login from "./pages/Login";
+import Demo from "./pages/Demo";
 import Convite from "./pages/Convite";
 import { Privacidade, Termos } from "./pages/Publicas";
 import NovaSenha from "./pages/NovaSenha";
@@ -305,6 +306,14 @@ export default function App() {
   if (rota.startsWith("/nova-senha")) return <NovaSenha />;
 
   if (estado.fase === "carregando") return <Carregando />;
+
+  /* Demonstracao em endereco proprio. Os perfis de mentira sairam da tela de
+     login -- o cliente real nao precisa ver conta ficticia toda vez que entra
+     para trabalhar -- e viraram este link, que e o que se compartilha numa
+     apresentacao. Vem antes do Login para funcionar sem sessao. */
+  if (estado.fase === "deslogado" && rota.replace(/\/+$/, "") === "/demo") {
+    return <Demo entrar={entrar} />;
+  }
   if (estado.fase === "deslogado") return <Login entrar={entrar} />;
 
   if (estado.fase === "erro") {
