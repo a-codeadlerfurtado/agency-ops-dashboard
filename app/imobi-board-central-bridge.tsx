@@ -67,6 +67,8 @@ const rotulos: Record<string, string> = {
   sem_item_no_cofre:
     "Esse usuário ainda não tem senha no cofre — defina uma primeiro para poder vê-la.",
   cofre_decifra_falhou: "Não foi possível abrir essa credencial.",
+  falha_ao_ler_imobiliaria:
+    "Não consegui ler a ligação desta imobiliária com o cliente. Isso é falha de leitura, não ausência de ligação — me mostre o detalhe.",
   origin_not_allowed: "Origem não autorizada.",
 };
 const rotulo = (codigo: unknown) =>
@@ -577,6 +579,13 @@ export default function ImobiBoardCentralBridge() {
         {alvo && (
           <div style={{ ...caixa, borderColor: "var(--accent, #60a5fa)" }}>
             <strong style={{ fontSize: 14 }}>Definir a senha de {alvo.u.email}</strong>
+            {/* O banner do topo fica longe daqui: com varios cards abertos, um erro
+                desta ação parecia ser de outra imobiliária. */}
+            {erro && (
+              <div style={{ marginTop: 8, fontSize: 12, color: "var(--danger, #f87171)" }}>
+                {erro}
+              </div>
+            )}
             <p style={{ fontSize: 12, color: "var(--muted)", margin: "6px 0 10px" }}>
               A senha que você digitar passa a valer no CRM e vai cifrada para o cofre de{" "}
               {alvo.t.cliente || "—"}. Você digita — eu não gero senha por você.
