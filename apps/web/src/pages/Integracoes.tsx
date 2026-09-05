@@ -8,6 +8,8 @@ import {
 } from "../lib/comercial";
 import { mensagemDeErro } from "../lib/supabase";
 import Dialogo from "../Dialogo";
+import GuiaDeIntegracao from "../GuiaDeIntegracao";
+import { GUIAS } from "../lib/guias";
 import {
   Alerta, CabecalhoDaPagina, Card, CardsCarregando, Ico, useAsync, useToast, Vazio,
 } from "../ui";
@@ -137,6 +139,9 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
   const [aberta, setAberta] = useState<string | null>(null);
   const [tokenNovo, setTokenNovo] = useState<{ id: string; token: string } | null>(null);
   const [escolhendo, setEscolhendo] = useState(false);
+  // canal cujo guia esta aberto; o guia vive no nivel da pagina para
+  // poder ser aberto tanto pelo card do canal quanto pelo da conexao
+  const [guia, setGuia] = useState<Canal | null>(null);
 
   const dados = useAsync(
     async () => ({
@@ -275,11 +280,19 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
                     <button className="btn sm ghost" onClick={() => setNovo(c)}>
                       Manual
                     </button>
+                    <button className="btn sm ghost" onClick={() => setGuia(c)}>
+                      Como configurar
+                    </button>
                   </div>
                 ) : (
-                  <button className="btn sm primary" onClick={() => setNovo(c)}>
-                    {Ico.plus({ size: 14 })} Conectar
-                  </button>
+                  <div className="row" style={{ gap: 7, flexWrap: "wrap" }}>
+                    <button className="btn sm primary" onClick={() => setNovo(c)}>
+                      {Ico.plus({ size: 14 })} Conectar
+                    </button>
+                    <button className="btn sm ghost" onClick={() => setGuia(c)}>
+                      Como configurar
+                    </button>
+                  </div>
                 )}
               </div>
             </Card>
@@ -307,9 +320,29 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
             aoAbrir={() => setAberta(aberta === f.id ? null : f.id)}
             aoMudar={() => dados.recarregar()}
             aoNovoToken={(t) => setTokenNovo({ id: f.id, token: t })}
+            aoVerGuia={() => setGuia(f.integration)}
           />
         ))
       )}
+
+      {/* Um guia so para a pagina inteira: aberto pelo card do canal ou pelo
+          "Ver guia" de uma conexao existente. Manter um por card duplicaria
+          estado e deixaria dois abertos ao mesmo tempo. */}
+      <GuiaDeIntegracao
+        aberto={guia !== null}
+        titulo={guia ? `Como configurar ${CANAIS[guia].nome}` : ""}
+        passos={guia ? GUIAS[guia] ?? [] : []}
+        credenciais={
+          guia && tokenNovo
+            ? {
+                url: urlDeCallback(guia, tokenNovo.token),
+                chave: guia === "GOOGLE_ADS" || guia === "META_ADS"
+                  ? tokenNovo.token : undefined,
+              }
+            : null
+        }
+        aoFechar={() => setGuia(null)}
+      />
 
       <EscolherPagina
         aberto={escolhendo}
@@ -353,7 +386,7 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
 /* ------------------------------------------------------- conexao --- */
 
 function Conexao({
-  fonte, filas: listaDeFilas, aberta, tokenNovo, aoAbrir, aoMudar, aoNovoToken,
+  fonte, filas: listaDeFilas, aberta, tokenNovo, aoAbrir, aoMudar, aoNovoToken, aoVerGuia,
 }: {
   fonte: FonteDeLead;
   filas: { id: string; name: string }[];
@@ -361,6 +394,7 @@ function Conexao({
   tokenNovo: string | null;
   aoAbrir: () => void;
   aoMudar: () => void;
+  aoVerGuia: () => void;
   aoNovoToken: (t: string) => void;
 }) {
   const avisar = useToast();
@@ -390,6 +424,9 @@ function Conexao({
           {fonte.leads} lead{fonte.leads === 1 ? "" : "s"}
           {fonte.last_used_at ? ` · ultimo ${relativo(fonte.last_used_at)}` : ""}
         </span>
+        <button className="btn ghost sm" onClick={aoVerGuia}>
+          Ver guia
+        </button>
         <button className="btn ghost sm" onClick={aoAbrir}>
           {aberta ? "Fechar" : "Configurar"}
         </button>
