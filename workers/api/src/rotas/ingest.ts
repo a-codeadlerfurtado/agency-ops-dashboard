@@ -95,9 +95,76 @@ const adaptadorMeta: Adaptador = (corpo) => {
   };
 };
 
+/**
+ * Google Ads - formulario de lead (lead form asset).
+ *
+ * Nao precisa de app nem de OAuth: o Google Ads chama um webhook direto. O
+ * payload vem com os campos numa lista `user_column_data`, cada item com
+ * `column_id` e `string_value`.
+ *
+ * A leitura e por `column_id`, nao por `column_name`: o nome vem traduzido
+ * para o idioma da conta ("Nome completo", "Full Name"), e casar por texto
+ * quebraria conforme o idioma de quem configurou. O nome so serve de reserva,
+ * para as perguntas personalizadas, que nao tem id padronizado.
+ *
+ * O Google nao manda cabecalho de autenticacao. Ele manda `google_key` no
+ * corpo, com o valor que o anunciante digitou na tela do Ads -- e por isso a
+ * conferencia dela acontece no handler, contra o mesmo token que ja esta na
+ * URL.
+ */
+const adaptadorGoogle: Adaptador = (corpo) => {
+  const c = corpo as Record<string, unknown>;
+  const colunas = Array.isArray(c.user_column_data)
+    ? (c.user_column_data as { column_id?: string; column_name?: string; string_value?: unknown }[])
+    : [];
+
+  const porId: Record<string, string> = {};
+  const porNome: Record<string, string> = {};
+  for (const col of colunas) {
+    const v = texto(col?.string_value);
+    if (!v) continue;
+    if (col.column_id) porId[String(col.column_id).toUpperCase()] = v;
+    if (col.column_name) porNome[String(col.column_name).toLowerCase()] = v;
+  }
+
+  const pegar = (ids: string[], nomes: string[] = []) => {
+    for (const id of ids) if (porId[id]) return porId[id];
+    for (const n of nomes) if (porNome[n]) return porNome[n];
+    return undefined;
+  };
+
+  // o Google separa nome e sobrenome quando a pergunta e essa; juntar aqui
+  // evita gravar "Maria" e perder "Silva"
+  const nome =
+    pegar(["FULL_NAME"], ["nome completo", "full name"]) ??
+    ([pegar(["FIRST_NAME"], ["nome"]), pegar(["LAST_NAME"], ["sobrenome"])]
+      .filter(Boolean).join(" ").trim() || undefined);
+
+  return {
+    nome: nome || "Sem nome",
+    telefone: pegar(["PHONE_NUMBER", "WORK_PHONE"], ["telefone", "phone"]),
+    email: pegar(["EMAIL", "WORK_EMAIL"], ["e-mail", "email"]),
+    atribuicao: {
+      utm_source: "google",
+      utm_medium: "cpc",
+      campaign_id: texto(c.campaign_id),
+      adset_id: texto(c.adgroup_id),
+      ad_id: texto(c.creative_id),
+      form_id: texto(c.form_id),
+      gclid: texto(c.gcl_id),
+      platform_lead_id: texto(c.lead_id),
+    },
+    // lead_id e o identificador estavel do Google: e ele que torna o reenvio
+    // do mesmo lead inofensivo, como o leadgen_id faz na Meta
+    eventoExterno: texto(c.lead_id),
+  };
+};
+
 const ADAPTADORES: Record<string, Adaptador> = {
   meta: adaptadorMeta,
   "meta-ads": adaptadorMeta,
+  google: adaptadorGoogle,
+  "google-ads": adaptadorGoogle,
   webhook: adaptadorWebhook,
   site: adaptadorWebhook,
   form: adaptadorWebhook,
@@ -144,6 +211,30 @@ export async function ingerir(
   const avisos = avisosDeLead(corpo);
   if (avisos) {
     return ingerirAvisosDaMeta(avisos, env, tokenSha, integracao);
+  }
+
+  /* --------------------------------------------- particularidades do Google ---
+     Duas coisas que so existem aqui e que, se ignoradas, fazem o Google
+     recusar a configuracao ou entregar lead falso no funil. */
+  if (integracao.toLowerCase().startsWith("google")) {
+    const c = corpo as Record<string, unknown>;
+
+    // 1. A chave. O Google nao manda cabecalho de autenticacao: manda
+    //    `google_key` no corpo, com o valor digitado na tela do Ads. Exigir
+    //    que seja o mesmo token da URL da uma segunda checagem sem inventar
+    //    outro segredo para alguem guardar.
+    const chave = typeof c.google_key === "string" ? c.google_key.trim() : "";
+    if (chave && chave !== token) {
+      return json({ erro: "google_key nao confere com a chave desta conexao." }, 401);
+    }
+
+    // 2. O lead de teste. Ao configurar, o Google envia um lead falso e SO
+    //    aceita a URL se a resposta for 200. Gravar esse lead sujaria o funil
+    //    com "Test Lead" logo na estreia; recusar faria o Google dizer que a
+    //    integracao esta quebrada. Responde 200 e nao grava.
+    if (c.is_test === true || c.is_test === "true") {
+      return json({ ok: true, teste: true, gravado: false }, 200);
+    }
   }
 
   const lead = adaptador(corpo);

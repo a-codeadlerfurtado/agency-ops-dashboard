@@ -27,6 +27,11 @@ const CANAIS = {
     caminho: "meta",
     resumo: "Facebook e Instagram. O lead cai no CRM no segundo em que a pessoa envia o formulario.",
   },
+  GOOGLE_ADS: {
+    nome: "Google Ads",
+    caminho: "google",
+    resumo: "Formulario de lead do Google Ads. Nao precisa de app nem de conta de desenvolvedor: cola a URL e a chave dentro do proprio Ads.",
+  },
   SITE: {
     nome: "Site / Landing page",
     caminho: "site",
@@ -419,6 +424,13 @@ function Conexao({
                   dica="O mesmo valor que ja esta no fim da URL. A Meta pede nos dois campos."
                 />
               )}
+              {fonte.integration === "GOOGLE_ADS" && (
+                <Copiavel
+                  rotulo="Chave"
+                  valor={tokenNovo}
+                  dica="No Google Ads, campo 'Chave'. E o mesmo valor do fim da URL: o Google manda essa chave no corpo e nos conferimos se bate."
+                />
+              )}
             </>
           ) : (
             <Alerta tipo="warn">
@@ -429,6 +441,7 @@ function Conexao({
           )}
 
           {fonte.integration === "META_ADS" && <PassoAPasso />}
+          {fonte.integration === "GOOGLE_ADS" && <PassoAPassoGoogle />}
 
           {fonte.integration !== "META_ADS" && (
             <div style={{ fontSize: 13, color: "var(--muted)" }}>
@@ -612,6 +625,44 @@ function PassoAPasso() {
         <span className="hint">
           Ele aparece em Leads em segundos. Se nao aparecer, o erro fica escrito
           aqui nesta tela.
+        </span>
+      </Passo>
+    </div>
+  );
+}
+
+/**
+ * Google Ads. Deliberadamente sem nenhum passo de "criar app": o formulario de
+ * lead do Google entrega por webhook direto, sem OAuth e sem conta de
+ * desenvolvedor. Quem procura por isso perde horas achando que precisa.
+ */
+function PassoAPassoGoogle() {
+  return (
+    <div className="col" style={{ gap: 12 }}>
+      <Passo n={1} titulo="No Google Ads, abra Recursos > Formulario de lead (ou crie um no anuncio).">
+        <span className="hint">
+          Nao e preciso criar app, projeto no Google Cloud nem conta de
+          desenvolvedor. Isso so seria necessario para a API do Google Ads, que
+          e outro caminho.
+        </span>
+      </Passo>
+      <Passo n={2} titulo="Va ate a etapa de entrega e escolha 'Webhook'." />
+      <Passo n={3} titulo="Cole a URL de callback no campo 'URL do webhook' e a Chave no campo 'Chave'." >
+        <span className="hint">
+          Sao os dois valores acima. O Google devolve a chave dentro do corpo de
+          cada lead, e o CRM confere se bate.
+        </span>
+      </Passo>
+      <Passo n={4} titulo="Clique em 'Enviar dados de teste'.">
+        <span className="hint">
+          O Google so aceita a URL se ela responder. Esse lead de teste NAO entra
+          no funil de proposito -- ele existe so para validar a configuracao.
+        </span>
+      </Passo>
+      <Passo n={5} titulo="Salve o formulario e publique o anuncio.">
+        <span className="hint">
+          A partir daí o lead cai aqui no momento do envio, ja distribuido para
+          um corretor da fila.
         </span>
       </Passo>
     </div>

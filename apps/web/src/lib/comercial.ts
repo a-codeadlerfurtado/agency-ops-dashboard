@@ -347,7 +347,7 @@ function achatarContato(linha: unknown): unknown {
 
 export interface FonteDeLead {
   id: string;
-  integration: "META_ADS" | "SITE" | "WEBHOOK";
+  integration: "META_ADS" | "GOOGLE_ADS" | "SITE" | "WEBHOOK";
   label: string;
   queue_id: string | null;
   queue_nome: string | null;
@@ -369,7 +369,7 @@ export async function fontesDeLead(): Promise<FonteDeLead[]> {
 
 /** Devolve o token EM CLARO uma unica vez. Depois so o hash existe. */
 export async function criarFonte(
-  integration: "META_ADS" | "SITE" | "WEBHOOK",
+  integration: "META_ADS" | "GOOGLE_ADS" | "SITE" | "WEBHOOK",
   label: string,
   queueId: string | null
 ) {
