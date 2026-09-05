@@ -48,6 +48,13 @@ const APPS = [
 
 const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+const BRAND_MARK = `<svg viewBox="0 0 276 390" role="img" aria-label="Leonardo Imobi" fill="none">
+  <rect x="6.5" y="6.5" width="263" height="252" stroke="currentColor" stroke-width="13" />
+  <rect x="0" y="252" width="13" height="138" fill="currentColor" />
+  <polygon points="68,223 276,247 276,253 68,253" fill="currentColor" />
+  <polygon points="0,377 208,343 208,390 0,390" fill="currentColor" />
+</svg>`;
+
 function pagina() {
   const cards = APPS.map((app) => {
     const icon = app.iconHref
@@ -65,7 +72,7 @@ function pagina() {
         <p>${esc(app.descricao)}</p>
         <div class="actions">
           <a class="btn primary" href="${esc(app.href)}" rel="noopener">Abrir sistema</a>
-          <button class="btn secondary" type="button" data-install-name="${esc(app.nome)}" data-install-url="${esc(app.href)}">Adicionar ao iPhone</button>
+          <button class="btn secondary" type="button" data-install-name="${esc(app.nome)}" data-install-url="${esc(app.href)}">Adicionar ao celular</button>
         </div>
       </article>`;
   }).join("");
@@ -77,7 +84,7 @@ function pagina() {
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
 <meta name="theme-color" content="#071C3D">
-<title>Apps Lak · Instalar no iPhone</title>
+<title>Apps Leonardo Imobi · Instalar no celular</title>
 <style>
   :root{color-scheme:dark;--bg:#040914;--panel:#08162c;--panel2:#0a1c38;--line:#17345f;--text:#f4f7fb;--muted:#90a3bc;--blue:#0c63b9;--orange:#fd6801;--ok:#36d399}
   *{box-sizing:border-box}
@@ -85,6 +92,11 @@ function pagina() {
   body{margin:0;min-height:100vh;background:radial-gradient(circle at 85% 0%,rgba(3,84,155,.28),transparent 35%),var(--bg);color:var(--text);font:15px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"SF Pro Text","Segoe UI",sans-serif}
   button,a{font:inherit}
   .shell{width:min(960px,100%);margin:0 auto;padding:max(30px,env(safe-area-inset-top)) 18px max(46px,env(safe-area-inset-bottom))}
+  .brand{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+  .brand-mark{width:28px;height:40px;color:#fff;flex:0 0 auto}
+  .brand-mark svg{display:block;width:100%;height:100%}
+  .brand-name{font-weight:800;letter-spacing:-.02em;font-size:16px}
+  .brand-name small{display:block;color:var(--muted);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-top:1px}
   .eyebrow{display:inline-flex;align-items:center;gap:8px;color:#a9bdd8;font-size:12px;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
   .eyebrow::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--orange);box-shadow:0 0 18px rgba(253,104,1,.65)}
   h1{font-size:clamp(32px,7vw,56px);line-height:1.02;letter-spacing:-.04em;margin:12px 0 12px;max-width:760px}
@@ -115,7 +127,7 @@ function pagina() {
   .modal{padding:20px}
   .modal-top{display:flex;justify-content:space-between;gap:14px;align-items:flex-start}
   .modal h3{font-size:22px;margin:0 0 5px;letter-spacing:-.025em}
-  .modal .sub{color:var(--muted);font-size:13px;margin:0}
+  .modal .sub{color:var(--muted);font-size:13px;margin:0;word-break:break-all}
   .close{border:1px solid var(--line);background:transparent;color:#c9d8eb;border-radius:9px;width:36px;height:36px;cursor:pointer}
   .steps{display:grid;gap:10px;margin:18px 0}
   .step{display:grid;grid-template-columns:30px 1fr;gap:10px;align-items:start;background:#0a1c36;border:1px solid #18375f;border-radius:13px;padding:11px}
@@ -124,33 +136,29 @@ function pagina() {
   .modal-actions{display:flex;gap:8px;flex-wrap:wrap}
   .modal-actions .btn{flex:1 1 170px}
   .status{margin-top:10px;color:var(--ok);font-size:12px;min-height:18px}
-  .non-safari{display:none;margin:12px 0 0;border:1px solid rgba(253,104,1,.45);background:rgba(253,104,1,.08);color:#ffd8bc;border-radius:11px;padding:10px 11px;font-size:12px}
+  .browser-warning{display:none;margin:12px 0 0;border:1px solid rgba(253,104,1,.45);background:rgba(253,104,1,.08);color:#ffd8bc;border-radius:11px;padding:10px 11px;font-size:12px}
   @media(max-width:700px){.grid{grid-template-columns:1fr}.app-card p{min-height:0}.shell{padding-left:14px;padding-right:14px}.actions .btn{flex:1 1 150px}}
   @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
 </style>
 </head>
 <body>
 <main class="shell">
-  <span class="eyebrow">Lak Assessoria Digital</span>
-  <h1>Seus sistemas no iPhone, como apps.</h1>
-  <p class="lead">Abra esta página no iPhone, escolha o sistema e siga o passo a passo. O ícone fica na Tela de Início e abre direto no sistema.</p>
+  <div class="brand"><div class="brand-mark">${BRAND_MARK}</div><div class="brand-name">Leonardo Imobi<small>Ecossistema de sistemas</small></div></div>
+  <span class="eyebrow">Apps Leonardo Imobi</span>
+  <h1>Seus sistemas no celular, como apps.</h1>
+  <p class="lead">Abra esta página no iPhone ou Android, escolha o sistema e siga o passo a passo. O ícone fica na Tela de Início e abre direto no sistema.</p>
   <div class="hero-actions">
     <button id="share-central" class="share-central" type="button">Compartilhar esta central</button>
   </div>
-  <div class="tip"><strong>Importante:</strong> o iPhone exige uma confirmação do usuário para colocar um site na Tela de Início. Esta página reduz o processo ao mínimo e mostra exatamente onde tocar.</div>
+  <div class="tip"><strong>Importante:</strong> iPhone e Android exigem uma confirmação do usuário para instalar ou colocar um site na Tela de Início. Esta página detecta o aparelho e mostra o caminho mais curto.</div>
   <section class="grid">${cards}</section>
-  <p class="foot">Central pública de atalhos. Nenhuma credencial ou dado de cliente é armazenado aqui.</p>
+  <p class="foot">Leonardo Imobi · Central pública de atalhos. Nenhuma credencial ou dado de cliente é armazenado aqui.</p>
 </main>
 <dialog id="install-dialog">
   <div class="modal">
-    <div class="modal-top"><div><h3 id="install-title">Adicionar ao iPhone</h3><p class="sub" id="install-url"></p></div><button class="close" type="button" aria-label="Fechar">✕</button></div>
-    <div class="non-safari" id="non-safari">Você parece estar dentro de outro aplicativo. Abra o endereço no <strong>Safari</strong> antes de continuar.</div>
-    <div class="steps">
-      <div class="step"><div class="n">1</div><div><b>Abra o sistema no Safari</b><span>Use o botão abaixo para abrir o endereço correto.</span></div></div>
-      <div class="step"><div class="n">2</div><div><b>Toque em Compartilhar</b><span>É o ícone do quadrado com uma seta para cima na barra do Safari.</span></div></div>
-      <div class="step"><div class="n">3</div><div><b>Adicionar à Tela de Início</b><span>Escolha essa opção; se aparecer “Abrir como App da Web”, deixe ativado.</span></div></div>
-      <div class="step"><div class="n">4</div><div><b>Toque em Adicionar</b><span>Pronto: o sistema vira um ícone na Tela de Início.</span></div></div>
-    </div>
+    <div class="modal-top"><div><h3 id="install-title">Adicionar ao celular</h3><p class="sub" id="install-url"></p></div><button class="close" type="button" aria-label="Fechar">✕</button></div>
+    <div class="browser-warning" id="browser-warning"></div>
+    <div class="steps" id="steps"></div>
     <div class="modal-actions">
       <a class="btn primary" id="open-app" href="#">Abrir sistema</a>
       <button class="btn secondary" id="copy-app" type="button">Copiar link</button>
@@ -166,22 +174,55 @@ function pagina() {
   const open = document.getElementById('open-app');
   const copy = document.getElementById('copy-app');
   const status = document.getElementById('status');
-  const nonSafari = document.getElementById('non-safari');
+  const warning = document.getElementById('browser-warning');
+  const steps = document.getElementById('steps');
   let currentUrl = '';
 
   const ua = navigator.userAgent || '';
   const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const isAndroid = /Android/i.test(ua);
   const isSafari = isIOS && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
+  const isChromeAndroid = isAndroid && /Chrome\//.test(ua) && !/EdgA|OPR\//.test(ua);
+
+  function renderSteps() {
+    warning.style.display = 'none';
+    if (isIOS) {
+      title.textContent = title.textContent.replace('ao celular', 'ao iPhone');
+      if (!isSafari) {
+        warning.innerHTML = 'Abra este endereço no <strong>Safari</strong> para ter a opção de adicionar como app.';
+        warning.style.display = 'block';
+      }
+      steps.innerHTML = '<div class="step"><div class="n">1</div><div><b>Abra o sistema no Safari</b><span>Use o botão abaixo para abrir o endereço correto.</span></div></div>' +
+        '<div class="step"><div class="n">2</div><div><b>Toque em Compartilhar</b><span>É o ícone do quadrado com uma seta para cima.</span></div></div>' +
+        '<div class="step"><div class="n">3</div><div><b>Adicionar à Tela de Início</b><span>Se aparecer “Abrir como App da Web”, deixe ativado.</span></div></div>' +
+        '<div class="step"><div class="n">4</div><div><b>Toque em Adicionar</b><span>Pronto: o sistema vira um ícone na Tela de Início.</span></div></div>';
+      return;
+    }
+    if (isAndroid) {
+      title.textContent = title.textContent.replace('ao celular', 'ao Android');
+      if (!isChromeAndroid) {
+        warning.innerHTML = 'No Android, o caminho mais consistente é abrir o sistema no <strong>Chrome</strong>.';
+        warning.style.display = 'block';
+      }
+      steps.innerHTML = '<div class="step"><div class="n">1</div><div><b>Abra o sistema no Chrome</b><span>Use o botão abaixo para abrir o endereço correto.</span></div></div>' +
+        '<div class="step"><div class="n">2</div><div><b>Abra o menu ⋮</b><span>Toque nos três pontos do Chrome.</span></div></div>' +
+        '<div class="step"><div class="n">3</div><div><b>Instalar app ou Adicionar à tela inicial</b><span>O texto pode variar conforme o site e a versão do Chrome.</span></div></div>' +
+        '<div class="step"><div class="n">4</div><div><b>Confirme a instalação</b><span>O ícone será criado na tela inicial ou no launcher.</span></div></div>';
+      return;
+    }
+    steps.innerHTML = '<div class="step"><div class="n">1</div><div><b>Abra no celular</b><span>Envie esta central para seu iPhone ou Android.</span></div></div>' +
+      '<div class="step"><div class="n">2</div><div><b>Use o navegador do aparelho</b><span>Safari no iPhone ou Chrome no Android.</span></div></div>';
+  }
 
   document.querySelectorAll('[data-install-url]').forEach((button) => {
     button.addEventListener('click', () => {
       currentUrl = button.getAttribute('data-install-url') || '';
       const name = button.getAttribute('data-install-name') || 'este sistema';
-      title.textContent = 'Adicionar ' + name + ' ao iPhone';
+      title.textContent = 'Adicionar ' + name + ' ao celular';
       urlEl.textContent = currentUrl;
       open.href = currentUrl;
       status.textContent = '';
-      nonSafari.style.display = isIOS && !isSafari ? 'block' : 'none';
+      renderSteps();
       if (typeof dialog.showModal === 'function') dialog.showModal();
       else dialog.setAttribute('open', '');
     });
@@ -202,7 +243,7 @@ function pagina() {
   });
 
   document.getElementById('share-central').addEventListener('click', async () => {
-    const data = { title: 'Apps Lak', text: 'Acesse e instale os sistemas da Lak no iPhone.', url: location.href };
+    const data = { title: 'Apps Leonardo Imobi', text: 'Acesse os sistemas da Leonardo Imobi e adicione ao celular.', url: location.href };
     if (navigator.share) {
       try { await navigator.share(data); } catch (_) {}
       return;
