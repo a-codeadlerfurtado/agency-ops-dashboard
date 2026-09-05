@@ -28,6 +28,7 @@ export const Ico = {
   building: (p: IcoProps = {}) => svg(<><path d="M4 21V6l7-3v18" /><path d="M11 21h9V10l-9-3" /><path d="M7 9v.01M7 13v.01M7 17v.01M15 12v.01M15 16v.01" /></>, p.size, p.className),
   trophy: (p: IcoProps = {}) => svg(<><path d="M7 4h10v5a5 5 0 0 1-10 0z" /><path d="M7 6H4v1a3 3 0 0 0 3 3M17 6h3v1a3 3 0 0 1-3 3" /><path d="M10 14h4l.6 5H9.4z" /><path d="M8 21h8" /></>, p.size, p.className),
   gear: (p: IcoProps = {}) => svg(<><circle cx="12" cy="12" r="3" /><path d="M12 2.5v2.2M12 19.3v2.2M21.5 12h-2.2M4.7 12H2.5M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6M18.7 18.7l-1.6-1.6M6.9 6.9 5.3 5.3" /></>, p.size, p.className),
+  lixeira: (p: IcoProps = {}) => svg(<><path d="M4 7h16" /><path d="M9 7V5.2A1.2 1.2 0 0 1 10.2 4h3.6A1.2 1.2 0 0 1 15 5.2V7" /><path d="M6.5 7 7.4 19a1.6 1.6 0 0 0 1.6 1.5h6a1.6 1.6 0 0 0 1.6-1.5L17.5 7" /><path d="M10.5 11v5.5M13.5 11v5.5" /></>, p.size, p.className),
   plus: (p: IcoProps = {}) => svg(<path d="M12 5v14M5 12h14" />, p.size, p.className),
   search: (p: IcoProps = {}) => svg(<><circle cx="10.5" cy="10.5" r="6.5" /><path d="m20 20-4.8-4.8" /></>, p.size, p.className),
   whats: (p: IcoProps = {}) => svg(<><path d="M3.5 20.5 5 16.4A8.2 8.2 0 1 1 8.2 19.6z" /><path d="M9 9.4c.4 2.4 3.2 5.2 5.6 5.6l1.1-1.5 1.9.9v1.7c-2.9.7-7.6-3-8.5-6.2l1.6-1z" /></>, p.size, p.className),

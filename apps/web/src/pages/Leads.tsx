@@ -3,7 +3,7 @@ import { irPara } from "../App";
 import { data, relativo, rotuloOrigem } from "../lib/format";
 import { corretores, criarOportunidade, etapas, oportunidades, type FiltrosLead } from "../lib/queries";
 import { empreendimentos } from "../lib/comercial";
-import { mensagemDeErro } from "../lib/supabase";
+import { mensagemDeErro, supabase } from "../lib/supabase";
 import Dialogo from "../Dialogo";
 import {
   Alerta, Avatar, CabecalhoDaPagina, Card, EtapaBadge, Ico, TabelaCarregando, useAsync,
@@ -14,12 +14,15 @@ import type { Opportunity, Profile, Sessao, Stage } from "../lib/types";
 const ORIGENS = ["META_ADS", "GOOGLE", "INDICACAO", "MANUAL", "SITE"];
 
 export default function Leads({ sessao }: { sessao: Sessao }) {
+  const avisar = useToast();
   const [filtros, setFiltros] = useState<FiltrosLead>({});
   const [busca, setBusca] = useState("");
   const [itens, setItens] = useState<Opportunity[]>([]);
   const [cursor, setCursor] = useState<string | undefined>();
   const [carregandoMais, setCarregandoMais] = useState(false);
   const [novo, setNovo] = useState(false);
+  const [paraExcluir, setParaExcluir] = useState<Opportunity | null>(null);
+  const [excluindo, setExcluindo] = useState(false);
 
   const meta = useAsync(
     async () => ({
@@ -36,6 +39,27 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
     const t = setTimeout(() => setBuscaAplicada(busca), 280);
     return () => clearTimeout(t);
   }, [busca]);
+
+  async function excluir() {
+    if (!paraExcluir) return;
+    setExcluindo(true);
+    try {
+      const { data, error } = await supabase.rpc("excluir_lead", { p_id: paraExcluir.id });
+      if (error) throw error;
+      const r = data as { contato_removido?: boolean } | null;
+      // some da lista sem recarregar tudo: a pagina esta paginada por cursor e
+      // recarregar do zero jogaria o usuario de volta ao topo
+      setItens((lista) => lista.filter((o) => o.id !== paraExcluir.id));
+      avisar("ok", r?.contato_removido
+        ? "Lead e contato excluidos."
+        : "Lead excluido. O contato foi mantido porque tem outros registros.");
+      setParaExcluir(null);
+    } catch (e) {
+      avisar("err", mensagemDeErro(e));
+    } finally {
+      setExcluindo(false);
+    }
+  }
 
   const filtrosCompletos = { ...filtros, busca: buscaAplicada };
   const lista = useAsync(
@@ -166,6 +190,39 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
         aoCriar={() => { setNovo(false); lista.recarregar(); }}
       />
 
+      {/* Confirmacao obrigatoria: exclusao de lead apaga tambem visitas,
+          propostas e todo o historico de atendimento em cascata. Dizer o que
+          vai junto e mais util que perguntar "tem certeza?". */}
+      <Dialogo
+        aberto={paraExcluir !== null}
+        titulo="Excluir lead"
+        aoFechar={() => setParaExcluir(null)}
+        rodape={
+          <>
+            <button className="btn" onClick={() => setParaExcluir(null)} disabled={excluindo}>
+              Cancelar
+            </button>
+            <button className="btn danger" onClick={() => void excluir()} disabled={excluindo}>
+              {excluindo ? "Excluindo..." : "Excluir definitivamente"}
+            </button>
+          </>
+        }
+      >
+        <p style={{ margin: 0 }}>
+          Excluir <b>{paraExcluir?.contact?.full_name ?? "este lead"}</b>
+          {paraExcluir?.contact?.phone ? ` (${paraExcluir.contact.phone})` : ""}?
+        </p>
+        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 10 }}>
+          Vao junto o historico de atendimento, as visitas, as propostas e as
+          tarefas deste lead. O contato so e removido se nao tiver mais nenhum
+          outro registro.
+        </p>
+        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 8 }}>
+          Lead com venda registrada nao pode ser excluido &mdash; nesse caso,
+          cancele a venda antes.
+        </p>
+      </Dialogo>
+
       {lista.erro && <Alerta>{lista.erro}</Alerta>}
 
       <Card>
@@ -196,6 +253,7 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
                     <th>Etapa</th>
                     <th>Entrada</th>
                     <th>Ultima interacao</th>
+                    {sessao.isAdmin && <th style={{ width: 44 }} aria-label="Acoes" />}
                   </tr>
                 </thead>
                 <tbody>
@@ -251,6 +309,21 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
                         }}>
                           {relativo(o.last_interaction_at)}
                         </td>
+                        {sessao.isAdmin && (
+                          /* stopPropagation: a linha inteira abre o lead, e um
+                             clique em excluir nao pode navegar junto */
+                          <td className="nowrap" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              className="btn ghost sm"
+                              title={`Excluir ${o.contact?.full_name ?? "lead"}`}
+                              aria-label={`Excluir ${o.contact?.full_name ?? "lead"}`}
+                              onClick={() => setParaExcluir(o)}
+                            >
+                              {Ico.lixeira({ size: 15 })}
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     );
                   })}

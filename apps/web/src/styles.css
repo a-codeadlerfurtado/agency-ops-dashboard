@@ -388,6 +388,19 @@ button, input, select, textarea { font: inherit; color: inherit; }
   border-color: var(--accent-light);
 }
 
+/* Acao destrutiva. Vermelho no contorno e no texto, nao no preenchimento: um
+   botao vermelho solido chama o clique, e este e o botao que ninguem deve
+   clicar por engano. So no hover ele se enche. */
+.btn.danger {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--danger) 55%, transparent);
+  color: var(--danger);
+}
+.btn.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  border-color: var(--danger);
+}
+
 .btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
 .btn.ghost:hover:not(:disabled) { background: var(--blue-wash); color: var(--text); }
 
@@ -1399,6 +1412,55 @@ table.tbl th {
     radial-gradient(90% 70% at 100% 100%, #f26b2136, transparent 58%),
     linear-gradient(160deg, var(--brand-mid) 0%, var(--brand-deep) 58%, var(--brand-ink) 100%);
 }
+
+/* ---- segunda camada de cor ----
+   Pedido de mais laranja e azul claro. Continua sendo overlay: nenhuma regra
+   abaixo troca cor de texto, tamanho ou estrutura -- so background-image sobre
+   a cor que ja estava la. */
+
+/* Tabela: a linha do cabecalho recebe o fio, e a linha sob o cursor acende em
+   azul claro pela esquerda. Antes o hover era um cinza que quase nao existia
+   em tela escura. */
+table.tbl th:first-child { background-image: linear-gradient(90deg, #76c6ff40, transparent 70%),
+                                             linear-gradient(180deg, #00000026, #ffffff05); }
+table.tbl tbody tr:hover td {
+  background-image: linear-gradient(90deg, #76c6ff14, transparent 42%);
+}
+
+/* Badge de etapa: cada uma mantem a propria cor semantica e ganha volume. O
+   overlay e neutro de proposito -- tingir de laranja aqui apagaria o
+   significado da cor, que e o unico trabalho do badge. */
+.badge { background-image: linear-gradient(160deg, #ffffff12, #0000 60%); }
+
+/* Alerta: so volume, sem cor de marca. `.alert.err` e vermelho e `.alert.warn`
+   e amarelo -- essas cores significam alguma coisa, e jogar laranja por cima
+   sujaria justamente o sinal que o usuario precisa ler. */
+.alert { background-image: var(--luz-suave); }
+
+/* Botao primario ja era laranja chapado com leve degrade; ganha brilho no topo
+   e sombra propria, para parecer botao e nao retangulo. */
+.btn.primary {
+  background-image: linear-gradient(180deg, #ffffff2b, transparent 55%);
+  box-shadow: 0 6px 18px #f26b2140;
+}
+
+/* Item selecionado do menu: o azul da marca entra pela esquerda, atras da
+   barra laranja que ja marcava a selecao. As duas cores no mesmo elemento,
+   cada uma com seu papel -- azul e superficie, laranja e indicador. */
+.nav-item[aria-current="page"] {
+  background-image: linear-gradient(90deg, #76c6ff1f, transparent 58%);
+}
+
+/* Avatar: bolinha chapada ficava morta ao lado do nome. */
+.avatar { background-image: linear-gradient(145deg, #76c6ff2e, #0359a61f 70%); }
+
+/* Barra de progresso do funil ja e degrade; a trilha vazia recebe um fio azul
+   para a barra nao parecer flutuar sobre nada. */
+.funil-trilho { background-image: linear-gradient(90deg, #76c6ff12, transparent 55%); }
+
+/* Vazio: quando nao ha nada na tela, o unico elemento e o icone. Sem um pouco
+   de cor ali a tela parece quebrada, e nao vazia. */
+.empty-icon { background-image: var(--duo-marca), var(--luz-suave); }
 
 /* ---- fundo da aplicacao ----
    Os dois radiais que ja existiam ficam; entra um terceiro, embaixo e a

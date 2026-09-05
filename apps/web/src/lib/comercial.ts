@@ -406,6 +406,21 @@ export async function atualizarFonte(id: string, campos: {
   if (error) throw error;
 }
 
+/**
+ * Exclui a integracao. Os leads que ja entraram por ela permanecem: a
+ * oportunidade guarda a origem em texto e nao aponta para a fonte, entao
+ * apagar a configuracao nao apaga historico.
+ */
+export async function excluirFonte(id: string) {
+  const { data, error } = await supabase.rpc("excluir_fonte", { p_id: id });
+  if (error) throw error;
+  return data as {
+    excluida: string;
+    era_meta: boolean;
+    pagina_ainda_assinada_na_meta: boolean;
+  };
+}
+
 /* ------------------------------------ conexao com a Meta por login (0027) --- */
 
 export interface PaginaDaMeta {

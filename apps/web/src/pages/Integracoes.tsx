@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { dataHora, relativo } from "../lib/format";
 import {
-  atualizarFonte, conectarPagina, criarFonte, filas, fontesDeLead, iniciarConexaoMeta,
+  atualizarFonte, conectarPagina, criarFonte, excluirFonte, filas, fontesDeLead, iniciarConexaoMeta,
   paginasDaMeta, prepararTeste, regerarTokenDaFonte, salvarTokenDeSistema,
   situacaoDoTokenDeSistema,
   type FonteDeLead, type PaginaDaMeta,
@@ -361,6 +361,7 @@ function Conexao({
   const avisar = useToast();
   const [tokenPagina, setTokenPagina] = useState("");
   const [salvando, setSalvando] = useState(false);
+  const [confirmando, setConfirmando] = useState(false);
   const st = situacao(fonte);
   const canal = CANAIS[fonte.integration];
 
@@ -532,11 +533,65 @@ function Conexao({
             >
               {fonte.active ? "Desativar" : "Reativar"}
             </button>
+            <button
+              className="btn danger sm" disabled={salvando}
+              onClick={() => setConfirmando(true)}
+            >
+              Excluir
+            </button>
             <span className="spacer" />
             <span className="hint">Criada em {dataHora(fonte.created_at)}</span>
           </div>
         </div>
       )}
+
+      {/* Excluir integracao nao e o mesmo que desativar, e a tela precisa dizer
+          isso: desativar para de aceitar lead e guarda a configuracao; excluir
+          descarta o token, e no caso da Meta a pagina continua assinada la --
+          ela vai seguir mandando lead para um destino que deixou de existir. */}
+      <Dialogo
+        aberto={confirmando}
+        titulo="Excluir integracao"
+        aoFechar={() => setConfirmando(false)}
+        rodape={
+          <>
+            <button className="btn" onClick={() => setConfirmando(false)} disabled={salvando}>
+              Cancelar
+            </button>
+            <button
+              className="btn danger" disabled={salvando}
+              onClick={() => mexer(async () => {
+                await excluirFonte(fonte.id);
+                setConfirmando(false);
+                avisar("ok", `Integracao "${fonte.label}" excluida.`);
+              })}
+            >
+              {salvando ? "Excluindo..." : "Excluir definitivamente"}
+            </button>
+          </>
+        }
+      >
+        <p style={{ margin: 0 }}>
+          Excluir <b>{fonte.label}</b>?
+        </p>
+        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 10 }}>
+          Os {fonte.leads} lead{fonte.leads === 1 ? "" : "s"} que ja entraram
+          por aqui <b>permanecem</b> no funil. O que se perde e a configuracao:
+          token, fila de destino e o vinculo com a pagina.
+        </p>
+        {fonte.integration === "META_ADS" && fonte.page_id && (
+          <p style={{ color: "var(--warning, #f0b429)", fontSize: 13, marginTop: 8 }}>
+            Esta pagina continua inscrita no webhook da Meta. Ela vai seguir
+            enviando lead para um destino que deixou de existir, e esse lead se
+            perde. Para parar de vez, remova o app tambem nas configuracoes da
+            pagina no Facebook.
+          </p>
+        )}
+        <p style={{ color: "var(--muted)", fontSize: 13, marginTop: 8 }}>
+          Se a intencao e so parar de receber por enquanto, use{" "}
+          <b>Desativar</b> &mdash; a configuracao fica guardada.
+        </p>
+      </Dialogo>
     </Card>
   );
 }
