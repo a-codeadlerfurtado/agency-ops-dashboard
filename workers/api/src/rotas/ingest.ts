@@ -151,7 +151,12 @@ const adaptadorGoogle: Adaptador = (corpo) => {
       adset_id: texto(c.adgroup_id),
       ad_id: texto(c.creative_id),
       form_id: texto(c.form_id),
-      gclid: texto(c.gcl_id),
+      // O gclid vai em utm_term por falta de coluna propria. Nao e o lugar
+      // ideal, mas perde-lo e pior: e ele que permite mandar a conversao de
+      // volta ao Google Ads depois que a venda acontece. `ingerir_lead` grava
+      // apenas as chaves que conhece, entao qualquer nome novo seria
+      // descartado em silencio -- foi o que aconteceu no primeiro teste.
+      utm_term: texto(c.gcl_id),
       platform_lead_id: texto(c.lead_id),
     },
     // lead_id e o identificador estavel do Google: e ele que torna o reenvio
