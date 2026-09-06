@@ -124,6 +124,14 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230359a6'/><g fill='%23fff'><rect x='8.46' y='5.5' width='15.09' height='1.45'/><rect x='8.46' y='5.5' width='1.56' height='21.00'/><rect x='21.98' y='5.5' width='1.56' height='14.38'/><path d='M12.31 17.49 L23.54 19.07 L23.54 19.88 L12.31 19.88 Z'/><path d='M19.69 24.11 L8.46 25.69 L8.46 26.5 L19.69 26.5 Z'/></g></svg>"
         />
 
+        {/* O iOS nao aceita data URI nem SVG em apple-touch-icon. Sem um PNG
+            de verdade aqui, "Adicionar a Tela de Inicio" cai no fallback do
+            proprio iOS: um print da tela no lugar do logo -- que era o que
+            acontecia. 180x180, opaco e sem canto arredondado, porque o iOS
+            compoe transparencia sobre preto e aplica a mascara sozinho.
+            Mesmo desenho do favicon acima, servido de public/. */}
+        <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" />
