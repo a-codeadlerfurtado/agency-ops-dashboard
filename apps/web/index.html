@@ -10,8 +10,15 @@
     <!-- favicon e o simbolo puro: uma forma so, sem furo, entao a 16px o
          funil continua fechando e o vinco ainda aparece como entalhe -->
     <link rel="icon" type="image/svg+xml" href="/marca/logo-symbol.svg" />
-    <link rel="apple-touch-icon" href="/marca/app-icon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/marca/favicon-32.png" />
+    <!-- o iOS e inconsistente com SVG na Tela de Inicio: o apple-touch-icon
+         precisa ser PNG, e opaco, porque o proprio iOS aplica a mascara -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/marca/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
+
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="ImobiBoard" />
+    <meta name="mobile-web-app-capable" content="yes" />
 
     <title>Imobi-Board</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
