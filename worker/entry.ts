@@ -1,4 +1,6 @@
 import baseWorker from "./index";
+import { rotearJarvis } from "./jarvis/index";
+import { rodarRondas } from "./jarvis/routines";
 
 const SUPABASE = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const OLD_IMG_SRC = "img-src 'self' data:";
@@ -146,7 +148,17 @@ export default {
   async fetch(request: Request, env: any, context: any): Promise<Response> {
     const vision = await runVisionBulk(request, env);
     if (vision) return vision;
+    // A Jarvis entra aqui, antes do baseWorker, pelo mesmo motivo do
+    // creative-vision: precisa do binding AI e nao pode passar pelo vinext.
+    // /api/ai continua indo direto para o baseWorker, intocado.
+    const jarvis = await rotearJarvis(request, env);
+    if (jarvis) return jarvis;
     const response = await baseWorker.fetch(request, env, context);
     return widenImageCsp(response);
+  },
+
+  // Cron Trigger: 08h, 12h e 17h UTC = 05h, 09h e 14h em Brasilia.
+  async scheduled(_evento: unknown, env: any, context: any): Promise<void> {
+    context.waitUntil(rodarRondas(env));
   },
 };

@@ -47,6 +47,7 @@ import WeeklyReportDeliveryCheckboxBridge from "./weekly-report-delivery-checkbo
 import AIHeadRouter from "./ai-head-router";
 import OpsQuestionBrand from "./opsquestion-brand";
 import OpsQuestionWidget from "./opsquestion-widget";
+import JarvisVoice from "./jarvis-voice";
 import WeekendBalanceAlert from "./weekend-balance-alert";
 import LeadQualityAlert from "./lead-quality-alert";
 import ChurnedClientMessageWarning from "./churned-client-message-warning";
@@ -222,6 +223,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <SystemUpdateCenter />
         <SecurityCenter />
         <OpsQuestionWidget />
+        <JarvisVoice />
         <OpsQuestionBrand />
         <LearningShortcut />
         <HomeShortcut />

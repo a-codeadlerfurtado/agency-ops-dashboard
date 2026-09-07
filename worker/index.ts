@@ -49,7 +49,10 @@ const SECURITY_HEADERS: Record<string, string> = {
   "x-content-type-options": "nosniff",
   "x-frame-options": "DENY",
   "referrer-policy": "strict-origin-when-cross-origin",
-  "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+  // microphone=(self): a Jarvis usa a Web Speech API e o MediaRecorder na
+  // propria origem. Com microphone=() o navegador nega antes de perguntar.
+  // Continua negado para qualquer iframe ou terceiro.
+  "permissions-policy": "camera=(), microphone=(self), geolocation=(), payment=(), usb=(), interest-cohort=()",
   "cross-origin-opener-policy": "same-origin",
   "cross-origin-resource-policy": "same-origin",
 };
