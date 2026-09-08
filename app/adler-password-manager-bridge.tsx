@@ -140,7 +140,12 @@ export default function AdlerPasswordManagerBridge() {
         setOpen(false);
         return;
       }
-      if (event === "SIGNED_IN" || event === "USER_UPDATED") void loadItems();
+      // Nunca chama getSession/RPC dentro do callback de auth: isso reentra no
+      // mutex do supabase-js. Agenda para o proximo tick, depois que o callback
+      // liberar o lock interno da sessao.
+      if (event === "SIGNED_IN" || event === "USER_UPDATED") {
+        window.setTimeout(() => { void loadItems(); }, 0);
+      }
     });
     return () => subscription.unsubscribe();
   }, [loadItems, lock]);
