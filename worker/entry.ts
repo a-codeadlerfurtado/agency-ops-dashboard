@@ -151,7 +151,7 @@ export default {
     // A Jarvis entra aqui, antes do baseWorker, pelo mesmo motivo do
     // creative-vision: precisa do binding AI e nao pode passar pelo vinext.
     // /api/ai continua indo direto para o baseWorker, intocado.
-    const jarvis = await rotearJarvis(request, env);
+    const jarvis = await rotearJarvis(request, env, context);
     if (jarvis) return jarvis;
     const response = await baseWorker.fetch(request, env, context);
     return widenImageCsp(response);

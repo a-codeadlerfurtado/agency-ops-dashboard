@@ -1,0 +1,26 @@
+services:
+  jarvis-tts:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "127.0.0.1:8091:8091"
+    volumes:
+      - ./reference/voice.wav:/app/reference/voice.wav:ro
+      - jarvis_tts_models:/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8091/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 15
+      start_period: 10m
+
+volumes:
+  jarvis_tts_models:
