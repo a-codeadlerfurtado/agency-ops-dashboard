@@ -174,6 +174,19 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
   },[authorized,loadClient,openEntity]);
 
   useEffect(()=>{
+    if(!authorized)return;
+    const onTriageOpen=(ev:Event)=>{
+      const detail=(ev as CustomEvent<{client_id?:string;tab?:Tab;entity_type?:"PRODUCT"|"PERSONA";entity_id?:string}>).detail||{};
+      const id=String(detail.client_id||"");
+      const nextTab=detail.tab==="materials"?"materials":detail.tab;
+      setOpen(true);
+      if(id) void loadClient(id,nextTab);
+      if(detail.entity_id&&(detail.entity_type==="PRODUCT"||detail.entity_type==="PERSONA")) window.setTimeout(()=>void openEntity(detail.entity_type!,String(detail.entity_id)),250);
+    };
+    window.addEventListener("material-triage-open-briefing",onTriageOpen as EventListener);
+    return()=>window.removeEventListener("material-triage-open-briefing",onTriageOpen as EventListener);
+  },[authorized,loadClient,openEntity]);
+  useEffect(()=>{
     const onClick=(ev:Event)=>{
       if(!open)return;
       const el=ev.target instanceof Element?ev.target.closest(".side-nav-items > button,.side-nav-items > a"):null;

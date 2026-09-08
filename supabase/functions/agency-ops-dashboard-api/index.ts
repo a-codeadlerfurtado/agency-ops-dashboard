@@ -1,4 +1,4 @@
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+﻿import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const ALLOWED_ORIGINS = new Set([
@@ -6,6 +6,29 @@ const ALLOWED_ORIGINS = new Set([
   "http://localhost:3000",
   "http://localhost:5173",
 ]);
+
+/**
+ * Previews do MESMO Worker tambem podem chamar a API.
+ *
+ * O `wrangler versions upload` publica em
+ * https://<versao>-agency-ops-dashboard.lakassessoriadigital.workers.dev, uma
+ * origem diferente da canonica. Sem isto o browser bloqueia a chamada antes de
+ * sair, o dashboard fica eternamente em "Atualizando..." e qualquer diagnostico
+ * feito em preview mede o CORS, nao o bug que se quer investigar.
+ *
+ * Casa por hostname exato, nunca por `includes`: "evil-agency-ops-dashboard.
+ * lakassessoriadigital.workers.dev.attacker.com" nao pode passar. O prefixo de
+ * versao e' restrito ao alfabeto que a Cloudflare usa (hex e hifen).
+ */
+const PREVIEW_HOST = /^[0-9a-f][0-9a-f-]{0,62}-agency-ops-dashboard\.lakassessoriadigital\.workers\.dev$/;
+
+function origemPermitida(origin: string): boolean {
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  let url: URL;
+  try { url = new URL(origin); } catch { return false; }
+  if (url.protocol !== "https:") return false;
+  return PREVIEW_HOST.test(url.hostname);
+}
 const CORS_BASE = {
   "access-control-allow-headers": "content-type,x-dashboard-key,authorization,apikey",
   "access-control-allow-methods": "GET,POST,OPTIONS",
@@ -20,7 +43,7 @@ const number = (value: unknown) => Number(value ?? 0);
 const value = <T>(result: any, fallback: T): T => result?.error ? fallback : (result?.data ?? fallback);
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
 const SYNTHETIC_NAME = /^[A-Za-z]+-\d{9,}-[a-z0-9]{4,8}$/;
-const ALL_VIEWS = ["overview","focus","work","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health","opsperf","creative","finance","executive"];
+const ALL_VIEWS = ["overview","focus","work","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health","opsperf","creative","capacity","finance","executive"];
 const opsDay = (date = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 
 const aggregateMedia = (rows: any[]) => {
@@ -51,7 +74,7 @@ const aggregateTaskLog = (rows: any[]) => {
 Deno.serve(async (req) => {
   const requestId = crypto.randomUUID();
   const origin = req.headers.get("origin");
-  const originAllowed = !origin || ALLOWED_ORIGINS.has(origin);
+  const originAllowed = !origin || origemPermitida(origin);
   const cors = origin && originAllowed ? { ...CORS_BASE, "access-control-allow-origin": origin, "vary": "Origin" } : CORS_BASE;
   const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
     status,
@@ -177,6 +200,45 @@ Deno.serve(async (req) => {
   if (!canViewOperationalAlerts) allowedViews = allowedViews.filter((key) => key !== "alerts");
   const canView = (key: string) => allowedViews.includes(key);
 
+  if (req.method === "GET" && view === "capacity") {
+    if (isLocked || !isAdler || !canView("capacity")) return respond({ error: "forbidden" }, 403);
+    const historySince = opsDay(new Date(Date.now() - 89 * 86400000));
+    const [metricsRes, settingsRes, overridesRes, weightsRes, growthRes, historyRes, rosterRes, termsRes] = await Promise.all([
+      ops.rpc("capacity_current_metrics"),
+      ops.from("capacity_settings").select("*").eq("active", true).order("scope_type").order("scope_id"),
+      ops.from("client_workload_overrides").select("*").order("updated_at", { ascending: false }),
+      ops.from("workload_weight_config").select("*").order("metric_key"),
+      ops.rpc("capacity_growth_summary"),
+      ops.from("operational_capacity_snapshots").select("snapshot_date,scope_type,scope_id,client_count,metadata,created_at").eq("scope_type", "CLIENT").gte("snapshot_date", historySince).order("snapshot_date", { ascending: true }).limit(12000),
+      ops.from("team_roster").select("person,role,access_level,is_former").eq("role", "GT").eq("is_former", false).order("person"),
+      ops.from("client_private_commercial_terms").select("client_id,monthly_value,service_fee_amount,service_fee_cadence,verified,confidence").limit(500),
+    ]);
+    if (metricsRes.error) return queryFailed(metricsRes.error);
+    if (settingsRes.error) return queryFailed(settingsRes.error);
+    if (overridesRes.error) return queryFailed(overridesRes.error);
+    if (weightsRes.error) return queryFailed(weightsRes.error);
+    if (historyRes.error) return queryFailed(historyRes.error);
+    if (rosterRes.error) return queryFailed(rosterRes.error);
+    const terms = termsRes.error ? [] : (termsRes.data ?? []);
+    const liveIds = new Set((metricsRes.data ?? []).map((row: any) => String(row.client_id)));
+    const commercialTerms = terms.filter((row: any) => liveIds.has(String(row.client_id)));
+    return respond({
+      metrics: metricsRes.data ?? [],
+      settings: settingsRes.data ?? [],
+      overrides: overridesRes.data ?? [],
+      weights: weightsRes.data ?? [],
+      growth: growthRes.error ? null : growthRes.data,
+      history: historyRes.data ?? [],
+      roster: rosterRes.data ?? [],
+      commercial_terms: commercialTerms,
+      calibration: {
+        configured_people: (settingsRes.data ?? []).filter((row: any) => row.scope_type === "PERSON" && Number(row.capacity_points) > 0).length,
+        active_gts: (rosterRes.data ?? []).length,
+      },
+      generated_at: new Date().toISOString(),
+    });
+  }
+
   if (req.method === "GET" && view === "creative") {
     if (isLocked || !canView("creative")) return respond({ error: "forbidden" }, 403);
     const [clientResult, ruleResult, candidateResult, brandResult, materialResult, adjustmentResult, briefingResult] = await Promise.all([
@@ -200,6 +262,56 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     if (view === "adjustment-create") return respond({ error: "deprecated_diary_endpoint" }, 410);
     if (view === "tasklog-create") return respond({ error: "deprecated_tasklog_endpoint" }, 410);
+    if (view === "capacity-setting-upsert") {
+      if (isLocked || !isAdler || !canView("capacity")) return respond({ error: "forbidden" }, 403);
+      const scopeType = String(body.scope_type ?? "PERSON").toUpperCase();
+      const scopeId = String(body.scope_id ?? "").trim();
+      if (!scopeId || !["PERSON","AREA"].includes(scopeType)) return respond({ error: "missing_fields" }, 400);
+      const rawCapacity = body.capacity_points;
+      const capacityPoints = rawCapacity === null || rawCapacity === "" ? null : Number(rawCapacity);
+      if (capacityPoints !== null && (!Number.isFinite(capacityPoints) || capacityPoints <= 0)) return respond({ error: "invalid_capacity" }, 400);
+      const warning = Number(body.warning_threshold ?? 70);
+      const high = Number(body.high_threshold ?? 85);
+      const critical = Number(body.critical_threshold ?? 90);
+      const overload = Number(body.overload_threshold ?? 100);
+      if (![warning,high,critical,overload].every(Number.isFinite) || !(warning < high && high < critical && critical <= overload)) return respond({ error: "invalid_thresholds" }, 400);
+      const leadTime = Math.max(1, Math.min(180, Math.round(Number(body.hiring_lead_time_days ?? 14))));
+      const monthlyCostRaw = body.monthly_cost;
+      const monthlyCost = monthlyCostRaw === null || monthlyCostRaw === "" ? null : Number(monthlyCostRaw);
+      const result = await ops.from("capacity_settings").upsert({
+        scope_type: scopeType, scope_id: scopeId, capacity_points: capacityPoints,
+        warning_threshold: warning, high_threshold: high, critical_threshold: critical,
+        overload_threshold: overload, hiring_lead_time_days: leadTime,
+        monthly_cost: Number.isFinite(monthlyCost as number) ? monthlyCost : null,
+        active: body.active !== false, metadata: typeof body.metadata === "object" && body.metadata ? body.metadata : {},
+        updated_by: profilePerson ?? "Adler Furtado", updated_at: new Date().toISOString(),
+      }, { onConflict: "scope_type,scope_id" }).select().single();
+      if (result.error) return queryFailed(result.error);
+      return respond({ ok: true, setting: result.data });
+    }
+    if (view === "capacity-override-upsert") {
+      if (isLocked || !isAdler || !canView("capacity")) return respond({ error: "forbidden" }, 403);
+      const clientId = String(body.client_id ?? "");
+      if (!clientId) return respond({ error: "missing_fields", required: ["client_id"] }, 400);
+      if (body.clear === true) {
+        const removed = await ops.from("client_workload_overrides").delete().eq("client_id", clientId).select("client_id");
+        if (removed.error) return queryFailed(removed.error);
+        return respond({ ok: true, cleared: true });
+      }
+      const score = Number(body.score_override);
+      const reason = String(body.reason ?? "").trim();
+      if (!Number.isFinite(score) || score <= 0 || score > 3 || !reason) return respond({ error: "invalid_override" }, 400);
+      const { data: client } = await ops.from("clients").select("id").eq("id", clientId).maybeSingle();
+      if (!client) return respond({ error: "client_not_found" }, 404);
+      const result = await ops.from("client_workload_overrides").upsert({
+        client_id: clientId, score_override: score, reason: reason.slice(0, 1000),
+        valid_until: body.valid_until || null, created_by: profilePerson ?? "Adler Furtado",
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "client_id" }).select().single();
+      if (result.error) return queryFailed(result.error);
+      return respond({ ok: true, override: result.data });
+    }
+
     if (view === "notifications-read") {
       const { data: candidates, error: candidateError } = await ops.from("platform_notifications").select("id,type,client_id,metadata").order("occurred_at", { ascending: false }).limit(1000);
       if (candidateError) return queryFailed(candidateError);
@@ -257,7 +369,7 @@ Deno.serve(async (req) => {
       if (!isAdler || !canView("finance")) return respond({ error: "forbidden" }, 403); const clientId = String(body.client_id ?? ""); if (!clientId) return respond({ error: "missing_fields", required: ["client_id"] }, 400); const { data: client } = await ops.from("clients").select("id,display_name,cs_owner,gt_owner,designer_owner").eq("id", clientId).maybeSingle(); if (!client) return respond({ error: "client_not_found" }, 404); const paymentStatus = ["UNKNOWN","CURRENT","DUE_SOON","OVERDUE","NEGOTIATING","PAID","CANCELLED"].includes(String(body.payment_status)) ? String(body.payment_status) : "UNKNOWN"; const operationalStatus = ["RELEASED","PAUSE_REQUESTED","PAUSED"].includes(String(body.operational_status)) ? String(body.operational_status) : "RELEASED";
       const financePatch = { client_id: clientId, payment_status: paymentStatus, operational_status: operationalStatus, monthly_value: body.monthly_value === null || body.monthly_value === "" ? null : Number(body.monthly_value), next_due_date: body.next_due_date || null, overdue_since: body.overdue_since || null, pause_reason: typeof body.pause_reason === "string" ? body.pause_reason.slice(0, 1000) : null, notes: typeof body.notes === "string" ? body.notes.slice(0, 4000) : null, last_contact_at: body.last_contact_at || null, last_payment_at: body.last_payment_at || null, updated_by: profilePerson ?? "Adler Furtado", updated_at: new Date().toISOString() };
       const result = await ops.from("client_finance_controls").upsert(financePatch, { onConflict: "client_id" }).select().single(); if (result.error) return queryFailed(result.error);
-      if (["PAUSE_REQUESTED","PAUSED"].includes(operationalStatus)) { const targets = [{ role: "GT", person: client.gt_owner },{ role: "CS", person: client.cs_owner },{ role: "DESIGN", person: client.designer_owner }].filter((target) => target.person); for (const target of targets) { const sourceId = `finance:${clientId}:${operationalStatus}:${target.role}`; const { data: existing } = await ops.from("work_items").select("id").eq("source_id", sourceId).in("status", ["OPEN","IN_PROGRESS","WAITING","SNOOZED"]).maybeSingle(); if (!existing) await ops.from("work_items").insert({ client_id: clientId, type: "FINANCE", status: "OPEN", priority: operationalStatus === "PAUSED" ? "CRITICAL" : "HIGH", title: `${operationalStatus === "PAUSED" ? "Trabalhos pausados" : "Pausa operacional solicitada"} — ${client.display_name}`, description: financePatch.pause_reason || "Verifique a orientação financeira antes de continuar qualquer entrega.", source: "finance_center", source_id: sourceId, created_by_user_key: currentUserKey, created_by_person: profilePerson ?? "Adler Furtado", target_role: target.role, target_person: target.person, metadata: { payment_status: paymentStatus, operational_status: operationalStatus } }); } }
+      if (["PAUSE_REQUESTED","PAUSED"].includes(operationalStatus)) { const targets = [{ role: "GT", person: client.gt_owner },{ role: "CS", person: client.cs_owner },{ role: "DESIGN", person: client.designer_owner }].filter((target) => target.person); for (const target of targets) { const sourceId = `finance:${clientId}:${operationalStatus}:${target.role}`; const { data: existing } = await ops.from("work_items").select("id").eq("source_id", sourceId).in("status", ["OPEN","IN_PROGRESS","WAITING","SNOOZED"]).maybeSingle(); if (!existing) await ops.from("work_items").insert({ client_id: clientId, type: "FINANCE", status: "OPEN", priority: operationalStatus === "PAUSED" ? "CRITICAL" : "HIGH", title: `${operationalStatus === "PAUSED" ? "Trabalhos pausados" : "Pausa operacional solicitada"} â€” ${client.display_name}`, description: financePatch.pause_reason || "Verifique a orientaÃ§Ã£o financeira antes de continuar qualquer entrega.", source: "finance_center", source_id: sourceId, created_by_user_key: currentUserKey, created_by_person: profilePerson ?? "Adler Furtado", target_role: target.role, target_person: target.person, metadata: { payment_status: paymentStatus, operational_status: operationalStatus } }); } }
       return respond({ ok: true, control: result.data });
     }
     if (view === "note-create") { const texto = typeof body.body === "string" ? body.body.trim() : ""; if (!texto) return respond({ error: "missing_fields", required: ["body"] }, 400); const { data, error } = await ops.rpc("ingest_ops_note", { p: { body: texto, author_user_key: currentUserKey, author_name: profilePerson ?? null, client_id: body.client_id ?? null, occurred_at: body.occurred_at ?? null } }); if (error) return queryFailed(error); return respond(data); }
@@ -298,7 +410,7 @@ Deno.serve(async (req) => {
   const campaigns = [...mediaGroups.values()].map((rows) => { const latestDate = rows.map((row) => row.date).filter(Boolean).sort().at(-1) ?? null; const latest = rows.filter((row) => row.date === latestDate); const spend = latest.reduce((sum, row) => sum + number(row.spend), 0); const leads = latest.reduce((sum, row) => sum + number(row.leads), 0); const clicks = latest.reduce((sum, row) => sum + number(row.clicks), 0); const impressions = latest.reduce((sum, row) => sum + number(row.impressions), 0); const ageDays = latestDate ? Math.floor((Date.now() - new Date(`${latestDate}T23:59:59Z`).getTime()) / 86400000) : null; return { client_id: latest[0]?.client_id ?? null, display_name: clientNames.get(latest[0]?.client_id) ?? null, lifecycle: clientLifecycles.get(latest[0]?.client_id) ?? "UNLINKED", account_key: latest[0]?.account_key ?? null, latest_date: latestDate, age_days: ageDays, is_stale: ageDays === null || ageDays > 2, spend: Number(spend.toFixed(2)), leads, clicks, impressions, cpl: leads ? Number((spend / leads).toFixed(2)) : null, ctr: impressions ? Number((clicks / impressions * 100).toFixed(2)) : null, campaign_count: latest.reduce((sum, row) => sum + number(row.campaign_count), 0) }; }).sort((a, b) => b.spend - a.spend);
   const lastClickupSync = value<any[]>(results[15], [])[0] ?? null; const clickupConfig: any = value(results[16], {}); const totalClickup = results[14].count ?? 0; const matchedClickup = results[17].count ?? 0; const stageDefs = value<any[]>(teamData[3], []); const stageLabels = Object.fromEntries(stageDefs.map((row: any) => [row.code, row.label])); const accessByPerson = new Map(value<any[]>(teamData[0], []).map((row: any) => [norm(row.person), row.access_level])); const fullTeam = value<any[]>(teamData[2], []).map((member: any) => ({ ...member, access_level: accessByPerson.get(norm(member.person)) ?? null, carteira: member.role === "GT" ? walletName(member.person) : null, portfolio: member.role === "GT" ? allClients.filter((row) => row.gt_owner === member.person && ["ACTIVE", "ONBOARDING"].includes(row.lifecycle)).map((row) => ({ client_id: row.client_id, display_name: row.display_name, priority: row.priority, lifecycle: row.lifecycle, next_step: row.next_step, data_coverage: row.data_coverage })) : [] })); const team = canView("team") && isFull ? fullTeam : fullTeam.filter((row) => row.person === profilePerson); const unassignedClients = isFull ? allClients.filter((row) => ["ACTIVE", "ONBOARDING"].includes(row.lifecycle) && !String(row.gt_owner ?? "").trim()).map((row) => ({ client_id: row.client_id, display_name: row.display_name, lifecycle: row.lifecycle, priority: row.priority, entrada: row.entrada, client_days: row.client_days })).sort((a, b) => String(a.display_name ?? "").localeCompare(String(b.display_name ?? ""), "pt-BR")) : [];
   const rawProductivity30 = value<any[]>(results[12], []); const rawProductivityDaily = value<any[]>(results[13], []); const rawRecentCompleted = value<any[]>(results[14], []); const currentOwnerKeys = new Set([norm(profileClickupUserId), norm(profileClickupUser), norm(profilePerson)].filter(Boolean)); const assignedToCurrent = (row: any) => (row.clickup_task_assignees ?? []).some((assignee: any) => { const email = norm(assignee.email); return [assignee.user_id, assignee.username, assignee.email, email.split("@")[0]].some((candidate) => currentOwnerKeys.has(norm(candidate))); }); const clickupScoped = isFull; const productivity30 = clickupScoped ? rawProductivity30 : rawProductivity30.filter((row) => norm(row.person) === norm(profileClickupUser)); const productivityDaily = clickupScoped ? rawProductivityDaily : rawProductivityDaily.filter((row) => norm(row.person) === norm(profileClickupUser)); const recentCompleted = clickupScoped ? rawRecentCompleted : rawRecentCompleted.filter(assignedToCurrent);
-  const exposePersonalTask = (row: any) => ({ task_id: row.task_id, name: row.name, status: row.status, status_type: row.status_type ?? null, date_created: row.date_created ?? null, date_updated: row.date_updated ?? null, start_date: row.start_date ?? null, due_date: row.due_date ?? null, time_estimate_ms: row.time_estimate_ms ?? null, list_name: row.list_name ?? null, client_id: row.client_id ?? null, client_display_name: row.client_id ? (clientMeta.get(row.client_id)?.display_name ?? null) : null, url: row.url ?? null }); const personalOpenTasks = viaLogin ? value<any[]>(clickupData[9], []).filter(assignedToCurrent).map(exposePersonalTask) : []; const personalClosedToday = viaLogin ? value<any[]>(clickupData[10], []).filter((row: any) => assignedToCurrent(row) && row.date_closed && opsDay(new Date(row.date_closed)) === opsDay()).map(exposePersonalTask) : []; const isDesignRelevantTask = (row: any) => /criativ|design|arte|video|vídeo|imagem|copy|roteiro|edicao|edição|revisao|revisão|ajuste na campanha/.test(norm(`${row.list_name ?? ""} ${row.name ?? ""}`)); const designOpenTasks = isDesignRestricted ? value<any[]>(clickupData[9], []).filter((row: any) => assignedToCurrent(row) && isDesignRelevantTask(row)).map(exposePersonalTask) : []; const designClosedToday = isDesignRestricted ? value<any[]>(clickupData[10], []).filter((row: any) => assignedToCurrent(row) && isDesignRelevantTask(row) && row.date_closed && opsDay(new Date(row.date_closed)) === opsDay()).map(exposePersonalTask) : [];
+  const exposePersonalTask = (row: any) => ({ task_id: row.task_id, name: row.name, status: row.status, status_type: row.status_type ?? null, date_created: row.date_created ?? null, date_updated: row.date_updated ?? null, start_date: row.start_date ?? null, due_date: row.due_date ?? null, time_estimate_ms: row.time_estimate_ms ?? null, list_name: row.list_name ?? null, client_id: row.client_id ?? null, client_display_name: row.client_id ? (clientMeta.get(row.client_id)?.display_name ?? null) : null, url: row.url ?? null }); const personalOpenTasks = viaLogin ? value<any[]>(clickupData[9], []).filter(assignedToCurrent).map(exposePersonalTask) : []; const personalClosedToday = viaLogin ? value<any[]>(clickupData[10], []).filter((row: any) => assignedToCurrent(row) && row.date_closed && opsDay(new Date(row.date_closed)) === opsDay()).map(exposePersonalTask) : []; const isDesignRelevantTask = (row: any) => /criativ|design|arte|video|vÃ­deo|imagem|copy|roteiro|edicao|ediÃ§Ã£o|revisao|revisÃ£o|ajuste na campanha/.test(norm(`${row.list_name ?? ""} ${row.name ?? ""}`)); const designOpenTasks = isDesignRestricted ? value<any[]>(clickupData[9], []).filter((row: any) => assignedToCurrent(row) && isDesignRelevantTask(row)).map(exposePersonalTask) : []; const designClosedToday = isDesignRestricted ? value<any[]>(clickupData[10], []).filter((row: any) => assignedToCurrent(row) && isDesignRelevantTask(row) && row.date_closed && opsDay(new Date(row.date_closed)) === opsDay()).map(exposePersonalTask) : [];
   const preclientsRaw = value<any[]>(platformData[1], []).filter((row) => !SYNTHETIC_NAME.test(String(row.name ?? "").trim()) && !SYNTHETIC_NAME.test(String(row.company ?? "").trim())); const preclients = isPortfolioScoped ? [] : preclientsRaw; const notificationReadRows = value<any[]>(await ops.from("platform_notification_reads").select("notification_id,read_at").eq("user_key", currentUserKey), []); const notificationReadAt = new Map(notificationReadRows.map((row: any) => [String(row.notification_id), row.read_at])); const notifications = value<any[]>(platformData[0], []).filter((row) => inScope(row.client_id)).filter((row) => !String(row.type).startsWith("WORK_ITEM_") || isAdler || row.metadata?.target_person === profilePerson || (!row.metadata?.target_person && row.metadata?.target_role === profileRole)).filter((row) => !isDesignRestricted || ((["DESIGNER_MENTION", "MATERIAL_UPLOADED"].includes(String(row.type)) && row.metadata?.target_role === "DESIGN" && row.metadata?.target_person === profilePerson) || (String(row.type).startsWith("WORK_ITEM_") && (row.metadata?.target_person === profilePerson || (!row.metadata?.target_person && row.metadata?.target_role === "DESIGN"))))).map((row) => { const meta = row.client_id ? clientMeta.get(row.client_id) : null; return { ...row, read_at: notificationReadAt.get(String(row.id)) ?? null, client_display_name: meta?.display_name ?? null, gestor: meta?.gt_owner ?? null, cs_owner: meta?.cs_owner ?? null, carteira: walletName(meta?.gt_owner) }; }); const chatMeta = new Map(value<any[]>(teamData[6], []).map((row: any) => [row.chat_id, row])); const conversationsEnriched = conversations.map((row: any) => { const meta = chatMeta.get(row.chat_id); return { ...row, chat_name: meta?.chat_name ?? null, message_count: meta?.message_count ?? null, last_seen_at: meta?.last_seen_at ?? null }; });
   const pfLive = value<any[]>(teamData[7], []); const pfTimeline = value<any[]>(teamData[8], []); const pfClients = value<any[]>(teamData[9], []); const pfTenure = value<any[]>(teamData[10], []); const pfAudit = value<any[]>(teamData[11], []); const pfChurn = value<any[]>(teamData[12], []); const somaSetores = (campo: string) => pfLive.reduce((total, row: any) => total + number(row[campo]), 0); const portfolio = isFull ? { reference: new Date().toISOString().slice(0, 10), total_active: somaSetores("active_clients"), sectors: pfLive, status_summary: { inadimplentes: somaSetores("inadimplentes"), juridico: somaSetores("juridico"), churn_previsto: somaSetores("churn_previsto") }, transitions: pfClients.filter((row: any) => row.urgencia === "urgente").sort((a: any, b: any) => number(a.dias_para_proxima) - number(b.dias_para_proxima)), clients: pfClients, tenure_distribution: pfTenure, timeline: pfTimeline, churns: pfChurn, audit: pfAudit, survival: value<any[]>(teamData[13], []), gt_retention: value<any[]>(teamData[14], []), long_series: value<any[]>(teamData[15], []), operational_signal: value<any[]>(teamData[16], []).filter((row: any) => row.sinal !== "ativo" && row.sinal !== "churned"), signal_summary: value<any[]>(teamData[16], []).filter((row: any) => ["ACTIVE","ONBOARDING"].includes(row.lifecycle)).reduce((acc: any, row: any) => { acc[row.sinal] = (acc[row.sinal] ?? 0) + 1; return acc; }, {}) } : null;
   const wonEvents = value<any[]>(platformData[2], []).filter((row) => inScope(row.client_id)); const preferencesRow = value(platformData[5], {}); const myAccessRequest = value<any[]>(teamData[5], [])[0] ?? null; const taskLogRows = value<any[]>(platformData[7], []); const taskLog = aggregateTaskLog(taskLogRows.filter((row: any) => row.user_key === currentUserKey)); const adjustments: any[] = [];
@@ -317,3 +429,4 @@ Deno.serve(async (req) => {
     generated_at: new Date().toISOString(),
   });
 });
+
