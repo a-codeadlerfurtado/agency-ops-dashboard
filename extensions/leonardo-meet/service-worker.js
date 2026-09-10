@@ -133,6 +133,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       };
     }
 
+    if (message?.type === "GET_INTEGRATIONS") {
+      const device = await getDevice();
+      if (!device?.device_token) return { ok: false, error: "extension_not_paired", providers: [] };
+      return await callApi("integrations_status", {}, device.device_token);
+    }
     if (message?.type === "FINALIZE") {
       try {
         const result = await deliver(message.payload);

@@ -162,6 +162,31 @@ Deno.serve(async (req: Request) => {
     return respond({ ok: true, device_token: rawToken, device_id: device.id, owner_person: device.owner_person, version: VERSION });
   }
 
+  if (action === "integrations_status") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const [{ data: providers, error: providersError }, { data: accounts, error: accountsError }] = await Promise.all([
+      ops.from("meeting_integration_providers")
+        .select("provider_key,label,category,auth_mode,capabilities,metadata")
+        .eq("enabled", true)
+        .order("category")
+        .order("label"),
+      ops.from("meeting_integration_accounts")
+        .select("provider_key,account_slot,account_email,display_name,status,enabled_capabilities,last_sync_at,last_error,metadata")
+        .eq("owner_person", device.owner_person),
+    ]);
+    if (providersError || accountsError) return respond({ error: "integrations_query_failed" }, 500);
+    const byProvider = new Map((accounts || []).map((row: Row) => [String(row.provider_key), row]));
+    return respond({
+      ok: true,
+      owner_person: device.owner_person,
+      providers: (providers || []).map((provider: Row) => ({
+        ...provider,
+        connection: byProvider.get(String(provider.provider_key)) || null,
+      })),
+      version: VERSION,
+    });
+  }
   if (action === "finalize") {
     const device = await resolveDevice(req, ops);
     if (!device) return respond({ error: "invalid_device" }, 401);

@@ -7,6 +7,7 @@ import { authenticatedFetch, SUPABASE_URL } from "./shared";
 type Row = Record<string, any>;
 
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-meetings-api`;
+const CAPTURE_API = `${SUPABASE_URL}/functions/v1/agency-ops-meeting-capture-api`;
 const PAGE_SIZE = 30;
 
 function fmtDate(value: unknown) {
@@ -81,6 +82,9 @@ const STYLE = `
   .meeting-transcript{white-space:pre-wrap;background:#090d10;border:1px solid #273139;border-radius:11px;padding:14px;max-height:48vh;overflow:auto;color:#aebbc4;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;}
   .meeting-participants{display:flex;gap:6px;flex-wrap:wrap;}
   .meeting-participant{padding:5px 7px;border-radius:8px;background:#141c21;border:1px solid #2b3942;font-size:10px;color:#b9c6ce;}
+  .meetings-pair{max-width:1440px;margin:0 auto 14px;padding:12px 14px;border:1px solid #3a4751;border-radius:12px;background:#10171c;display:flex;align-items:center;justify-content:space-between;gap:14px;}
+  .meetings-pair-code{font:850 18px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.13em;color:#8fd2ff;}
+  .meetings-pair-note{font-size:11px;color:#94a4af;margin-top:5px;}
   @media(max-width:720px){.meetings-shell{left:58px;padding:18px 14px 34px}.meetings-head{flex-direction:column}.meetings-toolbar{grid-template-columns:1fr 1fr}.meetings-toolbar input{grid-column:1/-1}.meetings-grid{grid-template-columns:1fr}.meeting-drawer-backdrop{left:58px}.meeting-drawer{width:100%}}
 `;
 
@@ -95,6 +99,9 @@ export default function MeetingsBridge() {
   const [activeQuery, setActiveQuery] = useState("");
   const [detail, setDetail] = useState<Row | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [pairingCode, setPairingCode] = useState("");
+  const [pairingExpires, setPairingExpires] = useState("");
+  const [pairingLoading, setPairingLoading] = useState(false);
 
   const load = useCallback(async (reset = true, q = activeQuery) => {
     setLoading(true);
@@ -223,6 +230,27 @@ export default function MeetingsBridge() {
     }
   };
 
+  const createPairing = async () => {
+    setPairingLoading(true);
+    setError("");
+    try {
+      const response = await authenticatedFetch(CAPTURE_API, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "pair_create" }),
+        cache: "no-store",
+      });
+      const body = await response.json();
+      if (!response.ok || !body?.code) throw new Error(body?.error || `API ${response.status}`);
+      setPairingCode(String(body.code));
+      setPairingExpires(String(body.expires_at || ""));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Não foi possível gerar o código da extensão.");
+    } finally {
+      setPairingLoading(false);
+    }
+  };
+
   const totalChars = useMemo(() => records.reduce((sum, row) => sum + Number(row.transcript_chars || 0), 0), [records]);
 
   if (typeof document === "undefined") return <style dangerouslySetInnerHTML={{ __html: STYLE }} />;
@@ -237,10 +265,19 @@ export default function MeetingsBridge() {
           <div className="meetings-sub">Resumo, decisões, compromissos e participantes já processados. A transcrição completa só é buscada quando você abre uma reunião.</div>
         </div>
         <div className="meetings-actions">
+          <button className="meetings-btn primary" onClick={createPairing} disabled={pairingLoading}>{pairingLoading ? "Gerando…" : "Conectar captura"}</button>
           <button className="meetings-btn" onClick={() => load(true, activeQuery)} disabled={loading}>{loading ? "Atualizando…" : "Atualizar"}</button>
           <button className="meetings-btn" onClick={() => setOpen(false)}>Fechar</button>
         </div>
       </div>
+
+      {pairingCode && <div className="meetings-pair">
+        <div>
+          <div className="meetings-pair-code">{pairingCode}</div>
+          <div className="meetings-pair-note">Abra a extensão Leonardo Meetings → Configurar conexão e digite este código. Ele expira {pairingExpires ? fmtDate(pairingExpires) : "em 15 minutos"}.</div>
+        </div>
+        <button className="meetings-btn" onClick={() => { navigator.clipboard?.writeText(pairingCode); }}>Copiar código</button>
+      </div>}
 
       <form className="meetings-toolbar" onSubmit={submitSearch}>
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente, título ou resumo" />

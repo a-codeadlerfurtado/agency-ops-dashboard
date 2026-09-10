@@ -172,6 +172,29 @@ Deno.serve(async (req) => {
       }) });
     }
 
+    if (action === "meeting_ready_notify") {
+      const transcriptId = Number(body.transcript_id || 0);
+      if (!Number.isInteger(transcriptId) || transcriptId <= 0) return json({ error: "transcript_id_required" }, 400);
+      const sb = client("agency_ops");
+      const { data: cfgRow, error: cfgError } = await sb.from("worker_runtime_config").select("value").eq("key", "meeting_notifications").maybeSingle();
+      if (cfgError) throw cfgError;
+      const cfg = (cfgRow?.value ?? {}) as Record<string, unknown>;
+      if (String(cfg.mode ?? "off") !== "execute") return json({ ok: true, skipped: true, reason: "meeting_notifications_off" });
+
+      const claimed = await rpc("claim_meeting_ready_notification", { p_transcript_id: transcriptId }) as Array<Record<string, unknown>>;
+      const notification = Array.isArray(claimed) ? claimed[0] : null;
+      if (!notification?.notification_id) return json({ ok: true, skipped: true, reason: "not_ready_already_sent_or_no_phone" });
+
+      const message = `? Reunião processada\n\n${String(notification.title ?? "Reunião")}\n${String(notification.client_name ?? "Cliente não vinculado")}\n\nResumo e transcrição já estão disponíveis no Dashboard.`;
+      try {
+        await sendWhatsApp(String(notification.recipient_phone ?? ""), message);
+        await rpc("finish_meeting_ready_notification", { p_notification_id: notification.notification_id, p_ok: true, p_error: null });
+        return json({ ok: true, sent: true, notification_id: notification.notification_id });
+      } catch (error) {
+        await rpc("finish_meeting_ready_notification", { p_notification_id: notification.notification_id, p_ok: false, p_error: String(error instanceof Error ? error.message : error) });
+        throw error;
+      }
+    }
     if (action === "overdue_snapshot") {
       const t0 = Date.now();
       const sb = client("sdr_monitor");
