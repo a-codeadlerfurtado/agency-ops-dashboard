@@ -54,9 +54,12 @@ function normalizeSegments(input: unknown) {
     ended_ms: Number.isFinite(Number(raw?.ended_ms)) ? Math.max(0, Math.round(Number(raw.ended_ms))) : null,
     speaker_key: clean(raw?.speaker_key, 180) || null,
     speaker_name: clean(raw?.speaker_name, 160) || "Participante",
+    device_id: clean(raw?.device_id || raw?.deviceId, 300) || null,
+    message_id: clean(raw?.message_id || raw?.messageId, 300) || null,
+    message_version: Number.isFinite(Number(raw?.message_version ?? raw?.messageVersion)) ? Math.round(Number(raw?.message_version ?? raw?.messageVersion)) : null,
     text: clean(raw?.text, 8000),
     confidence: Number.isFinite(Number(raw?.confidence)) ? Math.max(0, Math.min(1, Number(raw.confidence))) : null,
-    source: clean(raw?.source, 40) || "MEET_CAPTIONS",
+    source: clean(raw?.source, 40) || "MEET_RTC_CAPTIONS",
   })).filter((row) => row.text.length > 0).slice(0, 20000);
 }
 
@@ -260,7 +263,7 @@ Deno.serve(async (req: Request) => {
       participants: participantNames,
       owner_person: device.owner_person,
       processing_status: "CAPTURED",
-      transcript_source: "MEET_CAPTIONS",
+      transcript_source: sessionPayload.capture_mode === "MEET_RTC_CAPTIONS" ? "MEET_RTC_CAPTIONS" : "MEET_CAPTIONS",
       capture_session_id: session.id,
       metadata: { capture_mode: sessionPayload.capture_mode, local_session_id: localSessionId, captured_by: VERSION },
       updated_at: new Date().toISOString(),
@@ -302,6 +305,9 @@ Deno.serve(async (req: Request) => {
       ended_ms: segment.ended_ms,
       speaker_key: segment.speaker_key,
       speaker_name: segment.speaker_name,
+      device_id: segment.device_id,
+      message_id: segment.message_id,
+      message_version: segment.message_version,
       text: segment.text,
       confidence: segment.confidence,
       source: segment.source,
