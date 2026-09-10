@@ -28,6 +28,7 @@ function lenField(field, bytes) {
 }
 function strField(field, value) { return lenField(field, new TextEncoder().encode(value)); }
 function intField(field, value) { return concat(varint(field << 3), varint(value)); }
+function exactArrayBuffer(view) { return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength); }
 
 function nested(path, leaf) {
   let current = leaf;
@@ -87,7 +88,7 @@ const collections = new FakeChannel("collections");
 pc.dispatch("datachannel", { channel: collections });
 
 const leaf = concat(strField(1, "spaces/abc/devices/145"), strField(2, "Adler Furtado"));
-collections.emit("message", { data: nested([1, 2, 13, 1, 2], leaf).buffer });
+collections.emit("message", { data: exactArrayBuffer(nested([1, 2, 13, 1, 2], leaf)) });
 await new Promise((resolve) => setTimeout(resolve, 0));
 
 const innerV1 = concat(strField(1, "@145"), intField(2, 7), intField(3, 1), strField(6, "Olá"), intField(8, 1));
@@ -95,8 +96,8 @@ const innerV2 = concat(strField(1, "@145"), intField(2, 7), intField(3, 2), strF
 const captions = pc.created.find((channel) => channel.label === "captions");
 assert.ok(captions, "captions channel should be created after collections opens");
 
-captions.emit("message", { data: gzipSync(lenField(1, innerV1)) });
-captions.emit("message", { data: gzipSync(lenField(1, innerV2)) });
+captions.emit("message", { data: exactArrayBuffer(gzipSync(lenField(1, innerV1))) });
+captions.emit("message", { data: exactArrayBuffer(gzipSync(lenField(1, innerV2))) });
 await new Promise((resolve) => setTimeout(resolve, 20));
 
 const speaker = messages.find((message) => message.type === "SPEAKER_MAP")?.payload;
