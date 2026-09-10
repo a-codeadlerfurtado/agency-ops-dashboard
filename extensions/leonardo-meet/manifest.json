@@ -1,9 +1,16 @@
 {
   "manifest_version": 3,
   "name": "Leonardo Meetings",
-  "version": "0.1.0",
-  "description": "Captura automática e local de reuniões do Google Meet para o Leonardo Imobi.",
-  "permissions": ["storage", "alarms"],
+  "version": "0.2.0",
+  "description": "Captura automática e local de transcrições do Google Meet para o Leonardo Imobi.",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "alarms",
+    "tabs",
+    "scripting",
+    "webRequest"
+  ],
   "host_permissions": [
     "https://meet.google.com/*",
     "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/*"
@@ -15,8 +22,19 @@
   "content_scripts": [
     {
       "matches": ["https://meet.google.com/*"],
+      "js": ["rtc-injector.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://meet.google.com/*"],
       "js": ["content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-rtc-capture.js"],
+      "matches": ["https://meet.google.com/*"]
     }
   ],
   "action": {
