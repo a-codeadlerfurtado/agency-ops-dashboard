@@ -59,9 +59,10 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   const transcriptId = Number(url.searchParams.get("transcript_id") || 0);
   const clientId = String(url.searchParams.get("client_id") || "").trim();
+  const ownerPerson = String(url.searchParams.get("owner_person") || "").trim().slice(0, 160);
 
   if (transcriptId > 0) {
-    let q = ops.from("meeting_transcripts").select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,transcript_text,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,created_at").eq("id", transcriptId);
+    let q = ops.from("meeting_transcripts").select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_text,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,created_at,owner_person,processing_status,transcript_source,capture_session_id").eq("id", transcriptId);
     if (clientId) q = q.eq("client_id", clientId);
     const { data, error } = await q.maybeSingle();
     if (error) return reply({ error: "query_failed" }, 500, "no-store");
@@ -70,7 +71,12 @@ Deno.serve(async (req: Request) => {
       const { data: client } = await ops.from("clients").select("gt_owner").eq("id", data.client_id).maybeSingle();
       if (!client || String(client.gt_owner || "") !== person) return reply({ error: "forbidden" }, 403, "no-store");
     }
-    return reply({ transcript: data, generated_at: new Date().toISOString() }, 200, "private, max-age=300");
+    const { data: segments } = await ops.from("meeting_transcript_segments")
+      .select("sequence_no,started_ms,ended_ms,speaker_key,speaker_name,device_id,message_id,message_version,text,confidence,source")
+      .eq("transcript_id", transcriptId)
+      .order("sequence_no", { ascending: true })
+      .limit(20000);
+    return reply({ transcript: { ...data, segments: segments || [] }, generated_at: new Date().toISOString() }, 200, "private, max-age=300");
   }
 
   const rawLimit = Number(url.searchParams.get("limit") || 30);
@@ -89,12 +95,13 @@ Deno.serve(async (req: Request) => {
   }
 
   let q = ops.from("meeting_transcripts")
-    .select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,created_at", { count: "exact" })
+    .select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,created_at,owner_person,processing_status,transcript_source", { count: "exact" })
     .order("meeting_started_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
   if (allowedClientIds) q = q.in("client_id", allowedClientIds);
   if (clientId) q = q.eq("client_id", clientId);
+  if (ownerPerson) q = q.eq("owner_person", ownerPerson);
   if (from) q = q.gte("meeting_started_at", from);
   if (to) q = q.lte("meeting_started_at", to);
   if (search) q = q.or(`client_name_raw.ilike.%${search}%,source_file_name.ilike.%${search}%,summary.ilike.%${search}%`);
