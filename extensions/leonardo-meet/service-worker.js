@@ -1,4 +1,4 @@
-import { clearSession, getFrames, getSession, getSpeakers, listSessions, putFrame, putSession, putSpeaker } from "./rtc-store.js";
+import { clearSession, getAudioChunks, getFrames, getSession, getSpeakers, listSessions, putAudioChunk, putFrame, putSession, putSpeaker } from "./rtc-store.js";
 
 const API = "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-meeting-capture-api";
 const OUTBOX_KEY = "meeting_capture_outbox";
@@ -182,13 +182,75 @@ async function finalizeStoredSession(sessionId, finishOverride = null) {
   const payload = { meeting, participants, segments };
   try {
     const result = await deliver(payload);
-    await clearSession(sessionId);
     await setCaptureState({ active: false, saved: true, error: null, meeting_code: meeting.meeting_code, ended_at: meeting.ended_at, transcript_id: result?.transcript_id || null });
+    const feedback = { local_session_id: stored.id, transcript_id: result?.transcript_id || null, capture_session_id: result?.session_id || null, channel: "MEET", title: meeting.title || "ReuniÃ£o Google Meet" };
+    if (stored.tab_id != null) chrome.tabs.sendMessage(stored.tab_id, { type: "RELATO_SHOW_FEEDBACK", feedback }).catch(() => {});
+    await clearSession(sessionId);
     return { ok: true, result };
   } catch (error) {
     const attempts = Number(stored.attempts || 0) + 1;
     await putSession({ ...stored, ...meeting, state: "PENDING_UPLOAD", attempts, last_error: String(error?.message || error), ended_at: meeting.ended_at, finish_payload: finishOverride || null });
     await setCaptureState({ active: false, saving: false, queued: true, error: null, meeting_code: meeting.meeting_code, ended_at: meeting.ended_at });
+    return { ok: false, queued: true, error: String(error?.message || error) };
+  }
+}
+
+function decodeBase64(value) {
+  const raw = atob(String(value || ""));
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  return bytes;
+}
+
+async function uploadSignedAudio(url, chunks, mimeType) {
+  const parts = chunks.map((chunk) => decodeBase64(chunk.base64));
+  const blob = new Blob(parts, { type: mimeType || "audio/webm" });
+  const response = await fetch(url, { method: "PUT", headers: { "content-type": mimeType || "audio/webm", "x-upsert": "true" }, body: blob });
+  if (!response.ok) throw new Error(`call_audio_upload_${response.status}:${(await response.text()).slice(0,300)}`);
+  return blob.size;
+}
+
+async function finalizeCallSession(sessionId, finish = null) {
+  const stored = await getSession(sessionId);
+  if (!stored) return { ok: false, error: "session_not_found" };
+  const chunks = await getAudioChunks(sessionId);
+  if (!chunks.length) {
+    await putSession({ ...stored, state: "NEEDS_REVIEW", ended_at: finish?.ended_at || new Date().toISOString(), last_error: "no_call_audio" });
+    return { ok: false, error: "no_call_audio" };
+  }
+  const roles = [...new Set(chunks.map((chunk) => chunk.role).filter((role) => role === "local" || role === "remote"))];
+  const device = await getDevice();
+  if (!device?.device_token) throw new Error("extension_not_paired");
+  const endedAt = finish?.ended_at || stored.ended_at || new Date().toISOString();
+  const prepared = await callApi("call_prepare", {
+    call: {
+      local_session_id: stored.id,
+      started_at: stored.started_at,
+      ended_at: endedAt,
+      contact_name: finish?.contact_name || stored.contact_name || "Contato WhatsApp",
+      finish_reason: finish?.reason || stored.finish_reason || null,
+      extension_version: chrome.runtime.getManifest().version,
+    },
+    roles,
+  }, device.device_token);
+  const uploaded = [];
+  for (const item of prepared.uploads || []) {
+    const roleChunks = chunks.filter((chunk) => chunk.role === item.role).sort((a,b) => Number(a.seq||0)-Number(b.seq||0));
+    if (!roleChunks.length) continue;
+    const mime = roleChunks.find((chunk) => chunk.mime_type)?.mime_type || "audio/webm";
+    const bytes = await uploadSignedAudio(item.signed_url, roleChunks, mime);
+    uploaded.push({ role: item.role, path: item.path, bytes, mime_type: mime });
+  }
+  try {
+    const result = await callApi("call_finalize", { local_session_id: stored.id, uploaded }, device.device_token);
+    await setCaptureState({ active: false, saved: true, call: true, error: null, title: stored.contact_name || "LigaÃ§Ã£o WhatsApp", ended_at: endedAt, session_id: prepared.session_id });
+    const feedback = { local_session_id: stored.id, capture_session_id: prepared.session_id, channel: "WHATSAPP_WEB_CALL", title: `LigaÃ§Ã£o WhatsApp â€” ${stored.contact_name || "Contato"}` };
+    if (stored.tab_id != null) chrome.tabs.sendMessage(stored.tab_id, { type: "RELATO_SHOW_FEEDBACK", feedback }).catch(() => {});
+    await clearSession(sessionId);
+    return { ok: true, result, capture_session_id: prepared.session_id };
+  } catch (error) {
+    const attempts = Number(stored.attempts || 0) + 1;
+    await putSession({ ...stored, state: "CALL_PENDING_UPLOAD", attempts, last_error: String(error?.message || error), ended_at: endedAt, finish_payload: finish || null });
     return { ok: false, queued: true, error: String(error?.message || error) };
   }
 }
@@ -209,6 +271,7 @@ async function flushLegacyOutbox() {
 async function retryStoredSessions() {
   const sessions = await listSessions();
   for (const row of sessions.filter((item) => item.state === "PENDING_UPLOAD")) await finalizeStoredSession(row.id, row.finish_payload).catch(() => {});
+  for (const row of sessions.filter((item) => item.state === "CALL_PENDING_UPLOAD")) await finalizeCallSession(row.id, row.finish_payload).catch(() => {});
 }
 
 async function flushAll() {
@@ -295,6 +358,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const device = await getDevice();
       if (!device?.device_token) return { ok: false, error: "extension_not_paired", providers: [] };
       return callApi("integrations_status", {}, device.device_token);
+    }
+
+    if (message?.type === "CALL_SESSION_START") {
+      const row = message.session || {};
+      if (!row.id) return { ok: false, error: "session_id_required" };
+      await putSession({ ...row, tab_id: sender.tab?.id ?? null, state: "CALL_CAPTURING", attempts: 0, capture_mode: "WHATSAPP_WEB_AUDIO", created_at: new Date().toISOString() });
+      await setCaptureState({ active: true, call: true, title: `LigaÃ§Ã£o WhatsApp â€” ${row.contact_name || "Contato"}`, started_at: row.started_at, mode: "WHATSAPP_WEB_AUDIO" });
+      return { ok: true };
+    }
+
+    if (message?.type === "CALL_AUDIO_CHUNK") {
+      const chunk = message.chunk || {};
+      if (!message.session_id || !["local","remote"].includes(message.role) || !chunk.base64) return { ok: false, error: "invalid_call_chunk" };
+      await putAudioChunk(message.session_id, message.role, { seq: Number(chunk.seq || 0), base64: String(chunk.base64), mime_type: String(chunk.mime_type || "audio/webm"), offset_ms: Number(chunk.offset_ms || 0), track_key: String(chunk.track_key || ""), captured_at: chunk.captured_at || new Date().toISOString() });
+      return { ok: true };
+    }
+
+    if (message?.type === "CALL_SESSION_FINISH") {
+      const row = await getSession(message.session_id);
+      if (!row) return { ok: false, error: "session_not_found" };
+      const finish = { ended_at: message.ended_at || new Date().toISOString(), reason: message.reason || "call_ended", contact_name: message.contact_name || row.contact_name || null };
+      await putSession({ ...row, state: "FINISHING", ended_at: finish.ended_at, finish_reason: finish.reason, finish_payload: finish });
+      return finalizeCallSession(message.session_id, finish);
+    }
+
+    if (message?.type === "HUMAN_FEEDBACK_SAVE") {
+      const device = await getDevice();
+      if (!device?.device_token) return { ok: false, error: "extension_not_paired" };
+      return callApi("human_feedback_save", { feedback: message.feedback || {} }, device.device_token);
     }
 
     if (message?.type === "RTC_SESSION_START") {

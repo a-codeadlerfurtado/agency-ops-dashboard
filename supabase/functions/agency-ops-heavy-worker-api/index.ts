@@ -172,6 +172,106 @@ Deno.serve(async (req) => {
       }) });
     }
 
+    if (action === "call_snapshot") {
+      const sessionId = String(body.session_id || "").trim();
+      if (!sessionId) return json({ error: "session_id_required" }, 400);
+      const sb = client("agency_ops");
+      const { data: session, error } = await sb.from("meeting_capture_sessions")
+        .select("id,device_id,owner_person,local_session_id,title,started_at,ended_at,state,capture_mode,transcript_id,metadata")
+        .eq("id", sessionId).maybeSingle();
+      if (error) throw error;
+      if (!session) return json({ error: "call_session_not_found" }, 404);
+      const audioPaths = session.metadata?.audio_paths && typeof session.metadata.audio_paths === "object" ? session.metadata.audio_paths : {};
+      const audio: Record<string, unknown>[] = [];
+      for (const [role, path] of Object.entries(audioPaths)) {
+        if (!["local","remote"].includes(role) || !path) continue;
+        const { data: signed, error: signedError } = await createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } })
+          .storage.from("relato-call-audio").createSignedUrl(String(path), 3600);
+        if (signedError || !signed?.signedUrl) throw signedError || new Error("call_audio_signed_url_failed");
+        audio.push({ role, path, signed_url: signed.signedUrl });
+      }
+      return json({ ok: true, session, audio });
+    }
+
+    if (action === "call_commit") {
+      const sessionId = String(body.session_id || "").trim();
+      const transcriptText = String(body.transcript_text || "").trim();
+      if (!sessionId || !transcriptText) return json({ error: "call_commit_data_required" }, 400);
+      const sb = client("agency_ops");
+      const { data: session, error: sessionError } = await sb.from("meeting_capture_sessions")
+        .select("id,owner_person,local_session_id,title,started_at,ended_at,metadata,transcript_id")
+        .eq("id", sessionId).maybeSingle();
+      if (sessionError) throw sessionError;
+      if (!session) return json({ error: "call_session_not_found" }, 404);
+      const rawSegments = Array.isArray(body.segments) ? body.segments.slice(0, 20000) : [];
+      const segments = rawSegments.map((seg: Record<string, unknown>, index: number) => ({
+        sequence_no: Number.isFinite(Number(seg.sequence_no)) ? Number(seg.sequence_no) : index,
+        started_ms: Number.isFinite(Number(seg.started_ms)) ? Math.max(0, Math.round(Number(seg.started_ms))) : null,
+        ended_ms: Number.isFinite(Number(seg.ended_ms)) ? Math.max(0, Math.round(Number(seg.ended_ms))) : null,
+        speaker_key: String(seg.speaker_key || "").slice(0,180) || null,
+        speaker_name: String(seg.speaker_name || "Participante").slice(0,160),
+        text: String(seg.text || "").trim().slice(0,8000),
+        confidence: Number.isFinite(Number(seg.confidence)) ? Math.max(0, Math.min(1, Number(seg.confidence))) : null,
+        source: "WHATSAPP_WEB_AUDIO_WHISPER",
+      })).filter((seg: Record<string, unknown>) => String(seg.text || "").length > 0);
+      const durationSeconds = session.started_at && session.ended_at
+        ? Math.max(0, Math.round((Date.parse(String(session.ended_at)) - Date.parse(String(session.started_at))) / 1000)) : null;
+      const contentHash = await sha256Hex(transcriptText);
+      const contactName = String(session.metadata?.contact_name || "Contato WhatsApp").slice(0,160);
+      const participants = [...new Set([session.owner_person, contactName].filter(Boolean))];
+      const transcriptPayload = {
+        source_system: "RELATO_AI",
+        source_file_id: session.local_session_id,
+        source_file_name: `WhatsApp Call - ${contactName}.txt`,
+        source_url: "https://web.whatsapp.com/",
+        meeting_key: `relato:whatsapp:${session.owner_person}:${session.local_session_id}:${session.started_at}`,
+        meeting_code: null,
+        meeting_started_at: session.started_at,
+        meeting_ended_at: session.ended_at,
+        duration_seconds: durationSeconds,
+        transcript_text: transcriptText,
+        transcript_chars: transcriptText.length,
+        content_sha256: contentHash,
+        source_file_ids: [session.local_session_id],
+        copies_seen: 1,
+        participants,
+        owner_person: session.owner_person,
+        processing_status: "CAPTURED",
+        transcript_source: "WHATSAPP_WEB_AUDIO_WHISPER",
+        capture_session_id: session.id,
+        metadata: { ...(session.metadata || {}), capture_mode: "WHATSAPP_WEB_AUDIO", channel: "WHATSAPP_WEB_CALL" },
+        updated_at: new Date().toISOString(),
+      };
+      let transcript: Record<string, unknown> | null = null;
+      if (session.transcript_id) {
+        const { data, error } = await sb.from("meeting_transcripts").update(transcriptPayload).eq("id", session.transcript_id).select("id").single();
+        if (error) throw error; transcript = data;
+      } else {
+        const { data, error } = await sb.from("meeting_transcripts").insert(transcriptPayload).select("id").single();
+        if (error) throw error; transcript = data;
+      }
+      const transcriptId = Number(transcript?.id || session.transcript_id || 0);
+      if (!transcriptId) return json({ error: "call_transcript_missing" }, 500);
+      if (segments.length) {
+        const rows = segments.map((seg: Record<string, unknown>) => ({ ...seg, transcript_id: transcriptId, session_id: session.id }));
+        const { error } = await sb.from("meeting_transcript_segments").upsert(rows, { onConflict: "session_id,sequence_no" });
+        if (error) throw error;
+      }
+      await sb.from("meeting_capture_sessions").update({ transcript_id: transcriptId, state: "CAPTURED", updated_at: new Date().toISOString() }).eq("id", session.id);
+      await sb.from("meeting_human_feedback").update({ transcript_id: transcriptId, updated_at: new Date().toISOString() })
+        .eq("capture_session_id", session.id).is("transcript_id", null);
+      const { data: jobId, error: jobError } = await sb.rpc("enqueue_heavy_job", {
+        p_job_type: "MEETING_POSTPROCESS",
+        p_payload: { transcript_id: transcriptId, session_id: session.id, mode: "execute" },
+        p_dedupe_key: `meeting:${transcriptId}`,
+        p_max_attempts: 5,
+        p_available_at: new Date().toISOString(),
+      });
+      if (jobError) throw jobError;
+      await sb.from("meeting_capture_sessions").update({ state: "QUEUED", updated_at: new Date().toISOString() }).eq("id", session.id);
+      return json({ ok: true, transcript_id: transcriptId, segments: segments.length, job_id: jobId || null });
+    }
+
     if (action === "meeting_snapshot") {
       const transcriptId = Number(body.transcript_id || 0);
       if (!Number.isInteger(transcriptId) || transcriptId <= 0) return json({ error: "transcript_id_required" }, 400);

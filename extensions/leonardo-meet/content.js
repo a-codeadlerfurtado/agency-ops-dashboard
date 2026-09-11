@@ -18,6 +18,7 @@ let lastRequestAt = 0;
 let lastPath = location.pathname;
 let pageReady = false;
 let warningSent = false;
+let manualPaused = false;
 const prebuffer = [];
 const speakerPrebuffer = new Map();
 
@@ -94,7 +95,7 @@ async function runtime(message) {
 }
 
 async function beginSession() {
-  if (session) return;
+  if (session || manualPaused) return;
   const meetingCode = getMeetingCode();
   if (!meetingCode) return;
   const started = Date.now();
@@ -198,6 +199,16 @@ chrome.runtime.onMessage.addListener((message) => {
     requestRtcCapture();
   }
   if (message?.type === "REINJECT_RTC") requestRtcCapture(true);
+  if (message?.type === "RELATO_CAPTURE_CONTROL") {
+    const paused = Boolean(message.paused);
+    manualPaused = paused;
+    if (paused && session) endSession("manual_pause").catch(() => {});
+    if (!paused) {
+      inCallSince = Date.now() - JOIN_STABLE_MS;
+      requestRtcCapture(true);
+    }
+    runtime({ type: "CAPTURE_STATE", state: { active: !paused && Boolean(session), paused, meeting_code: getMeetingCode(), title: getMeetingTitle(), mode: "MEET_RTC_CAPTIONS" } });
+  }
 });
 
 setInterval(async () => {

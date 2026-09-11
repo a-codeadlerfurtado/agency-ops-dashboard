@@ -59,7 +59,9 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   const transcriptId = Number(url.searchParams.get("transcript_id") || 0);
   const clientId = String(url.searchParams.get("client_id") || "").trim();
-  const ownerPerson = String(url.searchParams.get("owner_person") || "").trim().slice(0, 160);
+  const requestedOwner = String(url.searchParams.get("owner_person") || "").trim().slice(0, 160);
+  const requestedScope = String(url.searchParams.get("scope") || "mine").trim().toLowerCase();
+  const effectiveOwner = isAdler && requestedScope === "all" ? "" : isAdler && requestedOwner ? requestedOwner : person;
 
   if (transcriptId > 0) {
     let q = ops.from("meeting_transcripts").select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_text,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,created_at,owner_person,processing_status,transcript_source,capture_session_id,match_status,match_confidence").eq("id", transcriptId);
@@ -67,6 +69,7 @@ Deno.serve(async (req: Request) => {
     const { data, error } = await q.maybeSingle();
     if (error) return reply({ error: "query_failed" }, 500, "no-store");
     if (!data) return reply({ error: "not_found" }, 404, "no-store");
+    if (!isAdler && String(data.owner_person || "") !== person) return reply({ error: "forbidden" }, 403, "no-store");
     if (role === "GT" && !elevated) {
       const { data: client } = await ops.from("clients").select("gt_owner").eq("id", data.client_id).maybeSingle();
       if (!client || String(client.gt_owner || "") !== person) return reply({ error: "forbidden" }, 403, "no-store");
@@ -85,7 +88,11 @@ Deno.serve(async (req: Request) => {
       ]);
       clientContext = { dossier: dossier || null, notes: notes || [], briefings: briefings || [] };
     }
-    return reply({ transcript: { ...data, segments: segments || [], client_context: clientContext }, generated_at: new Date().toISOString() }, 200, "private, max-age=300");
+    const { data: humanFeedback } = await ops.from("meeting_human_feedback")
+      .select("id,owner_person,channel,mood,tone,receptivity,trust_level,perceived_risk,relationship_direction,tags,note,submitted_at,dismissed")
+      .eq("transcript_id", transcriptId)
+      .order("submitted_at", { ascending: false, nullsFirst: false });
+    return reply({ transcript: { ...data, segments: segments || [], client_context: clientContext, human_feedback: humanFeedback || [] }, generated_at: new Date().toISOString() }, 200, "private, max-age=300");
   }
 
   const rawLimit = Number(url.searchParams.get("limit") || 30);
@@ -110,13 +117,18 @@ Deno.serve(async (req: Request) => {
     .range(offset, offset + limit - 1);
   if (allowedClientIds) q = q.in("client_id", allowedClientIds);
   if (clientId) q = q.eq("client_id", clientId);
-  if (ownerPerson) q = q.eq("owner_person", ownerPerson);
+  if (effectiveOwner) q = q.eq("owner_person", effectiveOwner);
   if (from) q = q.gte("meeting_started_at", from);
   if (to) q = q.lte("meeting_started_at", to);
   if (search) q = q.or(`client_name_raw.ilike.%${search}%,source_file_name.ilike.%${search}%,summary.ilike.%${search}%`);
   const { data, error, count } = await q;
   if (error) return reply({ error: "query_failed", detail: error.message }, 500, "no-store");
   const records = data || [];
+  let ownerOptions: string[] = [];
+  if (isAdler) {
+    const { data: activePeople } = await ops.from("team_roster").select("person").eq("is_former", false).order("person");
+    ownerOptions = (activePeople || []).map((row: Row) => String(row.person || "").trim()).filter(Boolean);
+  }
   return reply({
     records,
     count: count || 0,
@@ -124,6 +136,10 @@ Deno.serve(async (req: Request) => {
     limit,
     offset,
     generated_at: new Date().toISOString(),
-    policy: { transcript_on_demand: true, polling: false, cache_seconds: 60 },
+    viewer: { person, role, can_view_all: isAdler },
+    owner_options: ownerOptions,
+    active_scope: effectiveOwner ? "mine_or_person" : "all",
+    active_owner: effectiveOwner || null,
+    policy: { transcript_on_demand: true, polling: false, cache_seconds: 60, default_scope: "mine", admin_scope: isAdler ? "all_or_person" : "mine_only" },
   });
 });

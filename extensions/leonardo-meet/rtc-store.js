@@ -1,5 +1,5 @@
 const DB_NAME = "leonardo_meeting_capture_v2";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise = null;
 
@@ -36,6 +36,11 @@ export function openCaptureDb() {
       if (!db.objectStoreNames.contains("speakers")) {
         const store = db.createObjectStore("speakers", { keyPath: "id" });
         store.createIndex("session_id", "session_id", { unique: false });
+      }
+      if (!db.objectStoreNames.contains("audio_chunks")) {
+        const store = db.createObjectStore("audio_chunks", { keyPath: "id" });
+        store.createIndex("session_id", "session_id", { unique: false });
+        store.createIndex("session_role", ["session_id", "role"], { unique: false });
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -115,11 +120,30 @@ async function allByIndex(storeName, sessionId) {
 export const getFrames = (sessionId) => allByIndex("frames", sessionId);
 export const getSpeakers = (sessionId) => allByIndex("speakers", sessionId);
 
+export async function putAudioChunk(sessionId, role, chunk) {
+  const db = await openCaptureDb();
+  const seq = Number(chunk.seq || 0);
+  const id = `${sessionId}|${role}|${String(seq).padStart(8, "0")}`;
+  const tx = db.transaction("audio_chunks", "readwrite");
+  tx.objectStore("audio_chunks").put({ ...chunk, id, session_id: sessionId, role, seq, stored_at: new Date().toISOString() });
+  await txDone(tx);
+}
+
+export async function getAudioChunks(sessionId, role = null) {
+  const db = await openCaptureDb();
+  const tx = db.transaction("audio_chunks", "readonly");
+  const store = tx.objectStore("audio_chunks");
+  const rows = role
+    ? await reqResult(store.index("session_role").getAll(IDBKeyRange.only([sessionId, role])))
+    : await reqResult(store.index("session_id").getAll(IDBKeyRange.only(sessionId)));
+  return rows.sort((a, b) => Number(a.seq || 0) - Number(b.seq || 0));
+}
+
 export async function clearSession(sessionId) {
   const db = await openCaptureDb();
-  const tx = db.transaction(["sessions", "frames", "speakers"], "readwrite");
+  const tx = db.transaction(["sessions", "frames", "speakers", "audio_chunks"], "readwrite");
   tx.objectStore("sessions").delete(sessionId);
-  for (const storeName of ["frames", "speakers"]) {
+  for (const storeName of ["frames", "speakers", "audio_chunks"]) {
     const store = tx.objectStore(storeName);
     const index = store.index("session_id");
     const request = index.openKeyCursor(IDBKeyRange.only(sessionId));

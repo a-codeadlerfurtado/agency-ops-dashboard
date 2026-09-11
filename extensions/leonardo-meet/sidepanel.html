@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Relato AI — Transcriber</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="mark">»</span><strong>Relato AI</strong></div>
+    <span id="liveDot" class="live-dot"></span>
+  </header>
+  <section class="meeting-card">
+    <div><small>REUNIÃO</small><strong id="meetingTitle">Aguardando reunião</strong></div>
+    <div class="owner"><span id="ownerName">—</span><small id="ownerState">Conectado</small></div>
+  </section>
+  <button id="toggleCapture" class="stop-btn" type="button">Parar transcrição</button>
+  <nav class="tabs">
+    <button type="button" data-tab="info">Informações<br/>da reunião</button>
+    <button type="button" data-tab="ask">Perguntar à<br/>Relato AI</button>
+    <button type="button" data-tab="transcript" class="active">Transcrição</button>
+  </nav>
+  <main>
+    <section id="tab-info" class="panel hidden">
+      <h3>Informações da reunião</h3>
+      <dl class="info-grid">
+        <div><dt>Status</dt><dd id="infoStatus">Aguardando</dd></div>
+        <div><dt>Início</dt><dd id="infoStarted">—</dd></div>
+        <div><dt>Participantes</dt><dd id="infoParticipants">—</dd></div>
+        <div><dt>Origem</dt><dd id="infoSource">Google Meet</dd></div>
+      </dl>
+    </section>
+    <section id="tab-ask" class="panel hidden">
+      <h3>Perguntar à Relato AI</h3>
+      <p class="muted">Pergunte sobre o que já foi dito nesta reunião. A resposta usa somente a transcrição capturada até agora.</p>
+      <div id="askAnswer" class="ask-answer">Faça uma pergunta sobre a reunião.</div>
+      <form id="askForm" class="ask-form">
+        <textarea id="askInput" placeholder="Ex.: O que ficou combinado?" rows="3"></textarea>
+        <button type="submit">Perguntar</button>
+      </form>
+    </section>
+    <section id="tab-transcript" class="panel transcript-panel">
+      <label class="language-label">Idioma da reunião
+        <select id="language"><option value="pt-BR">Português (Brasil)</option></select>
+      </label>
+      <div class="transcript-head"><h3>Transcrição</h3><button id="refresh" title="Atualizar">↻</button></div>
+      <div id="transcript" class="transcript"><div class="empty">A transcrição ao vivo aparecerá aqui.</div></div>
+    </section>
+  </main>
+  <footer><span id="captureMode">Relato AI — Transcriber</span></footer>
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

@@ -242,6 +242,82 @@ const ollamaUrl = String(process.env.OLLAMA_URL || "http://ollama:11434").replac
 const meetingModel = process.env.MEETING_MODEL || "qwen3:1.7b";
 const meetingChunkChars = Math.max(6000, Math.min(Number(process.env.MEETING_CHUNK_CHARS || 14000), 24000));
 
+const whisperUrl = String(process.env.WHISPER_URL || "http://agency-whisper:8000/v1").replace(/\/$/, "");
+const whisperModel = process.env.WHISPER_MODEL || "Systran/faster-whisper-small";
+const whisperApiKey = process.env.WHISPER_API_KEY || "local-relato";
+
+function segmentClock(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const hh = String(Math.floor(total / 3600)).padStart(2, "0");
+  const mm = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
+  const ss = String(total % 60).padStart(2, "0");
+  return `${hh}:${mm}:${ss}`;
+}
+
+async function whisperTranscribe(audio, speakerName) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15 * 60_000);
+  try {
+    const source = await fetch(String(audio.signed_url), { signal: controller.signal });
+    if (!source.ok) throw new Error(`call_audio_download_${source.status}`);
+    const bytes = await source.arrayBuffer();
+    if (!bytes.byteLength) throw new Error("call_audio_empty");
+    const blob = new Blob([bytes], { type: "audio/webm" });
+    const form = new FormData();
+    form.append("file", blob, `${audio.role || "audio"}.webm`);
+    form.append("model", whisperModel);
+    form.append("language", "pt");
+    form.append("response_format", "verbose_json");
+    form.append("temperature", "0");
+    const response = await fetch(`${whisperUrl}/audio/transcriptions`, {
+      method: "POST",
+      headers: whisperApiKey ? { Authorization: `Bearer ${whisperApiKey}` } : {},
+      body: form,
+      signal: controller.signal,
+    });
+    const raw = await response.text();
+    if (!response.ok) throw new Error(`whisper_${response.status}:${raw.slice(0,500)}`);
+    const body = JSON.parse(raw || "{}");
+    const segments = Array.isArray(body.segments) ? body.segments : [];
+    return segments.map((seg, index) => ({
+      sequence_no: index,
+      started_ms: Math.max(0, Math.round(Number(seg.start || 0) * 1000)),
+      ended_ms: Math.max(0, Math.round(Number(seg.end || seg.start || 0) * 1000)),
+      speaker_key: speakerName,
+      speaker_name: speakerName,
+      device_id: null,
+      text: String(seg.text || "").trim(),
+      confidence: null,
+      source: "WHATSAPP_WEB_WHISPER",
+    })).filter((seg) => seg.text);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function processCallJob(job) {
+  const sessionId = String(job?.payload?.session_id || "").trim();
+  if (!sessionId) throw new Error("call_job_missing_session_id");
+  const snapshot = await call("call_snapshot", { session_id: sessionId }, 120000);
+  const session = snapshot.session || {};
+  const contactName = String(session.metadata?.contact_name || "Contato WhatsApp").trim() || "Contato WhatsApp";
+  const ownerName = String(session.owner_person || "Colaborador").trim() || "Colaborador";
+  const audio = Array.isArray(snapshot.audio) ? snapshot.audio : [];
+  if (!audio.length) throw new Error("call_audio_not_found");
+  const collected = [];
+  for (const item of audio) {
+    const speaker = item.role === "local" ? ownerName : contactName;
+    const rows = await whisperTranscribe(item, speaker);
+    for (const row of rows) collected.push(row);
+  }
+  collected.sort((a,b) => Number(a.started_ms || 0) - Number(b.started_ms || 0));
+  const segments = collected.map((row,index) => ({ ...row, sequence_no:index }));
+  const transcriptText = segments.map((row) => `[${segmentClock(row.started_ms)}] ${row.speaker_name}: ${row.text}`).join("\n\n");
+  if (transcriptText.trim().length < 3) throw new Error("call_transcript_empty");
+  const committed = await call("call_commit", { session_id:sessionId, transcript_text:transcriptText, segments }, 120000);
+  return { ok:true, session_id:sessionId, transcript_id:committed.transcript_id, segments:segments.length };
+}
+
+
 function meetingText(snapshot) {
   const segments = Array.isArray(snapshot?.segments) ? snapshot.segments : [];
   if (segments.length) return segments.map((s) => {
@@ -560,6 +636,9 @@ async function handleQueueJob(job) {
   }
   if (type === "MEETING_POSTPROCESS") {
     return await processMeetingJob(job);
+  }
+  if (type === "CALL_TRANSCRIBE") {
+    return await processCallJob(job);
   }
   if (type === "WHATSAPP_AGENDA_COMMAND") {
     return await processAgendaJob(job);

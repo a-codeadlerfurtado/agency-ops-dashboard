@@ -1,6 +1,7 @@
 const statusEl = document.getElementById("status");
 const pendingEl = document.getElementById("pending");
 const integrationsEl = document.getElementById("integrations");
+const liveButton = document.getElementById("live");
 const settingsButton = document.getElementById("settings");
 const retryButton = document.getElementById("retry");
 
@@ -42,6 +43,11 @@ async function render() {
   renderIntegrations(integrations?.providers || []);
 }
 
+liveButton.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id != null) await chrome.sidePanel.open({ tabId: tab.id });
+  window.close();
+});
 settingsButton.addEventListener("click", () => chrome.runtime.openOptionsPage());
 retryButton.addEventListener("click", async () => {
   retryButton.disabled = true;

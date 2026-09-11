@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Relato AI — Transcriber",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Relato AI — Transcriber: captura e inteligência de reuniões e chamadas para o Leonardo Imobi.",
   "permissions": [
     "storage",
@@ -9,32 +9,77 @@
     "alarms",
     "tabs",
     "scripting",
-    "webRequest"
+    "webRequest",
+    "sidePanel"
   ],
   "host_permissions": [
     "https://meet.google.com/*",
-    "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/*"
+    "https://web.whatsapp.com/*",
+    "https://bfzdetibfcwihfkltbkp.supabase.co/*"
   ],
   "background": {
     "service_worker": "service-worker.js",
     "type": "module"
   },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "content_scripts": [
     {
-      "matches": ["https://meet.google.com/*"],
-      "js": ["rtc-injector.js"],
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "rtc-injector.js"
+      ],
       "run_at": "document_start"
     },
     {
-      "matches": ["https://meet.google.com/*"],
-      "js": ["content.js"],
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "feedback-ui.js",
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://web.whatsapp.com/*"
+      ],
+      "js": [
+        "wa-injector.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://web.whatsapp.com/*"
+      ],
+      "js": [
+        "feedback-ui.js",
+        "wa-content.js"
+      ],
       "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["page-rtc-capture.js"],
-      "matches": ["https://meet.google.com/*"]
+      "resources": [
+        "page-rtc-capture.js"
+      ],
+      "matches": [
+        "https://meet.google.com/*"
+      ]
+    },
+    {
+      "resources": [
+        "wa-call-capture.js"
+      ],
+      "matches": [
+        "https://web.whatsapp.com/*"
+      ]
     }
   ],
   "action": {

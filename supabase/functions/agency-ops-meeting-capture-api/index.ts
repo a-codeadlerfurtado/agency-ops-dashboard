@@ -190,6 +190,81 @@ Deno.serve(async (req: Request) => {
       version: VERSION,
     });
   }
+  if (action === "call_prepare") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const call = (body?.call || {}) as Row;
+    const localSessionId = clean(call.local_session_id, 180);
+    const startedAt = clean(call.started_at, 80);
+    const endedAt = clean(call.ended_at, 80);
+    const contactName = clean(call.contact_name, 160) || "Contato WhatsApp";
+    if (!localSessionId || !startedAt || !endedAt) return respond({ error: "missing_call_data" }, 400);
+    if (!Number.isFinite(Date.parse(startedAt)) || !Number.isFinite(Date.parse(endedAt))) return respond({ error: "invalid_timestamps" }, 400);
+    const roles = Array.isArray(body?.roles) ? body.roles.map((v: unknown) => clean(v, 20)).filter((v: string) => ["local", "remote"].includes(v)) : [];
+    if (!roles.length) return respond({ error: "audio_roles_required" }, 400);
+    const safeLocal = localSessionId.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const audioPaths: Row = {};
+    for (const role of [...new Set(roles)]) audioPaths[role] = `calls/${device.id}/${safeLocal}/${role}.webm`;
+    const sessionPayload = {
+      device_id: device.id, owner_person: device.owner_person, local_session_id: localSessionId,
+      meeting_code: null, meeting_url: "https://web.whatsapp.com/", title: `Ligação WhatsApp — ${contactName}`,
+      started_at: startedAt, ended_at: endedAt, state: "UPLOADING", capture_mode: "WHATSAPP_WEB_AUDIO",
+      native_transcript_available: false, captions_available: false,
+      metadata: { source: "WHATSAPP_WEB", contact_name: contactName, audio_paths: audioPaths, finish_reason: clean(call.finish_reason, 80) || null, extension_version: clean(call.extension_version, 40) || null },
+      updated_at: new Date().toISOString(),
+    };
+    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions").upsert(sessionPayload, { onConflict: "device_id,local_session_id" }).select("id").single();
+    if (sessionError || !session) return respond({ error: "call_session_upsert_failed", detail: sessionError?.message }, 500);
+    const uploads: Row[] = [];
+    for (const [role, path] of Object.entries(audioPaths)) {
+      const { data, error } = await db.storage.from("relato-call-audio").createSignedUploadUrl(String(path), { upsert: true });
+      if (error || !data?.signedUrl) return respond({ error: "call_upload_url_failed", role, detail: error?.message }, 500);
+      uploads.push({ role, path, signed_url: data.signedUrl, token: data.token || null });
+    }
+    return respond({ ok: true, session_id: session.id, owner_person: device.owner_person, uploads });
+  }
+
+  if (action === "call_finalize") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const localSessionId = clean(body?.local_session_id, 180);
+    if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
+    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions").select("id,state,metadata").eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
+    if (sessionError || !session) return respond({ error: "call_session_not_found" }, 404);
+    await ops.from("meeting_capture_sessions").update({ state: "QUEUED", updated_at: new Date().toISOString() }).eq("id", session.id);
+    const { data: jobId, error: jobError } = await ops.rpc("enqueue_heavy_job", {
+      p_job_type: "CALL_TRANSCRIBE", p_payload: { session_id: session.id }, p_dedupe_key: `call:${session.id}`, p_max_attempts: 5, p_available_at: new Date().toISOString(),
+    });
+    if (jobError) return respond({ error: "call_enqueue_failed", detail: jobError.message }, 500);
+    return respond({ ok: true, session_id: session.id, job_id: jobId || null, state: "QUEUED" });
+  }
+
+  if (action === "human_feedback_save") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const feedback = (body?.feedback || {}) as Row;
+    const localSessionId = clean(feedback.local_session_id, 180);
+    if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
+    const { data: session } = await ops.from("meeting_capture_sessions")
+      .select("id,transcript_id,owner_person")
+      .eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
+    if (!session || String(session.owner_person || "") !== String(device.owner_person || "")) return respond({ error: "feedback_session_not_found" }, 404);
+    const asScore = (value: unknown) => Number.isFinite(Number(value)) ? Math.max(1, Math.min(5, Math.round(Number(value)))) : null;
+    const tags = Array.isArray(feedback.tags) ? feedback.tags.map((v: unknown) => clean(v, 80)).filter(Boolean).slice(0, 12) : [];
+    const payload = {
+      transcript_id: Number(feedback.transcript_id || session.transcript_id || 0) || null,
+      capture_session_id: session.id, local_session_id: localSessionId, owner_person: device.owner_person,
+      channel: clean(feedback.channel, 40) || "MEET", mood: clean(feedback.mood, 60) || null, tone: clean(feedback.tone, 60) || null,
+      receptivity: asScore(feedback.receptivity), trust_level: asScore(feedback.trust_level), perceived_risk: asScore(feedback.perceived_risk),
+      relationship_direction: ["IMPROVING","STABLE","WORSENING","UNKNOWN"].includes(clean(feedback.relationship_direction, 20).toUpperCase()) ? clean(feedback.relationship_direction, 20).toUpperCase() : "UNKNOWN",
+      tags, note: clean(feedback.note, 2000) || null, dismissed: Boolean(feedback.dismissed),
+      submitted_at: feedback.dismissed ? null : new Date().toISOString(), updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await ops.from("meeting_human_feedback").upsert(payload, { onConflict: "owner_person,local_session_id" }).select("id,transcript_id,submitted_at,dismissed").single();
+    if (error) return respond({ error: "feedback_save_failed", detail: error.message }, 500);
+    return respond({ ok: true, feedback: data });
+  }
+
   if (action === "finalize") {
     const device = await resolveDevice(req, ops);
     if (!device) return respond({ error: "invalid_device" }, 401);
