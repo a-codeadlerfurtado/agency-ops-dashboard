@@ -43,7 +43,7 @@ const number = (value: unknown) => Number(value ?? 0);
 const value = <T>(result: any, fallback: T): T => result?.error ? fallback : (result?.data ?? fallback);
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
 const SYNTHETIC_NAME = /^[A-Za-z]+-\d{9,}-[a-z0-9]{4,8}$/;
-const ALL_VIEWS = ["overview","focus","work","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health","opsperf","creative","capacity","finance","executive"];
+const ALL_VIEWS = ["overview","focus","work","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health","opsperf","creative","capacity","view-oncall","finance","executive"];
 const opsDay = (date = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 
 const aggregateMedia = (rows: any[]) => {

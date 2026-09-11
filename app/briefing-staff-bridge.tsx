@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Session } from "@supabase/supabase-js";
 import { authenticatedFetch, SUPABASE_URL } from "./shared";
+import BriefingAccessesPanel from "./briefing-accesses-panel";
 
 type Row = Record<string, any>;
-type Tab = "overview" | "products" | "personas" | "strategy" | "materials";
+type Tab = "overview" | "products" | "personas" | "strategy" | "materials" | "accesses";
 type DetailTab = "strategy" | "briefing" | "history";
 
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-briefing-staff-api`;
@@ -206,6 +207,8 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
   const personas=clientData?.personas||[];
   const materials=clientData?.materials||[];
   const drive=clientData?.drive||clients.find((c:Row)=>String(c.id)===clientId)?.drive||null;
+  const canAccessCredentials=ALLOWED_PEOPLE.has(String(boot?.person||""));
+  const topTabs: Array<[Tab,string]> = [["overview","Resumo"],["products","Produtos"],["personas","Personas"],["strategy","Estratégia"],["materials","Materiais"],...(canAccessCredentials ? [["accesses","Acessos Briefing Hub"] as [Tab,string]] : [])];
   const completeProducts=products.filter((x:Row)=>statusClass(x.completion_status)==="ok").length;
   const completePersonas=personas.filter((x:Row)=>statusClass(x.completion_status)==="ok").length;
 
@@ -258,7 +261,7 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
         {!selected&&!loading&&<div className="brief-staff-empty">Selecione um cliente para abrir seus briefings, personas e materiais.</div>}
         {selected&&<>
           <div className="brief-staff-clientbar"><div><div className="brief-staff-clientname">{selected.display_name}</div><div className="brief-staff-clientmeta">{selected.lifecycle} · GT: {selected.gt_owner||"não definido"} · CS: {selected.cs_owner||"não definido"}</div></div>{drive?.external_id&&<a className="brief-staff-btn" href={`https://drive.google.com/drive/folders/${drive.external_id}`} target="_blank" rel="noreferrer">Abrir Drive ↗</a>}</div>
-          <nav className="brief-staff-tabs" aria-label="Áreas do Briefing Hub">{([['overview','Resumo'],['products','Produtos'],['personas','Personas'],['strategy','Estratégia'],['materials','Materiais']] as [Tab,string][]).map(([k,label])=><button key={k} className={`brief-staff-tab${tab===k?' active':''}`} onClick={()=>setTab(k)}>{label}</button>)}</nav>
+          <nav className="brief-staff-tabs" aria-label="Áreas do Briefing Hub">{topTabs.map(([k,label])=><button key={k} className={`brief-staff-tab${tab===k?' active':''}`} onClick={()=>setTab(k)}>{label}</button>)}</nav>
 
           {tab==="overview"&&<>
             <div className="brief-staff-stats"><div className="brief-staff-stat"><small>Produtos</small><b>{products.length}</b><span>{completeProducts} completos</span></div><div className="brief-staff-stat"><small>Personas</small><b>{personas.length}</b><span>{completePersonas} completas</span></div><div className="brief-staff-stat"><small>Materiais</small><b>{materials.length}</b><span>registros recentes</span></div><div className="brief-staff-stat"><small>Drive</small><b>{drive?.external_id?'OK':'—'}</b><span>{drive?.external_name||'pasta não mapeada'}</span></div></div>
@@ -277,6 +280,7 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
           </>}
 
           {tab==="materials"&&<><div className="brief-staff-drive"><div><b>{drive?.external_name||'Pasta do Drive'}</b><code>{drive?.external_id||'Este cliente ainda não possui pasta DRIVE mapeada.'}</code></div>{drive?.external_id&&<a className="brief-staff-btn primary" href={`https://drive.google.com/drive/folders/${drive.external_id}`} target="_blank" rel="noreferrer">Abrir pasta</a>}</div><div className="brief-staff-upload-note"><strong>Materiais do cliente</strong><p>Os arquivos permanecem no Google Drive; o dashboard guarda somente metadados para histórico e notificações. A seleção de subpasta e o upload resumível serão habilitados aqui pelo mesmo bridge de Drive usado no portal do cliente.</p></div><div className="brief-staff-section-title"><h2>Arquivos registrados</h2><span>{materials.length} recentes</span></div>{materials.length?<div className="brief-staff-card">{materials.map((x:Row)=><div className="brief-staff-file" key={x.id}><div><b>{x.file_name}</b><span>{x.file_kind||'ARQUIVO'} {fmtBytes(x.file_size_bytes)?`· ${fmtBytes(x.file_size_bytes)}`:''} · {fmtDate(x.drive_uploaded_at||x.detected_at)}</span></div>{x.drive_file_id&&<a href={`https://drive.google.com/open?id=${x.drive_file_id}`} target="_blank" rel="noreferrer">Abrir ↗</a>}</div>)}</div>:<div className="brief-staff-empty">Nenhum material indexado para este cliente ainda.</div>}</>}
+          {tab==="accesses"&&canAccessCredentials&&<BriefingAccessesPanel clientId={String(selected.id)} clientName={String(selected.display_name)} drive={drive}/>}
         </>}
       </div>
     </main>,document.body)}

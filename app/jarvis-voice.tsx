@@ -60,36 +60,17 @@ const PULSO_CSS = `
 
 const FIM_DE_FRASE = /(?<=[.!?\n])\s+/;
 
-// Nomes masculinos de voz pt-BR mais comuns entre Windows, macOS e Chrome.
-// A lista e por nome porque a Web Speech API nao expoe genero -- `voiceURI` e
-// `name` sao tudo que da para inspecionar.
-const MASCULINAS = /antonio|ant[oô]nio|daniel|felipe|ricardo|jo[aã]o|thiago|lu[ií]s|luiz|male|homem/i;
-
-/**
- * Voz da resposta, em ordem de preferencia:
- *   1. pt-BR com nome masculino conhecido
- *   2. qualquer pt-BR
- *   3. pt-PT, so entao
- *
- * Roda tambem no `voiceschanged`: no Chrome a lista chega vazia no primeiro
- * render e so e populada depois, entao escolher uma unica vez daria silencio.
- */
-function escolherVoz(): SpeechSynthesisVoice | null {
-  const vozes = window.speechSynthesis?.getVoices?.() ?? [];
-  if (!vozes.length) return null;
-  const lang = (v: SpeechSynthesisVoice) => (v.lang ?? "").toLowerCase().replace("_", "-");
-
-  const brasileiras = vozes.filter((v) => lang(v).startsWith("pt-br"));
-  const masculina = brasileiras.find((v) => MASCULINAS.test(v.name ?? ""));
-  if (masculina) return masculina;
-  if (brasileiras.length) return brasileiras[0];
-
-  const portuguesas = vozes.filter((v) => lang(v).startsWith("pt"));
-  const masculinaPt = portuguesas.find((v) => MASCULINAS.test(v.name ?? ""));
-  return masculinaPt ?? portuguesas[0] ?? null;
+function corrigirTranscricaoJarvis(v: string): string {
+  return String(v || "").replace(/\blitros\b/giu, "leads").replace(/\blitro\b/giu, "lead");
 }
 
-export default function JarvisVoice() {
+/**
+ * `allowed` vem do router, que acabou de resolver o perfil via loadProfileLite.
+ * Quando informado, evita a segunda cadeia /api/jarvis/access ->
+ * identificarUsuario -> profile-lite, que ao estourar escondia o botao. E' gate
+ * VISUAL; a seguranca real continua em cada rota /api/jarvis/*.
+ */
+export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
   const [ativo, setAtivo] = useState(false);
   const [ouvindo, setOuvindo] = useState(false);
   const [falando, setFalando] = useState(false);
@@ -97,24 +78,27 @@ export default function JarvisVoice() {
   const [linhas, setLinhas] = useState<Linha[]>([]);
   const [pendencia, setPendencia] = useState<Pendencia | null>(null);
   const [erro, setErro] = useState<string | null>(null);
-  const [liberado, setLiberado] = useState(false);
+  const [liberado, setLiberado] = useState(allowed === true);
   const [analisando, setAnalisando] = useState(false);
   const [entradaTexto, setEntradaTexto] = useState("");
+  const [ttsProvider, setTtsProvider] = useState<"jarvis" | "cedar" | null>(null);
 
   const conversaRef = useRef<string | null>(null);
   const reconhecimentoRef = useRef<any>(null);
-  const vozRef = useRef<SpeechSynthesisVoice | null>(null);
   const bufferFalaRef = useRef("");
   // Ref alem do state: o closure de `enviar` congelava o valor antigo de
   // `analisando` e a trava de duplicidade nao pegava.
   const analisandoRef = useRef(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const blobUrlRef = useRef<string | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const pcmSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   // Cada nova fala invalida qualquer sintese que ainda esteja baixando. Sem
   // isso, uma resposta antiga poderia terminar de baixar e falar por cima da
   // pergunta mais recente.
   const geracaoAudioRef = useRef(0);
   const responderEmVozRef = useRef(false);
+  const warmIdleKeyRef = useRef<string | null>(null);
 
   // Rollout: MGMT primeiro. O projeto nao tem feature flag, entao a trava e o
   // proprio RBAC. Nao e barreira de seguranca -- o servidor ja filtra as
@@ -130,6 +114,8 @@ export default function JarvisVoice() {
   // getSession + onAuthStateChange que o resto do dashboard usa, e a checagem
   // roda de novo quando o token aparece.
   const [sessao, setSessao] = useState<Session | null>(null);
+  const sessaoRef = useRef<Session | null>(null);
+  useEffect(() => { sessaoRef.current = sessao; }, [sessao]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSessao(data.session)).catch(() => setSessao(null));
@@ -138,6 +124,19 @@ export default function JarvisVoice() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_evento, next) => setSessao(next));
     return () => subscription.unsubscribe();
   }, []);
+
+  // Aquece o contexto leve em idle, sem disputar com a carga inicial do dashboard.
+  // Assim a primeira pergunta ja encontra identidade/carteira/catalogo quentes.
+  useEffect(() => {
+    const token = sessao?.access_token; const userId = sessao?.user?.id;
+    if (!liberado || !token || !userId || warmIdleKeyRef.current === userId) return;
+    warmIdleKeyRef.current = userId;
+    const run = () => { void fetch("/api/jarvis/warm-lite", { method: "POST", headers: { authorization: `Bearer ${token}` } }).catch(() => null); };
+    const ric = (window as any).requestIdleCallback as undefined | ((cb: () => void, opts?: any) => number);
+    const cic = (window as any).cancelIdleCallback as undefined | ((id: number) => void);
+    if (ric) { const id = ric(run, { timeout: 800 }); return () => { try { cic?.(id); } catch {} }; }
+    const id = window.setTimeout(run, 300); return () => window.clearTimeout(id);
+  }, [liberado, sessao?.access_token, sessao?.user?.id]);
 
   // A conversa e' servidor-owned; o navegador guarda somente o UUID para
   // retomar o mesmo historico apos refresh. A chave e' por usuario para nunca
@@ -149,6 +148,8 @@ export default function JarvisVoice() {
   }, [sessao?.user?.id]);
 
   useEffect(() => {
+    // Perfil ja resolvido pelo router: nao repete a consulta.
+    if (allowed !== undefined) { setLiberado(allowed === true); return; }
     const jwt = sessao?.access_token;
     if (!jwt) { setLiberado(false); return; }
     let vivo = true;
@@ -156,15 +157,15 @@ export default function JarvisVoice() {
       try {
         const r = await fetch("/api/jarvis/access", { headers: { authorization: `Bearer ${jwt}` } });
         if (!r.ok) { if (vivo) setLiberado(false); return; }
-        const { allowed } = (await r.json()) as { allowed?: boolean };
-        if (vivo) setLiberado(allowed === true);
+        const corpo = (await r.json()) as { allowed?: boolean };
+        if (vivo) setLiberado(corpo.allowed === true);
       } catch {
         // Sem sessao ou rota indisponivel: fica oculta, sem erro na tela.
         if (vivo) setLiberado(false);
       }
     })();
     return () => { vivo = false; };
-  }, [sessao?.access_token]);
+  }, [allowed, sessao?.access_token]);
 
   // Não aquece o Jarvis automaticamente ao montar o dashboard.
   // O prewarm é pesado e exclusivo de MGMT; dispará-lo no load podia concorrer
@@ -177,34 +178,29 @@ export default function JarvisVoice() {
     console.info({ event: "jarvis_mounted", allowed: liberado });
   }, [liberado]);
 
+  // HARD LOCK: este dashboard nao pode falar por Web Speech. Mesmo que algum
+  // bundle antigo/terceiro tente usar speechSynthesis, o metodo e neutralizado
+  // enquanto o Jarvis estiver montado. A unica fala permitida e o MP3 Cedar.
   useEffect(() => {
-    const carregar = () => { vozRef.current = escolherVoz(); };
-    carregar();
-    window.speechSynthesis?.addEventListener?.("voiceschanged", carregar);
-    return () => window.speechSynthesis?.removeEventListener?.("voiceschanged", carregar);
+    const synth = window.speechSynthesis as any;
+    if (!synth) return;
+    try { synth.cancel?.(); } catch {}
+    const originalSpeak = synth.speak;
+    try {
+      synth.speak = (..._args: any[]) => {
+        console.error({ event: "jarvis_browser_tts_blocked" });
+        try { synth.cancel?.(); } catch {}
+      };
+    } catch {}
+    return () => {
+      try { synth.cancel?.(); } catch {}
+      try { synth.speak = originalSpeak; } catch {}
+    };
   }, []);
 
-  const falar = useCallback((texto: string): boolean => {
-    const limpo = texto.trim();
-    if (!limpo || !window.speechSynthesis) return false;
-    const fala = new SpeechSynthesisUtterance(limpo);
-    fala.lang = "pt-BR";
-    if (vozRef.current) fala.voice = vozRef.current;
-    // Natural e firme: acima de 1.1 a fala atropela; pitch abaixo de 1 assenta
-    // a voz sem soar artificial.
-    fala.rate = 1;
-    fala.pitch = 0.9;
-    fala.onstart = () => setFalando(true);
-    fala.onend = () => setFalando(window.speechSynthesis.speaking);
-    fala.onerror = () => setFalando(window.speechSynthesis.speaking);
-    window.speechSynthesis.speak(fala);
-    return true;
-  }, []);
-
-  /** Silencia TUDO: sintese do navegador e audio do servidor. */
+  /** Interrompe exclusivamente o audio Cedar do servidor. */
   const calar = useCallback(() => {
     geracaoAudioRef.current += 1;
-    window.speechSynthesis?.cancel();
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.src = "";
@@ -214,29 +210,28 @@ export default function JarvisVoice() {
       URL.revokeObjectURL(blobUrlRef.current);
       blobUrlRef.current = null;
     }
+    for (const source of pcmSourcesRef.current) {
+      try { source.stop(); } catch {}
+    }
+    pcmSourcesRef.current.clear();
     setFalando(false);
     bufferFalaRef.current = "";
   }, []);
 
   /**
-   * Fala a resposta inteira.
-   *
-   * Tenta a voz propria (`/api/jarvis/tts`, MP3 pelo Worker). So cai no
-   * `speechSynthesis` se ela falhar -- e nunca os dois juntos, porque `calar()`
-   * roda antes de qualquer um dos dois comecar.
+   * Fala a resposta inteira usando exclusivamente Cedar via /api/jarvis/tts.
+   * Nao existe SpeechSynthesis/Web Speech como fallback neste componente.
    */
   const falarResposta = useCallback(async (texto: string) => {
+    const ttsInicio = performance.now();
     const limpo = texto.trim();
     if (!limpo) return;
     calar();
     const geracao = geracaoAudioRef.current;
-    // A sintese no servidor tambem faz parte da resposta. Sem isto, a UI sai
-    // de "Analisando" e fica muda enquanto o MP3 e produzido/baixado.
     setFalando(true);
 
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
+      const token = sessaoRef.current?.access_token;
       if (!token) throw new Error("sem sessao");
 
       const r = await fetch("/api/jarvis/tts", {
@@ -244,39 +239,166 @@ export default function JarvisVoice() {
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({ text: limpo.slice(0, 1200) }),
       });
-      if (!r.ok) throw new Error(`tts ${r.status}`);
+      console.info({ event: "jarvis_latency", stage: "tts_headers", ms: Math.round(performance.now() - ttsInicio) });
+      if (!r.ok) {
+        const detalhe = await r.json().catch(() => null) as { erro?: string } | null;
+        throw new Error(detalhe?.erro || `tts ${r.status}`);
+      }
+      const engine = (r.headers.get("x-jarvis-tts-engine") || "").toLowerCase();
+      const voice = (r.headers.get("x-jarvis-tts-voice") || "").toLowerCase();
+      const ttsBuild = (r.headers.get("x-jarvis-tts-build") || "").toLowerCase();
+      const formato = (r.headers.get("x-jarvis-tts-format") || "").toLowerCase();
+      const localOk = engine === "local" && voice === "pm_jarvis" && ttsBuild === "hybrid-local-first-v1";
+      const cedarOk = engine === "openai" && voice === "cedar" && ttsBuild === "hybrid-local-first-v1";
+      if (!localOk && !cedarOk) {
+        throw new Error(`tts_provider_invalido:${engine || "sem-engine"}:${voice || "sem-voice"}:${ttsBuild || "sem-build"}`);
+      }
 
-      const blob = await r.blob();
-      if (!blob.size) throw new Error("audio vazio");
+      // Caminho de menor latencia: PCM bruto 24 kHz. Cada chunk vira um AudioBuffer
+      // e e agendado imediatamente; nao espera o arquivo inteiro existir.
+      if (formato === "pcm_s16le_24000" && r.body) {
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioCtx) throw new Error("audio_context_indisponivel");
+        let ctx = audioContextRef.current;
+        if (!ctx || ctx.state === "closed") {
+          ctx = new AudioCtx({ latencyHint: "interactive", sampleRate: 24000 });
+          audioContextRef.current = ctx;
+        }
+        if (ctx.state === "suspended") await ctx.resume();
+
+        const reader = r.body.getReader();
+        let carry: number | null = null;
+        let totalBytes = 0;
+        let iniciou = false;
+        let proximoInicio = ctx.currentTime + 0.08;
+        let fimAgendado = proximoInicio;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (geracaoAudioRef.current !== geracao) { await reader.cancel().catch(() => {}); return; }
+          if (!value?.byteLength) continue;
+          totalBytes += value.byteLength;
+
+          let bytes = value;
+          if (carry !== null) {
+            const juntado = new Uint8Array(value.byteLength + 1);
+            juntado[0] = carry;
+            juntado.set(value, 1);
+            bytes = juntado;
+            carry = null;
+          }
+          if (bytes.byteLength % 2) {
+            carry = bytes[bytes.byteLength - 1];
+            bytes = bytes.subarray(0, bytes.byteLength - 1);
+          }
+          const amostras = bytes.byteLength / 2;
+          if (!amostras) continue;
+
+          const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+          const buffer = ctx.createBuffer(1, amostras, 24000);
+          const canal = buffer.getChannelData(0);
+          for (let i = 0; i < amostras; i++) canal[i] = view.getInt16(i * 2, true) / 32768;
+
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(ctx.destination);
+          pcmSourcesRef.current.add(source);
+          source.onended = () => pcmSourcesRef.current.delete(source);
+          const inicio = Math.max(proximoInicio, ctx.currentTime + (iniciou ? 0.02 : 0.08));
+          source.start(inicio);
+          proximoInicio = inicio + buffer.duration;
+          fimAgendado = proximoInicio;
+
+          if (!iniciou) {
+            iniciou = true;
+            setTtsProvider(engine === "local" ? "jarvis" : "cedar");
+            const espera = Math.max(0, (inicio - ctx.currentTime) * 1000);
+            window.setTimeout(() => {
+              if (geracaoAudioRef.current === geracao) {
+                console.info({ event: "jarvis_latency", stage: "audio_play", ms: Math.round(performance.now() - ttsInicio), format: "pcm" });
+                console.info({ event: "jarvis_cedar_play", engine, voice, streaming: true });
+              }
+            }, espera);
+          }
+        }
+
+        if (!iniciou) throw new Error("audio vazio");
+        console.info({ event: "jarvis_latency", stage: "tts_stream_end", ms: Math.round(performance.now() - ttsInicio), bytes: totalBytes });
+        const restante = Math.max(0, (fimAgendado - ctx.currentTime) * 1000);
+        window.setTimeout(() => {
+          if (geracaoAudioRef.current === geracao) setFalando(false);
+        }, restante + 60);
+        return;
+      }
+
+      // Compatibilidade de rollback: ainda toca MP3 Cedar de uma versao anterior,
+      // mas nunca usa Web Speech nem outra voz.
+      const audioBytes = await r.arrayBuffer();
+      console.info({ event: "jarvis_latency", stage: "tts_bytes", ms: Math.round(performance.now() - ttsInicio), bytes: audioBytes.byteLength });
+      if (!audioBytes.byteLength) throw new Error("audio vazio");
+      const blob = new Blob([audioBytes], { type: "audio/mpeg" });
       if (geracaoAudioRef.current !== geracao) return;
-
       const url = URL.createObjectURL(blob);
       blobUrlRef.current = url;
       const audio = new Audio(url);
       audioRef.current = audio;
-
       const encerrar = () => {
         setFalando(false);
         if (blobUrlRef.current === url) { URL.revokeObjectURL(url); blobUrlRef.current = null; }
       };
-      audio.onplay = () => setFalando(true);
+      audio.onplay = () => {
+        console.info({ event: "jarvis_latency", stage: "audio_play", ms: Math.round(performance.now() - ttsInicio), format: "mp3" });
+        setFalando(true);
+        setTtsProvider(engine === "local" ? "jarvis" : "cedar");
+        console.info({ event: "jarvis_cedar_play", engine, voice, bytes: audioBytes.byteLength });
+      };
       audio.onended = encerrar;
-      audio.onerror = encerrar;
+      audio.onerror = () => {
+        encerrar();
+        if (geracaoAudioRef.current === geracao) setErro("Voz indisponível (falha de reprodução)");
+      };
       await audio.play();
-      return;
-    } catch {
+    } catch (erroTts) {
       if (geracaoAudioRef.current !== geracao) return;
-      // Sem voz propria, melhor a do navegador do que silencio. O motivo fica
-      // no log do Worker; aqui nao vale poluir a tela com isso.
-      if (!falar(limpo)) setFalando(false);
+      setFalando(false);
+      const motivo = erroTts instanceof Error ? erroTts.message : String(erroTts);
+      setErro(`Voz indisponível (${motivo})`);
     }
-  }, [calar, falar]);
+  }, [calar]);
 
-  useEffect(() => () => calar(), [calar]);
+  useEffect(() => () => {
+    calar();
+    const ctx = audioContextRef.current;
+    audioContextRef.current = null;
+    if (ctx && ctx.state !== "closed") void ctx.close().catch(() => {});
+  }, [calar]);
+
+  /**
+   * Fecha a janela sem perder a conversa.
+   *
+   * O X antes fazia `setAtivo(false)`, mas o render decidia por
+   * `!ativo && !linhas.length` -- com historico na tela a condicao nunca era
+   * verdadeira e o painel continuava aberto. Agora a visibilidade depende so de
+   * `ativo`; `linhas` e o conversation_id permanecem em memoria para quando o
+   * usuario reabrir.
+   */
+  const fecharJarvis = useCallback(() => {
+    calar();
+    try { reconhecimentoRef.current?.stop?.(); } catch { /* ja parado */ }
+    setOuvindo(false);
+    setParcial("");
+    setAtivo(false);
+  }, [calar]);
 
   const enviar = useCallback(async (mensagem: string, viaVoz: boolean) => {
+    const turnoInicio = performance.now();
     const texto = mensagem.trim();
     if (!texto || analisandoRef.current) return;   // trava envio duplicado
+    // Preserve a origem deste turno dentro da propria closure. Usar apenas o
+    // ref mutavel permitia que outro evento de UI alterasse a decisao antes do
+    // fim do stream e deixasse uma pergunta por voz sem Cedar.
+    const responderEmVoz = viaVoz;
     responderEmVozRef.current = viaVoz;
     setErro(null);
     setParcial("");
@@ -292,8 +414,8 @@ export default function JarvisVoice() {
     };
     setLinhas((atual) => [...atual, { tipo: "usuario", texto }]);
 
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
+    const session = sessaoRef.current;
+    const token = session?.access_token;
     if (!token) { setErro("sessão expirada"); encerrarAnalise(); return; }
 
     let resposta: Response;
@@ -308,12 +430,15 @@ export default function JarvisVoice() {
       encerrarAnalise();
       return;
     }
+    console.info({ event: "jarvis_latency", stage: "chat_headers", ms: Math.round(performance.now() - turnoInicio) });
     if (!resposta.ok || !resposta.body) { setErro(`falhou (${resposta.status})`); encerrarAnalise(); return; }
 
     setLinhas((atual) => [...atual, { tipo: "jarvis", texto: "" }]);
     const leitor = resposta.body.getReader();
     const decodificador = new TextDecoder();
     let sobra = "";
+    let primeiroToken = false;
+    let falaAntecipada = false;
 
     while (true) {
       const { done, value } = await leitor.read();
@@ -332,6 +457,10 @@ export default function JarvisVoice() {
           // Ferramentas são implementação interna. A interface mostra só pergunta e resposta;
           // o uso de tools continua disponível nos logs/metadata para diagnóstico.
         } else if (evento === "token") {
+          if (!primeiroToken) {
+            primeiroToken = true;
+            console.info({ event: "jarvis_latency", stage: "first_token", ms: Math.round(performance.now() - turnoInicio) });
+          }
           encerrarAnalise();
           setLinhas((a) => {
             const copia = [...a];
@@ -343,10 +472,14 @@ export default function JarvisVoice() {
           // Acumula sem falar. Com voz propria, sintetizar frase a frase seria
           // uma chamada paga por frase e cortes audiveis entre elas.
           bufferFalaRef.current += dados.text;
+        } else if (evento === "speech_ready") {
+          const fala = String(dados.text ?? "").trim();
+          if (fala && !falaAntecipada) { falaAntecipada = true; void falarResposta(fala); }
         } else if (evento === "pending") {
           encerrarAnalise();
           setPendencia({ id: dados.action_id, resumo: dados.summary });
-          if (responderEmVozRef.current) void falarResposta(`${dados.summary}. Confirmo?`);
+          falaAntecipada = true;
+          void falarResposta(`${dados.summary}. Confirmo?`);
         } else if (evento === "error") {
           encerrarAnalise();
           setErro(String(dados.message ?? "erro"));
@@ -354,17 +487,20 @@ export default function JarvisVoice() {
           const conversationId = String(dados.conversation_id ?? "").trim();
           if (conversationId) {
             conversaRef.current = conversationId;
-            const userId = data.session?.user?.id;
+            const userId = session?.user?.id;
             if (userId) window.localStorage.setItem(`jarvis:conversation:${userId}`, conversationId);
           }
         }
       }
     }
+    console.info({ event: "jarvis_latency", stage: "chat_stream_end", ms: Math.round(performance.now() - turnoInicio) });
     const completa = bufferFalaRef.current.trim();
     bufferFalaRef.current = "";
     encerrarAnalise();
-    if (completa && responderEmVozRef.current) void falarResposta(completa);
-  }, [falar, falarResposta]);
+    // Jarvis e um assistente de voz: toda resposta textual concluida sai em Cedar.
+    // Nao existe mais caminho silencioso depois de uma resposta valida.
+    if (completa && !falaAntecipada) void falarResposta(completa);
+  }, [falarResposta]);
 
   const resolver = useCallback(async (decisao: "confirm" | "cancel") => {
     if (!pendencia) return;
@@ -383,35 +519,139 @@ export default function JarvisVoice() {
     void falarResposta(dito);
   }, [pendencia, falarResposta]);
 
+  const ouvirViaRecorder = useCallback(async () => {
+    const token = sessaoRef.current?.access_token;
+    if (!token) { setErro("sessão expirada"); return; }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setErro("microfone não suportado neste navegador"); return;
+    }
+
+    let stream: MediaStream | null = null;
+    let recorder: MediaRecorder | null = null;
+    let captureCtx: AudioContext | null = null;
+    let timer = 0;
+    let cancelled = false;
+    const chunks: Blob[] = [];
+
+    const cleanup = () => {
+      if (timer) window.clearInterval(timer);
+      try { stream?.getTracks().forEach((track) => track.stop()); } catch {}
+      try { if (captureCtx && captureCtx.state !== "closed") void captureCtx.close(); } catch {}
+      reconhecimentoRef.current = null;
+    };
+    try {
+      setErro(null);
+      setParcial("ouvindo…");
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      const mime = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm"]
+        .find((tipo) => MediaRecorder.isTypeSupported?.(tipo));
+      recorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      const startedAt = Date.now();
+      let speechStarted = false;
+      let lastVoiceAt = startedAt;
+      const stop = (cancel = false) => {
+        cancelled = cancelled || cancel;
+        if (recorder && recorder.state !== "inactive") recorder.stop();
+      };
+      reconhecimentoRef.current = { stop: () => stop(false), abort: () => stop(true) };
+      recorder.ondataavailable = (event) => { if (event.data?.size) chunks.push(event.data); };
+      recorder.onerror = () => { setErro("erro ao gravar o microfone"); stop(true); };
+      recorder.onstop = async () => {
+        cleanup();
+        setOuvindo(false);
+        setParcial("");
+        if (cancelled || !chunks.length) return;
+        try {
+          const blob = new Blob(chunks, { type: recorder?.mimeType || mime || "audio/webm" });
+          const response = await fetch("/api/jarvis/stt", {
+            method: "POST",
+            headers: { authorization: `Bearer ${token}`, "content-type": blob.type || "application/octet-stream" },
+            body: blob,
+          });
+          const body = await response.json().catch(() => null) as { ok?: boolean; text?: string; error?: string } | null;
+          const texto = corrigirTranscricaoJarvis(String(body?.text || "")).trim();
+          if (!response.ok || !body?.ok || !texto) throw new Error(body?.error || "não entendi o áudio");
+          void enviar(texto, true);
+        } catch (erroStt) {
+          setErro(erroStt instanceof Error ? erroStt.message : "não consegui transcrever");
+        }
+      };
+
+      recorder.start(200);
+      setOuvindo(true);
+      const CaptureCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (CaptureCtx) {
+        captureCtx = new CaptureCtx();
+        const source = captureCtx.createMediaStreamSource(stream);
+        const analyser = captureCtx.createAnalyser();
+        analyser.fftSize = 512;
+        source.connect(analyser);
+        const samples = new Uint8Array(analyser.fftSize);
+        timer = window.setInterval(() => {
+          if (!recorder || recorder.state === "inactive") return;
+          analyser.getByteTimeDomainData(samples);
+          let sum = 0;
+          for (const value of samples) { const n = (value - 128) / 128; sum += n * n; }
+          const rms = Math.sqrt(sum / samples.length);
+          const now = Date.now();
+          if (rms > 0.025) { speechStarted = true; lastVoiceAt = now; }
+          if (speechStarted && now - lastVoiceAt > 950 && now - startedAt > 900) stop(false);
+          else if (now - startedAt > 12000) stop(false);
+        }, 100);
+      } else {
+        timer = window.setInterval(() => { if (Date.now() - startedAt > 10000) stop(false); }, 250);
+      }
+    } catch (erroMic) {
+      cleanup();
+      setOuvindo(false);
+      setParcial("");
+      const nome = erroMic instanceof DOMException ? erroMic.name : "";
+      setErro(nome === "NotAllowedError" ? "permita o acesso ao microfone para falar com a Jarvis" : "não consegui acessar o microfone");
+    }
+  }, [enviar]);
+
   const ouvir = useCallback(() => {
-    calar(); // interrompe a fala assim que o mic liga
+    calar();
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioCtx && (!audioContextRef.current || audioContextRef.current.state === "closed")) {
+        audioContextRef.current = new AudioCtx({ latencyHint: "interactive", sampleRate: 24000 });
+      }
+      if (audioContextRef.current?.state === "suspended") void audioContextRef.current.resume().catch(() => {});
+    } catch {}
+    const tokenWarm = sessaoRef.current?.access_token;
+    if (tokenWarm) void fetch("/api/jarvis/warm-lite", { method: "POST", headers: { authorization: `Bearer ${tokenWarm}` } }).catch(() => null);
+
     const Reconhecimento = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!Reconhecimento) { setErro("este navegador não reconhece voz; use o campo de texto"); return; }
+    const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || Boolean(window.matchMedia?.("(pointer: coarse)").matches);
+    if (mobile || !Reconhecimento) { void ouvirViaRecorder(); return; }
 
     const r = new Reconhecimento();
-    r.lang = "pt-BR";
-    r.interimResults = true;
-    r.continuous = false;
+    r.lang = "pt-BR"; r.interimResults = true; r.continuous = false;
     r.onstart = () => setOuvindo(true);
-    r.onspeechend = () => { try { r.stop(); } catch { /* ja parou */ } };
+    r.onspeechend = () => { try { r.stop(); } catch {} };
     r.onresult = (evento: any) => {
       let final = "", provisorio = "";
       for (let i = evento.resultIndex; i < evento.results.length; i++) {
         const t = evento.results[i][0].transcript;
         if (evento.results[i].isFinal) final += t; else provisorio += t;
       }
-      setParcial(provisorio);
-      if (final) { setOuvindo(false); r.stop(); void enviar(final, true); }
+      const parcialCorrigido = corrigirTranscricaoJarvis(provisorio);
+      const finalCorrigido = corrigirTranscricaoJarvis(final);
+      setParcial(parcialCorrigido);
+      if (finalCorrigido) { setOuvindo(false); r.stop(); void enviar(finalCorrigido, true); }
     };
     r.onerror = () => { setOuvindo(false); setErro("não consegui ouvir"); };
     r.onend = () => setOuvindo(false);
     reconhecimentoRef.current = r;
     setOuvindo(true);
     r.start();
-  }, [calar, enviar]);
+  }, [calar, enviar, ouvirViaRecorder]);
 
   const alternar = useCallback(() => {
-    if (ouvindo) { reconhecimentoRef.current?.stop?.(); setOuvindo(false); return; }
+    if (ouvindo) { reconhecimentoRef.current?.abort?.(); reconhecimentoRef.current?.stop?.(); setOuvindo(false); setParcial(""); return; }
     if (!ativo) setAtivo(true);
     ouvir();
   }, [ouvindo, ativo, ouvir]);
@@ -468,7 +708,7 @@ export default function JarvisVoice() {
     </div>
   );
 
-  if (!ativo && !linhas.length) {
+  if (!ativo) {
     return (
       <>
         <style>{PULSO_CSS}</style>
@@ -499,8 +739,11 @@ export default function JarvisVoice() {
           aria-hidden="true"
         />
         <strong style={{ fontSize: 13 }}>Jarvis</strong>
+        <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, opacity: ttsProvider ? 1 : 0.7, color: ttsProvider ? "var(--green)" : "var(--muted)" }}>
+          {ttsProvider === "jarvis" ? "Jarvis local ✓" : ttsProvider === "cedar" ? "Cedar fallback" : "Jarvis local"}
+        </span>
         <span style={{ marginLeft: "auto", fontSize: 11, opacity: 0.6 }}>Ctrl+Espaço</span>
-        <button type="button" onClick={() => { calar(); setAtivo(false); }} style={fechar} aria-label="Fechar a Jarvis">×</button>
+        <button type="button" onClick={fecharJarvis} style={fechar} aria-label="Fechar a Jarvis">×</button>
       </div>
 
       <div style={corpo}>

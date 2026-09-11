@@ -7,6 +7,7 @@
  */
 
 import type { EnvJarvis } from "./tools";
+import { normalizarTranscricaoOperacional } from "./memory";
 
 const MODELO = "@cf/openai/whisper-large-v3-turbo";
 const AUDIO_MAX_BYTES = 8 * 1024 * 1024;
@@ -38,7 +39,7 @@ export async function transcrever(request: Request, env: EnvJarvis): Promise<Res
       audio: bytesParaBase64(new Uint8Array(buffer)),
       language: "pt",
     });
-    const texto = String(resultado?.text ?? resultado?.result?.text ?? "").trim();
+    const texto = normalizarTranscricaoOperacional(resultado?.text ?? resultado?.result?.text).trim();
     return Response.json({ ok: true, text: texto });
   } catch (erro) {
     return Response.json(

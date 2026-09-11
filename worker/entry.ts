@@ -5,14 +5,26 @@ import { rodarRondas } from "./jarvis/routines";
 const SUPABASE = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const OLD_IMG_SRC = "img-src 'self' data:";
 const NEW_IMG_SRC = `img-src 'self' data: ${SUPABASE}`;
+const MEDIA_SRC = "media-src 'self' blob:";
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 const VISION_BULK_KEY = "cvi_20260829_5b1d73f04c784898";
 
 function widenImageCsp(response: Response): Response {
   const headers = new Headers(response.headers);
   const csp = headers.get("content-security-policy");
-  if (csp && csp.includes(OLD_IMG_SRC) && !csp.includes(NEW_IMG_SRC)) {
-    headers.set("content-security-policy", csp.replace(OLD_IMG_SRC, NEW_IMG_SRC));
+  if (csp) {
+    let next = csp.includes(OLD_IMG_SRC) && !csp.includes(NEW_IMG_SRC)
+      ? csp.replace(OLD_IMG_SRC, NEW_IMG_SRC)
+      : csp;
+    if (!/\bmedia-src\b/i.test(next)) next = `${next}; ${MEDIA_SRC}`;
+    else if (!/\bmedia-src\b[^;]*\bblob:/i.test(next)) next = next.replace(/\bmedia-src\b([^;]*)/i, `media-src$1 blob:`);
+    if (next !== csp) headers.set("content-security-policy", next);
+  }
+  const contentType = (headers.get("content-type") || "").toLowerCase();
+  if (contentType.includes("text/html")) {
+    headers.set("cache-control", "no-store, no-cache, must-revalidate, max-age=0");
+    headers.set("pragma", "no-cache");
+    headers.set("x-jarvis-ui-build", "cedar-only-v3");
   }
   return new Response(response.body, {
     status: response.status,

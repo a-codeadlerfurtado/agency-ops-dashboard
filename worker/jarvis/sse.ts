@@ -9,6 +9,7 @@
 
 export type EventoJarvis =
   | { evento: "token"; dados: { text: string } }
+  | { evento: "speech_ready"; dados: { text: string } }
   | { evento: "tool_start"; dados: { name: string; summary: string } }
   | { evento: "tool_end"; dados: { name: string; ok: boolean; ms: number } }
   | { evento: "pending"; dados: { action_id: string; summary: string } }

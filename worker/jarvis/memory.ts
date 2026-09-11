@@ -9,6 +9,13 @@ export type ClientePermitido = {
   designer_owner?: string | null;
 };
 
+/** Corrige confusoes recorrentes do STT antes de qualquer roteamento/contexto. */
+export function normalizarTranscricaoOperacional(valor: unknown): string {
+  return String(valor ?? "")
+    .replace(/\blitros\b/giu, "leads")
+    .replace(/\blitro\b/giu, "lead");
+}
+
 export function normalizarEntidade(valor: unknown): string {
   return String(valor ?? "")
     .normalize("NFD")
@@ -19,13 +26,50 @@ export function normalizarEntidade(valor: unknown): string {
 }
 
 export function perguntaSobreOnboarding(mensagem: string): boolean {
-  const q = normalizarEntidade(mensagem);
+  const q = normalizarEntidade(normalizarTranscricaoOperacional(mensagem));
   return /\b(onboarding|onboard|onboardg|onbording|onbordem|ombording|ombordem|borden|boarding)\b/.test(q)
     || /\bon\s+(?:board|bord)(?:ing)?\b/.test(q);
 }
 
+/**
+ * ATIVO OPERACIONAL = ACTIVE ou ONBOARDING.
+ *
+ * Regra de negocio da operacao, nao do banco: quem esta em onboarding JA E'
+ * cliente -- contrato ativo, apenas ainda na implantacao. Responder 82 quando
+ * ha 92 clientes sendo atendidos e' errado para quem toca a operacao.
+ *
+ * O lifecycle no banco continua distinguindo ACTIVE, ONBOARDING, CHURNED e
+ * PROSPECT. A mudanca e' semantica, e mora SO aqui: qualquer contagem ou lista
+ * do Jarvis passa por esta funcao, para a regra nao voltar a divergir entre
+ * arquivos.
+ */
+export function ehAtivoOperacional(lifecycle: unknown): boolean {
+  const v = String(lifecycle ?? "").toUpperCase();
+  return v === "ACTIVE" || v === "ONBOARDING";
+}
+
+/** Somente ONBOARDING -- para "quantos estao em onboarding?". */
+export function ehOnboarding(lifecycle: unknown): boolean {
+  return String(lifecycle ?? "").toUpperCase() === "ONBOARDING";
+}
+
+/** Somente ACTIVE -- para "quantos ja sairam do onboarding?". */
+export function ehEmOperacao(lifecycle: unknown): boolean {
+  return String(lifecycle ?? "").toUpperCase() === "ACTIVE";
+}
+
+/** Quebra a carteira nas tres leituras de uma vez. */
+export function repartirPorEstagio(clientes: ClientePermitido[]): { ativos: number; emOperacao: number; onboarding: number } {
+  let emOperacao = 0, onboarding = 0;
+  for (const c of clientes) {
+    if (ehEmOperacao(c.lifecycle)) emOperacao += 1;
+    else if (ehOnboarding(c.lifecycle)) onboarding += 1;
+  }
+  return { ativos: emOperacao + onboarding, emOperacao, onboarding };
+}
+
 export function contarClientesAtivos(clientes: ClientePermitido[]): number {
-  return clientes.filter((c) => String(c.lifecycle ?? "").toUpperCase() === "ACTIVE").length;
+  return clientes.filter((c) => ehAtivoOperacional(c.lifecycle)).length;
 }
 
 export function resolverResponsavelMencionado(termo: string, clientes: ClientePermitido[]): string | null {
@@ -47,7 +91,7 @@ export function resolverResponsavelMencionado(termo: string, clientes: ClientePe
 
 export function listarClientesAtivosPorResponsavel(clientes: ClientePermitido[], pessoa: string): ClientePermitido[] {
   const alvo = normalizarEntidade(pessoa);
-  return clientes.filter((c) => String(c.lifecycle ?? "").toUpperCase() === "ACTIVE" &&
+  return clientes.filter((c) => ehAtivoOperacional(c.lifecycle) &&
     [c.gt_owner, c.cs_owner, c.designer_owner].some((nome) => normalizarEntidade(nome) === alvo));
 }
 
@@ -74,13 +118,20 @@ function distanciaEdicao(a: string, b: string): number {
   return anterior[b.length];
 }
 
+const TOKENS_NAO_ENTIDADE = new Set([
+  "dia", "dias", "hoje", "ontem", "ultimo", "ultimos", "ultima", "ultimas",
+  "lead", "leads", "cliente", "clientes", "todos", "todas", "geral", "total",
+  "semana", "semanas", "mes", "meses", "ano", "anos", "quanto", "quantos",
+  "teve", "tiveram", "gerados", "somando", "agencia", "nossos", "nossas",
+]);
+
 export function resolverClienteMencionado(mensagem: string, clientes: ClientePermitido[]): ClientePermitido | null {
   const q = normalizarEntidade(mensagem);
   if (!q || !clientes.length) return null;
-  const qTokens = new Set(q.split(" ").filter(Boolean));
+  const qTokens = new Set(q.split(" ").filter((t) => t && !TOKENS_NAO_ENTIDADE.has(t)));
   const frequencia = new Map<string, number>();
   for (const c of clientes) {
-    for (const t of new Set(normalizarEntidade(c.display_name).split(" ").filter((x) => x.length >= 4))) {
+    for (const t of new Set(normalizarEntidade(c.display_name).split(" ").filter((x) => x.length >= 4 && !TOKENS_NAO_ENTIDADE.has(x)))) {
       frequencia.set(t, (frequencia.get(t) ?? 0) + 1);
     }
   }
@@ -95,7 +146,7 @@ export function resolverClienteMencionado(mensagem: string, clientes: ClientePer
     let score = 0;
     if (frase.includes(` ${nome} `)) score = 1000 + nome.length;
     else {
-      const tokens = nome.split(" ").filter((t) => t.length >= 3);
+      const tokens = nome.split(" ").filter((t) => t.length >= 3 && !TOKENS_NAO_ENTIDADE.has(t));
       const exatos = tokens.filter((t) => qTokens.has(t));
       const unicos = exatos.filter((t) => t.length >= 4 && frequencia.get(t) === 1);
       let fuzzy = 0;

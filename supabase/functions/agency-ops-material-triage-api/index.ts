@@ -55,7 +55,7 @@ Deno.serve(async(req:Request)=>{
     if(req.method==="GET") return json({ok:true,items:await list(),person,role,generated_at:new Date().toISOString()});
     const body=await req.json().catch(()=>({}));
     const id=clean(body.id,80), action=clean(body.action,30).toUpperCase();
-    if(!id||!["CLAIM","OPENED","SNOOZE","COMPLETE","RELEASE"].includes(action)) return json({ok:false,error:"invalid_action"},400);
+    if(!id||!["CLAIM","OPENED","SNOOZE","COMPLETE","RELEASE","ACKNOWLEDGE"].includes(action)) return json({ok:false,error:"invalid_action"},400);
     const {data:current,error:ce}=await ops.from("work_items").select("*").eq("id",id).eq("type","MATERIAL_TRIAGE").maybeSingle();
     if(ce) throw ce; if(!current) return json({ok:false,error:"not_found"},404);
     const owner=clean(current.target_person,160), canControl=isAdler||!owner||owner===person;
@@ -73,7 +73,13 @@ Deno.serve(async(req:Request)=>{
     }else if(action==="CLAIM"){
       if(current.status==="IN_PROGRESS"&&owner===person) return json({ok:true,item:current,idempotent:true});
       meta.claimed_by=person; meta.claimed_at=now;
-      patch={...patch,status:"IN_PROGRESS",target_person:person,target_role:"CS",started_at:current.started_at||now,snoozed_until:null};
+      // target_role precisa ser o papel REAL de quem assume. Estava fixo em "CS":
+      // quando o Adler (MGMT) clicava Assumir, o trigger que compara
+      // team_roster.role com target_role recusava com
+      // WORK_ITEM_ASSIGNEE_ROLE_MISMATCH. O trigger esta certo; o hardcode e' que
+      // estava errado. `role` ja vem do team_roster acima, com is_former=false.
+      if(!role) return json({ok:false,error:"role_required"},409);
+      patch={...patch,status:"IN_PROGRESS",target_person:person,target_role:role,started_at:current.started_at||now,snoozed_until:null};
     }else if(action==="SNOOZE"){
       const minutes=Math.min(120,Math.max(5,Number(body.minutes)||15));
       meta.snoozed_by=person; meta.snoozed_at=now; meta.snooze_minutes=minutes;
@@ -83,6 +89,15 @@ Deno.serve(async(req:Request)=>{
       const resolution=clean(body.resolution||"Triagem concluída e material encaminhado.",4000);
       meta.completed_by=person; meta.completed_at=now;
       patch={...patch,status:"COMPLETED",completed_at:now,completed_by:person,resolution,snoozed_until:null};
+    }else if(action==="ACKNOWLEDGE"){
+      // "Ciente": vi o material e nao preciso que ele continue cobrando.
+      // NAO exige CLAIM antes -- exigir assumir para depois dar ciencia seria
+      // uma mutacao inutil no meio do caminho. Tambem nao apaga nada: o
+      // briefing/video continua na origem; so' a obrigacao de triagem encerra.
+      if(current.status==="COMPLETED") return json({ok:true,item:current,idempotent:true});
+      meta.acknowledged_by=person; meta.acknowledged_at=now; meta.completion_kind="ACKNOWLEDGED";
+      patch={...patch,status:"COMPLETED",completed_at:now,completed_by:person,
+        resolution:"Ciente — triagem reconhecida sem ação adicional.",snoozed_until:null};
     }else if(action==="RELEASE"){
       if(!isAdler&&owner!==person) return json({ok:false,error:"claim_required"},409);
       meta.released_by=person; meta.released_at=now;
@@ -106,7 +121,7 @@ Deno.serve(async(req:Request)=>{
     await ops.from("work_item_events").insert({
       work_item_id:id,event_type:eventType,actor_user_key:userKey,actor_person:person,
       previous_status:current.status,new_status:updated.status,
-      detail:action==="SNOOZE"?`Adiado por ${Number(body.minutes)||15} min`:action==="OPENED"?"Material aberto para revisão":null,
+      detail:action==="SNOOZE"?`Adiado por ${Number(body.minutes)||15} min`:action==="OPENED"?"Material aberto para revisão":action==="ACKNOWLEDGE"?"Ciente — triagem encerrada sem ação adicional":null,
       metadata:{action,triage_kind:meta.triage_kind||null}
     });
     return json({ok:true,item:updated,items:await list()});

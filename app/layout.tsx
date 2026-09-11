@@ -45,8 +45,6 @@ import AdsIntelligenceOpsBridge from "./ads-intelligence-ops-bridge";
 import MetaWeeklyReportsInlineBridge from "./meta-weekly-reports-inline-bridge";
 import WeeklyReportDeliveryCheckboxBridge from "./weekly-report-delivery-checkbox-bridge";
 import AIHeadRouter from "./ai-head-router";
-import OpsQuestionBrand from "./opsquestion-brand";
-import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
 import LeadQualityAlert from "./lead-quality-alert";
 import ChurnedClientMessageWarning from "./churned-client-message-warning";
@@ -73,6 +71,7 @@ import NotificationReadOnClick from "./notification-read-on-click";
 import WorkCenterScopeNetwork from "./work-center-scope-network";
 import AutomationNavBridge from "./automation-nav-bridge";
 import DonnahNavBridge from "./donnah-nav-bridge";
+import DiagnosticsNavBridge from "./diagnostics-nav-bridge";
 import NavBrandIcons from "./nav-brand-icons";
 import NavBrandIconsOutlineFix from "./nav-brand-icons-outline-fix";
 import LearningShortcut from "./learning-shortcut";
@@ -214,6 +213,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <NotificationReadOnClick />
         <AutomationNavBridge />
         <DonnahNavBridge />
+        <DiagnosticsNavBridge />
         <NavBrandIcons />
         <NavBrandIconsOutlineFix />
         <TeamAccessAdmin />
@@ -221,8 +221,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <DailyGreeting />
         <SystemUpdateCenter />
         <SecurityCenter />
-        <OpsQuestionWidget />
-        <OpsQuestionBrand />
         <LearningShortcut />
         <HomeShortcut />
         <LogoutShortcut />

@@ -71,7 +71,8 @@ export type MemoriaRapida = {
   client_id?: string | null;
   client_name?: string | null;
   metric?: string | null;
-  period?: "today" | "yesterday" | "current" | null;
+  period?: "today" | "yesterday" | "current" | "last_days" | null;
+  period_days?: number | null;
   person?: string | null;
   topic?: string | null;
   answer_kind?: "count" | "list" | "metric" | "text" | null;
@@ -146,6 +147,40 @@ export async function carregarEstadoCliente(
     await env.JARVIS_CACHE.put(chave, JSON.stringify(mesclado), { expirationTtl: CLIENT_CACHE_SECONDS }).catch(() => {});
   }
   return mesclado;
+}
+
+export async function carregarMidiaClienteDia(
+  clientId: string, dia: string, jwt: string, env: EnvJarvis,
+): Promise<{ ok: boolean; source?: string; client_id?: string; display_name?: string; date?: string; leads?: number | null; spend?: number | null; cpl?: number | null; checked_at?: string | null } | null> {
+  let sub = ""; try { const b=jwt.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"); sub=String(JSON.parse(atob(b))?.sub ?? ""); } catch {}
+  const chave = sub ? `jarvis:media-day:v1:${escopo(sub)}:${clientId}:${dia}` : null;
+  if (chave && env.JARVIS_CACHE) { const hit=await env.JARVIS_CACHE.get(chave,"json").catch(()=>null); if (hit && typeof hit === "object") return hit as any; }
+  const estado = await rpc("jarvis_client_media_snapshot", jwt, env, { p_client_id: clientId, p_date: dia });
+  const out = estado && typeof estado === "object" ? estado : null;
+  if (out && chave && env.JARVIS_CACHE) await env.JARVIS_CACHE.put(chave, JSON.stringify(out), { expirationTtl: 45 }).catch(()=>{});
+  return out;
+}
+
+export type EstadoMidiaPeriodo = {
+  ok: boolean; source?: string; error?: string; client_id?: string | null; display_name?: string | null;
+  since?: string; until?: string; leads?: number | null; spend?: number | null; cpl?: number | null;
+  available_from?: string | null; available_until?: string | null; coverage_days?: number; expected_days?: number;
+  complete?: boolean; client_count?: number; checked_at?: string | null;
+};
+
+export async function carregarMidiaPeriodo(
+  clientId: string | null, since: string, until: string, jwt: string, env: EnvJarvis, scopeKey: string,
+): Promise<EstadoMidiaPeriodo | null> {
+  const alvo = clientId || "global";
+  const chave = `jarvis:media-period:v2:${escopo(scopeKey)}:${alvo}:${since}:${until}`;
+  if (env.JARVIS_CACHE) {
+    const hit = await env.JARVIS_CACHE.get(chave, "json").catch(() => null);
+    if (hit && typeof hit === "object") return hit as EstadoMidiaPeriodo;
+  }
+  const estado = await rpc("jarvis_media_period_snapshot", jwt, env, { p_since: since, p_until: until, p_client_id: clientId });
+  const out = estado && typeof estado === "object" ? estado as EstadoMidiaPeriodo : null;
+  if (out && env.JARVIS_CACHE) await env.JARVIS_CACHE.put(chave, JSON.stringify(out), { expirationTtl: until === since ? 45 : 120 }).catch(() => {});
+  return out;
 }
 
 export async function carregarEstadoOperacao(

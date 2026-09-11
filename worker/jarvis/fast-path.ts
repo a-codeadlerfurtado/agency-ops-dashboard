@@ -3,6 +3,8 @@ import { executarFerramenta, type EnvJarvis, type FerramentaJarvis } from "./too
 import {
   atualizarEstadoClienteCache,
   carregarEstadoCliente,
+  carregarMidiaClienteDia,
+  carregarMidiaPeriodo,
   carregarEstadoOperacao,
   carregarEstadoLifecycle,
   carregarMemoriaRapida,
@@ -12,8 +14,8 @@ import {
   type EstadoCliente,
   type MemoriaRapida,
 } from "./state";
-import { listarClientesAtivosPorResponsavel, perguntaSobreOnboarding, type ClientePermitido } from "./memory";
-import { confirmacaoDeLeitura, detectarConsultaLifecycle, temTemaOperacionalExplicito } from "./intent";
+import { ehAtivoOperacional, listarClientesAtivosPorResponsavel, normalizarTranscricaoOperacional, perguntaSobreOnboarding, type ClientePermitido, repartirPorEstagio } from "./memory";
+import { confirmacaoDeLeitura, detectarConsultaClientesOperacionais, detectarConsultaLifecycle, detectarEscopoGlobal, detectarJanelaMidia, temTemaOperacionalExplicito } from "./intent";
 import { respostaSaldoMeta } from "./balance-semantics";
 
 export type ChamadaFast = { name: string; ok: boolean; ms: number };
@@ -60,7 +62,8 @@ function dataOperacional(offsetDays = 0): string {
 function periodoDaMensagem(q: string, anterior?: MemoriaRapida | null): "today" | "yesterday" | "current" {
   if (/\bontem\b/.test(q)) return "yesterday";
   if (/\bhoje\b/.test(q)) return "today";
-  return anterior?.period ?? "today";
+  const prev = anterior?.period;
+  return prev === "today" || prev === "yesterday" || prev === "current" ? prev : "today";
 }
 
 function metricDaMensagem(q: string): string | null {
@@ -118,6 +121,25 @@ function respostaMidiaSnapshot(estado: EstadoCliente, metric: string, period: "t
   if (metric === "cpl" && cpl !== null) return `O CPL de ${estado.display_name} ${sufixo} foi ${moeda(cpl)}.`;
   return null;
 }
+function intervaloDaJanela(janela: ReturnType<typeof detectarJanelaMidia>): { since: string; until: string; label: string } | null {
+  if (!janela) return null;
+  if (janela.kind === "today") { const d=dataOperacional(0); return { since:d, until:d, label:"hoje" }; }
+  if (janela.kind === "yesterday") { const d=dataOperacional(-1); return { since:d, until:d, label:"ontem" }; }
+  return { since:dataOperacional(-(janela.days-1)), until:dataOperacional(0), label:janela.label };
+}
+
+function respostaPeriodo(nome: string | null, metric: string, label: string, d: any): string | null {
+  const leads=numero(d?.leads), spend=numero(d?.spend), cpl=numero(d?.cpl);
+  const sujeito = nome ? nome : "No total, nossos clientes";
+  let base: string | null = null;
+  if (metric === "leads" && leads !== null) base = nome ? `${sujeito} teve ${leads} ${leads===1?"lead":"leads"} ${label}.` : `${sujeito} geraram ${leads} ${leads===1?"lead":"leads"} ${label}.`;
+  if (metric === "spend" && spend !== null) base = `${sujeito} ${nome?"gastou":"gastaram"} ${moeda(spend)} ${label}.`;
+  if (metric === "cpl" && cpl !== null) base = `O CPL ${nome?`de ${nome}`:"geral"} ${label} foi ${moeda(cpl)}.`;
+  if (!base) return null;
+  if (d?.complete === false && d?.available_until) base += ` O período ainda não está totalmente consolidado; os snapshots disponíveis vão até ${String(d.available_until).split('-').reverse().join('/')}.`;
+  return base;
+}
+
 export async function tentarFastPath(params: {
   message: string;
   conversationId: string | null;
@@ -130,10 +152,27 @@ export async function tentarFastPath(params: {
   canal: CanalSse | null;
 }): Promise<ResultadoFast | null> {
   const { message, conversationId, explicitClient, clients, jwt, env, scopeKey, catalogo, canal } = params;
-  const q = norm(message);
+  const mensagemNormalizada = normalizarTranscricaoOperacional(message);
+  const q = norm(mensagemNormalizada);
   const chamadas: ChamadaFast[] = [];
   const memoria = await carregarMemoriaRapida(conversationId, env, scopeKey);
   const porNome = new Map(catalogo.map((f) => [f.name, f]));
+  const janelaExplicita = detectarJanelaMidia(mensagemNormalizada);
+  const escopoGlobal = detectarEscopoGlobal(mensagemNormalizada);
+  const metricAtual = metricDaMensagem(q);
+
+  if (escopoGlobal && ["leads","spend","cpl"].includes(String(metricAtual)) && janelaExplicita) {
+    const faixa = intervaloDaJanela(janelaExplicita);
+    if (faixa) {
+      const snap = await carregarMidiaPeriodo(null, faixa.since, faixa.until, jwt, env, scopeKey).catch(() => null);
+      const resposta = snap?.ok ? respostaPeriodo(null, String(metricAtual), faixa.label, snap) : null;
+      if (resposta) {
+        const memory = { metric: String(metricAtual), period: janelaExplicita.kind, period_days: janelaExplicita.days, client_id: null, client_name: null, topic: "media_global", answer_kind: "metric" as const };
+        await salvarMemoriaRapida(conversationId, memory, env, scopeKey);
+        return { resposta, chamadas, memory, source: "snapshot:media_period_global" };
+      }
+    }
+  }
 
   // Continuação de uma ação de LEITURA oferecida no turno anterior. Isso é
   // separado de confirmação de escrita: ações mutáveis continuam passando pelo gate /confirm.
@@ -157,6 +196,23 @@ export async function tentarFastPath(params: {
       await salvarMemoriaRapida(conversationId, memory, env, scopeKey);
       return { resposta, chamadas, memory, source: "snapshot:lifecycle_list_followup" };
     }
+  }
+
+  const consultaClientes = detectarConsultaClientesOperacionais(message);
+  if (consultaClientes && !explicitClient) {
+    const viva = clients.filter((c) => ehAtivoOperacional(c.lifecycle));
+    const quebraViva = repartirPorEstagio(clients);
+    const op = viva.length ? null : await carregarEstadoOperacao(jwt, env, scopeKey);
+    const emOperacao = viva.length ? quebraViva.emOperacao : Number(op?.active_clients ?? 0);
+    const emOnboarding = viva.length ? quebraViva.onboarding : Number(op?.onboarding_clients ?? 0);
+    const total = emOperacao + emOnboarding;
+    const nomes = viva.map((c) => c.display_name).filter(Boolean).sort((x,y) => x.localeCompare(y, "pt-BR"));
+    const resposta = consultaClientes === "list"
+      ? (nomes.length ? `${nomes.length} clientes hoje: ${nomes.join(", ")}.` : "Não consegui consultar a carteira operacional agora.")
+      : `Temos ${total} ${total === 1 ? "cliente" : "clientes"} hoje: ${emOperacao} em operação e ${emOnboarding} em onboarding.`;
+    const memory = { metric: "active_clients", period: "current" as const, topic: "active_clients", answer_kind: consultaClientes, offered_action: null };
+    await salvarMemoriaRapida(conversationId, memory, env, scopeKey);
+    return { resposta, chamadas, memory, source: "snapshot:operational_clients" };
   }
 
   const consultaLifecycle = detectarConsultaLifecycle(message);
@@ -183,7 +239,24 @@ export async function tentarFastPath(params: {
   if (/\bquantos?\s+clientes?\s+ativos?\b/.test(q) && !explicitClient) {
     const op = await carregarEstadoOperacao(jwt, env, scopeKey);
     if (!op) return null;
-    const resposta = `Temos ${op.active_clients} clientes ativos hoje.`;
+    // ATIVO OPERACIONAL = ACTIVE + ONBOARDING. Quem esta em onboarding ja e'
+    // cliente e ja consome operacao; responder so o ACTIVE subnotifica a
+    // carteira. A quebra vai junto para nao esconder a composicao.
+    // A carteira viva (`clients`) e' a fonte preferida: o snapshot
+    // jarvis_client_state estava devolvendo onboarding_clients = 0 enquanto a
+    // lista viva acertava os clientes em onboarding, e responder pelos dois
+    // produzia numeros que se contradiziam na mesma conversa. O snapshot fica
+    // como fallback para quando a carteira nao veio.
+    const viva = clients.length ? repartirPorEstagio(clients) : null;
+    const emOperacao = viva ? viva.emOperacao : Number(op.active_clients ?? 0);
+    const emOnboarding = viva ? viva.onboarding : Number(op.onboarding_clients ?? 0);
+    const totalOperacional = emOperacao + emOnboarding;
+    // A quebra sai SEMPRE que houver total: esconder o Z quando ele e' zero
+    // fazia a resposta parecer igual a antiga e escondia de qual fonte o numero
+    // veio. Com a quebra visivel, uma divergencia entre fontes aparece na hora.
+    const resposta = totalOperacional
+      ? `Temos ${totalOperacional} clientes ativos hoje: ${emOperacao} já em operação e ${emOnboarding} ainda em onboarding.`
+      : "Não encontrei clientes ativos na base agora.";
     const memory = { metric: "active_clients", period: "current" as const, topic: "active_clients", answer_kind: "count" as const, offered_action: null };
     await salvarMemoriaRapida(conversationId, memory, env, scopeKey);
     return { resposta, chamadas, memory, source: "snapshot:operation" };
@@ -257,16 +330,63 @@ export async function tentarFastPath(params: {
       return { resposta, chamadas, memory, source: "snapshot:operation" };
     }
   }
-  const metricExplicita = metricDaMensagem(q);
-  const apenasPeriodo = /^(?:e\s+)?(?:hoje|ontem)\s*[?.!]*$/i.test(message.trim());
-  const trocaCliente = Boolean(explicitClient) && !metricExplicita;
-  const metric = metricExplicita ?? ((apenasPeriodo || trocaCliente) ? memoria?.metric ?? null : null);
+  const soCliente = Boolean(explicitClient) && (() => {
+    const curto = norm(mensagemNormalizada);
+    const nome = norm(explicitClient?.display_name);
+    if (!curto || !nome) return false;
+    return curto === nome || (curto.split(" ").length === 1 && nome.split(" ").includes(curto));
+  })();
+  if (soCliente && explicitClient) {
+    const resposta = `Certo. Vou considerar ${explicitClient.display_name}.`;
+    const memory = { client_id: explicitClient.client_id, client_name: explicitClient.display_name, metric: null, period: null, period_days: null, topic: "client_focus", answer_kind: "text" as const };
+    await salvarMemoriaRapida(conversationId, memory, env, scopeKey);
+    return { resposta, chamadas, memory, source: "memory:client_focus" };
+  }
+  const apenasPeriodo = Boolean(janelaExplicita) && /^(?:e\s+)?(?:(?:hoje|ontem)|(?:nos?\s+)?ultim(?:o|os|a|as)\s+(?:\d{1,3}|tres|sete|quatorze|trinta|noventa)\s+dias?|(?:ultima|ultimos?)\s+semana)\s*[?.!]*$/i.test(q);
+  const metric = metricAtual ?? (apenasPeriodo ? memoria?.metric ?? null : null);
   if (!metric || !["leads", "spend", "cpl", "balance", "campaigns", "gt", "cs"].includes(metric)) return null;
 
   let cliente = explicitClient;
   if (!cliente && memoria?.client_id) cliente = clients.find((c) => c.client_id === memoria.client_id) ?? null;
   if (!cliente && memoria?.client_name) cliente = clients.find((c) => norm(c.display_name) === norm(memoria.client_name)) ?? null;
   if (!cliente) return null;
+
+  if (["leads","spend","cpl"].includes(metric) && janelaExplicita?.kind === "last_days") {
+    const faixa = intervaloDaJanela(janelaExplicita);
+    if (faixa) {
+      const snap = await carregarMidiaPeriodo(cliente.client_id, faixa.since, faixa.until, jwt, env, scopeKey).catch(() => null);
+      if (snap?.ok && snap.complete !== false) {
+        const resposta = respostaPeriodo(cliente.display_name, metric, faixa.label, snap);
+        if (resposta) {
+          const memory = { client_id: cliente.client_id, client_name: cliente.display_name, metric, period: "last_days" as const, period_days: janelaExplicita.days, topic: "media_client", answer_kind: "metric" as const };
+          await salvarMemoriaRapida(conversationId, memory, env, scopeKey);
+          return { resposta, chamadas, memory, source: "snapshot:media_period_client" };
+        }
+      }
+      const live = await chamarTool("campanhas_cliente", { client_name: cliente.display_name, since: faixa.since, until: faixa.until, lifecycle: "ACTIVE", details: "0" }, porNome, jwt, env, canal, chamadas);
+      if (live?.ok) {
+        try {
+          const d=JSON.parse(live.content);
+          if (d?.ok) {
+            const resposta=respostaPeriodo(cliente.display_name, metric, faixa.label, { leads:d?.totals?.leads, spend:d?.totals?.spend, cpl:(Number(d?.totals?.leads)>0?Number(d?.totals?.spend)/Number(d?.totals?.leads):null), complete:true });
+            if (resposta) {
+              const memory = { client_id: cliente.client_id, client_name: cliente.display_name, metric, period: "last_days" as const, period_days: janelaExplicita.days, topic: "media_client", answer_kind: "metric" as const };
+              await salvarMemoriaRapida(conversationId, memory, env, scopeKey);
+              return { resposta, chamadas, memory, source: "live:media_period_client" };
+            }
+          }
+        } catch {}
+      }
+      if (snap?.ok) {
+        const resposta = respostaPeriodo(cliente.display_name, metric, faixa.label, snap);
+        if (resposta) {
+          const memory = { client_id: cliente.client_id, client_name: cliente.display_name, metric, period: "last_days" as const, period_days: janelaExplicita.days, topic: "media_client", answer_kind: "metric" as const };
+          await salvarMemoriaRapida(conversationId, memory, env, scopeKey);
+          return { resposta, chamadas, memory, source: "snapshot:media_period_client_partial" };
+        }
+      }
+    }
+  }
 
   let estado = await carregarEstadoCliente(cliente.client_id, jwt, env, scopeKey);
   if (!estado) return null;
@@ -343,8 +463,32 @@ export async function tentarFastPath(params: {
 
   const offset = period === "yesterday" ? -1 : 0;
   const dia = dataOperacional(offset);
+
+  // Primeiro usa o snapshot diario canonico do banco. Para ontem ele e final e
+  // evita uma chamada Meta desnecessaria; para hoje so vale se estiver recente.
+  if ((metric === "leads" || metric === "spend" || metric === "cpl") && period !== "current") {
+    const snap = await carregarMidiaClienteDia(estado.client_id, dia, jwt, env).catch(() => null);
+    const snapValido = Boolean(snap?.ok && snap?.checked_at && (period === "yesterday" || idadeSegundos(snap.checked_at) <= 600));
+    if (snapValido) {
+      const leads = numero(snap?.leads);
+      const spend = numero(snap?.spend);
+      const cpl = numero(snap?.cpl) ?? (leads !== null && leads > 0 && spend !== null ? spend / leads : null);
+      const checkedAt = String(snap?.checked_at ?? new Date().toISOString());
+      const patch: Partial<EstadoCliente> = period === "yesterday"
+        ? { leads_yesterday: leads, spend_yesterday: spend, cpl_yesterday: cpl, yesterday_checked_at: checkedAt, live_source: "META_CAMPAIGN_INSIGHTS" }
+        : { leads_today: leads, spend_today: spend, cpl_today: cpl, today_checked_at: checkedAt, live_source: "META_CAMPAIGN_INSIGHTS" };
+      estado = await atualizarEstadoClienteCache(estado, patch, env, scopeKey, period === "yesterday" ? 1800 : 120);
+      const resposta = respostaMidiaSnapshot(estado, metric, period);
+      if (resposta) {
+        const memory = { client_id: estado.client_id, client_name: estado.display_name, metric, period };
+        await salvarMemoriaRapida(conversationId, memory, env, scopeKey);
+        return { resposta, chamadas, memory, source: "snapshot:media_day" };
+      }
+    }
+  }
+
   const live = await chamarTool("campanhas_cliente", {
-    client_name: estado.display_name, since: dia, until: dia, lifecycle: "ACTIVE",
+    client_name: estado.display_name, since: dia, until: dia, lifecycle: "ACTIVE", details: "0",
   }, porNome, jwt, env, canal, chamadas);
   if (!live?.ok) return null;
 
