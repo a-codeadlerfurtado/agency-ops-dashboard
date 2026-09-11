@@ -5,25 +5,13 @@ import { createPortal } from "react-dom";
 import { authenticatedFetch, SUPABASE_URL } from "./shared";
 
 type Row = Record<string, any>;
+type FilterTab = "status" | "people" | "period";
+type RelatoSection = "home" | "feed" | "network" | "workspace" | "companies" | "reminders" | "connectors";
 
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-meetings-api`;
+const CAPTURE_API = `${SUPABASE_URL}/functions/v1/agency-ops-meeting-capture-api`;
+const CALENDAR_API = `${SUPABASE_URL}/functions/v1/agency-ops-google-calendar-api`;
 const PAGE_SIZE = 30;
-
-function fmtDate(value: unknown) {
-  if (!value) return "Sem data";
-  try {
-    return new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date(String(value)));
-  } catch {
-    return String(value);
-  }
-}
-
-function cleanTitle(row: Row) {
-  const fromMeta = String(row?.metadata?.subject || row?.metadata?.title || "").trim();
-  if (fromMeta) return fromMeta;
-  const raw = String(row?.source_file_name || row?.meeting_code || "Reunião").trim();
-  return raw.replace(/\.(txt|md|json)$/i, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim() || "Reunião";
-}
 
 function asItems(value: unknown): string[] {
   if (!value) return [];
@@ -38,50 +26,82 @@ function asItems(value: unknown): string[] {
   }).filter(Boolean);
 }
 
-function participants(value: unknown) {
-  return asItems(value).slice(0, 8);
+function participants(value: unknown) { return asItems(value).slice(0, 16); }
+function cleanTitle(row: Row) {
+  const fromMeta = String(row?.metadata?.subject || row?.metadata?.title || "").trim();
+  if (fromMeta) return fromMeta;
+  const raw = String(row?.source_file_name || row?.meeting_code || "Reunião").trim();
+  return raw.replace(/\.(txt|md|json)$/i, "").replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim() || "Reunião";
+}
+function when(row: Row) { return new Date(String(row.meeting_started_at || row.created_at || 0)); }
+function dayKey(row: Row) { const d = when(row); return Number.isNaN(d.getTime()) ? "Sem data" : d.toISOString().slice(0, 10); }
+function dayLabel(row: Row) {
+  const d = when(row); if (Number.isNaN(d.getTime())) return "SEM DATA";
+  return new Intl.DateTimeFormat("pt-BR", { weekday: "long", month: "long", day: "numeric" }).format(d).toUpperCase();
+}
+function timeLabel(value: unknown) {
+  const d = new Date(String(value || 0));
+  return Number.isNaN(d.getTime()) ? "--:--" : new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(d);
+}
+function shortDate(value: unknown) {
+  const d = new Date(String(value || 0));
+  return Number.isNaN(d.getTime()) ? "Sem data" : new Intl.DateTimeFormat("pt-BR", { day: "numeric", month: "short" }).format(d);
+}
+function durationLabel(row: Row) {
+  let sec = Number(row.duration_seconds || 0);
+  if (!sec && row.meeting_started_at && row.meeting_ended_at) sec = Math.max(0, Math.round((Date.parse(row.meeting_ended_at) - Date.parse(row.meeting_started_at)) / 1000));
+  if (!Number.isFinite(sec) || sec <= 0) return "—";
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h ? `${h}h ${m}min` : `${m}min ${s}s`;
+}
+function initials(name: string) { return name.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase()).join("") || "?"; }
+function ready(row: Row) { return String(row.processing_status || "").toUpperCase() === "READY" || (!row.processing_status && Boolean(row.summary)); }
+function parseLegacyTranscript(text: unknown): Row[] {
+  const raw = String(text || "");
+  if (!raw.trim()) return [];
+  const blocks = raw.split(/\n\s*\n/).map((item) => item.trim()).filter(Boolean);
+  return blocks.map((block, index) => {
+    const m = block.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*([^:]{1,120}):\s*([\s\S]*)$/);
+    if (!m) return { sequence_no: index, speaker_name: "Transcrição", text: block, started_ms: 0 };
+    const [h, min, sec] = m[1].split(":").map(Number);
+    return { sequence_no: index, speaker_name: m[2].trim(), text: m[3].trim(), started_ms: ((h * 3600) + (min * 60) + sec) * 1000 };
+  });
+}
+function stamp(ms: unknown) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const h = String(Math.floor(total / 3600)).padStart(2, "0"), m = String(Math.floor((total % 3600) / 60)).padStart(2, "0"), s = String(total % 60).padStart(2, "0");
+  return `${h}:${m}:${s}`;
+}
+function signalGroups(detail: Row) {
+  const raw = detail?.ai_signals && typeof detail.ai_signals === "object" ? detail.ai_signals : {};
+  const highlights = raw.highlights && typeof raw.highlights === "object" && !Array.isArray(raw.highlights) ? raw.highlights : raw;
+  const defs = [["Oportunidades", "*", highlights.opportunities || raw.opportunities],["Insights", "!", highlights.insights || raw.insights],["Ideias", "+", highlights.ideas || raw.ideas],["Objetivos", "o", highlights.objectives || raw.objectives],["Problemas atuais", "!", highlights.problems || raw.problems],["Licoes aprendidas", "v", highlights.lessons || raw.lessons]];
+  return defs.map(([name, icon, value]) => ({ name, icon, items: asItems(value) })).filter((group) => group.items.length);
+}
+function topicRows(detail: Row) {
+  const raw = detail?.ai_signals?.summary_topics || detail?.metadata?.summary_topics || [];
+  const rows = Array.isArray(raw) ? raw : [];
+  return rows.map((item: any) => typeof item === "string" ? { title: item.split(/[.:\-]/)[0] || "Topico", body: item } : { title: String(item?.title || item?.name || "Topico"), body: String(item?.body || item?.text || item?.description || item?.title || "") }).filter((item: any) => item.body);
+}
+function actionRows(detail: Row) {
+  const raw = Array.isArray(detail?.ai_signals?.action_items) ? detail.ai_signals.action_items : [];
+  if (raw.length) return raw.map((item: any) => ({ title: String(item?.title || item?.text || item || ""), owner: String(item?.owner || ""), due_date: String(item?.due_date || ""), evidence: String(item?.evidence || "") })).filter((item: any) => item.title);
+  return [...asItems(detail?.commitments), ...asItems(detail?.decisions).slice(0,3)].map((title) => ({ title, owner: "", due_date: "", evidence: "" }));
+}
+function rewrittenRows(detail: Row) {
+  const raw = Array.isArray(detail?.ai_signals?.rewritten_notes) ? detail.ai_signals.rewritten_notes : [];
+  return raw.map((item: any) => ({ speaker: String(item?.speaker || "Participante"), timestamp: String(item?.timestamp || "00:00:00"), original: String(item?.original || ""), rewritten: String(item?.rewritten || "") })).filter((item: any) => item.original || item.rewritten);
 }
 
+
 const STYLE = `
-  .meetings-nav-button::before{content:""!important;width:18px!important;min-width:18px!important;height:18px!important;flex:0 0 18px!important;margin:0!important;transform:none!important;background-color:currentColor!important;background-image:none!important;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3.5' y='5' width='17' height='15.5' rx='2' fill='none' stroke='black' stroke-width='1.8'/%3E%3Cpath d='M7 3v4M17 3v4M3.5 9h17' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat!important;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3.5' y='5' width='17' height='15.5' rx='2' fill='none' stroke='black' stroke-width='1.8'/%3E%3Cpath d='M7 3v4M17 3v4M3.5 9h17' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat!important;}
-  .meetings-nav-button{display:flex!important;align-items:center!important;gap:12px!important;}
-  .meetings-shell{position:fixed;inset:0 0 0 var(--sidenav-width,224px);z-index:2147481500;background:#0b1014;color:var(--text,#edf4f8);overflow:auto;padding:24px 28px 42px;}
-  .meetings-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin:0 auto 18px;max-width:1440px;}
-  .meetings-head h1{margin:4px 0 4px;font:800 30px/1.05 Inter Tight,Inter,sans-serif;letter-spacing:-.03em;}
-  .meetings-kicker{font-size:11px;font-weight:900;letter-spacing:.12em;color:#ff9a61;text-transform:uppercase;}
-  .meetings-sub{color:#9eacb7;font-size:13px;max-width:720px;}
-  .meetings-actions{display:flex;gap:8px;align-items:center;}
-  .meetings-btn{border:1px solid #34414b;background:#151c22;color:#e8f0f5;border-radius:10px;padding:9px 12px;font:700 12px Inter,sans-serif;cursor:pointer;}
-  .meetings-btn:hover{border-color:#76c6ff;background:#18232a;}
-  .meetings-btn.primary{border-color:#ff934f;background:#ff7a2f;color:white;}
-  .meetings-toolbar{max-width:1440px;margin:0 auto 14px;display:grid;grid-template-columns:minmax(240px,1fr) auto auto;gap:8px;}
-  .meetings-toolbar input{min-width:0;border:1px solid #33414b;background:#10161b;color:#eef5f8;border-radius:10px;padding:10px 12px;outline:none;}
-  .meetings-toolbar input:focus{border-color:#76c6ff;box-shadow:0 0 0 2px rgba(118,198,255,.08);}
-  .meetings-meta{max-width:1440px;margin:0 auto 10px;color:#8f9da8;font-size:11px;display:flex;gap:12px;flex-wrap:wrap;}
-  .meetings-grid{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;}
-  .meeting-card{border:1px solid #2e3a43;background:linear-gradient(180deg,#151b20,#11171b);border-radius:14px;padding:15px;text-align:left;color:inherit;cursor:pointer;min-height:210px;display:flex;flex-direction:column;gap:9px;box-shadow:0 8px 20px rgba(0,0,0,.12);}
-  .meeting-card:hover{border-color:#4d6576;transform:translateY(-1px);}
-  .meeting-card-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;}
-  .meeting-client{font-size:11px;font-weight:900;letter-spacing:.07em;color:#8fd2ff;text-transform:uppercase;}
-  .meeting-date{font-size:10px;color:#82909a;white-space:nowrap;}
-  .meeting-title{font:750 16px/1.2 Inter,sans-serif;color:#f1f6f8;}
-  .meeting-summary{font-size:12px;line-height:1.5;color:#b4c0c8;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;}
-  .meeting-card-footer{margin-top:auto;display:flex;gap:7px;flex-wrap:wrap;}
-  .meeting-pill{font-size:10px;font-weight:800;border:1px solid #33414b;background:#0e1418;border-radius:999px;padding:4px 7px;color:#a9b6bf;}
-  .meeting-empty{max-width:1440px;margin:28px auto;border:1px dashed #35434d;border-radius:14px;padding:28px;color:#9baab4;text-align:center;}
-  .meeting-more{display:flex;justify-content:center;max-width:1440px;margin:16px auto 0;}
-  .meeting-drawer-backdrop{position:fixed;inset:0 0 0 var(--sidenav-width,224px);z-index:2147482500;background:rgba(0,0,0,.46);display:flex;justify-content:flex-end;}
-  .meeting-drawer{width:min(620px,92vw);height:100%;background:#0d1317;border-left:1px solid #33414b;overflow:auto;padding:22px;box-shadow:-18px 0 50px rgba(0,0,0,.35);}
-  .meeting-drawer-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;position:sticky;top:-22px;background:#0d1317;padding:22px 0 14px;z-index:2;border-bottom:1px solid #28333a;}
-  .meeting-drawer h2{margin:4px 0 4px;font:800 22px/1.15 Inter Tight,Inter,sans-serif;}
-  .meeting-section{margin-top:18px;}
-  .meeting-section h3{margin:0 0 8px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#ff9a61;}
-  .meeting-section p,.meeting-section li{color:#bec9d0;font-size:12px;line-height:1.6;}
-  .meeting-section ul{margin:0;padding-left:18px;display:grid;gap:5px;}
-  .meeting-transcript{white-space:pre-wrap;background:#090d10;border:1px solid #273139;border-radius:11px;padding:14px;max-height:48vh;overflow:auto;color:#aebbc4;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;}
-  .meeting-participants{display:flex;gap:6px;flex-wrap:wrap;}
-  .meeting-participant{padding:5px 7px;border-radius:8px;background:#141c21;border:1px solid #2b3942;font-size:10px;color:#b9c6ce;}
-  @media(max-width:720px){.meetings-shell{left:58px;padding:18px 14px 34px}.meetings-head{flex-direction:column}.meetings-toolbar{grid-template-columns:1fr 1fr}.meetings-toolbar input{grid-column:1/-1}.meetings-grid{grid-template-columns:1fr}.meeting-drawer-backdrop{left:58px}.meeting-drawer{width:100%}}
+.meetings-nav-button::before{content:""!important;width:18px!important;min-width:18px!important;height:18px!important;flex:0 0 18px!important;background:currentColor!important;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3.5' y='5' width='17' height='15.5' rx='2' fill='none' stroke='black' stroke-width='1.8'/%3E%3Cpath d='M7 3v4M17 3v4M3.5 9h17' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat!important;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3.5' y='5' width='17' height='15.5' rx='2' fill='none' stroke='black' stroke-width='1.8'/%3E%3Cpath d='M7 3v4M17 3v4M3.5 9h17' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat!important}.meetings-nav-button{display:flex!important;align-items:center!important;gap:12px!important}
+.meetings-app{position:fixed;inset:0 0 0 var(--sidenav-width,224px);z-index:2147481500;background:#050505;color:#f1f5f9;overflow:auto;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.meetings-inner{max-width:1440px;margin:0 auto;padding:24px 28px 54px}.meetings-top{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:18px}.meetings-top h1{margin:0;font-size:20px;font-weight:500}.meetings-actions{display:flex;align-items:center;gap:8px}.m-btn{border:1px solid #3f3f46;background:#18181b;color:#e4e4e7;border-radius:8px;padding:8px 11px;font:600 12px/1 system-ui;cursor:pointer}.m-btn:hover{background:#27272a;border-color:#52525b}.m-btn.primary{background:#4f46e5;border-color:#4f46e5;color:white}.m-btn.icon{width:34px;height:34px;border-radius:999px;padding:0;font-size:17px}.m-searchrow{display:flex;gap:10px;align-items:center;margin-bottom:16px;position:relative}.m-search{height:38px;width:min(430px,60vw);border-radius:999px;border:1px solid #52525b;background:#09090b;color:#f1f5f9;padding:0 14px 0 39px;outline:none;font-size:12px}.m-search:focus{border-color:#6366f1}.m-searchwrap{position:relative}.m-searchwrap::before{content:"⌕";position:absolute;left:14px;top:8px;color:#94a3b8;font-size:18px;z-index:1}.m-filterbtn{height:38px;border:0;border-radius:999px;background:#27272a;color:#e4e4e7;padding:0 14px;font-weight:600;cursor:pointer}.m-filterpop{position:absolute;top:45px;left:440px;width:360px;background:#111113;border:1px solid #33333a;border-radius:12px;box-shadow:0 20px 55px rgba(0,0,0,.45);z-index:20;overflow:hidden}.m-filtertabs{display:grid;grid-template-columns:repeat(3,1fr);border-bottom:1px solid #29292e}.m-filtertabs button{border:0;background:transparent;color:#94a3b8;padding:11px 8px;cursor:pointer;font-size:11px}.m-filtertabs button.active{color:white;border-bottom:2px solid #6366f1}.m-filterbody{padding:13px;display:grid;gap:8px;max-height:270px;overflow:auto}.m-choice{display:flex;align-items:center;gap:9px;padding:8px;border-radius:8px;color:#cbd5e1;font-size:12px;cursor:pointer}.m-choice:hover{background:#1d1d20}.m-choice input{accent-color:#4f46e5}.m-pair{margin-bottom:16px;padding:12px 14px;border:1px solid #3730a3;background:#11102a;border-radius:10px;display:flex;align-items:center;justify-content:space-between;gap:12px}.m-pair strong{font:800 18px ui-monospace,monospace;letter-spacing:.14em;color:#a5b4fc}.m-pair small{display:block;color:#94a3b8;margin-top:3px}.m-chiprow{display:flex;gap:6px;flex-wrap:wrap;margin:-6px 0 14px}.m-chip{border:1px solid #3f3f46;border-radius:999px;padding:4px 8px;color:#cbd5e1;font-size:10px;background:#111113}.m-timeline{position:relative;border-radius:8px;background:#171719;padding:0 18px 4px}.m-day{position:relative;padding:17px 0 3px 18px;border-left:2px solid #3f3f46}.m-day::before{content:"";position:absolute;left:-6px;top:21px;width:10px;height:10px;border-radius:50%;background:#64748b}.m-daytitle{color:#94a3b8;font-size:11px;letter-spacing:.04em;margin:0 0 8px}.m-feedcard{width:100%;border:0;border-bottom:1px solid #29292e;background:transparent;color:inherit;padding:10px 6px;text-align:left;display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:10px;cursor:pointer;border-radius:7px}.m-feedcard:hover{background:rgba(255,255,255,.03)}.m-feedicon{width:34px;height:34px;border-radius:50%;background:linear-gradient(145deg,#4c1d95,#6d28d9);display:grid;place-items:center;color:#d8b4fe;font-size:15px}.m-feedtitleline{display:flex;gap:8px;align-items:center;min-width:0}.m-feedtitle{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.m-summary{color:#94a3b8;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px}.m-meta{display:flex;gap:13px;align-items:center;color:#94a3b8;font-size:10.5px;margin-top:7px}.m-avatars{display:flex;margin-left:4px}.m-avatar{width:24px;height:24px;margin-left:-6px;border-radius:50%;display:grid;place-items:center;background:#1e3a5f;border:1px solid #171719;font-size:9px;font-weight:800}.m-status{align-self:center;display:flex;gap:8px;align-items:center;color:#94a3b8;font-size:15px}.m-status .ok{color:#4ade80}.m-status .wait{color:#eab308}.m-owner{font-size:9px;color:#818cf8;border:1px solid #3730a3;border-radius:999px;padding:2px 6px}.m-empty{padding:60px 20px;text-align:center;color:#94a3b8}.m-skeleton{height:76px;margin:4px 0;border-radius:8px;background:linear-gradient(90deg,#202024,#29292e,#202024);background-size:200% 100%;animation:mshimmer 1.2s linear infinite}@keyframes mshimmer{to{background-position:-200% 0}}
+.m-detailhead{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:14px}.m-breadcrumb{color:#94a3b8;cursor:pointer}.m-detailtitle{font-size:20px;font-weight:500;margin:0}.m-tag{display:inline-flex;align-items:center;gap:5px;background:#2e1065;color:#c4b5fd;border-radius:999px;padding:3px 7px;font-size:10px;margin-left:7px}.m-ready{color:#4ade80;margin-left:7px}.m-card{background:#18181b;border:1px solid #232329;border-radius:8px;padding:13px}.m-participantline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;color:#cbd5e1;font-size:11px}.m-detailmeta{display:flex;gap:14px;color:#94a3b8;font-size:10.5px;margin-top:9px}.m-section{margin-top:22px}.m-sectiontitle{font-size:15px;font-weight:500;margin:0 0 9px;display:flex;align-items:center;gap:7px}.m-detailgrid{display:grid;grid-template-columns:minmax(0,60fr) minmax(300px,40fr);gap:18px}.m-action{display:grid;grid-template-columns:120px 1fr;gap:12px;align-items:center;border:1px solid #29292e;border-radius:8px;padding:11px;margin-top:7px;background:#18181b}.m-follow{border:1px dashed #52525b;border-radius:999px;background:#27272a;color:#e4e4e7;padding:8px;font-size:10px}.m-actiontext{font-size:12px;color:#f1f5f9}.m-context{color:#94a3b8;font-size:10.5px;margin-top:4px}.m-highlightgroup{margin-bottom:11px}.m-highlightgroup h4{margin:0 0 7px;font-size:11px;color:#e2e8f0}.m-highlight{background:#18181b;border:1px solid #29292e;border-radius:8px;padding:10px;margin-bottom:6px}.m-highlight strong{display:block;font-size:11px}.m-highlight p{margin:5px 0 0;color:#94a3b8;font-size:10.5px}.m-topic{padding:9px 0;border-bottom:1px solid #29292e}.m-topic strong{font-size:11px}.m-topic p{margin:3px 0;color:#94a3b8;font-size:10.5px}.m-mind{display:grid;grid-template-columns:90px 1fr;gap:10px;align-items:center;min-height:130px}.m-mindroot{background:#4f46e5;border-radius:8px;padding:12px;text-align:center;font-weight:700;font-size:11px}.m-mindnodes{display:grid;gap:6px}.m-mindnode{border-left:3px solid #6366f1;background:#18181b;border-radius:6px;padding:8px;font-size:10.5px}.m-accordion{border:1px solid #29292e;background:#18181b;border-radius:8px;overflow:hidden}.m-accrow{padding:14px;border-bottom:1px solid #29292e;color:#cbd5e1;font-size:12px}.m-transcriptbody{padding:12px 14px 18px}.m-transcripttoolbar{display:flex;justify-content:space-between;gap:10px;margin-bottom:14px}.m-transcriptsearch{width:min(400px,70%);border:1px solid #52525b;background:#09090b;color:white;border-radius:999px;padding:8px 12px}.m-keywords{color:#94a3b8;font-size:10.5px;margin-bottom:13px}.m-transcriptscroll{max-height:55vh;overflow:auto;border-top:1px solid #29292e;padding:6px 18px 18px}.m-transcriptblock{padding:12px 0}.m-transcriptwho{font-size:13.3px;font-weight:600}.m-transcripttime{font-size:10.5px;color:rgba(120,120,120,.8);margin-left:8px}.m-transcripttext{font-size:12.25px;line-height:1.55;color:#f1f5f9;white-space:pre-wrap;margin:4px 0 0}.m-more{display:flex;justify-content:center;padding:15px}
+.m-contextbox{border:1px solid #29292e;background:#18181b;border-radius:8px;overflow:hidden}.m-contexthead{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:12px 13px;border-bottom:1px solid #29292e}.m-contextclient{display:flex;align-items:center;gap:8px;font-size:12px}.m-contextbody{padding:12px 13px;display:grid;gap:12px}.m-contextlabel{font-size:9px;letter-spacing:.08em;color:#94a3b8;text-transform:uppercase}.m-briefing{font-size:11.5px;color:#e2e8f0;line-height:1.55}.m-attention{border-left:3px solid #8b5cf6;padding-left:10px;color:#cbd5e1;font-size:10.5px}.m-note{border-left:3px solid #eab308;padding:8px 10px;background:#151515;border-radius:0 6px 6px 0}.m-note strong{font-size:10.5px}.m-note p{margin:4px 0 0;color:#94a3b8;font-size:10.5px}.m-ctxactions{display:flex;gap:7px;flex-wrap:wrap}.m-mini{border:0;background:transparent;color:#94a3b8;font-size:10px;cursor:pointer;padding:2px}.m-mini:hover{color:#fff}.m-rewritecard{border:1px solid #29292e;border-radius:8px;padding:11px 12px;margin:8px 0;background:#151517}.m-rewritehead{display:flex;align-items:center;gap:8px;font-size:10.5px;color:#60a5fa}.m-rewriteorig{font-style:italic;color:#94a3b8;font-size:11px;line-height:1.55;margin:9px 0;padding-bottom:9px;border-bottom:1px solid #29292e}.m-rewritenew{color:#e2e8f0;font-size:11.5px;line-height:1.55}.m-feedback{font-size:9.5px;color:#71717a;margin-left:auto}.m-accbutton{width:100%;border:0;background:transparent;color:#cbd5e1;text-align:left;padding:14px;cursor:pointer;font:inherit}.m-accpanel{padding:0 14px 14px}.m-filterfooter{display:flex;align-items:center;justify-content:flex-end;gap:8px;border-top:1px solid #29292e;padding:10px 12px}.m-filterfooter .clear{margin-right:auto}.m-humanfeedback{display:grid;gap:8px}.m-humanrow{border:1px solid #2b3d60;background:#0d1627;border-radius:8px;padding:10px 12px}.m-humanhead{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11px}.m-humanwho{font-weight:700;color:#e2e8f0}.m-humanchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}.m-humanchip{border:1px solid #33476c;background:#111e34;color:#cbd5e1;border-radius:999px;padding:3px 7px;font-size:9.5px}.m-humannote{margin-top:8px;color:#cbd5e1;font-size:10.5px;line-height:1.5;border-left:2px solid #6366f1;padding-left:8px}
+.m-clientstats{display:flex;gap:8px;flex-wrap:wrap}.m-clientstat{border:1px solid #29292e;border-radius:999px;padding:3px 7px;color:#94a3b8;font-size:9.5px}.m-scopebar{display:flex;align-items:center;gap:7px;margin:0 0 14px;flex-wrap:wrap}.m-scopebtn{border:1px solid #3f3f46;background:#111113;color:#a1a1aa;border-radius:999px;padding:7px 11px;font:600 11px system-ui;cursor:pointer}.m-scopebtn.active{background:#312e81;border-color:#6366f1;color:#fff}.m-scope-select{border:1px solid #3f3f46;background:#111113;color:#e4e4e7;border-radius:999px;padding:7px 28px 7px 11px;font:600 11px system-ui;outline:none}.m-scope-label{font-size:10px;color:#71717a;margin-right:2px}
+.relato-shell{display:grid;grid-template-columns:230px minmax(0,1fr);min-height:100vh}.relato-side{position:sticky;top:0;height:100vh;background:#0b1425;border-right:1px solid #1f2a44;padding:18px 12px 14px;display:flex;flex-direction:column;box-sizing:border-box}.relato-brand{display:flex;align-items:center;gap:10px;padding:4px 8px 18px;font-weight:900;font-size:20px}.relato-mark{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#a855f7,#4f46e5);display:grid;place-items:center;color:white}.relato-desc{display:block;color:#7f8da8;font-size:9px;letter-spacing:.08em;text-transform:uppercase}.relato-menu{display:grid;gap:6px}.relato-nav{border:0;background:transparent;color:#cbd5e1;border-radius:9px;padding:10px 11px;display:flex;align-items:center;gap:11px;text-align:left;cursor:pointer;font:700 12px system-ui}.relato-nav:hover{background:#121f35}.relato-nav.active{background:linear-gradient(135deg,#5145e5,#5b48ee);color:#fff}.relato-navicon{width:20px;text-align:center;font-size:15px}.relato-profile{margin-top:auto;border-top:1px solid #26334d;padding:14px 8px 0;display:flex;align-items:center;gap:9px}.relato-profileavatar{width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#4f46e5);display:grid;place-items:center;font-weight:900;border:1px solid #8b5cf6}.relato-profilemeta b{display:block;font-size:11px}.relato-profilemeta span{display:block;color:#22c55e;font-size:9px;margin-top:2px}.relato-main{min-width:0;background:#050505}.relato-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}.relato-section-head h1{font-size:22px;font-weight:500;margin:0}.relato-kicker{font-size:10px;color:#818cf8;text-transform:uppercase;letter-spacing:.08em;margin-bottom:3px}.relato-grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.relato-stat,.relato-panel,.relato-row{background:#151518;border:1px solid #29292e;border-radius:10px;padding:14px}.relato-stat strong{display:block;font-size:24px}.relato-stat span,.relato-row-main p,.relato-panel p{font-size:10.5px;color:#94a3b8}.relato-list{display:grid;gap:8px}.relato-row{display:flex;align-items:center;justify-content:space-between;gap:12px}.relato-row-main p{margin:3px 0 0}.relato-pill{border:1px solid #33334a;border-radius:999px;padding:4px 8px;color:#a5b4fc;font-size:9px}.relato-cardtitle{font-size:15px;font-weight:700;margin:20px 0 9px}.relato-empty{border:1px dashed #33333a;border-radius:10px;padding:34px;text-align:center;color:#94a3b8}.relato-connector{display:grid;grid-template-columns:42px 1fr auto;gap:12px;align-items:center;margin-bottom:10px}.relato-connector-logo{width:38px;height:38px;border-radius:10px;background:#fff;color:#111;display:grid;place-items:center;font-weight:900}@media(max-width:1100px){.relato-shell{grid-template-columns:190px minmax(0,1fr)}.relato-grid4{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:900px){.meetings-app{left:58px}.meetings-inner{padding:18px 14px 80px}.m-detailgrid{grid-template-columns:1fr}.m-filterpop{left:0;width:min(360px,90vw)}.m-feedcard{grid-template-columns:34px minmax(0,1fr)}.m-status{grid-column:2}.m-summary{white-space:normal;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}.m-action{grid-template-columns:1fr}.m-follow{width:100%}.m-search{width:min(64vw,430px)}}
 `;
 
 export default function MeetingsBridge() {
@@ -95,217 +115,164 @@ export default function MeetingsBridge() {
   const [activeQuery, setActiveQuery] = useState("");
   const [detail, setDetail] = useState<Row | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [pairingCode, setPairingCode] = useState("");
+  const [pairingExpires, setPairingExpires] = useState("");
+  const [pairingLoading, setPairingLoading] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterTab, setFilterTab] = useState<FilterTab>("status");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [peopleFilter, setPeopleFilter] = useState("");
+  const [periodFilter, setPeriodFilter] = useState("all");
+  const [transcriptQuery, setTranscriptQuery] = useState("");
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(true);
+  const [viewer, setViewer] = useState<Row | null>(null);
+  const [ownerOptions, setOwnerOptions] = useState<string[]>([]);
+  const [viewScope, setViewScope] = useState<"mine" | "all" | "person">("mine");
+  const [selectedOwner, setSelectedOwner] = useState("");
+  const [relatoSection, setRelatoSection] = useState<RelatoSection>("feed");
+  const [googleStatus, setGoogleStatus] = useState<Row | null>(null);
+  const [connectorLoading, setConnectorLoading] = useState(false);
 
-  const load = useCallback(async (reset = true, q = activeQuery) => {
-    setLoading(true);
-    setError("");
+  const load = useCallback(async (reset = true, q = activeQuery, scope = viewScope, owner = selectedOwner) => {
+    setLoading(true); setError("");
     try {
       const url = new URL(API);
       url.searchParams.set("limit", String(PAGE_SIZE));
       url.searchParams.set("offset", String(reset ? 0 : records.length));
       if (q.trim()) url.searchParams.set("q", q.trim());
+      if (scope === "all") url.searchParams.set("scope", "all");
+      if (scope === "person" && owner.trim()) url.searchParams.set("owner_person", owner.trim());
       const response = await authenticatedFetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error(`API ${response.status}`);
       const body = await response.json();
       const next = Array.isArray(body.records) ? body.records : [];
       setRecords((current) => reset ? next : [...current, ...next]);
-      setCount(Number(body.count || 0));
-      setHasMore(Boolean(body.has_more));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Não foi possível carregar as reuniões.");
-    } finally {
-      setLoading(false);
-    }
-  }, [activeQuery, records.length]);
+      setCount(Number(body.count || 0)); setHasMore(Boolean(body.has_more));
+      if (body.viewer) setViewer(body.viewer);
+      if (Array.isArray(body.owner_options)) setOwnerOptions(body.owner_options.map((x: unknown) => String(x)).filter(Boolean));
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "Não foi possível carregar as reuniões."); }
+    finally { setLoading(false); }
+  }, [activeQuery, records.length, viewScope, selectedOwner]);
+
+  useEffect(() => { if (open && !records.length && !loading) load(true, activeQuery); }, [open, records.length, loading, load, activeQuery]);
 
   useEffect(() => {
-    if (!open || records.length || loading) return;
-    load(true, activeQuery);
-  }, [open, records.length, loading, load, activeQuery]);
-
-  useEffect(() => {
-    let observer: MutationObserver | null = null;
-    let cleanupButton: (() => void) | null = null;
-
+    let observer: MutationObserver | null = null; let cleanupButton: (() => void) | null = null;
     const ensureButton = () => {
-      const container = document.querySelector<HTMLElement>(".side-nav-items");
-      if (!container) return;
+      const container = document.querySelector<HTMLElement>(".side-nav-items"); if (!container) return;
       let button = container.querySelector<HTMLButtonElement>("[data-meetings-nav]");
-      if (!button) {
-        button = document.createElement("button");
-        button.type = "button";
-        button.dataset.meetingsNav = "true";
-        button.className = "meetings-nav-button";
-        button.title = "Equipe";
-        button.setAttribute("aria-label", "Reuniões");
-        button.textContent = "Reuniões";
-        container.appendChild(button);
-      }
+      if (!button) { button = document.createElement("button"); button.type = "button"; button.dataset.meetingsNav = "true"; button.className = "meetings-nav-button"; button.title = "Relato AI"; button.setAttribute("aria-label", "Relato AI"); button.textContent = "Relato AI"; container.appendChild(button); }
       button.classList.toggle("active", open);
-      const onClick = (event: Event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        setOpen(true);
-      };
-      button.addEventListener("click", onClick);
-      cleanupButton?.();
-      cleanupButton = () => button?.removeEventListener("click", onClick);
-
-      observer?.disconnect();
-      observer = new MutationObserver(() => {
-        if (!document.querySelector("[data-meetings-nav]")) ensureButton();
-      });
-      observer.observe(container, { childList: true });
+      const onClick = (event: Event) => { event.preventDefault(); event.stopPropagation(); setOpen(true); };
+      button.addEventListener("click", onClick); cleanupButton?.(); cleanupButton = () => button?.removeEventListener("click", onClick);
+      observer?.disconnect(); observer = new MutationObserver(() => { if (!document.querySelector("[data-meetings-nav]")) ensureButton(); }); observer.observe(container, { childList: true });
     };
-
-    ensureButton();
-    const startup = window.setInterval(() => {
-      if (document.querySelector("[data-meetings-nav]")) {
-        window.clearInterval(startup);
-        return;
-      }
-      ensureButton();
-    }, 250);
-    const stopStartup = window.setTimeout(() => window.clearInterval(startup), 5000);
-
-    const closeOnOtherNav = (event: Event) => {
-      if (!open) return;
-      const target = event.target instanceof Element ? event.target.closest(".side-nav-items > button,.side-nav-items > a") : null;
-      if (!target || target.hasAttribute("data-meetings-nav") || target.classList.contains("sidebar-ia-group-title")) return;
-      setOpen(false);
-    };
+    ensureButton(); const startup = window.setInterval(() => document.querySelector("[data-meetings-nav]") ? window.clearInterval(startup) : ensureButton(), 250); const stop = window.setTimeout(() => window.clearInterval(startup), 5000);
+    const closeOnOtherNav = (event: Event) => { if (!open) return; const target = event.target instanceof Element ? event.target.closest(".side-nav-items > button,.side-nav-items > a") : null; if (target && !target.hasAttribute("data-meetings-nav") && !target.classList.contains("sidebar-ia-group-title")) setOpen(false); };
     document.addEventListener("click", closeOnOtherNav, true);
-    return () => {
-      cleanupButton?.();
-      observer?.disconnect();
-      window.clearInterval(startup);
-      window.clearTimeout(stopStartup);
-      document.removeEventListener("click", closeOnOtherNav, true);
-      document.querySelector("[data-meetings-nav]")?.remove();
-    };
+    return () => { cleanupButton?.(); observer?.disconnect(); clearInterval(startup); clearTimeout(stop); document.removeEventListener("click", closeOnOtherNav, true); document.querySelector("[data-meetings-nav]")?.remove(); };
   }, [open]);
 
   useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        if (detail) setDetail(null);
-        else setOpen(false);
-      }
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    if (!open) return; const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") detail ? setDetail(null) : setOpen(false); };
+    document.addEventListener("keydown", onKey); return () => document.removeEventListener("keydown", onKey);
   }, [open, detail]);
 
-  const submitSearch = (event: FormEvent) => {
-    event.preventDefault();
-    const next = query.trim();
-    setActiveQuery(next);
-    setRecords([]);
-    setDetail(null);
-    load(true, next);
-  };
-
+  const submitSearch = (event: FormEvent) => { event.preventDefault(); const next = query.trim(); setActiveQuery(next); setRecords([]); setDetail(null); load(true, next); };
   const openDetail = async (row: Row) => {
-    setDetailLoading(true);
-    setDetail(null);
-    try {
-      const url = new URL(API);
-      url.searchParams.set("transcript_id", String(row.id));
-      const response = await authenticatedFetch(url, { cache: "no-store" });
-      if (!response.ok) throw new Error(`API ${response.status}`);
-      const body = await response.json();
-      setDetail(body.transcript || row);
-    } catch {
-      setDetail(row);
-    } finally {
-      setDetailLoading(false);
-    }
+    setDetailLoading(true); setTranscriptQuery("");
+    try { const url = new URL(API); url.searchParams.set("transcript_id", String(row.id)); const response = await authenticatedFetch(url, { cache: "no-store" }); if (!response.ok) throw new Error(`API ${response.status}`); const body = await response.json(); setDetail(body.transcript || row); }
+    catch { setDetail(row); } finally { setDetailLoading(false); }
+  };
+  const createPairing = async () => {
+    setPairingLoading(true); setError("");
+    try { const response = await authenticatedFetch(CAPTURE_API, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "pair_create" }), cache: "no-store" }); const body = await response.json(); if (!response.ok || !body?.code) throw new Error(body?.error || `API ${response.status}`); setPairingCode(String(body.code)); setPairingExpires(String(body.expires_at || "")); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "Não foi possível gerar o código da extensão."); } finally { setPairingLoading(false); }
+  };
+  const loadGoogleStatus = async () => {
+    setConnectorLoading(true);
+    try { const response = await authenticatedFetch(CALENDAR_API, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "status" }), cache: "no-store" }); const body = await response.json(); if (!response.ok) throw new Error(body?.error || `API ${response.status}`); setGoogleStatus(body); }
+    catch (caught) { setGoogleStatus({ error: caught instanceof Error ? caught.message : "Falha ao consultar Google." }); } finally { setConnectorLoading(false); }
+  };
+  const connectGoogle = async () => {
+    setConnectorLoading(true);
+    try { const response = await authenticatedFetch(CALENDAR_API, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "start_oauth" }), cache: "no-store" }); const body = await response.json(); if (!response.ok || !body?.url) throw new Error(body?.error || `API ${response.status}`); window.open(String(body.url), "_blank", "noopener,noreferrer"); }
+    catch (caught) { setGoogleStatus({ error: caught instanceof Error ? caught.message : "Falha ao iniciar conexão Google." }); } finally { setConnectorLoading(false); }
   };
 
-  const totalChars = useMemo(() => records.reduce((sum, row) => sum + Number(row.transcript_chars || 0), 0), [records]);
+  const people = useMemo(() => [...new Set(records.flatMap((row) => [...participants(row.participants), String(row.owner_person || "")]).filter(Boolean))].sort(), [records]);
+  const filtered = useMemo(() => records.filter((row) => {
+    if (statusFilter === "ready" && !ready(row)) return false;
+    if (statusFilter === "waiting" && ready(row)) return false;
+    if (statusFilter === "calendar" && !row?.metadata?.calendar_event_id) return false;
+    if (statusFilter === "crm" && !row.client_id) return false;
+    if (peopleFilter && ![...participants(row.participants), String(row.owner_person || "")].some((name) => name === peopleFilter)) return false;
+    if (periodFilter !== "all") {
+      const d = when(row); if (Number.isNaN(d.getTime())) return false; const now = new Date(); const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const age = start.getTime() - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      if (periodFilter === "today" && age !== 0) return false;
+      if (periodFilter === "yesterday" && age !== 86400000) return false;
+      if (periodFilter === "7" && (age < 0 || age > 6 * 86400000)) return false;
+      if (periodFilter === "30" && (age < 0 || age > 29 * 86400000)) return false;
+    }
+    return true;
+  }), [records, statusFilter, peopleFilter, periodFilter]);
+  const grouped = useMemo(() => { const map = new Map<string, Row[]>(); for (const row of filtered) { const key = dayKey(row); if (!map.has(key)) map.set(key, []); map.get(key)!.push(row); } return [...map.values()]; }, [filtered]);
+  const activeFilterCount = Number(statusFilter !== "all") + Number(Boolean(peopleFilter)) + Number(periodFilter !== "all");
+
+  const detailSegments = useMemo(() => detail ? (Array.isArray(detail.segments) && detail.segments.length ? detail.segments : parseLegacyTranscript(detail.transcript_text)) : [], [detail]);
+  const shownSegments = useMemo(() => { const q = transcriptQuery.trim().toLocaleLowerCase("pt-BR"); return q ? detailSegments.filter((segment) => `${segment.speaker_name || ""} ${segment.text || ""}`.toLocaleLowerCase("pt-BR").includes(q)) : detailSegments; }, [detailSegments, transcriptQuery]);
+  const detailActions = detail ? actionRows(detail) : [];
+  const detailSignals = detail ? signalGroups(detail) : [];
+  const topics = detail ? topicRows(detail).slice(0, 8) : [];
+  const keywords = detail ? asItems(detail?.ai_signals?.keywords || detail?.metadata?.keywords).slice(0, 20) : [];
+  const rewritten = detail ? rewrittenRows(detail) : [];
+  const clientContext = detail?.client_context || null;
+  const dossier = clientContext?.dossier || null;
+  const clientNotes = Array.isArray(clientContext?.notes) ? clientContext.notes : [];
+  const briefings = Array.isArray(clientContext?.briefings) ? clientContext.briefings : [];
+  const humanFeedback = detail && Array.isArray(detail.human_feedback) ? detail.human_feedback.filter((item: Row) => !item.dismissed) : [];
+  const networkRows = useMemo(() => ownerOptions.map((name) => ({ name, count: records.filter((row) => String(row.owner_person || "") === name).length })), [ownerOptions, records]);
+  const companies = useMemo(() => { const map = new Map<string,{name:string,count:number,last:Date}>(); for (const row of records) { const name=String(row.client_name_raw || row?.metadata?.client_name || "").trim(); if (!name) continue; const prev=map.get(name); const date=when(row); map.set(name,{name,count:(prev?.count||0)+1,last:!prev||date>prev.last?date:prev.last}); } return [...map.values()].sort((a,b)=>b.last.getTime()-a.last.getTime()); }, [records]);
+  const reminders = useMemo(() => records.flatMap((row) => actionRows(row).map((item: { title: string; owner: string; due_date: string; evidence: string }) => ({ ...item, meeting: cleanTitle(row), transcript_id: row.id }))).filter((item) => item.title).slice(0,80), [records]);
+  const homeStats = useMemo(() => ({ total: records.length, ready: records.filter(ready).length, clients: companies.length, actions: reminders.length }), [records, companies.length, reminders.length]);
+  useEffect(() => { if (open && relatoSection === "connectors" && !googleStatus && !connectorLoading) loadGoogleStatus(); }, [open, relatoSection, googleStatus, connectorLoading]);
 
   if (typeof document === "undefined") return <style dangerouslySetInnerHTML={{ __html: STYLE }} />;
-
-  return <>
-    <style dangerouslySetInnerHTML={{ __html: STYLE }} />
-    {open && createPortal(<section className="meetings-shell" aria-label="Reuniões">
-      <div className="meetings-head">
-        <div>
-          <div className="meetings-kicker">Reuniões</div>
-          <h1>Histórico de reuniões</h1>
-          <div className="meetings-sub">Resumo, decisões, compromissos e participantes já processados. A transcrição completa só é buscada quando você abre uma reunião.</div>
-        </div>
-        <div className="meetings-actions">
-          <button className="meetings-btn" onClick={() => load(true, activeQuery)} disabled={loading}>{loading ? "Atualizando…" : "Atualizar"}</button>
-          <button className="meetings-btn" onClick={() => setOpen(false)}>Fechar</button>
-        </div>
-      </div>
-
-      <form className="meetings-toolbar" onSubmit={submitSearch}>
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente, título ou resumo" />
-        <button className="meetings-btn primary" type="submit">Buscar</button>
-        {(activeQuery || query) && <button className="meetings-btn" type="button" onClick={() => { setQuery(""); setActiveQuery(""); setRecords([]); load(true, ""); }}>Limpar</button>}
-      </form>
-
-      <div className="meetings-meta">
-        <span>{count} reuniões encontradas</span>
-        <span>{records.length} carregadas</span>
-        <span>{Math.round(totalChars / 1000)} mil caracteres referenciados sem carregar transcript</span>
-        <span>Sem polling automático</span>
-      </div>
-
-      {error && <div className="meeting-empty">{error}</div>}
-      {!error && !loading && !records.length && <div className="meeting-empty">Nenhuma reunião encontrada.</div>}
-
-      <div className="meetings-grid">
-        {records.map((row) => {
-          const decisions = asItems(row.decisions);
-          const commitments = asItems(row.commitments);
-          const people = participants(row.participants);
-          return <button className="meeting-card" key={String(row.id)} onClick={() => openDetail(row)}>
-            <div className="meeting-card-top">
-              <span className="meeting-client">{String(row.client_name_raw || "Cliente não vinculado")}</span>
-              <span className="meeting-date">{fmtDate(row.meeting_started_at || row.created_at)}</span>
-            </div>
-            <div className="meeting-title">{cleanTitle(row)}</div>
-            <div className="meeting-summary">{String(row.summary || "Sem resumo processado. Abra a reunião para consultar o conteúdo disponível.")}</div>
-            <div className="meeting-card-footer">
-              {decisions.length > 0 && <span className="meeting-pill">{decisions.length} decisões</span>}
-              {commitments.length > 0 && <span className="meeting-pill">{commitments.length} compromissos</span>}
-              {people.length > 0 && <span className="meeting-pill">{people.length} participantes</span>}
-              <span className="meeting-pill">{Math.round(Number(row.transcript_chars || 0) / 1000)}k chars</span>
-            </div>
-          </button>;
-        })}
-      </div>
-
-      {hasMore && <div className="meeting-more"><button className="meetings-btn" disabled={loading} onClick={() => load(false, activeQuery)}>{loading ? "Carregando…" : "Carregar mais"}</button></div>}
-
-      {(detail || detailLoading) && <div className="meeting-drawer-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setDetail(null); }}>
-        <aside className="meeting-drawer">
-          {detailLoading && !detail ? <div className="meeting-empty">Carregando reunião…</div> : detail && <>
-            <div className="meeting-drawer-head">
-              <div>
-                <div className="meeting-client">{String(detail.client_name_raw || "Cliente")}</div>
-                <h2>{cleanTitle(detail)}</h2>
-                <div className="meeting-date">{fmtDate(detail.meeting_started_at || detail.created_at)}</div>
-              </div>
-              <button className="meetings-btn" onClick={() => setDetail(null)}>Fechar</button>
-            </div>
-
-            <div className="meeting-section"><h3>Resumo</h3><p>{String(detail.summary || "Sem resumo processado.")}</p></div>
-
-            {participants(detail.participants).length > 0 && <div className="meeting-section"><h3>Participantes</h3><div className="meeting-participants">{participants(detail.participants).map((name, index) => <span className="meeting-participant" key={`${name}-${index}`}>{name}</span>)}</div></div>}
-
-            {asItems(detail.decisions).length > 0 && <div className="meeting-section"><h3>Decisões</h3><ul>{asItems(detail.decisions).map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
-            {asItems(detail.commitments).length > 0 && <div className="meeting-section"><h3>Compromissos</h3><ul>{asItems(detail.commitments).map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
-
-            <div className="meeting-section"><h3>Transcrição</h3><div className="meeting-transcript">{String(detail.transcript_text || "Transcrição completa indisponível para este registro.")}</div></div>
-            {detail.source_url && <div className="meeting-section"><a className="meetings-btn" href={String(detail.source_url)} target="_blank" rel="noreferrer">Abrir origem ↗</a></div>}
-          </>}
-        </aside>
-      </div>}
-    </section>, document.body)}
-  </>;
+  const navItems: Array<[RelatoSection,string,string]> = [["home","⌂","Home"],["feed","☷","Feed"],["network","♧","Minha rede"],["workspace","▦","Workspace"],["companies","▥","Empresas"],["reminders","◴","Lembretes"],["connectors","⌁","Conectores"]];
+  return <><style dangerouslySetInnerHTML={{ __html: STYLE }} />{open && createPortal(<section className="meetings-app" aria-label="Relato AI — Transcriber"><div className="relato-shell"><aside className="relato-side"><div className="relato-brand"><span className="relato-mark">»</span><span>Relato AI<span className="relato-desc">Transcriber</span></span></div><nav className="relato-menu">{navItems.map(([key,icon,label]) => <button key={key} className={`relato-nav ${relatoSection===key?"active":""}`} onClick={() => { setRelatoSection(key); setDetail(null); }}><span className="relato-navicon">{icon}</span>{label}</button>)}</nav><div className="relato-profile"><span className="relato-profileavatar">{initials(String(viewer?.person || "Colaborador"))}</span><span className="relato-profilemeta"><b>{String(viewer?.person || "Colaborador")}</b><span>● Ativo</span></span></div></aside><main className="relato-main"><div className="meetings-inner">
+    {relatoSection === "home" && <><div className="relato-section-head"><div><div className="relato-kicker">Relato AI — Transcriber</div><h1>Home</h1></div><button className="m-btn icon" onClick={() => setOpen(false)}>×</button></div><div className="relato-grid4"><div className="relato-stat"><strong>{homeStats.total}</strong><span>calls carregadas</span></div><div className="relato-stat"><strong>{homeStats.ready}</strong><span>processadas</span></div><div className="relato-stat"><strong>{homeStats.clients}</strong><span>empresas</span></div><div className="relato-stat"><strong>{homeStats.actions}</strong><span>ações detectadas</span></div></div><div className="relato-cardtitle">Atividade recente</div><div className="relato-list">{records.slice(0,6).map((row)=><button key={String(row.id)} className="relato-row" onClick={()=>{setRelatoSection("feed");openDetail(row)}}><span className="relato-row-main"><b>{cleanTitle(row)}</b><p>{String(row.summary||"Aguardando processamento")}</p></span><span className="relato-pill">{ready(row)?"Pronto":"Processando"}</span></button>)}</div></>}
+    {relatoSection === "network" && <><div className="relato-section-head"><div><div className="relato-kicker">Equipe</div><h1>Minha rede</h1></div><button className="m-btn icon" onClick={() => setOpen(false)}>×</button></div><div className="relato-list">{networkRows.length?networkRows.map((item)=><div className="relato-row" key={item.name}><span style={{display:"flex",alignItems:"center",gap:10}}><span className="relato-profileavatar" style={{width:34,height:34}}>{initials(item.name)}</span><span className="relato-row-main"><b>{item.name}</b><p>{item.count} call(s) no recorte atual</p></span></span>{viewer?.can_view_all&&<button className="m-btn" onClick={()=>{setRelatoSection("feed");setViewScope("person");setSelectedOwner(item.name);setRecords([]);load(true,activeQuery,"person",item.name)}}>Ver Feed</button>}</div>):<div className="relato-empty">Nenhum colaborador encontrado.</div>}</div></>}
+    {relatoSection === "workspace" && <><div className="relato-section-head"><div><div className="relato-kicker">Captura e operação</div><h1>Workspace</h1></div><button className="m-btn icon" onClick={() => setOpen(false)}>×</button></div><div className="relato-panel"><h3>Extensão Relato AI</h3><p>Conecte este navegador para capturar Google Meet e chamadas do WhatsApp Web.</p><button className="m-btn primary" style={{marginTop:12}} onClick={createPairing} disabled={pairingLoading}>{pairingLoading?"Gerando…":"Gerar código de conexão"}</button>{pairingCode&&<div className="m-pair" style={{marginTop:12,marginBottom:0}}><div><strong>{pairingCode}</strong><small>Use na extensão Relato AI — Transcriber.</small></div><button className="m-btn" onClick={()=>navigator.clipboard?.writeText(pairingCode)}>Copiar</button></div>}</div><div className="relato-panel"><h3>Processamento local</h3><p>Meet usa RTC captions; WhatsApp Web usa áudio local/remoto + Faster Whisper. Ambos seguem para o mesmo motor de inteligência.</p></div></>}
+    {relatoSection === "companies" && <><div className="relato-section-head"><div><div className="relato-kicker">Contexto por conta</div><h1>Empresas</h1></div><button className="m-btn icon" onClick={() => setOpen(false)}>×</button></div><div className="relato-list">{companies.length?companies.map((item)=><div className="relato-row" key={item.name}><span className="relato-row-main"><b>{item.name}</b><p>{item.count} call(s) · última {Number.isNaN(item.last.getTime())?"sem data":shortDate(item.last.toISOString())}</p></span><span className="relato-pill">Cliente</span></div>):<div className="relato-empty">Nenhuma empresa vinculada às calls carregadas.</div>}</div></>}
+    {relatoSection === "reminders" && <><div className="relato-section-head"><div><div className="relato-kicker">Ações detectadas</div><h1>Lembretes</h1></div><button className="m-btn icon" onClick={() => setOpen(false)}>×</button></div><div className="relato-list">{reminders.length?reminders.map((item,index)=><div className="relato-row" key={`${item.transcript_id}-${index}`}><span className="relato-row-main"><b>{item.title}</b><p>{item.meeting}{item.owner?` · ${item.owner}`:""}{item.due_date?` · prazo ${item.due_date}`:""}</p></span><button className="m-btn" onClick={()=>{const row=records.find((r)=>r.id===item.transcript_id);if(row){setRelatoSection("feed");openDetail(row)}}}>Abrir call</button></div>):<div className="relato-empty">Nenhuma ação detectada neste recorte.</div>}</div></>}
+    {relatoSection === "connectors" && <><div className="relato-section-head"><div><div className="relato-kicker">Integrações</div><h1>Conectores</h1></div><button className="m-btn icon" onClick={() => setOpen(false)}>×</button></div><div className="relato-panel relato-connector"><span className="relato-connector-logo">G</span><span><h3>Google Calendar + Meet</h3><p>{connectorLoading?"Consultando…":googleStatus?.account?.status==="ACTIVE"?`Conectado como ${String(googleStatus.account.account_email||googleStatus.account.display_name||"")}`:googleStatus?.google_configured?"Pronto para conectar sua conta Google.":"OAuth Google ainda não configurado na aplicação."}</p></span><button className="m-btn primary" onClick={connectGoogle} disabled={connectorLoading||googleStatus?.account?.status==="ACTIVE"}>{googleStatus?.account?.status==="ACTIVE"?"Conectado":"Conectar"}</button></div><div className="relato-panel relato-connector"><span className="relato-connector-logo" style={{background:"#22c55e",color:"white"}}>W</span><span><h3>WhatsApp</h3><p>Captura de chamadas no WhatsApp Web + notificações de reunião pronta pelo 1685.</p></span><span className="relato-pill">Ativo</span></div><div className="relato-panel relato-connector"><span className="relato-connector-logo" style={{background:"#4f46e5",color:"white"}}>R</span><span><h3>Extensão Relato AI</h3><p>Google Meet, transcrição ao vivo, WhatsApp Web Calls e percepção humana pós-call.</p></span><button className="m-btn" onClick={()=>setRelatoSection("workspace")}>Configurar</button></div></>}
+    {relatoSection === "feed" && <>{!detail && <>
+      <div className="meetings-top"><h1>Relato AI — Transcriber</h1><div className="meetings-actions"><button className="m-btn primary" onClick={createPairing} disabled={pairingLoading}>{pairingLoading ? "Gerando…" : "Conectar captura"}</button><button className="m-btn" onClick={() => load(true, activeQuery, viewScope, selectedOwner)} disabled={loading}>Atualizar</button><button className="m-btn icon" onClick={() => setOpen(false)}>×</button></div></div>
+      {viewer?.can_view_all && <div className="m-scopebar"><span className="m-scope-label">VISUALIZAÇÃO</span><button className={`m-scopebtn ${viewScope === "mine" ? "active" : ""}`} onClick={() => { setViewScope("mine"); setSelectedOwner(""); setRecords([]); setDetail(null); load(true, activeQuery, "mine", ""); }}>Minhas</button><button className={`m-scopebtn ${viewScope === "all" ? "active" : ""}`} onClick={() => { setViewScope("all"); setSelectedOwner(""); setRecords([]); setDetail(null); load(true, activeQuery, "all", ""); }}>Todas</button><select className="m-scope-select" value={viewScope === "person" ? selectedOwner : ""} onChange={(event) => { const owner = event.target.value; if (!owner) return; setViewScope("person"); setSelectedOwner(owner); setRecords([]); setDetail(null); load(true, activeQuery, "person", owner); }}><option value="">Por colaborador…</option>{ownerOptions.filter((name) => name !== viewer?.person).map((name) => <option value={name} key={name}>{name}</option>)}</select></div>}
+      {pairingCode && <div className="m-pair"><div><strong>{pairingCode}</strong><small>Digite este código no Relato AI — Transcriber. {pairingExpires ? `Expira ${new Intl.DateTimeFormat("pt-BR", { timeStyle: "short" }).format(new Date(pairingExpires))}.` : "Expira em 15 minutos."}</small></div><button className="m-btn" onClick={() => navigator.clipboard?.writeText(pairingCode)}>Copiar</button></div>}
+      <div className="m-searchrow"><form onSubmit={submitSearch} className="m-searchwrap"><input className="m-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Assunto, pessoa…" /></form><button className="m-filterbtn" onClick={() => setFilterOpen((value) => !value)}>☷ Filtros {activeFilterCount ? `(${activeFilterCount})` : ""}</button>{filterOpen && <div className="m-filterpop"><div className="m-filtertabs">{(["status","people","period"] as FilterTab[]).map((tab) => <button key={tab} className={filterTab === tab ? "active" : ""} onClick={() => setFilterTab(tab)}>{tab === "status" ? "Status" : tab === "people" ? "Pessoas" : "Período"}</button>)}</div><div className="m-filterbody">{filterTab === "status" && [["all","Todos"],["ready","Pronto"],["waiting","Aguardando"],["calendar","Reuniões do calendário"],["crm","Integrado ao cliente/CRM"]].map(([value,label]) => <label className="m-choice" key={value}><input type="radio" name="status" checked={statusFilter === value} onChange={() => setStatusFilter(value)} />{label}</label>)}{filterTab === "people" && <><label className="m-choice"><input type="radio" name="person" checked={!peopleFilter} onChange={() => setPeopleFilter("")} />Todas as pessoas</label>{people.map((name) => <label className="m-choice" key={name}><input type="radio" name="person" checked={peopleFilter === name} onChange={() => setPeopleFilter(name)} />{name}</label>)}</>}{filterTab === "period" && [["all","Qualquer período"],["today","Hoje"],["yesterday","Ontem"],["7","Últimos 7 dias"],["30","Últimos 30 dias"]].map(([value,label]) => <label className="m-choice" key={value}><input type="radio" name="period" checked={periodFilter === value} onChange={() => setPeriodFilter(value)} />{label}</label>)}</div></div>}</div>
+      {(activeQuery || activeFilterCount > 0) && <div className="m-chiprow">{activeQuery && <button className="m-chip" onClick={() => { setQuery(""); setActiveQuery(""); setRecords([]); load(true, ""); }}>“{activeQuery}” ×</button>}{statusFilter !== "all" && <button className="m-chip" onClick={() => setStatusFilter("all")}>{statusFilter} ×</button>}{peopleFilter && <button className="m-chip" onClick={() => setPeopleFilter("")}>{peopleFilter} ×</button>}{periodFilter !== "all" && <button className="m-chip" onClick={() => setPeriodFilter("all")}>{periodFilter} ×</button>}</div>}
+      {error && <div className="m-empty">{error}</div>}{loading && !records.length && <div className="m-timeline">{[1,2,3,4].map((n) => <div className="m-skeleton" key={n} />)}</div>}
+      {!loading && !filtered.length && !error && <div className="m-empty"><div style={{fontSize:34}}>⌕</div><b>Ops, nada por aqui…</b><div>Nenhuma reunião foi encontrada com essa pesquisa ou filtro.</div></div>}
+      {!!grouped.length && <div className="m-timeline">{grouped.map((rows) => <div className="m-day" key={dayKey(rows[0])}><div className="m-daytitle">{dayLabel(rows[0])}</div>{rows.map((row) => { const ps = participants(row.participants); const actions = asItems(row.commitments).length + asItems(row.decisions).length; return <button className="m-feedcard" key={String(row.id)} onClick={() => openDetail(row)}><span className="m-feedicon">▣</span><span><span className="m-feedtitleline"><span className="m-feedtitle">{cleanTitle(row)}</span>{ps.length > 0 && <span className="m-avatars">{ps.slice(0,4).map((name,index) => <span className="m-avatar" title={name} key={`${name}-${index}`}>{initials(name)}</span>)}</span>}{row.owner_person && <span className="m-owner">{String(row.owner_person)}</span>}</span><span className="m-summary">{String(row.summary || "Reunião capturada. Processamento e inteligência aparecerão aqui quando estiverem prontos.")}</span><span className="m-meta"><span>▣ {timeLabel(row.meeting_started_at)}</span><span>◷ {durationLabel(row)}</span><span>☷ {actions} Ações</span>{row.client_name_raw && <span>⌂ {String(row.client_name_raw)}</span>}</span></span><span className="m-status">{row?.metadata?.calendar_event_id && <span title="Google Calendar">▣</span>}<span title="Relato AI">»</span><span className={ready(row) ? "ok" : "wait"}>{ready(row) ? "✓" : "◴"}</span></span></button>})}</div>)}</div>}
+      {hasMore && <div className="m-more"><button className="m-btn" onClick={() => load(false, activeQuery)} disabled={loading}>{loading ? "Carregando…" : `Carregar mais (${records.length}/${count})`}</button></div>}
+    </>}
+    {(detail || detailLoading) && <>{detailLoading && !detail ? <div className="m-empty">Carregando reunião…</div> : detail && <>
+      <div className="m-detailhead"><div><div><span className="m-breadcrumb" onClick={() => setDetail(null)}>Feed / </span><span className="m-detailtitle">{cleanTitle(detail)}</span><span className="m-tag">▣ Reunião</span><span className="m-ready">{ready(detail) ? "✓" : "◴"}</span></div></div><div className="meetings-actions"><button className="m-btn icon" title="Copiar resumo" onClick={() => navigator.clipboard?.writeText(String(detail.summary || ""))}>⧉</button><button className="m-btn icon" onClick={() => setDetail(null)}>×</button></div></div>
+      <div className="m-card"><div className="m-participantline"><div className="m-avatars">{participants(detail.participants).slice(0,6).map((name,index) => <span className="m-avatar" key={`${name}-${index}`}>{initials(name)}</span>)}</div>{participants(detail.participants).join(", ") || "Participantes não identificados"}</div><div className="m-detailmeta"><span>▣ {shortDate(detail.meeting_started_at)}</span><span>◷ {timeLabel(detail.meeting_started_at)} - {timeLabel(detail.meeting_ended_at)} ({durationLabel(detail)})</span><span>☷ {detailActions.length} Ações</span>{detail.owner_person && <span>Responsável: {String(detail.owner_person)}</span>}</div></div>
+      <section className="m-section"><h2 className="m-sectiontitle">☰ Resumo</h2><div className="m-card" style={{fontSize:12,color:"#cbd5e1"}}>{String(detail.summary || "Resumo ainda não processado.")}</div></section>
+      {humanFeedback.length > 0 && <section className="m-section"><h2 className="m-sectiontitle">Percepção humana <span className="m-chip">Pós-call</span></h2><div className="m-humanfeedback">{humanFeedback.map((fb: Row,index:number)=><div className="m-humanrow" key={fb.id || index}><div className="m-humanhead"><span className="m-humanwho">{String(fb.owner_person || "Colaborador")}</span><span style={{color:"#94a3b8"}}>{fb.submitted_at ? new Intl.DateTimeFormat("pt-BR",{dateStyle:"short",timeStyle:"short"}).format(new Date(fb.submitted_at)) : ""}</span></div><div className="m-humanchips">{fb.mood && <span className="m-humanchip">Humor: {String(fb.mood)}</span>}{fb.tone && <span className="m-humanchip">Tom: {String(fb.tone)}</span>}{fb.receptivity != null && <span className="m-humanchip">Receptividade {String(fb.receptivity)}/5</span>}{fb.trust_level != null && <span className="m-humanchip">Confiança {String(fb.trust_level)}/5</span>}{fb.perceived_risk != null && <span className="m-humanchip">Risco {String(fb.perceived_risk)}/5</span>}{fb.relationship_direction && <span className="m-humanchip">Relação: {String(fb.relationship_direction)}</span>}{Array.isArray(fb.tags) && fb.tags.map((tag:string)=><span className="m-humanchip" key={tag}>{tag}</span>)}</div>{fb.note && <div className="m-humannote">{String(fb.note)}</div>}</div>)}</div></section>}
+      <div className="m-detailgrid"><div>
+      <section className="m-section"><h2 className="m-sectiontitle">Acoes ({detailActions.length}) <span className="m-mini">?</span></h2>{detailActions.length ? detailActions.map((item: { title: string; owner: string; due_date: string; evidence: string }, index: number) => <div className="m-action" key={index}><button className="m-follow">Acompanhar?</button><div><div className="m-actiontext">{item.title}</div><div className="m-context">{item.owner ? `Responsavel: ${item.owner}` : "Responsavel nao definido"}{item.due_date ? ` - ${item.due_date}` : ""}</div>{item.evidence && <div className="m-context">Contexto: {item.evidence}</div>}</div></div>) : <div className="m-card m-empty" style={{padding:30}}><b>Nenhuma acao encontrada</b><br/>As acoes detectadas para esta reuniao aparecerao aqui. Voce tambem pode adicionar uma manualmente.</div>}<button className="m-btn" style={{marginTop:8}}>+ Nova acao...</button></section>
+      {dossier && <section className="m-section"><h2 className="m-sectiontitle">Contexto do Cliente <span className="m-chip">Novo</span></h2><div className="m-contextbox"><div className="m-contexthead"><div className="m-contextclient"><b>{String(dossier.display_name || detail.client_name_raw || "Cliente")}</b>{dossier.lifecycle && <span className="m-chip">{String(dossier.lifecycle)}</span>}</div><button className="m-mini">Nao e esta empresa?</button></div><div className="m-contextbody"><div><div className="m-contextlabel">Briefing para o proximo contato</div><div className="m-briefing">{briefings[0]?.extracted_profile ? JSON.stringify(briefings[0].extracted_profile).slice(0,900) : briefings[0]?.title ? `Briefing disponivel: ${String(briefings[0].title)}` : `Cliente ${String(dossier.display_name || "")}. GT ${String(dossier.gt_owner || "nao definido")} - CS ${String(dossier.cs_owner || "nao definido")}.`}</div></div><div><div className="m-contextlabel">Pontos de atencao</div><div className="m-attention">{dossier.onboarding_risk ? `Risco de onboarding: ${String(dossier.onboarding_risk)}. ` : ""}{dossier.waiting_for_agency ? "Aguardando acao da agencia. " : ""}{dossier.waiting_for_client ? "Aguardando cliente. " : ""}{dossier.alerts_open ? `${String(dossier.alerts_open)} alerta(s) aberto(s). ` : ""}{dossier.health_band ? `Saude: ${String(dossier.health_band)}.` : "Sem alerta adicional consolidado."}</div></div>{clientNotes.length > 0 && <div><div className="m-contextlabel">Contextos ({clientNotes.length})</div>{clientNotes.slice(0,5).map((note:any,index:number)=><div className="m-note" key={note.id || index}><strong>{String(note.title || note.note_type || "Nota interna")}</strong><p>{String(note.body || "")}</p><div className="m-ctxactions"><button className="m-mini">Aceitar</button><button className="m-mini">Rejeitar</button><button className="m-mini">Editar</button><button className="m-mini">Trocar</button></div></div>)}</div>}<div className="m-clientstats">{dossier.health_score != null && <span className="m-clientstat">Health {String(dossier.health_score)}</span>}{dossier.complaints_total != null && <span className="m-clientstat">{String(dossier.complaints_total)} reclamacoes</span>}{dossier.commitments_open != null && <span className="m-clientstat">{String(dossier.commitments_open)} compromissos abertos</span>}{dossier.whatsapp_sla && <span className="m-clientstat">SLA {String(dossier.whatsapp_sla)}</span>}</div></div></div></section>}
+      <section className="m-section"><h2 className="m-sectiontitle">Resumo em topicos <span className="m-feedback">Esse resumo foi util? 👍 👎</span></h2><div className="m-card">{topics.length ? topics.map((item: { title: string; body: string }, index: number) => <div className="m-topic" key={index}><strong>{item.title}</strong><p>{item.body}</p></div>) : <div style={{color:"#94a3b8",fontSize:11}}>Os topicos aparecerao depois do processamento.</div>}</div></section></div>
+      <div><section className="m-section"><h2 className="m-sectiontitle">Highlights <span className="m-mini">?</span></h2>{detailSignals.length ? detailSignals.map((group) => <div className="m-highlightgroup" key={String(group.name)}><h4>{String(group.icon)} {String(group.name)} ({group.items.length})</h4>{group.items.map((item: string,index: number) => <div className="m-highlight" key={index}><strong>{item.slice(0,90)}</strong><p>{item}</p><div className="m-highlightfeedback">Isso foi util? 👍 👎</div></div>)}</div>) : <div className="m-card" style={{color:"#94a3b8",fontSize:11}}>Highlights ainda nao processados.</div>}</section><section className="m-section"><h2 className="m-sectiontitle">Mapa mental <span className="m-feedback">Esse mapa foi util? 👍 👎</span></h2><div className="m-card m-mind"><div className="m-mindroot">Reuniao</div><div className="m-mindnodes">{(topics.length ? topics.map((item: { title: string; body: string })=>item.title) : asItems(detail.decisions)).slice(0,5).map((item: string,index: number) => <div className="m-mindnode" key={index}>{String(item).slice(0,100)}</div>)}</div></div></section></div></div>
+      <section className="m-section"><h2 className="m-sectiontitle">Transcricao da reuniao</h2><div className="m-accordion">
+      <button className="m-accbutton" onClick={() => setNotesOpen((v)=>!v)}><b>Notas reescritas pelo Relato AI</b><span style={{float:"right"}}>{notesOpen ? "^" : "v"}</span></button>{notesOpen && <div className="m-accpanel">{rewritten.length ? rewritten.map((note: Row,index: number)=><div className="m-rewritecard" key={index}><div className="m-rewritehead">@{note.speaker} <span>[{note.timestamp}]</span></div><div className="m-rewriteorig">{note.original}</div><div className="m-rewritenew">{note.rewritten}</div><div className="m-feedback">Essa nota foi util? 👍 👎</div></div>) : <div className="m-empty" style={{padding:24}}>Nenhuma nota reescrita disponivel.</div>}</div>}
+      <button className="m-accbutton" onClick={() => setTranscriptOpen((v)=>!v)}><b>Transcricao completa</b><span style={{float:"right"}}>{transcriptOpen ? "^" : "v"}</span></button>{transcriptOpen && <div className="m-transcriptbody"><div className="m-transcripttoolbar"><input className="m-transcriptsearch" value={transcriptQuery} onChange={(event) => setTranscriptQuery(event.target.value)} placeholder="Procurar em transcricao..." /><button className="m-btn" onClick={() => { const text = shownSegments.map((x) => `[${stamp(x.started_ms)}] ${x.speaker_name}: ${x.text}`).join("\n\n"); const blob = new Blob([text], {type:"text/plain;charset=utf-8"}); const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${cleanTitle(detail).replace(/[^a-z0-9_-]+/gi,"-")}.txt`; link.click(); URL.revokeObjectURL(link.href); }}>Exportar</button></div>{keywords.length > 0 && <div className="m-keywords"><b style={{color:"#f1f5f9",fontSize:13}}>Palavras chave</b><br />{keywords.join(", ")}</div>}<div className="m-transcriptscroll">{shownSegments.length ? shownSegments.map((segment,index) => <article className="m-transcriptblock" key={`${segment.message_id || index}-${segment.sequence_no || index}`}><header><span className="m-transcriptwho">{String(segment.speaker_name || "Participante")}</span><span className="m-transcripttime">{stamp(segment.started_ms)}</span></header><p className="m-transcripttext">{String(segment.text || "")}</p></article>) : <div className="m-empty">Transcricao estruturada indisponivel.</div>}</div></div>}</div></section>
+    </>}</>}
+    </>}
+  </div></main></div></section>, document.body)}</>;
 }

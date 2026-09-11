@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Relato AI — Transcriber</title>
+  <style>
+    body{width:320px;margin:0;padding:16px;background:#0b1014;color:#edf4f8;font:13px Inter,system-ui,sans-serif}h1{font-size:16px;margin:0 0 10px}.muted{color:#93a1ab}.status{padding:10px;border:1px solid #2e3a43;border-radius:10px;background:#11171b;margin:10px 0}.rec{color:#ff9a61;font-weight:800}.ok{color:#8fd2ff;font-weight:700}.bad{color:#ff8c8c;font-weight:700}
+    button{width:100%;padding:9px 10px;border-radius:9px;border:1px solid #34414b;background:#151c22;color:#edf4f8;font-weight:700;cursor:pointer;margin-top:8px}.integrations{margin-top:12px;display:grid;gap:6px}.integration{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 9px;border:1px solid #26323a;border-radius:8px;background:#0f1519}.integration-name{font-weight:700;font-size:12px}.integration-state{font-size:10px;color:#93a1ab}.integration-state.active{color:#82d6a5}.integration-state.pending{color:#f1bc78}
+  </style>
+</head>
+<body>
+  <h1>Relato AI — Transcriber</h1>
+  <div id="status" class="status">Carregando...</div>
+  <div id="pending" class="muted"></div>
+  <div id="integrations" class="integrations"></div>
+  <button id="live" type="button">Abrir transcrição ao vivo</button>
+  <button id="settings" type="button">Configurar conexão</button>
+  <button id="retry" type="button">Reenviar pendências</button>
+  <script src="popup.js"></script>
+</body>
+</html>

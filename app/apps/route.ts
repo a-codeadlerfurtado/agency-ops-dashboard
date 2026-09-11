@@ -1,17 +1,83 @@
-/**
- * Pagina de instalacao dos apps no celular.
- *
- * ATENCAO -- esta pagina existia APENAS dentro do worker publicado. Foi ao ar
- * em 05/09/2026 e nunca chegou ao git, entao um `wrangler deploy` feito a
- * partir do repositorio a apagava do ar sem aviso -- foi exatamente o que
- * aconteceu em 06/09. O HTML abaixo foi recuperado da versao publicada
- * (4a970c64) e recolocado aqui para que isso nao se repita.
- *
- * Cabecalhos iguais aos que a versao publicada devolvia: cache de 5 minutos e
- * noindex. A CSP vem do middleware do worker, nao daqui.
- */
+const APPS = [
+  {
+    id: "dashboard",
+    nome: "Dashboard Operacional",
+    tipo: "Sistema interno",
+    descricao: "Central da operação, clientes, alertas e rotinas da equipe.",
+    href: "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/",
+    icone: "OP",
+    iconHref: "",
+  },
+  {
+    id: "briefing",
+    nome: "Briefing Hub",
+    tipo: "Portal do cliente",
+    descricao: "Produtos, personas, briefings e materiais do onboarding.",
+    href: "https://agency-briefing-hub.lakassessoriadigital.workers.dev/cliente",
+    icone: "BH",
+    iconHref: "/brand/briefing-hub-icon.svg",
+  },
+  {
+    id: "imobiboard",
+    nome: "ImobiBoard",
+    tipo: "CRM imobiliário",
+    descricao: "Leads, pipeline e rotina comercial da imobiliária.",
+    href: "https://imobi-board-app.lakassessoriadigital.workers.dev/",
+    icone: "IB",
+    iconHref: "/brand/imobi-board-icon.svg",
+  },
+  {
+    id: "briefing-demo",
+    nome: "Briefing Hub · Demo",
+    tipo: "Demonstração",
+    descricao: "Ambiente fictício para apresentar o Briefing Hub sem tocar dados reais.",
+    href: "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/briefing-hub-demo",
+    icone: "BH",
+    iconHref: "/brand/briefing-hub-icon.svg",
+  },
+  {
+    id: "imobiboard-demo",
+    nome: "ImobiBoard · Demo",
+    tipo: "Demonstração",
+    descricao: "Ambiente fictício do CRM para apresentações e testes.",
+    href: "https://imobi-board-app.lakassessoriadigital.workers.dev/#/demo",
+    icone: "IB",
+    iconHref: "/brand/imobi-board-icon.svg",
+  },
+];
 
-const PAGINA = `<!doctype html>
+const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+const BRAND_MARK = `<svg viewBox="0 0 276 390" role="img" aria-label="Leonardo Imobi" fill="none">
+  <rect x="6.5" y="6.5" width="263" height="252" stroke="currentColor" stroke-width="13" />
+  <rect x="0" y="252" width="13" height="138" fill="currentColor" />
+  <polygon points="68,223 276,247 276,253 68,253" fill="currentColor" />
+  <polygon points="0,377 208,343 208,390 0,390" fill="currentColor" />
+</svg>`;
+
+function pagina() {
+  const cards = APPS.map((app) => {
+    const icon = app.iconHref
+      ? `<img src="${esc(app.iconHref)}" alt="" width="42" height="42">`
+      : `<span class="fallback-icon">${esc(app.icone)}</span>`;
+    return `
+      <article class="app-card" data-app="${esc(app.id)}">
+        <div class="app-head">
+          <div class="app-icon">${icon}</div>
+          <div class="app-title">
+            <span class="app-type">${esc(app.tipo)}</span>
+            <h2>${esc(app.nome)}</h2>
+          </div>
+        </div>
+        <p>${esc(app.descricao)}</p>
+        <div class="actions">
+          <a class="btn primary" href="${esc(app.href)}" rel="noopener">Abrir sistema</a>
+          <button class="btn secondary" type="button" data-install-name="${esc(app.nome)}" data-install-url="${esc(app.href)}">Adicionar ao celular</button>
+        </div>
+      </article>`;
+  }).join("");
+
+  return `<!doctype html>
 <html lang="pt-BR">
 <head>
 <meta charset="utf-8">
@@ -77,12 +143,7 @@ const PAGINA = `<!doctype html>
 </head>
 <body>
 <main class="shell">
-  <div class="brand"><div class="brand-mark"><svg viewBox="0 0 276 390" role="img" aria-label="Leonardo Imobi" fill="none">
-  <rect x="6.5" y="6.5" width="263" height="252" stroke="currentColor" stroke-width="13" />
-  <rect x="0" y="252" width="13" height="138" fill="currentColor" />
-  <polygon points="68,223 276,247 276,253 68,253" fill="currentColor" />
-  <polygon points="0,377 208,343 208,390 0,390" fill="currentColor" />
-</svg></div><div class="brand-name">Leonardo Imobi<small>Ecossistema de sistemas</small></div></div>
+  <div class="brand"><div class="brand-mark">${BRAND_MARK}</div><div class="brand-name">Leonardo Imobi<small>Ecossistema de sistemas</small></div></div>
   <span class="eyebrow">Apps Leonardo Imobi</span>
   <h1>Seus sistemas no celular, como apps.</h1>
   <p class="lead">Abra esta página no iPhone ou Android, escolha o sistema e siga o passo a passo. O ícone fica na Tela de Início e abre direto no sistema.</p>
@@ -90,77 +151,7 @@ const PAGINA = `<!doctype html>
     <button id="share-central" class="share-central" type="button">Compartilhar esta central</button>
   </div>
   <div class="tip"><strong>Importante:</strong> iPhone e Android exigem uma confirmação do usuário para instalar ou colocar um site na Tela de Início. Esta página detecta o aparelho e mostra o caminho mais curto.</div>
-  <section class="grid">
-      <article class="app-card" data-app="dashboard">
-        <div class="app-head">
-          <div class="app-icon"><span class="fallback-icon">OP</span></div>
-          <div class="app-title">
-            <span class="app-type">Sistema interno</span>
-            <h2>Dashboard Operacional</h2>
-          </div>
-        </div>
-        <p>Central da operação, clientes, alertas e rotinas da equipe.</p>
-        <div class="actions">
-          <a class="btn primary" href="https://agency-ops-dashboard.lakassessoriadigital.workers.dev/" rel="noopener">Abrir sistema</a>
-          <button class="btn secondary" type="button" data-install-name="Dashboard Operacional" data-install-url="https://agency-ops-dashboard.lakassessoriadigital.workers.dev/">Adicionar ao celular</button>
-        </div>
-      </article>
-      <article class="app-card" data-app="briefing">
-        <div class="app-head">
-          <div class="app-icon"><img src="/brand/briefing-hub-icon.svg" alt="" width="42" height="42"></div>
-          <div class="app-title">
-            <span class="app-type">Portal do cliente</span>
-            <h2>Briefing Hub</h2>
-          </div>
-        </div>
-        <p>Produtos, personas, briefings e materiais do onboarding.</p>
-        <div class="actions">
-          <a class="btn primary" href="https://agency-briefing-hub.lakassessoriadigital.workers.dev/cliente" rel="noopener">Abrir sistema</a>
-          <button class="btn secondary" type="button" data-install-name="Briefing Hub" data-install-url="https://agency-briefing-hub.lakassessoriadigital.workers.dev/cliente">Adicionar ao celular</button>
-        </div>
-      </article>
-      <article class="app-card" data-app="imobiboard">
-        <div class="app-head">
-          <div class="app-icon"><img src="/brand/imobi-board-icon.svg" alt="" width="42" height="42"></div>
-          <div class="app-title">
-            <span class="app-type">CRM imobiliário</span>
-            <h2>ImobiBoard</h2>
-          </div>
-        </div>
-        <p>Leads, pipeline e rotina comercial da imobiliária.</p>
-        <div class="actions">
-          <a class="btn primary" href="https://imobi-board-app.lakassessoriadigital.workers.dev/" rel="noopener">Abrir sistema</a>
-          <button class="btn secondary" type="button" data-install-name="ImobiBoard" data-install-url="https://imobi-board-app.lakassessoriadigital.workers.dev/">Adicionar ao celular</button>
-        </div>
-      </article>
-      <article class="app-card" data-app="briefing-demo">
-        <div class="app-head">
-          <div class="app-icon"><img src="/brand/briefing-hub-icon.svg" alt="" width="42" height="42"></div>
-          <div class="app-title">
-            <span class="app-type">Demonstração</span>
-            <h2>Briefing Hub · Demo</h2>
-          </div>
-        </div>
-        <p>Ambiente fictício para apresentar o Briefing Hub sem tocar dados reais.</p>
-        <div class="actions">
-          <a class="btn primary" href="https://agency-ops-dashboard.lakassessoriadigital.workers.dev/briefing-hub-demo" rel="noopener">Abrir sistema</a>
-          <button class="btn secondary" type="button" data-install-name="Briefing Hub · Demo" data-install-url="https://agency-ops-dashboard.lakassessoriadigital.workers.dev/briefing-hub-demo">Adicionar ao celular</button>
-        </div>
-      </article>
-      <article class="app-card" data-app="imobiboard-demo">
-        <div class="app-head">
-          <div class="app-icon"><img src="/brand/imobi-board-icon.svg" alt="" width="42" height="42"></div>
-          <div class="app-title">
-            <span class="app-type">Demonstração</span>
-            <h2>ImobiBoard · Demo</h2>
-          </div>
-        </div>
-        <p>Ambiente fictício do CRM para apresentações e testes.</p>
-        <div class="actions">
-          <a class="btn primary" href="https://imobi-board-app.lakassessoriadigital.workers.dev/#/demo" rel="noopener">Abrir sistema</a>
-          <button class="btn secondary" type="button" data-install-name="ImobiBoard · Demo" data-install-url="https://imobi-board-app.lakassessoriadigital.workers.dev/#/demo">Adicionar ao celular</button>
-        </div>
-      </article></section>
+  <section class="grid">${cards}</section>
   <p class="foot">Leonardo Imobi · Central pública de atalhos. Nenhuma credencial ou dado de cliente é armazenado aqui.</p>
 </main>
 <dialog id="install-dialog">
@@ -191,7 +182,7 @@ const PAGINA = `<!doctype html>
   const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   const isAndroid = /Android/i.test(ua);
   const isSafari = isIOS && /Safari/.test(ua) && !/CriOS|FxiOS|EdgiOS|OPiOS/.test(ua);
-  const isChromeAndroid = isAndroid && /Chrome//.test(ua) && !/EdgA|OPR//.test(ua);
+  const isChromeAndroid = isAndroid && /Chrome\//.test(ua) && !/EdgA|OPR\//.test(ua);
 
   function renderSteps() {
     warning.style.display = 'none';
@@ -268,9 +259,10 @@ const PAGINA = `<!doctype html>
 </script>
 </body>
 </html>`;
+}
 
 export async function GET(): Promise<Response> {
-  return new Response(PAGINA, {
+  return new Response(pagina(), {
     status: 200,
     headers: {
       "content-type": "text/html; charset=utf-8",
