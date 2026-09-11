@@ -62,7 +62,7 @@ Deno.serve(async (req: Request) => {
   const ownerPerson = String(url.searchParams.get("owner_person") || "").trim().slice(0, 160);
 
   if (transcriptId > 0) {
-    let q = ops.from("meeting_transcripts").select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_text,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,created_at,owner_person,processing_status,transcript_source,capture_session_id").eq("id", transcriptId);
+    let q = ops.from("meeting_transcripts").select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_text,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,created_at,owner_person,processing_status,transcript_source,capture_session_id,match_status,match_confidence").eq("id", transcriptId);
     if (clientId) q = q.eq("client_id", clientId);
     const { data, error } = await q.maybeSingle();
     if (error) return reply({ error: "query_failed" }, 500, "no-store");
@@ -76,7 +76,16 @@ Deno.serve(async (req: Request) => {
       .eq("transcript_id", transcriptId)
       .order("sequence_no", { ascending: true })
       .limit(20000);
-    return reply({ transcript: { ...data, segments: segments || [] }, generated_at: new Date().toISOString() }, 200, "private, max-age=300");
+    let clientContext: Row | null = null;
+    if (data.client_id) {
+      const [{ data: dossier }, { data: notes }, { data: briefings }] = await Promise.all([
+        ops.from("client_dossier").select("client_id,display_name,lifecycle,service,cs_owner,gt_owner,designer_owner,onboarding_stage,onboarding_risk,onboarding_blocked_by,health_score,health_band,complaints_total,commitments_open,alerts_open,waiting_for_agency,waiting_for_client,whatsapp_sla,conversation_status,last_actor").eq("client_id", data.client_id).maybeSingle(),
+        ops.from("client_notes").select("id,title,body,note_type,importance,is_pinned,created_by_person,updated_at").eq("client_id", data.client_id).is("archived_at", null).eq("use_as_ai_context", true).order("is_pinned", { ascending: false }).order("updated_at", { ascending: false }).limit(8),
+        ops.from("notion_briefing_pages").select("title,page_url,extracted_profile,notion_last_edited_at").eq("client_id", data.client_id).order("notion_last_edited_at", { ascending: false }).limit(3),
+      ]);
+      clientContext = { dossier: dossier || null, notes: notes || [], briefings: briefings || [] };
+    }
+    return reply({ transcript: { ...data, segments: segments || [], client_context: clientContext }, generated_at: new Date().toISOString() }, 200, "private, max-age=300");
   }
 
   const rawLimit = Number(url.searchParams.get("limit") || 30);
@@ -95,7 +104,7 @@ Deno.serve(async (req: Request) => {
   }
 
   let q = ops.from("meeting_transcripts")
-    .select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,created_at,owner_person,processing_status,transcript_source", { count: "exact" })
+    .select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,created_at,owner_person,processing_status,transcript_source,match_status,match_confidence", { count: "exact" })
     .order("meeting_started_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);

@@ -59,7 +59,7 @@ function valueText(answer: Row | undefined) {
 function statusClass(value: unknown) {
   const v=String(value||"").toUpperCase(); return v.includes("COMPLE")||v.includes("COMPLETE") ? "ok" : "warn";
 }
-function summaryText(value: unknown) {
+function summaryText(value: unknown): string {
   if (value === null || value === undefined || value === "") return "";
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(summaryText).filter(Boolean).join("\n");
