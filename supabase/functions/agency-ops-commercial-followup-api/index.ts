@@ -54,19 +54,38 @@ async function zapiSend(db:any, target:string, message:string, mentioned:string[
 const MONTH_NAMES = ["","JANEIRO","FEVEREIRO","MARCO","ABRIL","MAIO","JUNHO","JULHO","AGOSTO","SETEMBRO","OUTUBRO","NOVEMBRO","DEZEMBRO"];
 const isSheetMode = (client:Row) => String(client?.collection_mode||"").toUpperCase()==="PLANILHA";
 const brokerKey = (value:unknown) => norm(value).replace(/^sdr\s+/,"").trim();
+const cleanBrokerFileName = (value:unknown) => String(value||"").replace(/\.xlsx?$/i,"").replace(/[-_ ]+patrocinado.*$/i,"").replace(/[-_ ]+trafego.*$/i,"").trim();
 function decodeHtml(value:string){
   return value.replace(/&quot;/g,'"').replace(/&#39;|&#x27;/g,"'").replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n)));
 }
 async function fetchText(url:string, timeout=10000){
-  const r=await fetch(url,{signal:AbortSignal.timeout(timeout),headers:{"user-agent":"Mozilla/5.0"}});
+  const r=await fetch(url,{signal:AbortSignal.timeout(timeout),headers:{"user-agent":"Mozilla/5.0","accept-language":"pt-BR,pt;q=0.9,en;q=0.8"}});
   if(!r.ok) throw new Error(`fetch_${r.status}:${url}`);
   return await r.text();
 }
+function parseDriveModifiedLabel(label:string){
+  const clean=String(label||"").trim().toLowerCase(); const today=localDate();
+  if(/^\d{1,2}:\d{2}$/.test(clean)) return today;
+  const raw=norm(label);
+  if(raw==="ontem") return shiftDate(today,-1);
+  const months:Record<string,number>={jan:1,fev:2,mar:3,abr:4,mai:5,jun:6,jul:7,ago:8,set:9,out:10,nov:11,dez:12};
+  const m=raw.match(/^(\d{1,2}) de ([a-z]{3})/); if(!m||!months[m[2]])return null;
+  let y=Number(today.slice(0,4)); const mo=months[m[2]], d=Number(m[1]);
+  const candidate=`${y}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  if(candidate>today)y--; return `${y}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+}
 async function publicDriveItems(folderId:string){
-  const html=await fetchText(`https://drive.google.com/drive/folders/${folderId}`);
+  const page=await fetchText(`https://drive.google.com/drive/folders/${folderId}`);
   const out:Row[]=[]; const seen=new Set<string>();
-  const rx=/aria-label="([^"]+?) (Shared folder|Google Sheets Shared)"[\s\S]{0,1800}?data-id="([A-Za-z0-9_-]{20,})"/g;
-  for(const m of html.matchAll(rx)){ const id=m[3]; if(seen.has(id))continue; seen.add(id); out.push({id,name:decodeHtml(m[1]),kind:m[2]==="Shared folder"?"folder":"sheet"}); }
+  const rowRx=/<tr[^>]*data-id="([A-Za-z0-9_-]{20,})"[\s\S]*?<\/tr>/g;
+  for(const rm of page.matchAll(rowRx)){
+    const id=rm[1]; if(seen.has(id))continue; const row=rm[0];
+    const label=row.match(/aria-label="([^"]+?) (Shared folder|Google Sheets Shared|Microsoft Excel Shared)"/); if(!label)continue;
+    seen.add(id); const text=decodeHtml(row.replace(/<[^>]+>/g," ")).replace(/\s+/g," ").trim();
+    const modified=text.match(/(?:Compartilhado|Shared)\s+(.+?)\s+\d+(?:[.,]\d+)?\s*(?:KB|MB|GB)\b/i)?.[1]?.trim()||null;
+    const format=label[2]==="Microsoft Excel Shared"?"excel":label[2]==="Google Sheets Shared"?"google_sheet":"folder";
+    out.push({id,name:decodeHtml(label[1]),kind:format==="folder"?"folder":"sheet",format,modified_label:modified,modified_date:modified?parseDriveModifiedLabel(modified):null});
+  }
   return out;
 }
 function parseCsv(text:string){
@@ -98,11 +117,11 @@ async function readSheetSnapshot(sheetId:string){
   const metrics:Row={}; if(lastRow) headers.forEach((h,i)=>{const k=metricKey(h);if(!k)return;const raw=String(lastRow![i]??"").trim().replace(',','.');if(raw!==""&&!Number.isNaN(Number(raw)))metrics[k]=Number(raw);});
   return {sheet_id:sheetId,last_date:lastDate,metrics};
 }
-async function sheetIdsUnder(folderId:string){
-  const items=await publicDriveItems(folderId); const ids=items.filter(x=>x.kind==="sheet").map(x=>String(x.id));
-  if(ids.length)return ids; const month=MONTH_NAMES[Number(localDate().slice(5,7))]||"";
+async function sheetItemsUnder(folderId:string){
+  const items=await publicDriveItems(folderId); const sheets=items.filter(x=>x.kind==="sheet");
+  if(sheets.length)return sheets; const month=MONTH_NAMES[Number(localDate().slice(5,7))]||"";
   const child=items.find(x=>x.kind==="folder"&&norm(x.name)===norm(month)); if(!child)return [];
-  return (await publicDriveItems(String(child.id))).filter(x=>x.kind==="sheet").map(x=>String(x.id));
+  return (await publicDriveItems(String(child.id))).filter(x=>x.kind==="sheet");
 }
 function readNum(t:string, patterns:RegExp[], zero:RegExp[] = []) {
   for (const rx of zero) if (rx.test(t)) return 0;
@@ -136,20 +155,34 @@ async function resolveSheetReport(client:Row){
   const rootItems=await publicDriveItems(root); const sources:Row[]=[];
   if(layout==="BROKER_FOLDERS"){
     for(const item of rootItems.filter(x=>x.kind==="folder")){
-      const ids=await sheetIdsUnder(String(item.id));
-      sources.push({name:String(item.name).replace(/^SDR\s+/i,""),folder_id:item.id,sheet_ids:ids});
+      const sheet_items=await sheetItemsUnder(String(item.id));
+      const folderName=String(item.name).replace(/^SDR\s+/i,"");
+      const only=sheet_items.length===1?sheet_items[0]:null;
+      const fileName=only?cleanBrokerFileName(only.name):"";
+      const name=only&&fileName&&brokerKey(fileName)!==brokerKey(folderName)?fileName:folderName;
+      sources.push({name,folder_id:item.id,sheet_items,sheet_ids:sheet_items.map((x:Row)=>String(x.id))});
     }
   }else{
     const monthFolder=rootItems.find(x=>x.kind==="folder"&&norm(x.name)===norm(month));
     const folderId=monthFolder?String(monthFolder.id):root;
     const items=monthFolder?await publicDriveItems(folderId):rootItems;
-    for(const item of items.filter(x=>x.kind==="sheet")) sources.push({name:String(item.name),sheet_ids:[String(item.id)]});
+    for(const item of items.filter(x=>x.kind==="sheet")) sources.push({name:String(item.name),sheet_items:[item],sheet_ids:[String(item.id)]});
   }
 
+  const firstDay=localDate().slice(0,8)+"01";
   return await Promise.all(sources.map(async(src)=>{
-    const snaps=await Promise.all((src.sheet_ids||[]).map((id:string)=>readSheetSnapshot(id).catch(()=>({sheet_id:id,last_date:null,metrics:{}}))));
-    const best=[...snaps].sort((a,b)=>String(b.last_date||"").localeCompare(String(a.last_date||"")))[0]||{sheet_id:null,last_date:null,metrics:{}};
-    return {...src,last_date:best.last_date||null,metrics:best.metrics||{},sheet_id:best.sheet_id||src.sheet_ids?.[0]||null};
+    const itemById=new Map((src.sheet_items||[]).map((x:Row)=>[String(x.id),x]));
+    const snaps=await Promise.all((src.sheet_ids||[]).map(async(id:string)=>{
+      const item:any=itemById.get(id)||{};
+      const snap:any=item.format==="excel"?{sheet_id:id,last_date:null,metrics:{}}:await readSheetSnapshot(id).catch(()=>({sheet_id:id,last_date:null,metrics:{}}));
+      const modified=String(item.modified_date||"")||null;
+      const modifiedUsable=modified&&!(modified===firstDay&&!snap.last_date)?modified:null;
+      const activity=[snap.last_date,modifiedUsable].filter(Boolean).sort().at(-1)||null;
+      const date_source=!activity?null:(activity===modifiedUsable&&modifiedUsable!==snap.last_date?"DRIVE_MODIFIED":"SHEET_CONTENT");
+      return {...snap,modified_date:modified,modified_label:item.modified_label||null,activity_date:activity,date_source};
+    }));
+    const best:any=[...snaps].sort((a,b)=>String(b.activity_date||"").localeCompare(String(a.activity_date||"")))[0]||{sheet_id:null,activity_date:null,metrics:{}};
+    return {...src,last_date:best.activity_date||null,content_last_date:best.last_date||null,modified_date:best.modified_date||null,date_source:best.date_source||null,metrics:best.metrics||{},sheet_id:best.sheet_id||src.sheet_ids?.[0]||null};
   }));
 }
 function sheetStatusMessage(rows:Row[]){

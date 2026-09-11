@@ -8,7 +8,7 @@ import "./commercial-followup.css";
 type Row = Record<string, any>;
 type Payload = { clients:Row[]; brokers:Row[]; days:Row[]; entries:Row[]; events:Row[]; portal_access?:Row[]; view_adapter?:Row; role?:string };
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-commercial-followup-api`;
-const CLIENT_ORDER = ["view-imoveis","murano","wall-street","lopes-chaves","nexus"];
+const CLIENT_ORDER = ["view-imoveis","murano","wall-street","lopes-chaves","imperial-imoveis","nexus"];
 const METRICS:Record<string,string>={
   leads_received:"Leads recebidos",leads_contacted:"Leads acionados",leads_in_conversation:"Leads em conversa",
   calls_made:"Ligações feitas",calls_answered:"Ligações atendidas",visits_scheduled:"Visitas agendadas",
