@@ -146,6 +146,7 @@ function placementFor(node: HTMLElement): Placement {
 
   if (label === "equipe") return { group: "gestao", order: 10 };
   if (label.startsWith("desempenho op") || label.startsWith("desempenho da operacao")) return { group: "gestao", order: 20 };
+  if (node.hasAttribute("data-diagnostics-nav") || href === "/diagnostics" || label === "central de diagnostico") return { group: "gestao", order: 25 };
   if (label === "auditoria") return { group: "gestao", order: 30 };
   if (label === "contratos") return { group: "gestao", order: 40 };
   if (label === "evidencias") return { group: "gestao", order: 80, contextual: true };

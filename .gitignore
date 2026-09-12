@@ -11,3 +11,6 @@ dist/
 
 # artefatos do servidor de desenvolvimento
 .vinext/
+
+# voz de referencia local da Jarvis (nao versionar)
+vps/jarvis-tts/reference/

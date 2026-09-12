@@ -2,9 +2,12 @@
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { API_URL, CONTRACTS_API, SUPABASE_ANON_KEY, SUPABASE_URL, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
+import { API_URL, CONTRACTS_API, DASHBOARD_CLIENT_VERSION, SUPABASE_ANON_KEY, SUPABASE_URL, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
 import type { HomeData, Row, TeamMember, View } from "./shared";
+import { nextLabel } from "./material-triage-bridge";
 import { TabHelp } from "./tab-help";
+import { ViewErrorBoundary } from "./view-error-boundary";
+import AdlerWalletManagement from "./adler-wallet-management";
 import { PortfolioCenter } from "./views/portfolio";
 import { DiaryCenter as StructuredDiaryCenter } from "./views/diary";
 // A aba de contratos entra por import dinamico de proposito: assim o codigo da
@@ -16,9 +19,45 @@ const HealthCenter = lazy(() => import("./views/health").then((m) => ({ default:
 const ClientContractSection = lazy(() => import("./views/contracts").then((m) => ({ default: m.ClientContractSection })));
 const OpsPerfCenter = lazy(() => import("./views/opsperf").then((m) => ({ default: m.OpsPerfCenter })));
 const CreativeCenter = lazy(() => import("./views/creative").then((m) => ({ default: m.CreativeCenter })));
+const CapacityCenter = lazy(() => import("./views/capacity").then((m) => ({ default: m.CapacityCenter })));
 const VideoScriptsCenter = lazy(() => import("./views/video-scripts").then((m) => ({ default: m.VideoScriptsCenter })));
+const VideoAutomationCenter = lazy(() => import("./views/video-automation").then((m) => ({ default: m.VideoAutomationCenter })));
 const CommercialFollowupCenter = lazy(() => import("./views/commercial-followup").then((m) => ({ default: m.CommercialFollowupCenter })));
+const MATERIAL_TRIAGE_API = SUPABASE_URL + "/functions/v1/agency-ops-material-triage-api";
 
+function materialTriageAge(item: Row, now = Date.now()) {
+  const raw = item.metadata?.received_at || item.created_at;
+  const at = raw ? new Date(raw).getTime() : now;
+  const minutes = Math.max(0, Math.floor((now - at) / 60000));
+  const severity = minutes >= 30 ? "critical" : minutes >= 15 ? "danger" : minutes >= 5 ? "warning" : "fresh";
+  const label = minutes < 1 ? "Recebido agora" : minutes >= 30 ? `ESCALADO · ${minutes} min` : minutes >= 15 ? `URGENTE · ${minutes} min` : `Aguardando há ${minutes} min`;
+  return { minutes, severity, label };
+}
+
+function materialTriageSummary(item: Row) {
+  const meta = item.metadata || {};
+  const kind = String(meta.triage_kind || "");
+  if (kind === "PRODUCT_BRIEFING") return meta.entity_name ? `Briefing de produto · ${meta.entity_name}` : "Briefing de produto";
+  if (kind === "PERSONA") return meta.entity_name ? `Persona · ${meta.entity_name}` : "Briefing de persona";
+  const parts = [
+    Number(meta.photo_count || 0) ? `${meta.photo_count} foto${Number(meta.photo_count) === 1 ? "" : "s"}` : "",
+    Number(meta.video_count || 0) ? `${meta.video_count} vídeo${Number(meta.video_count) === 1 ? "" : "s"}` : "",
+    Number(meta.document_count || 0) ? `${meta.document_count} arquivo${Number(meta.document_count) === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join(" · ") : `${Number(meta.item_count || 1)} material${Number(meta.item_count || 1) === 1 ? "" : "is"}`;
+}
+
+function materialTriageState(item: Row, now = Date.now()) {
+  if (item.status === "IN_PROGRESS") {
+    const started = new Date(item.metadata?.claimed_at || item.started_at || item.updated_at || item.created_at).getTime();
+    const mins = Math.max(0, Math.floor((now - started) / 60000));
+    return `${text(item.target_person || "Alguém")} assumiu${mins ? ` há ${mins} min` : " agora"}`;
+  }
+  if (item.status === "SNOOZED" && item.snoozed_until && new Date(item.snoozed_until).getTime() > now) {
+    return `Adiado até ${new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit" }).format(new Date(item.snoozed_until))}`;
+  }
+  return materialTriageAge(item, now).label;
+}
 function AuthScreen() {
   const [mode, setMode] = useState<"login" | "signup">("login");
   const [name, setName] = useState("");
@@ -84,6 +123,8 @@ export default function Dashboard() {
   const [campaignFilter, setCampaignFilter] = useState("ACTIVE");
   const [commandOpen, setCommandOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [walletManagementOpen, setWalletManagementOpen] = useState(false);
+  const [walletManagementAllowed, setWalletManagementAllowed] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [workItemId, setWorkItemId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -94,6 +135,13 @@ export default function Dashboard() {
   const loadInFlightRef = useRef(false);
   const lastNotificationRef = useRef<string | null>(null);
   const preferencesRef = useRef<Row>({});
+  const [materialTriage, setMaterialTriage] = useState<Row[]>([]);
+  const [triageBusy, setTriageBusy] = useState<string | null>(null);
+  const [triageError, setTriageError] = useState("");
+  const [triageNow, setTriageNow] = useState(Date.now());
+  const triageLoadedRef = useRef(false);
+  const triageLoadRef = useRef(false);
+  const lastTriageSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: current } }) => { setSession(current); setAuthReady(true); });
@@ -146,7 +194,7 @@ export default function Dashboard() {
   const viewsKey = viewsFrescas && !viewsStale ? viewsFrescas.join(",") : viewsCache;
   const allowedViews = useMemo(() => new Set<string>(viewsKey ? viewsKey.split(",") : ["overview", "focus"]), [viewsKey]);
   const navItems = useMemo(() => ([
-    ["overview", "Visão geral"], ["focus", "Foco do dia"], ["work", "Central de Trabalho"], ["clients", "Clientes"], ["creative", "Central Criativa"], ["scripts" as View, "Produção de Roteiros"], ["view-oncall" as View, "Acompanhamento Comercial"], ["health", "Saúde"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"], ["opsperf", "Desempenho OP"],
+    ["overview", "Visão geral"], ["focus", "Foco do dia"], ["work", "Central de Trabalho"], ["clients", "Clientes"], ["creative", "Central Criativa"], ["scripts" as View, "Produção de Roteiros"], ["videos" as View, "Vídeos Automáticos"], ["view-oncall" as View, "Acompanhamento Comercial"], ["health", "Saúde"], ["onboarding", "Onboarding"], ["campaigns", "Campanhas"], ["preclients", "Pré-clientes"], ["conversations", "Conversas"], ["team", "Equipe"], ["diary", "Diário"], ["clickup", "ClickUp"], ["evidence", "Evidências"], ["audit", "Auditoria"], ["alerts", "Alertas"], ["opsperf", "Desempenho OP"], ["capacity", "Capacidade"],
   ] as [View, string][]).filter(([key]) => allowedViews.has(key)), [allowedViews]);
   // Aba aberta que deixou de ser permitida volta para a primeira disponivel.
   useEffect(() => {
@@ -172,7 +220,21 @@ export default function Dashboard() {
     if (!loadedRef.current) setLoading(true);
     setError("");
     try {
-      const next = await api("home", session.access_token);
+      const isAdlerSession = session.user.id === "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
+      const next = isAdlerSession
+        ? await (async () => {
+            const url = new URL(API_URL);
+            url.searchParams.set("view", "home");
+            url.searchParams.set("client", DASHBOARD_CLIENT_VERSION);
+            const response = await fetch(url, {
+              cache: "no-store",
+              headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },
+              signal: AbortSignal.timeout(15_000),
+            });
+            if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
+            return response.json() as Promise<HomeData>;
+          })()
+        : await api("home", session.access_token);
       // Complemento de perfil: usa uma Edge Function pequena e autenticada para resolver
       // a identidade ClickUp por ID e enriquecer o payload sem depender de deploy da API geral.
       try {
@@ -252,6 +314,86 @@ export default function Dashboard() {
 
   const isDesignRestricted = data?.profile?.role === "DESIGN";
   const isAdlerAccount = session?.user?.id === "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
+  const isAdlerIdentity = Boolean(isAdlerAccount || data?.profile?.person === "Adler Furtado" || data?.preferences?.collaborator_person === "Adler Furtado" || data?.preferences?.name === "Adler Furtado");
+  const canManageWallets = Boolean(walletManagementAllowed || isAdlerIdentity);
+  const canMaterialTriage = Boolean(isAdlerIdentity || data?.profile?.role === "CS");
+
+  useEffect(() => {
+    let active = true;
+    if (!session?.access_token) {
+      setWalletManagementAllowed(false);
+      return;
+    }
+    fetch(`${SUPABASE_URL}/functions/v1/agency-ops-wallet-management-api?probe=1`, {
+      headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },
+      cache: "no-store",
+    }).then(async (response) => {
+      const body = await response.json().catch(() => null);
+      if (active) setWalletManagementAllowed(Boolean(response.ok && body?.ok));
+    }).catch(() => {
+      if (active) setWalletManagementAllowed(false);
+    });
+    return () => { active = false; };
+  }, [session?.access_token]);
+  const loadMaterialTriage = useCallback(async () => {
+    if (!canMaterialTriage || !session?.access_token || triageLoadRef.current) return;
+    triageLoadRef.current = true;
+    try {
+      const response = await fetch(MATERIAL_TRIAGE_API, {
+        headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error(`Triagem ${response.status}`);
+      const body = await response.json();
+      const items: Row[] = body.items || [];
+      const newest = items[0];
+      const signature = newest ? `${newest.id}:${newest.metadata?.item_count ?? 1}:${newest.updated_at ?? newest.created_at}` : null;
+      if (triageLoadedRef.current && signature && signature !== lastTriageSignatureRef.current) playTone("pop");
+      lastTriageSignatureRef.current = signature;
+      triageLoadedRef.current = true;
+      setMaterialTriage(items);
+      setTriageError("");
+    } catch (caught) {
+      setTriageError(caught instanceof Error ? caught.message : "Falha ao atualizar triagem");
+    } finally {
+      triageLoadRef.current = false;
+    }
+  }, [canMaterialTriage, playTone, session?.access_token]);
+
+  useEffect(() => {
+    if (!canMaterialTriage || !session?.access_token || !session.user?.id) { setMaterialTriage([]); return; }
+    void loadMaterialTriage();
+
+    // Sem polling: escuta apenas o sinal minimo de triagem. Os dados reais
+    // continuam vindo da Edge Function autorizada quando o sinal muda.
+    let subscribedOnce = false;
+    const channel = supabase
+      .channel(`dashboard-material-triage:${session.user.id}`)
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "material_triage_signal" },
+        () => void loadMaterialTriage(),
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          if (subscribedOnce) void loadMaterialTriage();
+          subscribedOnce = true;
+        }
+      });
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") void loadMaterialTriage();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    // Apenas atualiza textos de idade localmente; zero request.
+    const clock = window.setInterval(() => setTriageNow(Date.now()), 15_000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.clearInterval(clock);
+      void supabase.removeChannel(channel);
+    };
+  }, [canMaterialTriage, loadMaterialTriage, session?.access_token, session?.user?.id]);
   const isGtPortfolio = data?.profile?.role === "GT" && !data?.profile?.elevated;
   const clients = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase("pt-BR");
@@ -295,6 +437,61 @@ export default function Dashboard() {
     }
   }
 
+  async function materialTriageAction(item: Row, action: "CLAIM" | "OPENED" | "SNOOZE" | "COMPLETE" | "RELEASE" | "ACKNOWLEDGE", extra: Row = {}) {
+    if (!session?.access_token) return false;
+    const busyKey = `${item.id}:${action}`;
+    setTriageBusy(busyKey); setTriageError("");
+    try {
+      const response = await fetch(MATERIAL_TRIAGE_API, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY, "content-type": "application/json" },
+        body: JSON.stringify({ id: item.id, action, ...extra }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 409 && body.claimed_by) throw new Error(`${body.claimed_by} já assumiu este material.`);
+        throw new Error(body.detail || body.error || `Triagem ${response.status}`);
+      }
+      if (body.items) setMaterialTriage(body.items);
+      else await loadMaterialTriage();
+      return true;
+    } catch (caught) {
+      setTriageError(caught instanceof Error ? caught.message : "Não foi possível atualizar a triagem.");
+      await loadMaterialTriage();
+      return false;
+    } finally { setTriageBusy(null); }
+  }
+
+  function dispatchTriageBriefing(item: Row) {
+    const kind = String(item.metadata?.triage_kind || "");
+    const entityType = kind === "PRODUCT_BRIEFING" ? "PRODUCT" : kind === "PERSONA" ? "PERSONA" : undefined;
+    window.dispatchEvent(new CustomEvent("material-triage-open-briefing", { detail: {
+      client_id: String(item.client_id || ""),
+      tab: kind === "ASSET_BATCH" ? "materials" : entityType === "PERSONA" ? "personas" : "products",
+      entity_type: entityType,
+      entity_id: entityType ? String(item.metadata?.entity_id || "") : undefined,
+    } }));
+  }
+
+  async function viewTriageMaterial(item: Row) {
+    const ok = await materialTriageAction(item, "OPENED");
+    if (ok) dispatchTriageBriefing(item);
+  }
+
+  async function continueTriageMaterial(item: Row) {
+    const mine = item.status === "IN_PROGRESS" && (item.target_person === data?.profile?.person || isAdlerAccount);
+    const ok = mine || await materialTriageAction(item, "CLAIM");
+    if (!ok) return;
+    const kind = String(item.metadata?.triage_kind || "");
+    if (kind === "ASSET_BATCH" && canSee("creative")) setView("creative");
+    else if (kind === "PRODUCT_BRIEFING" && canSee("scripts" as View)) setView("scripts" as View);
+    else dispatchTriageBriefing(item);
+  }
+
+  const actionableMaterialTriage = materialTriage
+    .filter((item) => item.status === "OPEN" || (item.status === "SNOOZED" && (!item.snoozed_until || new Date(item.snoozed_until).getTime() <= triageNow)))
+    .sort((a, b) => new Date(a.metadata?.received_at || a.created_at || 0).getTime() - new Date(b.metadata?.received_at || b.created_at || 0).getTime());
+  const materialTriageAlert = canMaterialTriage ? (actionableMaterialTriage[0] || null) : null;
   const kpis = data?.kpis || {};
   const media = data?.media || {};
   const health = data?.health || {};
@@ -352,6 +549,7 @@ export default function Dashboard() {
             ...navItems,
             ...(contractsAllowed ? [["contracts", "Contratos"]] : []),
           ] as [View, string][]).map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)} title={label}>{label}{key === "contracts" && contractsUnread > 0 && <span className="chip" style={{ marginLeft: 6 }}>{contractsUnread}</span>}</button>)}
+          {isAdlerAccount && <a href="/wrapped" title="Wrapped mensal da agência">Wrapped</a>}
           {isAdlerAccount
             ? <a href="/ia" title="IA da agência">IA</a>
             : <button type="button" title="IA em desenvolvimento" onClick={() => window.alert("Esta função está em desenvolvimento pelo PAI DO OP.")}>IA (Beta)</button>}
@@ -381,6 +579,7 @@ export default function Dashboard() {
           <ClientPortfolio clients={clients} total={allClients.length} query={query} setQuery={setQuery} filter={filter} setFilter={setFilter} lifecycleFilter={lifecycleFilter} setLifecycleFilter={setLifecycleFilter} openClient={openClient} /></details></>)}
       {view === "creative" && canSee("creative") && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando Central Criativa…</div>}><CreativeCenter token={session.access_token} /></Suspense>}
       {view === ("scripts" as View) && canSee("scripts" as View) && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando Produção de Roteiros…</div>}><VideoScriptsCenter token={session.access_token} /></Suspense>}
+      {view === ("videos" as View) && canSee("videos" as View) && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando controles de vídeo…</div>}><VideoAutomationCenter token={session.access_token} /></Suspense>}
       {view === ("view-oncall" as View) && canSee("view-oncall" as View) && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando acompanhamento comercial…</div>}><CommercialFollowupCenter token={session.access_token} /></Suspense>}
       {view === "onboarding" && canSee("onboarding") && <OnboardingBoard groups={onboardingGroups} stageLabels={data?.stage_labels || {}} openClient={openClient} />}
       {view === "campaigns" && canSee("campaigns") && <CampaignCenter media={media} campaigns={filteredCampaigns} clients={allClients} campaignFilter={campaignFilter} setCampaignFilter={setCampaignFilter} openClient={openClient} />}
@@ -388,6 +587,7 @@ export default function Dashboard() {
       {view === "conversations" && canSee("conversations") && <ConversationCenter conversations={data?.conversations || []} clients={allClients} openClient={openClient} />}
       {view === "health" && canSee("health") && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando saúde dos clientes…</div>}><HealthCenter token={session.access_token} /></Suspense>}
       {view === "opsperf" && canSee("opsperf") && <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando desempenho...</div>}><OpsPerfCenter token={session.access_token} /></Suspense>}
+      {view === "capacity" && canSee("capacity") && <ViewErrorBoundary titulo="Capacidade Operacional"><Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando capacidade operacional...</div>}><CapacityCenter token={session.access_token} /></Suspense></ViewErrorBoundary>}
       {view === "team" && canSee("team") && <TeamCenter team={data?.team || []} teamMembers={Number(kpis.team_members || 0)} unassigned={data?.unassigned_clients || []} openClient={openClient} />}
       {view === "diary" && canSee("diary") && <StructuredDiaryCenter clients={allClients} adjustments={data?.adjustments || []} taskLog={data?.operations?.task_log || {}} profile={data?.profile || {}} token={session.access_token} reload={load} />}
       {view === "clickup" && canSee("clickup") && <ClickUpCenter clickup={data?.clickup || {}} reload={load} token={session.access_token} />}
@@ -398,6 +598,34 @@ export default function Dashboard() {
 
       {view === "overview" && isDesignRestricted && <><DesignFocusMetrics focus={data?.operations?.design_focus || {}} loading={!data} /><DesignFocusCenter focus={data?.operations?.design_focus || {}} /></>}
       {view === "overview" && !isDesignRestricted && <>{isGtPortfolio && <GtPortfolioOverview profile={data?.profile || {}} clients={activeClients} campaigns={filteredCampaigns} alerts={data?.alerts || []} commitments={data?.commitments || []} conversations={data?.conversations || []} openClient={openClient} setView={setView} />}
+      {canMaterialTriage && <section className="card section material-triage-panel">
+        <div className="section-head material-triage-head">
+          <div><div className="section-title">🆕 Novos materiais aguardando ação</div><div className="subtitle">Triagem em tempo real · Adler + CS · atualização por evento</div></div>
+          <div className="material-triage-head-actions"><span className="chip">{materialTriage.length} em triagem</span><button className="btn" onClick={() => void loadMaterialTriage()}>Atualizar</button></div>
+        </div>
+        {triageError && <div className="material-triage-error">{triageError}</div>}
+        {!materialTriage.length ? <div className="material-triage-empty"><b>Tudo em dia.</b><span>Nenhum briefing ou material novo aguardando triagem.</span></div> : <div className="material-triage-list">
+          {materialTriage.slice(0, 8).map((item) => {
+            const age = materialTriageAge(item, triageNow);
+            const mine = item.target_person === data?.profile?.person || isAdlerAccount;
+            const snoozed = item.status === "SNOOZED" && item.snoozed_until && new Date(item.snoozed_until).getTime() > triageNow;
+            const itemBusy = Boolean(triageBusy?.startsWith(`${item.id}:`));
+            return <article className={`material-triage-item ${item.status === "IN_PROGRESS" ? "claimed" : snoozed ? "snoozed" : age.severity}`} key={item.id}>
+              <div className="material-triage-main"><div className="material-triage-client"><b>{text(item.client_display_name || "Cliente")}</b><span>{materialTriageSummary(item)}</span></div><div className="material-triage-meta"><span>{text(item.metadata?.origin || item.source)}</span><strong>{materialTriageState(item, triageNow)}</strong></div></div>
+              <div className="material-triage-actions">
+                {!snoozed && item.status !== "IN_PROGRESS" && <button disabled={itemBusy} className="btn primary" onClick={() => void materialTriageAction(item, "CLAIM")}>Assumir</button>}
+                {snoozed && (!item.target_person || mine) && <button disabled={itemBusy} className="btn" onClick={() => void materialTriageAction(item, "CLAIM")}>Retomar</button>}
+                {(!item.target_person || mine) && <button disabled={itemBusy} className="btn" onClick={() => void viewTriageMaterial(item)}>Ver material</button>}
+                {(!item.target_person || mine) && <button disabled={itemBusy} className="btn" onClick={() => void continueTriageMaterial(item)}>{nextLabel(item)}</button>}
+                {!snoozed && item.status !== "IN_PROGRESS" && <button disabled={itemBusy} className="btn" onClick={() => void materialTriageAction(item, "SNOOZE", { minutes: 15 })}>Adiar 15 min</button>}
+                <button disabled={itemBusy} className="btn material-triage-ack" title="Encerra a triagem deste material. O briefing/vídeo continua na origem." onClick={() => void materialTriageAction(item, "ACKNOWLEDGE")}>{triageBusy === `${item.id}:ACKNOWLEDGE` ? "Ciente…" : "Ciente"}</button>
+                {item.status === "IN_PROGRESS" && mine && <button disabled={itemBusy} className="btn" onClick={() => void materialTriageAction(item, "COMPLETE")}>Concluir triagem</button>}
+              </div>
+            </article>;
+          })}
+          {materialTriage.length > 8 && <div className="material-triage-more">+ {materialTriage.length - 8} itens na fila</div>}
+        </div>}
+      </section>}
       <SmartSearch question={opsQuestion} setQuestion={setOpsQuestion} clients={allClients} conversations={data?.conversations || []} commitments={data?.commitments || []} openClient={openClient} />
       <AttentionCenter clients={activeClients} operations={data?.operations || {}} preclients={data?.preclients || []} />
       <ExecutiveBrief ready={!!data} clients={activeClients} onboardingGroups={onboardingGroups} stageLabels={data?.stage_labels || {}} openClient={openClient} />
@@ -471,7 +699,8 @@ export default function Dashboard() {
 
       {selected && <ClientDrawer detail={selected} loading={detailLoading} close={() => setSelected(null)} contractsAllowed={contractsAllowed} token={session.access_token} />}
       {commandOpen && <GlobalCommand clients={allClients} tasks={data?.clickup?.recent_completed || []} preclients={data?.preclients || []} close={() => setCommandOpen(false)} openClient={openClient} />}
-      {profileOpen && <ProfileMenu preferences={data?.preferences || {}} profile={data?.profile || {}} email={session.user.email || ""} settings={() => { setProfileOpen(false); setSettingsOpen(true); }} close={() => setProfileOpen(false)} signOut={() => supabase.auth.signOut()} requestAccess={requestAccess} token={session.access_token} clients={allClients} />}
+      {profileOpen && <ProfileMenu preferences={data?.preferences || {}} profile={data?.profile || {}} email={session.user.email || ""} settings={() => { setProfileOpen(false); setSettingsOpen(true); }} openWalletManagement={() => { setProfileOpen(false); setWalletManagementOpen(true); }} canManageWallets={canManageWallets} close={() => setProfileOpen(false)} signOut={() => supabase.auth.signOut()} requestAccess={requestAccess} token={session.access_token} clients={allClients} />}
+      {walletManagementOpen && canManageWallets && <AdlerWalletManagement token={session.access_token} close={() => setWalletManagementOpen(false)} refresh={load} />}
       {notificationsOpen && <NotificationCenter items={data?.notifications || []} close={() => setNotificationsOpen(false)} refresh={load} openClient={openClient} openWork={(id) => { setNotificationsOpen(false); setWorkItemId(id); setView("work"); }} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
       {settingsOpen && <SettingsModal preferences={data?.preferences || {}} close={() => setSettingsOpen(false)} refresh={load} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
       {toast && <button className={`toast${toastLeaving ? " leaving" : ""}`} onClick={() => { const workId = toast.metadata?.work_item_id; if (workId) { setWorkItemId(String(workId)); setView("work"); } else if (toast.client_id) openClient(toast.client_id); setToast(null); }}><Chip value={toast.level}/><span><b>{text(toast.title)}</b><small>{text(toast.actor ? `${toast.actor}: ${toast.description}` : toast.description)}</small>{(toast.gestor || toast.carteira) && <small className="toast-meta">{text(toast.carteira ? `Carteira ${toast.carteira}` : (toast.gestor ? `Gestor: ${toast.gestor}` : ""))}</small>}</span><i onClick={(event) => { event.stopPropagation(); setToast(null); }}>×</i></button>}
@@ -1728,7 +1957,7 @@ function NoteBox({ token, clients }: { token: string; clients: Row[] }) {
   </div>;
 }
 
-function ProfileMenu({preferences,profile,email,settings,close,signOut,requestAccess,token,clients}:{preferences:Row;profile:Row;email:string;settings:()=>void;close:()=>void;signOut:()=>Promise<unknown>;requestAccess:()=>Promise<void>;token:string;clients:Row[]}) {
+function ProfileMenu({preferences,profile,email,settings,openWalletManagement,canManageWallets,close,signOut,requestAccess,token,clients}:{preferences:Row;profile:Row;email:string;settings:()=>void;openWalletManagement:()=>void;canManageWallets:boolean;close:()=>void;signOut:()=>Promise<unknown>;requestAccess:()=>Promise<void>;token:string;clients:Row[]}) {
   const dialogRef = useDialogFocus(close);
   const name=preferences.name||email;
   const showRequest = profile?.access_level === "RESTRICTED" && !profile?.elevated;
@@ -1737,7 +1966,7 @@ function ProfileMenu({preferences,profile,email,settings,close,signOut,requestAc
   async function ask() { setAsking(true); try { await requestAccess(); } finally { setAsking(false); } }
   return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Menu do perfil" className="profile-menu"><div className="profile-card"><span className="avatar">{initials(name)}</span><div><b>{text(name)}</b><small>{text(preferences.role||"Colaborador")}</small></div></div>
     {showRequest && <button className="request-access" disabled={pending || asking} onClick={ask}>{pending ? "Solicitação enviada — aguardando Adler" : asking ? "Enviando…" : "Solicitar acesso completo"}</button>}
-    <NoteBox token={token} clients={clients} /><button onClick={settings}>Meu perfil</button><button onClick={settings}>Configurações</button><button onClick={settings}>Preferências</button><button onClick={close}>Notificações</button><button className="muted" onClick={() => signOut()}>Sair</button></div>;
+    {canManageWallets && <button className="wallet-management-entry" onClick={openWalletManagement}>Gestão de carteiras</button>}<NoteBox token={token} clients={clients} /><button onClick={settings}>Meu perfil</button><button onClick={settings}>Configurações</button><button onClick={settings}>Preferências</button><button onClick={close}>Notificações</button><button className="muted" onClick={() => signOut()}>Sair</button></div>;
 }
 
 function NotificationCenter({items,close,refresh,openClient,openWork,token,pendingRequests,canDecide,decide}:{items:Row[];close:()=>void;refresh:()=>Promise<void>;openClient:(id:string)=>void;openWork:(id:string)=>void;token:string;pendingRequests:Row[];canDecide:boolean;decide:(id:string,decision:"APPROVED"|"DENIED")=>Promise<void>}) {

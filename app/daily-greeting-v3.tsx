@@ -22,6 +22,13 @@ type ProgressDetail = {
   duration?: number;
 };
 
+function saudacaoPorHorario(): string {
+  const hora = new Date().getHours();
+  if (hora >= 5 && hora < 12) { return 'Bom dia'; }
+  if (hora >= 12 && hora < 18) { return 'Boa tarde'; }
+  return 'Boa noite';
+}
+
 function CinematicCore({ speaking, finished, progress, phase }: { speaking: boolean; finished: boolean; progress: number; phase: OpeningPhase }) {
   const ringProgress = Math.max(2, Math.round(progress * 100));
   const nodes = [[50,16],[72,24],[84,45],[78,69],[58,82],[34,78],[18,58],[22,34],[50,35],[65,47],[60,65],[40,66],[34,47],[50,52]];
@@ -169,14 +176,15 @@ export default function DailyGreetingV3() {
 
   if (!greeting) return null;
 
-  const needsAudio = greeting.is_monday;
+  const horaLocal = new Date().getHours();
+  const needsAudio = greeting.is_monday && horaLocal >= 5 && horaLocal < 12;
   const canEnter = !needsAudio || finished;
+  const saudacao = saudacaoPorHorario();
   const phase: OpeningPhase = finished ? "ready" : !playing ? "standby" : progress < .13 ? "boot" : progress < .36 ? "core" : progress < .78 ? "greet" : "finalize";
   const showGreeting = phase === "greet" || phase === "finalize" || phase === "ready";
   const showReady = phase === "finalize" || phase === "ready";
 
   const close = () => {
-    if (!canEnter) return;
     setGreeting(null);
   };
 
@@ -191,7 +199,7 @@ export default function DailyGreetingV3() {
           : ready ? "VOICE CORE PRONTO" : "PREPARANDO SISTEMA";
 
   return (
-    <div className={`opsq-opening phase-${phase}`}>
+    <div className={`opsq-opening phase-${phase}`} data-needs-audio={needsAudio ? "1" : "0"}>
       <style>{`
         @keyframes opsqGridDrift{from{transform:translateY(0)}to{transform:translateY(44px)}}
         @keyframes opsqScan{0%{transform:translateY(-25vh);opacity:0}12%{opacity:.5}88%{opacity:.2}100%{transform:translateY(115vh);opacity:0}}
@@ -207,6 +215,7 @@ export default function DailyGreetingV3() {
         .opsq-opening:after{content:"";position:absolute;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,rgba(97,206,255,.35),transparent);box-shadow:0 0 24px rgba(83,194,245,.18);animation:opsqScan 7s linear infinite;pointer-events:none}
         .opsq-opening-shell{position:relative;width:min(820px,100%);min-height:650px;border:1px solid rgba(74,177,225,.24);border-radius:24px;background:linear-gradient(180deg,rgba(4,22,34,.96),rgba(2,12,20,.99));padding:25px 34px 28px;display:grid;grid-template-rows:auto 1fr auto;overflow:hidden;animation:opsqBorderWake 3.6s ease-in-out infinite;isolation:isolate}
         .opsq-opening-shell:before{content:"";position:absolute;inset:0;z-index:-1;background:radial-gradient(circle at 50% 42%,rgba(36,139,188,.11),transparent 34%)}
+        .opsq-close-btn{position:absolute;right:17px;top:15px;z-index:20;width:36px;height:36px;border-radius:50%;border:1px solid rgba(116,190,224,.28);background:rgba(4,19,29,.82);color:#a9cddd;font-size:24px;line-height:1;display:grid;place-items:center;cursor:pointer;touch-action:manipulation} .opsq-close-btn:hover{color:#fff;border-color:rgba(116,210,255,.6)}
         .opsq-corner{position:absolute;width:38px;height:38px;border-color:rgba(93,200,249,.52);opacity:.7}.opsq-corner.tl{left:14px;top:14px;border-left:1px solid;border-top:1px solid}.opsq-corner.tr{right:14px;top:14px;border-right:1px solid;border-top:1px solid}.opsq-corner.bl{left:14px;bottom:14px;border-left:1px solid;border-bottom:1px solid}.opsq-corner.br{right:14px;bottom:14px;border-right:1px solid;border-bottom:1px solid}
         .opsq-opening-head{display:flex;justify-content:space-between;align-items:center;gap:14px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.opsq-opening-head b{color:#78d0fb;font-size:10.5px;letter-spacing:.16em}.opsq-opening-head span{color:#52798f;font-size:9px;letter-spacing:.13em}
         .opsq-opening-stage{display:grid;align-content:center;justify-items:center;padding:6px 0 2px}.opsq-stage-copy{height:122px;text-align:center;display:grid;align-content:start;justify-items:center;margin-top:-6px}.opsq-stage-kicker{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#5faed3;font-size:9px;font-weight:800;letter-spacing:.24em;margin-bottom:9px}.opsq-stage-copy h1{margin:0;font-family:Inter Tight,Inter,sans-serif;font-size:clamp(38px,6vw,59px);line-height:1;letter-spacing:-.045em}.opsq-stage-copy p{margin:13px 0 0;color:#9fbaca;font-size:14px;line-height:1.55;max-width:610px}.opsq-greeting-copy,.opsq-system-copy{animation:opsqAppear .65s ease both}.opsq-system-copy{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#77c9ef;font-size:14px;letter-spacing:.13em}.opsq-system-copy strong{display:block;color:#dff7ff;font-family:Inter Tight,Inter,sans-serif;font-size:30px;letter-spacing:-.025em;margin-top:7px}
@@ -220,6 +229,7 @@ export default function DailyGreetingV3() {
       `}</style>
 
       <section role="dialog" aria-modal="true" aria-label="Abertura do OpsQuestion" className="opsq-opening-shell">
+        <button type="button" className="opsq-close-btn" onClick={close} aria-label="Fechar introdução">×</button>
         <i className="opsq-corner tl" /><i className="opsq-corner tr" /><i className="opsq-corner bl" /><i className="opsq-corner br" />
         <header className="opsq-opening-head">
           <b>OPSQUESTION // MONDAY INITIALIZATION</b>
@@ -232,7 +242,7 @@ export default function DailyGreetingV3() {
             {showGreeting ? (
               <div className="opsq-greeting-copy">
                 <div className="opsq-stage-kicker">{showReady ? "OPERATION LAYER // READY" : "VOICE TRANSMISSION // ACTIVE"}</div>
-                <h1>Bom dia, {greeting.first_name}.</h1>
+                <h1>{saudacao}, {greeting.first_name}.</h1>
                 <p>Nova semana operacional iniciada. Organização, execução e bons resultados por aí.</p>
               </div>
             ) : phase === "core" ? (

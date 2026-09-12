@@ -45,8 +45,6 @@ import AdsIntelligenceOpsBridge from "./ads-intelligence-ops-bridge";
 import MetaWeeklyReportsInlineBridge from "./meta-weekly-reports-inline-bridge";
 import WeeklyReportDeliveryCheckboxBridge from "./weekly-report-delivery-checkbox-bridge";
 import AIHeadRouter from "./ai-head-router";
-import OpsQuestionBrand from "./opsquestion-brand";
-import OpsQuestionWidget from "./opsquestion-widget";
 import WeekendBalanceAlert from "./weekend-balance-alert";
 import LeadQualityAlert from "./lead-quality-alert";
 import ChurnedClientMessageWarning from "./churned-client-message-warning";
@@ -73,6 +71,7 @@ import NotificationReadOnClick from "./notification-read-on-click";
 import WorkCenterScopeNetwork from "./work-center-scope-network";
 import AutomationNavBridge from "./automation-nav-bridge";
 import DonnahNavBridge from "./donnah-nav-bridge";
+import DiagnosticsNavBridge from "./diagnostics-nav-bridge";
 import NavBrandIcons from "./nav-brand-icons";
 import NavBrandIconsOutlineFix from "./nav-brand-icons-outline-fix";
 import LearningShortcut from "./learning-shortcut";
@@ -124,6 +123,30 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230359a6'/><g fill='%23fff'><rect x='8.46' y='5.5' width='15.09' height='1.45'/><rect x='8.46' y='5.5' width='1.56' height='21.00'/><rect x='21.98' y='5.5' width='1.56' height='14.38'/><path d='M12.31 17.49 L23.54 19.07 L23.54 19.88 L12.31 19.88 Z'/><path d='M19.69 24.11 L8.46 25.69 L8.46 26.5 L19.69 26.5 Z'/></g></svg>"
         />
 
+        {/* Icone e modo tela cheia da Tela de Inicio.
+
+            O head so tinha rel="icon" em data URI, que serve a aba e mais
+            nada. Sem apple-touch-icon o iOS nao tem de onde tirar o icone e
+            usa o fallback dele -- um print da propria pagina -- e sem
+            apple-mobile-web-app-capable ele abre dentro do Safari, com a
+            barra embaixo. Os dois sintomas vinham daqui.
+
+            O PNG e o BrandMark de shared.tsx (o logo da Leonardo Imobi que o
+            cabecalho ja usa), sobre o mesmo gradiente de .logo. Nao e o
+            favicon acima: aquele e um redesenho engrossado para sobreviver a
+            16px, proporcao errada para 180. Opaco e sem canto arredondado de
+            proposito -- o iOS compoe alfa sobre preto e aplica a mascara.
+
+            status-bar-style vai "black", nao "black-translucent": translucido
+            joga o conteudo por baixo da barra de status, e o layout nao
+            reserva safe-area para isso. */}
+        <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-title" content="Central Ops" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@600;700;800&display=swap" />
@@ -132,9 +155,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <GabrielScopeNetwork />
         <LeonardoScopeNetwork />
         <WorkCenterScopeNetwork />
+        {children}
         <GreetingAudioBridge />
         <PreGreetingShield />
-        {children}
         <PreclientsKanbanBridge />
         <MotionSystem />
         <AIHeadRouter />
@@ -190,6 +213,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <NotificationReadOnClick />
         <AutomationNavBridge />
         <DonnahNavBridge />
+        <DiagnosticsNavBridge />
         <NavBrandIcons />
         <NavBrandIconsOutlineFix />
         <TeamAccessAdmin />
@@ -197,8 +221,6 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <DailyGreeting />
         <SystemUpdateCenter />
         <SecurityCenter />
-        <OpsQuestionWidget />
-        <OpsQuestionBrand />
         <LearningShortcut />
         <HomeShortcut />
         <LogoutShortcut />

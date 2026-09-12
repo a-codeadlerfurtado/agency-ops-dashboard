@@ -197,6 +197,7 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const lifecycle = (url.searchParams.get("lifecycle") ?? "ACTIVE").toUpperCase();
   const includeDetails = url.searchParams.get("details") !== "0";
+  const clientName = (url.searchParams.get("client_name") ?? "").trim();
   const since = url.searchParams.get("since");
   const until = url.searchParams.get("until");
   const periodLabel = url.searchParams.get("period_label") ?? null;
@@ -209,6 +210,10 @@ Deno.serve(async (req) => {
   if (lifecycle === "ACTIVE") q = q.in("lifecycle", ["ACTIVE", "ONBOARDING"]);
   else if (lifecycle !== "ALL") q = q.eq("lifecycle", lifecycle);
   if ((isWalletOnly || isGtScoped) && person) q = q.eq("gt_owner", person);
+  // Jarvis resolve o nome canonico antes de chamar esta API. Quando client_name
+  // vier, limite a consulta ANTES de buscar integra??es/Graph API. Sem isso uma
+  // pergunta de um cliente dispara a carteira inteira e estoura o timeout.
+  if (clientName) q = q.ilike("display_name", clientName);
   const { data: baseClients, error: baseError } = await q.order("display_name");
   if (baseError) return reply({ error: "query_failed", detail: baseError.message }, 500);
   const base = baseClients ?? [];

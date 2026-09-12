@@ -21,6 +21,15 @@
     "enabled": true,
     "head_sampling_rate": 1
   },
+  // Cache curto do catalogo de ferramentas da Jarvis (60s) e, na fase 2, do
+  // audio ja sintetizado pelo TTS.
+  "kv_namespaces": [
+    { "binding": "JARVIS_CACHE", "id": "44671461c84144ee92b40d0be83f40d3" }
+  ],
+  // 08h, 12h e 17h UTC = 05h, 09h e 14h em Brasilia.
+  "triggers": { "crons": ["0 8 * * 1-5", "0 12 * * 1-5", "0 17 * * 1-5"] },
+  // Chave publicavel, a mesma que o front ja usa. Nao e segredo.
+  "vars": { "SUPABASE_ANON_KEY": "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7", "JARVIS_TTS_URL": "https://portainer.leonardoimobi.com.br/reader/api/tts" },
   "assets": {
     "not_found_handling": "none",
     "binding": "ASSETS"

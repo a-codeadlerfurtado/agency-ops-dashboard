@@ -79,7 +79,7 @@ export type HomeData = {
   generated_at: string;
 };
 
-export type View = "overview" | "focus" | "work" | "clients" | "health" | "onboarding" | "campaigns" | "contracts" | "preclients" | "conversations" | "team" | "diary" | "clickup" | "evidence" | "audit" | "alerts" | "opsperf" | "creative" | "view-oncall";
+export type View = "overview" | "focus" | "work" | "clients" | "health" | "onboarding" | "campaigns" | "contracts" | "preclients" | "conversations" | "team" | "diary" | "clickup" | "evidence" | "audit" | "alerts" | "opsperf" | "creative" | "capacity" | "videos" | "view-oncall";
 
 export const pt: Record<string,string> = { ATTENTION:"Atenção",FOLLOW_UP:"Acompanhamento",UNDETERMINED:"Indeterminado",DATA_INCOMPLETE:"Dados incompletos",OK:"OK",ACTIVE:"Ativo",ONBOARDING:"Onboarding",CHURNED:"Churned",COMPLETE:"Completa",PARTIAL:"Parcial",INCOMPLETE:"Incompleta",SUCCESS:"Sucesso",ERROR:"Erro",RUNNING:"Em execução",OPEN:"Aberto",IN_PROGRESS:"Em andamento",WAITING:"Aguardando",SNOOZED:"Adiado",COMPLETED:"Concluído",DISMISSED:"Descartado",ABORTED:"Encerrado",CRITICAL:"Crítico",HIGH:"Alto",MEDIUM:"Médio",LOW:"Baixo",CONNECTED:"Conectado",CONECTADO:"Conectado",ESCALATION:"Escalonamento",CREATIVE_REQUEST:"Solicitação criativa",TECHNICAL:"Problema técnico",CLIENT_FOLLOWUP:"Acompanhamento",CLICKUP:"ClickUp",FINANCE:"Financeiro",GENERAL:"Geral" };
 
@@ -213,18 +213,84 @@ export function isSessionExpiredError(error: unknown): error is SessionExpiredEr
   return error instanceof SessionExpiredError || (error instanceof Error && (error as any).code === "SESSION_EXPIRED");
 }
 
+/** Teto de qualquer chamada autenticada do dashboard. */
+const FETCH_TIMEOUT_MS = 15_000;
+/** Teto da leitura de sessao. Menor que o do fetch: e' so' ler o token. */
+const TOKEN_TIMEOUT_MS = 8_000;
+/** Teto do refresh. Maior que o do getSession: e' ida real a rede. */
+const REFRESH_TIMEOUT_MS = 12_000;
+
+/**
+ * Erro de espera, distinto de sessao expirada.
+ *
+ * A diferenca importa: SessionExpiredError leva a signOut em alguns caminhos, e
+ * um getSession lento NAO significa que a sessao morreu. Deslogar alguem porque
+ * o mutex demorou seria trocar um travamento por uma perda de contexto.
+ */
+export class AuthTimeoutError extends Error {
+  constructor() { super("A validação da sessão demorou demais. Tente novamente."); this.name = "AuthTimeoutError"; }
+}
+
+/**
+ * getSession() com teto.
+ *
+ * getSession() passa pelo mutex interno do supabase-js e, quando ele nao
+ * libera, a promessa nunca assenta -- nao ha' erro para capturar. Como
+ * authenticatedFetch aguardava esta chamada, `load()` nunca chegava ao seu
+ * `finally`, `setLoading(false)` nunca rodava e o topo ficava eternamente em
+ * "Atualizando...". Este `race` transforma "nunca" em "15 segundos e uma tela
+ * utilizavel com Tentar novamente".
+ */
 async function liveAccessToken(): Promise<string | null> {
-  const { data, error } = await supabase.auth.getSession();
+  const { data, error } = await comTeto(supabase.auth.getSession(), TOKEN_TIMEOUT_MS);
   if (error) return null;
   return data.session?.access_token ?? null;
 }
 
+/** getSession com teto, exportado para o router reusar no "Tentar novamente". */
+export async function getSessionBounded() {
+  return comTeto(supabase.auth.getSession(), TOKEN_TIMEOUT_MS);
+}
+
+/**
+ * Corre `promessa` contra um teto e lanca AuthTimeoutError se estourar.
+ *
+ * O timer e' sempre limpo: sem isso um `race` vencido pela promessa boa deixaria
+ * um setTimeout pendurado segurando o event loop ate o fim do prazo.
+ */
+async function comTeto<T>(promessa: Promise<T>, ms: number): Promise<T> {
+  let timer: number | undefined;
+  const limite = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(() => reject(new AuthTimeoutError()), ms);
+  });
+  try {
+    return await Promise.race([promessa, limite]);
+  } finally {
+    if (timer !== undefined) window.clearTimeout(timer);
+  }
+}
+
+/**
+ * refreshSession() com teto.
+ *
+ * Mesma armadilha do getSession, num caminho menos obvio: request -> 401 ->
+ * refresh travado -> authenticatedFetch nunca assenta -> o `finally` de quem
+ * chamou nunca roda -> loading eterno. O teto aqui e' maior que o do getSession
+ * porque refresh e' uma ida real a rede, nao leitura de storage.
+ *
+ * Estouro NAO vira sessao invalida: devolve null e quem chamou decide. Deslogar
+ * por lentidao seria trocar um travamento por perda de contexto.
+ */
 async function refreshAccessToken(): Promise<string | null> {
   if (!refreshSessionPromise) {
     refreshSessionPromise = (async () => {
-      const { data, error } = await supabase.auth.refreshSession();
-      if (error || !data.session?.access_token) return null;
-      return data.session.access_token;
+      try {
+        const { data, error } = await comTeto(supabase.auth.refreshSession(), REFRESH_TIMEOUT_MS);
+        if (error || !data.session?.access_token) return null;
+        return data.session.access_token;
+      } catch {
+        return null;
+      }
     })().finally(() => { refreshSessionPromise = null; });
   }
   return refreshSessionPromise;
@@ -241,7 +307,13 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
   const currentToken = await liveAccessToken();
   if (!currentToken) throw new SessionExpiredError();
 
-  const request = (token: string) => fetch(input, { ...init, headers: authHeaders(init, token) });
+  // Sem `signal` a chamada podia ficar pendurada indefinidamente e segurar o
+  // `finally` de quem chamou. Respeita um signal ja fornecido pelo chamador.
+  const request = (token: string) => fetch(input, {
+    ...init,
+    signal: init.signal ?? AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    headers: authHeaders(init, token),
+  });
   let response = await request(currentToken);
   if (response.status !== 401) return response;
 
@@ -260,7 +332,28 @@ export async function authenticatedFetch(input: RequestInfo | URL, init: Request
 }
 
 const PROFILE_LITE_CACHE_MS = 30_000;
-const PROFILE_LITE_TIMEOUT_MS = 10_000;
+/**
+ * Teto do profile-lite.
+ *
+ * Era 10s. Medido em producao, a mesma chamada com o mesmo token deu
+ * 2.6s / 9.1s / 15.2s / 16.0s -- o gargalo e' o /auth/v1/user do Supabase, que
+ * oscila entre 400ms e 10s e todas as edge functions atravessam antes de
+ * qualquer query. Com teto de 10s, metade das cargas abortava uma chamada que
+ * teria respondido. 20s cobre o p90 observado sem deixar a tela presa.
+ */
+const PROFILE_LITE_TIMEOUT_MS = 20_000;
+/** Perfil da ultima sessao boa, para abrir a tela sem esperar a rede. */
+const PERFIL_CACHE_KEY = "ops-perfil:v1";
+/**
+ * Validade do perfil guardado.
+ *
+ * Sem prazo, um papel revogado continuaria abrindo a tela antiga
+ * indefinidamente. Uma hora e' curto o bastante para que qualquer mudanca de
+ * papel apareca no mesmo turno de trabalho, e longo o bastante para cobrir os
+ * picos de lentidao do Auth, que e' o problema que este cache existe para
+ * contornar.
+ */
+const PERFIL_PERSISTENTE_TTL_MS = 60 * 60 * 1000;
 
 let profileLiteCache: {
   userId: string;
@@ -272,6 +365,40 @@ let profileLiteCache: {
 // A sessão pode vir diretamente do evento onAuthStateChange. Nesse caminho é
 // obrigatório NÃO chamar getSession() nem authenticatedFetch(), porque ambos voltam
 // ao mutex interno do Supabase e podem deixar a tela presa em "Validando perfil".
+/**
+ * Ultimo perfil bom deste usuario, se houver.
+ *
+ * Nao e' fonte de verdade -- e' o que permite a tela abrir enquanto a fonte de
+ * verdade responde. Sempre revalidado em seguida; se o papel tiver mudado, a
+ * revalidacao corrige.
+ */
+export function perfilEmCache(userId: string | undefined): Row | null {
+  if (!userId) return null;
+  try {
+    const bruto = window.localStorage.getItem(PERFIL_CACHE_KEY);
+    if (!bruto) return null;
+    const guardado = JSON.parse(bruto) as { userId?: string; profile?: Row | null; at?: number };
+    if (guardado?.userId !== userId || !guardado.profile) return null;
+
+    const gravadoEm = Number(guardado.at);
+    // `at` ausente ou no futuro (relogio mexido) conta como invalido: preferir
+    // uma validacao real a confiar num carimbo que nao da' para verificar.
+    if (!Number.isFinite(gravadoEm) || gravadoEm > Date.now()) { limparPerfilEmCache(); return null; }
+    if (Date.now() - gravadoEm > PERFIL_PERSISTENTE_TTL_MS) { limparPerfilEmCache(); return null; }
+
+    return guardado.profile;
+  } catch {
+    // JSON corrompido nao pode travar o boot -- descarta e valida de verdade.
+    limparPerfilEmCache();
+    return null;
+  }
+}
+
+/** Usado no logout e sempre que o cache se mostrar invalido. */
+export function limparPerfilEmCache(): void {
+  try { window.localStorage.removeItem(PERFIL_CACHE_KEY); } catch { /* storage bloqueado */ }
+}
+
 export async function loadProfileLite(currentSession?: Session | null): Promise<Row> {
   const session = currentSession ?? (await supabase.auth.getSession()).data.session;
   const userId = session?.user.id;
@@ -298,7 +425,13 @@ export async function loadProfileLite(currentSession?: Session | null): Promise<
       .then(async (response) => {
         if (response.status === 401) throw new SessionExpiredError();
         if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
-        return response.json();
+        const corpo = await response.json();
+        // Guarda o ultimo perfil bom deste usuario. E' o que permite abrir o
+        // dashboard instantaneamente na proxima carga mesmo com o Auth lento.
+        try {
+          window.localStorage.setItem(PERFIL_CACHE_KEY, JSON.stringify({ userId, profile: corpo?.profile ?? null, at: Date.now() }));
+        } catch { /* storage cheio ou bloqueado: seguir sem cache */ }
+        return corpo;
       })
       .catch((caught) => {
         if (profileLiteCache?.promise === promise) profileLiteCache = null;
@@ -429,3 +562,4 @@ export function taskCompletion(item: Row) {
     concluidaPor: item?.actor ? String(item.actor) : null,
   };
 }
+

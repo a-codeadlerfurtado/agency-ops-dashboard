@@ -7,7 +7,9 @@
     "dev": "vinext dev",
     "build": "vinext build && node -e \"const f=require('fs');f.mkdirSync('dist/.openai',{recursive:true});f.copyFileSync('.openai/hosting.json','dist/.openai/hosting.json')\"",
     "start": "vinext start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:capacity": "node --test shared/capacity/capacity.test.ts",
+    "test:jarvis": "node --test worker/jarvis/guards.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

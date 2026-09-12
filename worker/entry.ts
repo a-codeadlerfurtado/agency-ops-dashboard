@@ -1,16 +1,30 @@
 import baseWorker from "./index";
+import { rotearJarvis } from "./jarvis/index";
+import { rodarRondas } from "./jarvis/routines";
 
 const SUPABASE = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const OLD_IMG_SRC = "img-src 'self' data:";
 const NEW_IMG_SRC = `img-src 'self' data: ${SUPABASE}`;
+const MEDIA_SRC = "media-src 'self' blob:";
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 const VISION_BULK_KEY = "cvi_20260829_5b1d73f04c784898";
 
 function widenImageCsp(response: Response): Response {
   const headers = new Headers(response.headers);
   const csp = headers.get("content-security-policy");
-  if (csp && csp.includes(OLD_IMG_SRC) && !csp.includes(NEW_IMG_SRC)) {
-    headers.set("content-security-policy", csp.replace(OLD_IMG_SRC, NEW_IMG_SRC));
+  if (csp) {
+    let next = csp.includes(OLD_IMG_SRC) && !csp.includes(NEW_IMG_SRC)
+      ? csp.replace(OLD_IMG_SRC, NEW_IMG_SRC)
+      : csp;
+    if (!/\bmedia-src\b/i.test(next)) next = `${next}; ${MEDIA_SRC}`;
+    else if (!/\bmedia-src\b[^;]*\bblob:/i.test(next)) next = next.replace(/\bmedia-src\b([^;]*)/i, `media-src$1 blob:`);
+    if (next !== csp) headers.set("content-security-policy", next);
+  }
+  const contentType = (headers.get("content-type") || "").toLowerCase();
+  if (contentType.includes("text/html")) {
+    headers.set("cache-control", "no-store, no-cache, must-revalidate, max-age=0");
+    headers.set("pragma", "no-cache");
+    headers.set("x-jarvis-ui-build", "cedar-only-v3");
   }
   return new Response(response.body, {
     status: response.status,
@@ -146,7 +160,17 @@ export default {
   async fetch(request: Request, env: any, context: any): Promise<Response> {
     const vision = await runVisionBulk(request, env);
     if (vision) return vision;
+    // A Jarvis entra aqui, antes do baseWorker, pelo mesmo motivo do
+    // creative-vision: precisa do binding AI e nao pode passar pelo vinext.
+    // /api/ai continua indo direto para o baseWorker, intocado.
+    const jarvis = await rotearJarvis(request, env, context);
+    if (jarvis) return jarvis;
     const response = await baseWorker.fetch(request, env, context);
     return widenImageCsp(response);
+  },
+
+  // Cron Trigger: 08h, 12h e 17h UTC = 05h, 09h e 14h em Brasilia.
+  async scheduled(_evento: unknown, env: any, context: any): Promise<void> {
+    context.waitUntil(rodarRondas(env));
   },
 };
