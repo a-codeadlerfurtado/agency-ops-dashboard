@@ -8,13 +8,15 @@ internal sealed class AgentContext : ApplicationContext
     private readonly ToolStripMenuItem autoItem;
     private readonly ToolStripMenuItem finishItem;
     private readonly WhatsAppDesktopCapture capture;
+    private readonly Control dispatcher = new();
 
     public AgentContext()
     {
         config = AgentConfig.Load();
+        dispatcher.CreateControl();
         statusItem = new ToolStripMenuItem("Inicializando…") { Enabled = false };
         autoItem = new ToolStripMenuItem("Captura automática") { Checked = true, CheckOnClick = true };
-        finishItem = new ToolStripMenuItem("Finalizar e enviar chamada") { Enabled = false };
+        finishItem = new ToolStripMenuItem("Forçar encerramento (emergência)") { Enabled = false };
         var pairItem = new ToolStripMenuItem("Parear / trocar usuário");
         var exitItem = new ToolStripMenuItem("Sair");
         var menu = new ContextMenuStrip();
@@ -39,17 +41,20 @@ internal sealed class AgentContext : ApplicationContext
             tray.Text = "Relato AI · REC WhatsApp";
             tray.ShowBalloonTip(2000, "Relato AI", $"Gravando chamada com {contact}", ToolTipIcon.Info);
         });
-        capture.CallFinished += (sessionId, ok, error) => Post(() =>
+        capture.CallEnded += (sessionId, _) => Post(() =>
         {
             finishItem.Enabled = false;
             tray.Text = "Relato AI Desktop Agent";
+            tray.ShowBalloonTip(1500, "Relato AI", "Ligação encerrada. Enviando em segundo plano...", ToolTipIcon.Info);
+            using var form = new FeedbackForm(config, sessionId);
+            form.ShowDialog();
+        });
+        capture.CallFinished += (_, ok, error) => Post(() =>
+        {
             if (ok)
-            {
-                tray.ShowBalloonTip(2500, "Relato AI", "Ligação enviada para transcrição.", ToolTipIcon.Info);
-                using var form = new FeedbackForm(config, sessionId);
-                form.ShowDialog();
-            }
-            else tray.ShowBalloonTip(3500, "Relato AI", error ?? "Falha ao enviar ligação.", ToolTipIcon.Error);
+                tray.ShowBalloonTip(2200, "Relato AI", "Ligação enviada para transcrição.", ToolTipIcon.Info);
+            else
+                tray.ShowBalloonTip(3500, "Relato AI", error ?? "Falha ao enviar ligação.", ToolTipIcon.Error);
         });
     }
 
@@ -97,15 +102,14 @@ internal sealed class AgentContext : ApplicationContext
 
     private void Post(Action action)
     {
-        var form = Application.OpenForms.Count > 0 ? Application.OpenForms[0] : null;
-        if (form is not null && form.InvokeRequired)
-            form.BeginInvoke(action);
-        else action();
+        if (dispatcher.IsDisposed) return;
+        dispatcher.BeginInvoke(action);
     }
 
     protected override void ExitThreadCore()
     {
         capture.Dispose();
+        dispatcher.Dispose();
         tray.Visible = false;
         tray.Dispose();
         base.ExitThreadCore();

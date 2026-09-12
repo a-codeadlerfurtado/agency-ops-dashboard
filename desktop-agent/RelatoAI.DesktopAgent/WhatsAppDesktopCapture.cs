@@ -20,12 +20,16 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     private DateTimeOffset lastRemoteActive = DateTimeOffset.MinValue;
     private DateTimeOffset lastLocalActive = DateTimeOffset.MinValue;
     private DateTimeOffset? callStarted;
+    private bool callAudioSessionObservedActive;
+    private DateTimeOffset? audioSessionInactiveAt;
     private string? sessionId;
     private string? remotePath;
     private string? localPath;
     private bool disposed;
+    private int ticking;
     public event Action<string>? StatusChanged;
     public event Action<string, string>? CallStarted;
+    public event Action<string, string>? CallEnded;
     public event Action<string, bool, string?>? CallFinished;
 
     public bool Enabled { get; set; } = true;
@@ -39,9 +43,10 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
 
     private void TickSafe()
     {
-        if (disposed || !Enabled) return;
+        if (disposed || !Enabled || Interlocked.Exchange(ref ticking, 1) == 1) return;
         try { Tick().GetAwaiter().GetResult(); }
         catch (Exception ex) { StatusChanged?.Invoke("Erro: " + ex.Message); }
+        finally { Volatile.Write(ref ticking, 0); }
     }
 
     private async Task Tick()
@@ -60,6 +65,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         var now = DateTimeOffset.Now;
         var remoteHot = now - lastRemoteActive < TimeSpan.FromSeconds(2.5);
         var localHot = now - lastLocalActive < TimeSpan.FromSeconds(8);
+        var audioSessionActive = IsTargetAudioSessionActive(process);
 
         if (!IsRecording)
         {
@@ -71,9 +77,51 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             return;
         }
 
-        if (now - lastRemoteActive > TimeSpan.FromSeconds(45)
-            && now - lastLocalActive > TimeSpan.FromSeconds(45))
-            await FinishCallAsync("audio_inactive");
+        if (audioSessionActive)
+        {
+            callAudioSessionObservedActive = true;
+            audioSessionInactiveAt = null;
+        }
+        else if (callAudioSessionObservedActive)
+        {
+            audioSessionInactiveAt ??= now;
+            if (now - audioSessionInactiveAt.Value >= TimeSpan.FromSeconds(1.2))
+            {
+                await FinishCallAsync("audio_session_closed");
+                return;
+            }
+        }
+
+        // Fallback only. Normal hangup is detected by the Windows audio-session state above.
+        if (now - lastRemoteActive > TimeSpan.FromSeconds(12)
+            && now - lastLocalActive > TimeSpan.FromSeconds(12))
+            await FinishCallAsync("audio_inactive_fallback");
+    }
+
+    private static bool IsTargetAudioSessionActive(Process process)
+    {
+        try
+        {
+            using var devices = new MMDeviceEnumerator();
+            foreach (var role in new[] { Role.Communications, Role.Multimedia, Role.Console })
+            {
+                try
+                {
+                    using var device = devices.GetDefaultAudioEndpoint(DataFlow.Render, role);
+                    var sessions = device.AudioSessionManager.Sessions;
+                    for (var i = 0; i < sessions.Count; i++)
+                    {
+                        using var session = sessions[i];
+                        if (session.GetProcessID == (uint)process.Id
+                            && string.Equals(session.State.ToString(), "AudioSessionStateActive", StringComparison.Ordinal))
+                            return true;
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return false;
     }
 
     private static Process? FindWhatsApp()
@@ -143,6 +191,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         var now = DateTimeOffset.Now;
         sessionId = $"wa-desktop-{now:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
         callStarted = now;
+        callAudioSessionObservedActive = IsTargetAudioSessionActive(process);
+        audioSessionInactiveAt = null;
         var dir = Path.Combine(Path.GetTempPath(), "RelatoAI", sessionId);
         Directory.CreateDirectory(dir);
         remotePath = Path.Combine(dir, "remote.wav");
@@ -175,6 +225,12 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             localWriter?.Dispose(); localWriter = null;
         }
         sessionId = null; callStarted = null; candidateAt = null;
+        callAudioSessionObservedActive = false;
+        audioSessionInactiveAt = null;
+        StatusChanged?.Invoke(reason == "audio_session_closed"
+            ? "Ligação encerrada automaticamente"
+            : $"Ligação encerrada ({reason})");
+        CallEnded?.Invoke(id, contact);
         var success = false; string? error = null;
         try
         {

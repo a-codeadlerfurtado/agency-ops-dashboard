@@ -287,6 +287,21 @@ internal sealed class FeedbackForm : Form
             note = note.Text.Trim(),
             dismissed
         };
-        await new RelatoApi(config).SaveFeedbackAsync(sessionId, feedback);
+        var api = new RelatoApi(config);
+        Exception? last = null;
+        for (var attempt = 1; attempt <= 8; attempt++)
+        {
+            try
+            {
+                await api.SaveFeedbackAsync(sessionId, feedback);
+                return;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+                if (attempt < 8) await Task.Delay(500);
+            }
+        }
+        throw last ?? new InvalidOperationException("Não foi possível salvar a avaliação.");
     }
 }
