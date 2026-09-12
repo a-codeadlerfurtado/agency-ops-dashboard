@@ -109,10 +109,11 @@ function blocoGestor(alertas: Record<string, unknown>[], nomes: Record<string, s
 }
 
 async function sendWhatsApp(numero: string, texto: string) {
-  const instancia = Deno.env.get("ZAPI_INSTANCIA") ?? "";
-  const token = Deno.env.get("ZAPI_TOKEN") ?? "";
-  const clientToken = Deno.env.get("ZAPI_CLIENT_TOKEN") ?? "";
-  if (!instancia || !token || !clientToken) throw new Error("zapi_not_configured");
+  const instancia = Deno.env.get("RELATO_ZAPI_INSTANCE_ID") ?? "";
+  const token = Deno.env.get("RELATO_ZAPI_TOKEN") ?? "";
+  const clientToken = Deno.env.get("RELATO_ZAPI_CLIENT_TOKEN") ?? Deno.env.get("ZAPI_CLIENT_TOKEN") ?? "";
+  if (instancia !== "3F4D76359358E20A5B334EE998918E2A") throw new Error("relato_zapi_wrong_instance");
+  if (!token || !clientToken) throw new Error("relato_zapi_not_configured");
   const phone = numero.replace(/\D/g, "");
   const res = await fetch(`https://api.z-api.io/instances/${instancia}/token/${token}/send-text`, {
     method: "POST",
