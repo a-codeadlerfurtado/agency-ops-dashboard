@@ -4,7 +4,7 @@ import {
 } from "./rotas/meta-oauth";
 import { rpc, sha256Hex, type Env } from "./lib/db";
 import { comCors, preflight } from "./lib/cors";
-import { trocarCodigoImobia, verificarAssinaturaImobia, type EnvImobiaMetaBroker } from "./rotas/imobia-meta-broker";
+import { trocarCodigoImobia, verificarAssinaturaImobia, encaminharWebhookWhatsAppImobia, type EnvImobiaMetaBroker } from "./rotas/imobia-meta-broker";
 
 export { WorkflowSla } from "./sla-workflow";
 
@@ -91,7 +91,11 @@ async function rotear(req: Request, env: EnvComLimite): Promise<Response> {
         // webhook do app: uma URL para todas as imobiliarias
         if (partes[2] === "webhook") {
           if (req.method === "GET") return verificarWebhookDoApp(url, env);
-          if (req.method === "POST") return webhookDoApp(req, env);
+          if (req.method === "POST") {
+            const wpp = await encaminharWebhookWhatsAppImobia(req.clone(), env);
+            if (wpp) return wpp;
+            return webhookDoApp(req, env);
+          }
           return json({ erro: "Metodo nao permitido." }, 405);
         }
       }

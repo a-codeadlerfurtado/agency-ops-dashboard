@@ -29,7 +29,8 @@
     // Para onde o worker devolve o navegador depois do login da Meta, e qual
     // origem ele libera no CORS. Sao a mesma coisa: o unico navegador que
     // conversa com este worker e o do proprio app.
-    "APP_URL": "https://imobi-board-app.lakassessoriadigital.workers.dev"
+    "APP_URL": "https://imobi-board-app.lakassessoriadigital.workers.dev",
+    "IMOBIA_WEBHOOK_URL": "https://portainer.leonardoimobi.com.br/imobia/webhooks/whatsapp"
   }
 
   // Secrets (wrangler secret put): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,

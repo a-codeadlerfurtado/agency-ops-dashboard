@@ -6,6 +6,7 @@ export interface EnvImobiaMetaBroker {
   META_APP_ID?: string;
   META_APP_SECRET?: string;
   IMOBIA_BROKER_TOKEN?: string;
+  IMOBIA_WEBHOOK_URL?: string;
 }
 
 function hex(bytes: ArrayBuffer): string {
@@ -72,4 +73,28 @@ export async function verificarAssinaturaImobia(req: Request, env: EnvImobiaMeta
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.META_APP_SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const digest = hex(await crypto.subtle.sign("HMAC", key, raw));
   return json({ valid: comparacaoConstante(signature.slice(7), digest) });
+}
+
+export async function encaminharWebhookWhatsAppImobia(
+  req: Request, env: EnvImobiaMetaBroker
+): Promise<Response | null> {
+  const raw = await req.arrayBuffer();
+  let payload: { object?: string };
+  try { payload = JSON.parse(new TextDecoder().decode(raw)); }
+  catch { return null; }
+  if (payload.object !== "whatsapp_business_account") return null;
+  if (!env.META_APP_SECRET || !env.IMOBIA_WEBHOOK_URL) {
+    return json({ erro: "Gateway WhatsApp da ImoBia nao configurado." }, 503);
+  }
+  const signature = req.headers.get("x-hub-signature-256") ?? "";
+  if (!signature.startsWith("sha256=")) return json({ erro: "Assinatura ausente." }, 401);
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(env.META_APP_SECRET),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const expected = "sha256=" + hex(await crypto.subtle.sign("HMAC", key, raw));
+  if (!comparacaoConstante(signature.toLowerCase(), expected.toLowerCase()))
+    return json({ erro: "Assinatura invalida." }, 401);
+  const upstream = await fetch(env.IMOBIA_WEBHOOK_URL, { method: "POST",
+    headers: { "content-type": "application/json", "x-hub-signature-256": signature }, body: raw });
+  return new Response(await upstream.arrayBuffer(), { status: upstream.status,
+    headers: { "content-type": upstream.headers.get("content-type") ?? "application/json" } });
 }
