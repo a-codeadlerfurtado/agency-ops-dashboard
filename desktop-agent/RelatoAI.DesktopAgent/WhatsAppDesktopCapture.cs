@@ -78,8 +78,14 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
 
     private static Process? FindWhatsApp()
     {
-        var rows = Process.GetProcessesByName("WhatsApp");
+        // The current Microsoft Store build runs as WhatsApp.Root.exe, while
+        // older desktop builds use WhatsApp.exe. Match the whole WhatsApp
+        // process family so automatic capture survives app updates.
+        var rows = Process.GetProcesses()
+            .Where(p => p.ProcessName.StartsWith("WhatsApp", StringComparison.OrdinalIgnoreCase))
+            .ToArray();
         return rows.OrderByDescending(p => p.MainWindowHandle != IntPtr.Zero)
+            .ThenByDescending(p => string.Equals(p.MainWindowTitle, "WhatsApp", StringComparison.OrdinalIgnoreCase))
             .ThenByDescending(p => !string.IsNullOrWhiteSpace(p.MainWindowTitle))
             .FirstOrDefault();
     }

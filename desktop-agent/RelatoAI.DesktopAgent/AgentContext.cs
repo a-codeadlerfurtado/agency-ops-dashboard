@@ -79,7 +79,20 @@ internal sealed class AgentContext : ApplicationContext
 
     private void UpdateStatus(string text)
     {
-        statusItem.Text = text.Length > 70 ? text[..70] : text;
+        var display = text.Length > 70 ? text[..70] : text;
+        if (statusItem.Text == display) return;
+        statusItem.Text = display;
+        try
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "RelatoAI");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(
+                Path.Combine(dir, "desktop-agent.log"),
+                $"{DateTimeOffset.Now:O}\t{text}{Environment.NewLine}");
+        }
+        catch { }
     }
 
     private void Post(Action action)
