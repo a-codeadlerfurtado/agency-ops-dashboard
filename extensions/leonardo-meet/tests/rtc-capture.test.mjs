@@ -36,6 +36,15 @@ function nested(path, leaf) {
   return current;
 }
 
+
+async function waitFor(predicate, timeoutMs = 1000) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error("wait_for_timeout");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 class FakeChannel {
   constructor(label) { this.label = label; this.readyState = "open"; this.listeners = new Map(); }
   addEventListener(type, handler) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(handler); }
@@ -89,7 +98,7 @@ pc.dispatch("datachannel", { channel: collections });
 
 const leaf = concat(strField(1, "spaces/abc/devices/145"), strField(2, "Adler Furtado"));
 collections.emit("message", { data: exactArrayBuffer(nested([1, 2, 13, 1, 2], leaf)) });
-await new Promise((resolve) => setTimeout(resolve, 0));
+await waitFor(() => messages.some((message) => message.type === "SPEAKER_MAP"));
 
 const innerV1 = concat(strField(1, "@145"), intField(2, 7), intField(3, 1), strField(6, "Olá"), intField(8, 1));
 const innerV2 = concat(strField(1, "@145"), intField(2, 7), intField(3, 2), strField(6, "Olá mundo"), intField(8, 1));
@@ -98,7 +107,7 @@ assert.ok(captions, "captions channel should be created after collections opens"
 
 captions.emit("message", { data: exactArrayBuffer(gzipSync(lenField(1, innerV1))) });
 captions.emit("message", { data: exactArrayBuffer(gzipSync(lenField(1, innerV2))) });
-await new Promise((resolve) => setTimeout(resolve, 20));
+await waitFor(() => messages.some((message) => message.type === "CAPTION" && message.payload?.message_version === 2));
 
 const speaker = messages.find((message) => message.type === "SPEAKER_MAP")?.payload;
 assert.equal(speaker?.deviceKey, "@145");

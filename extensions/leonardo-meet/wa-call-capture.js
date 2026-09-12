@@ -97,8 +97,22 @@
     };
   }
 
+  const nativeReplaceTrack = window.RTCRtpSender?.prototype?.replaceTrack;
+  if (nativeReplaceTrack) {
+    window.RTCRtpSender.prototype.replaceTrack = function(track) {
+      if (track?.kind === "audio") attachTrack(track, "local");
+      return nativeReplaceTrack.call(this, track);
+    };
+  }
+
+  function scanLocalTracks(pc) {
+    try { for (const sender of pc.getSenders?.() || []) if (sender?.track?.kind === "audio") attachTrack(sender.track, "local"); } catch {}
+  }
+
   function bindPc(pc) {
     pc.addEventListener("track", (event) => attachTrack(event.track, "remote"));
+    pc.addEventListener("negotiationneeded", () => scanLocalTracks(pc));
+    pc.addEventListener("signalingstatechange", () => scanLocalTracks(pc));
     pc.addEventListener("connectionstatechange", () => {
       if (["closed", "failed"].includes(pc.connectionState)) stopAll(`peer_${pc.connectionState}`);
     });
