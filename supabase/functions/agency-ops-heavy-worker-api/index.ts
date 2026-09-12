@@ -108,11 +108,14 @@ function blocoGestor(alertas: Record<string, unknown>[], nomes: Record<string, s
   return `âš ï¸ SLA estourado â€” a SDR precisa responder estes leads:\n${alertas.map((a) => linha(a, nomes)).join("\n")}`;
 }
 
+const RELATO_ZAPI_INSTANCE = "3F4D76359358E20A5B334EE998918E2A";
+const RELATO_ZAPI_PHONE = "5513997811685";
+
 async function sendWhatsApp(numero: string, texto: string) {
   const instancia = Deno.env.get("RELATO_ZAPI_INSTANCE_ID") ?? "";
   const token = Deno.env.get("RELATO_ZAPI_TOKEN") ?? "";
   const clientToken = Deno.env.get("RELATO_ZAPI_CLIENT_TOKEN") ?? Deno.env.get("ZAPI_CLIENT_TOKEN") ?? "";
-  if (instancia !== "3F4D76359358E20A5B334EE998918E2A") throw new Error("relato_zapi_wrong_instance");
+  if (instancia !== RELATO_ZAPI_INSTANCE) throw new Error("relato_zapi_wrong_instance");
   if (!token || !clientToken) throw new Error("relato_zapi_not_configured");
   const phone = numero.replace(/\D/g, "");
   const res = await fetch(`https://api.z-api.io/instances/${instancia}/token/${token}/send-text`, {
@@ -120,7 +123,37 @@ async function sendWhatsApp(numero: string, texto: string) {
     headers: { "content-type": "application/json", "Client-Token": clientToken },
     body: JSON.stringify({ phone, message: texto }),
   });
-  if (!res.ok) throw new Error(`zapi_${res.status}:${(await res.text()).slice(0, 500)}`);
+  const raw = await res.text();
+  if (!res.ok) throw new Error(`zapi_${res.status}:${raw.slice(0, 500)}`);
+  let data: Record<string, unknown> = {};
+  try { data = raw ? JSON.parse(raw) : {}; } catch {}
+  const messageId = String(data.messageId ?? data.message_id ?? data.zaapId ?? data.id ?? "").trim();
+  if (!messageId) throw new Error(`zapi_missing_message_id:${raw.slice(0, 300)}`);
+  return { message_id: messageId, instance_id: instancia, recipient_phone: phone };
+}
+
+async function confirmRelatoDelivery(messageId: string, recipientPhone: string, timeoutMs = 45000) {
+  const sb = client("agency_ops");
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { data, error } = await sb.from("whatsapp_zapi_raw")
+      .select("message_id,instance_id,connected_phone,chat_id,from_me,status,received_at")
+      .eq("message_id", messageId)
+      .order("received_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    if (data) {
+      if (String(data.instance_id ?? "") !== RELATO_ZAPI_INSTANCE) throw new Error(`relato_zapi_delivery_wrong_instance:${String(data.instance_id ?? "")}`);
+      if (String(data.connected_phone ?? "") !== RELATO_ZAPI_PHONE) throw new Error(`relato_zapi_delivery_wrong_phone:${String(data.connected_phone ?? "")}`);
+      if (!data.from_me) throw new Error("relato_zapi_delivery_not_from_me");
+      const expectedChat = recipientPhone.replace(/\D/g, "");
+      if (expectedChat && String(data.chat_id ?? "").replace(/\D/g, "") !== expectedChat) throw new Error(`relato_zapi_delivery_wrong_recipient:${String(data.chat_id ?? "")}`);
+      return data;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error(`relato_zapi_delivery_unconfirmed:${messageId}`);
 }
 
 async function getControl() {
@@ -341,9 +374,11 @@ Deno.serve(async (req) => {
 
       const message = `? Reunião processada\n\n${String(notification.title ?? "Reunião")}\n${String(notification.client_name ?? "Cliente não vinculado")}\n\nResumo e transcrição já estão disponíveis no Dashboard.`;
       try {
-        await sendWhatsApp(String(notification.recipient_phone ?? ""), message);
+        const recipientPhone = String(notification.recipient_phone ?? "");
+        const queued = await sendWhatsApp(recipientPhone, message);
+        const delivery = await confirmRelatoDelivery(queued.message_id, recipientPhone);
         await rpc("finish_meeting_ready_notification", { p_notification_id: notification.notification_id, p_ok: true, p_error: null });
-        return json({ ok: true, sent: true, notification_id: notification.notification_id });
+        return json({ ok: true, sent: true, confirmed: true, notification_id: notification.notification_id, message_id: queued.message_id, delivery });
       } catch (error) {
         await rpc("finish_meeting_ready_notification", { p_notification_id: notification.notification_id, p_ok: false, p_error: String(error instanceof Error ? error.message : error) });
         throw error;
