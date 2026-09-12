@@ -4,7 +4,7 @@ import {
 } from "./rotas/meta-oauth";
 import { rpc, sha256Hex, type Env } from "./lib/db";
 import { comCors, preflight } from "./lib/cors";
-import { trocarCodigoImobia, type EnvImobiaMetaBroker } from "./rotas/imobia-meta-broker";
+import { trocarCodigoImobia, verificarAssinaturaImobia, type EnvImobiaMetaBroker } from "./rotas/imobia-meta-broker";
 
 export { WorkflowSla } from "./sla-workflow";
 
@@ -66,6 +66,9 @@ async function rotear(req: Request, env: EnvComLimite): Promise<Response> {
       // ------------------------------------------- broker Meta da ImoBia
       if (url.pathname === "/internal/imobia/meta/exchange") {
         return trocarCodigoImobia(req, env);
+      }
+      if (url.pathname === "/internal/imobia/meta/verify-signature") {
+        return verificarAssinaturaImobia(req, env);
       }
 
       // ------------------------------------------- conexao com a Meta
