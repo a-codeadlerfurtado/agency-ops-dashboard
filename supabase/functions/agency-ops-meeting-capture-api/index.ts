@@ -227,14 +227,16 @@ Deno.serve(async (req: Request) => {
     const roles = Array.isArray(body?.roles) ? body.roles.map((v: unknown) => clean(v, 20)).filter((v: string) => ["local", "remote"].includes(v)) : [];
     if (!roles.length) return respond({ error: "audio_roles_required" }, 400);
     const safeLocal = localSessionId.replace(/[^a-zA-Z0-9._-]/g, "_");
+    const source = clean(call.source, 40).toUpperCase() === "WHATSAPP_DESKTOP" ? "WHATSAPP_DESKTOP" : "WHATSAPP_WEB";
+    const ext = clean(call.audio_ext, 12).toLowerCase() === "wav" ? "wav" : "webm";
     const audioPaths: Row = {};
-    for (const role of [...new Set(roles)]) audioPaths[role] = `calls/${device.id}/${safeLocal}/${role}.webm`;
+    for (const role of [...new Set(roles)]) audioPaths[role] = `calls/${device.id}/${safeLocal}/${role}.${ext}`;
     const sessionPayload = {
       device_id: device.id, owner_person: device.owner_person, local_session_id: localSessionId,
-      meeting_code: null, meeting_url: "https://web.whatsapp.com/", title: `Ligação WhatsApp — ${contactName}`,
-      started_at: startedAt, ended_at: endedAt, state: "UPLOADING", capture_mode: "WHATSAPP_WEB_AUDIO",
+      meeting_code: null, meeting_url: source === "WHATSAPP_WEB" ? "https://web.whatsapp.com/" : null, title: `Ligação WhatsApp — ${contactName}`,
+      started_at: startedAt, ended_at: endedAt, state: "CAPTURING", capture_mode: source === "WHATSAPP_DESKTOP" ? "WHATSAPP_DESKTOP_AUDIO" : "WHATSAPP_WEB_AUDIO",
       native_transcript_available: false, captions_available: false,
-      metadata: { source: "WHATSAPP_WEB", contact_name: contactName, audio_paths: audioPaths, finish_reason: clean(call.finish_reason, 80) || null, extension_version: clean(call.extension_version, 40) || null },
+      metadata: { source, contact_name: contactName, audio_paths: audioPaths, finish_reason: clean(call.finish_reason, 80) || null, extension_version: clean(call.extension_version, 40) || null },
       updated_at: new Date().toISOString(),
     };
     const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions").upsert(sessionPayload, { onConflict: "device_id,local_session_id" }).select("id").single();

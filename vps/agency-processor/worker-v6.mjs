@@ -240,7 +240,7 @@ async function runOverdueCycle(forcedMode = null) {
 }
 const ollamaUrl = String(process.env.OLLAMA_URL || "http://ollama:11434").replace(/\/$/, "");
 const meetingModel = process.env.MEETING_MODEL || "qwen3:1.7b";
-const meetingChunkChars = Math.max(6000, Math.min(Number(process.env.MEETING_CHUNK_CHARS || 14000), 24000));
+const meetingChunkChars = Math.max(6000, Math.min(Number(process.env.MEETING_CHUNK_CHARS || 10000), 18000));
 
 const whisperUrl = String(process.env.WHISPER_URL || "http://agency-whisper:8000/v1").replace(/\/$/, "");
 const whisperModel = process.env.WHISPER_MODEL || "Systran/faster-whisper-small";
@@ -254,7 +254,7 @@ function segmentClock(ms) {
   return `${hh}:${mm}:${ss}`;
 }
 
-async function whisperTranscribe(audio, speakerName) {
+async function whisperTranscribe(audio, speakerName, transcriptSource = "WHATSAPP_WEB_WHISPER") {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15 * 60_000);
   try {
@@ -262,9 +262,13 @@ async function whisperTranscribe(audio, speakerName) {
     if (!source.ok) throw new Error(`call_audio_download_${source.status}`);
     const bytes = await source.arrayBuffer();
     if (!bytes.byteLength) throw new Error("call_audio_empty");
-    const blob = new Blob([bytes], { type: "audio/webm" });
+    const path = String(audio.path || "").toLowerCase();
+    const isWav = path.endsWith(".wav");
+    const mime = isWav ? "audio/wav" : "audio/webm";
+    const ext = isWav ? "wav" : "webm";
+    const blob = new Blob([bytes], { type: mime });
     const form = new FormData();
-    form.append("file", blob, `${audio.role || "audio"}.webm`);
+    form.append("file", blob, `${audio.role || "audio"}.${ext}`);
     form.append("model", whisperModel);
     form.append("language", "pt");
     form.append("response_format", "verbose_json");
@@ -288,7 +292,7 @@ async function whisperTranscribe(audio, speakerName) {
       device_id: null,
       text: String(seg.text || "").trim(),
       confidence: null,
-      source: "WHATSAPP_WEB_WHISPER",
+      source: transcriptSource,
     })).filter((seg) => seg.text);
   } finally {
     clearTimeout(timeout);
@@ -303,10 +307,13 @@ async function processCallJob(job) {
   const ownerName = String(session.owner_person || "Colaborador").trim() || "Colaborador";
   const audio = Array.isArray(snapshot.audio) ? snapshot.audio : [];
   if (!audio.length) throw new Error("call_audio_not_found");
+  const transcriptSource = String(session.capture_mode || "").toUpperCase() === "WHATSAPP_DESKTOP_AUDIO"
+    ? "WHATSAPP_DESKTOP_WHISPER"
+    : "WHATSAPP_WEB_WHISPER";
   const collected = [];
   for (const item of audio) {
     const speaker = item.role === "local" ? ownerName : contactName;
-    const rows = await whisperTranscribe(item, speaker);
+    const rows = await whisperTranscribe(item, speaker, transcriptSource);
     for (const row of rows) collected.push(row);
   }
   collected.sort((a,b) => Number(a.started_ms || 0) - Number(b.started_ms || 0));
@@ -378,7 +385,7 @@ async function ollamaJson(prompt, timeoutMs = 180000) {
         stream: false,
         think: false,
         format: analysisSchema,
-        options: { temperature: 0.1, num_ctx: 32768, num_predict: 4096 },
+        options: { temperature: 0.1, num_ctx: 8192, num_predict: 2048 },
       }),
       signal: controller.signal,
     });

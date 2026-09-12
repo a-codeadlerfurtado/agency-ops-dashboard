@@ -199,10 +199,13 @@ Deno.serve(async (req) => {
       if (!sessionId || !transcriptText) return json({ error: "call_commit_data_required" }, 400);
       const sb = client("agency_ops");
       const { data: session, error: sessionError } = await sb.from("meeting_capture_sessions")
-        .select("id,owner_person,local_session_id,title,started_at,ended_at,metadata,transcript_id")
+        .select("id,owner_person,local_session_id,title,started_at,ended_at,capture_mode,metadata,transcript_id")
         .eq("id", sessionId).maybeSingle();
       if (sessionError) throw sessionError;
       if (!session) return json({ error: "call_session_not_found" }, 404);
+      const isDesktop = String(session.capture_mode || "").toUpperCase() === "WHATSAPP_DESKTOP_AUDIO";
+      const transcriptSource = isDesktop ? "WHATSAPP_DESKTOP_WHISPER" : "WHATSAPP_WEB_AUDIO_WHISPER";
+      const channel = isDesktop ? "WHATSAPP_DESKTOP_CALL" : "WHATSAPP_WEB_CALL";
       const rawSegments = Array.isArray(body.segments) ? body.segments.slice(0, 20000) : [];
       const segments = rawSegments.map((seg: Record<string, unknown>, index: number) => ({
         sequence_no: Number.isFinite(Number(seg.sequence_no)) ? Number(seg.sequence_no) : index,
@@ -212,7 +215,7 @@ Deno.serve(async (req) => {
         speaker_name: String(seg.speaker_name || "Participante").slice(0,160),
         text: String(seg.text || "").trim().slice(0,8000),
         confidence: Number.isFinite(Number(seg.confidence)) ? Math.max(0, Math.min(1, Number(seg.confidence))) : null,
-        source: "WHATSAPP_WEB_AUDIO_WHISPER",
+        source: transcriptSource,
       })).filter((seg: Record<string, unknown>) => String(seg.text || "").length > 0);
       const durationSeconds = session.started_at && session.ended_at
         ? Math.max(0, Math.round((Date.parse(String(session.ended_at)) - Date.parse(String(session.started_at))) / 1000)) : null;
@@ -223,23 +226,22 @@ Deno.serve(async (req) => {
         source_system: "RELATO_AI",
         source_file_id: session.local_session_id,
         source_file_name: `WhatsApp Call - ${contactName}.txt`,
-        source_url: "https://web.whatsapp.com/",
+        source_url: isDesktop ? null : "https://web.whatsapp.com/",
         meeting_key: `relato:whatsapp:${session.owner_person}:${session.local_session_id}:${session.started_at}`,
         meeting_code: null,
         meeting_started_at: session.started_at,
         meeting_ended_at: session.ended_at,
         duration_seconds: durationSeconds,
         transcript_text: transcriptText,
-        transcript_chars: transcriptText.length,
         content_sha256: contentHash,
         source_file_ids: [session.local_session_id],
         copies_seen: 1,
         participants,
         owner_person: session.owner_person,
         processing_status: "CAPTURED",
-        transcript_source: "WHATSAPP_WEB_AUDIO_WHISPER",
+        transcript_source: transcriptSource,
         capture_session_id: session.id,
-        metadata: { ...(session.metadata || {}), capture_mode: "WHATSAPP_WEB_AUDIO", channel: "WHATSAPP_WEB_CALL" },
+        metadata: { ...(session.metadata || {}), capture_mode: session.capture_mode, channel },
         updated_at: new Date().toISOString(),
       };
       let transcript: Record<string, unknown> | null = null;
