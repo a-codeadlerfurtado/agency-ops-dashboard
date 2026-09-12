@@ -6,6 +6,28 @@ const ALLOWED_ORIGINS = new Set([
   "http://localhost:3000",
   "http://localhost:5173",
 ]);
+/**
+ * Previews do MESMO Worker tambem podem chamar a API.
+ *
+ * O `wrangler versions upload` publica em
+ * https://<versao>-agency-ops-dashboard.lakassessoriadigital.workers.dev, uma
+ * origem diferente da canonica. Sem isto o browser bloqueia a chamada antes de
+ * sair, o dashboard fica eternamente em "Atualizando..." e qualquer diagnostico
+ * feito em preview mede o CORS, nao o bug que se quer investigar.
+ *
+ * Casa por hostname exato, nunca por `includes`: "evil-agency-ops-dashboard.
+ * lakassessoriadigital.workers.dev.attacker.com" nao pode passar. O prefixo de
+ * versao e' restrito ao alfabeto que a Cloudflare usa (hex e hifen).
+ */
+const PREVIEW_HOST = /^[0-9a-f][0-9a-f-]{0,62}-agency-ops-dashboard\.lakassessoriadigital\.workers\.dev$/;
+
+function origemPermitida(origin: string): boolean {
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  let url: URL;
+  try { url = new URL(origin); } catch { return false; }
+  if (url.protocol !== "https:") return false;
+  return PREVIEW_HOST.test(url.hostname);
+}
 const CORS_BASE = {
   "access-control-allow-headers": "content-type,x-dashboard-key,authorization,apikey",
   "access-control-allow-methods": "GET,POST,OPTIONS",
@@ -20,7 +42,7 @@ const number = (value: unknown) => Number(value ?? 0);
 const value = <T>(result: any, fallback: T): T => result?.error ? fallback : (result?.data ?? fallback);
 const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
 const SYNTHETIC_NAME = /^[A-Za-z]+-\d{9,}-[a-z0-9]{4,8}$/;
-const ALL_VIEWS = ["overview","focus","work","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health","opsperf","creative","view-oncall","finance","executive"];
+const ALL_VIEWS = ["overview","focus","work","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health","opsperf","creative","view-oncall","capacity","finance","executive"];
 const opsDay = (date = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
 
 const aggregateMedia = (rows: any[]) => {
@@ -51,7 +73,7 @@ const aggregateTaskLog = (rows: any[]) => {
 Deno.serve(async (req) => {
   const requestId = crypto.randomUUID();
   const origin = req.headers.get("origin");
-  const originAllowed = !origin || ALLOWED_ORIGINS.has(origin);
+  const originAllowed = !origin || origemPermitida(origin);
   const cors = origin && originAllowed ? { ...CORS_BASE, "access-control-allow-origin": origin, "vary": "Origin" } : CORS_BASE;
   const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
     status,
@@ -177,6 +199,45 @@ Deno.serve(async (req) => {
   if (!canViewOperationalAlerts) allowedViews = allowedViews.filter((key) => key !== "alerts");
   const canView = (key: string) => allowedViews.includes(key);
 
+  if (req.method === "GET" && view === "capacity") {
+    if (isLocked || !isAdler || !canView("capacity")) return respond({ error: "forbidden" }, 403);
+    const historySince = opsDay(new Date(Date.now() - 89 * 86400000));
+    const [metricsRes, settingsRes, overridesRes, weightsRes, growthRes, historyRes, rosterRes, termsRes] = await Promise.all([
+      ops.rpc("capacity_current_metrics"),
+      ops.from("capacity_settings").select("*").eq("active", true).order("scope_type").order("scope_id"),
+      ops.from("client_workload_overrides").select("*").order("updated_at", { ascending: false }),
+      ops.from("workload_weight_config").select("*").order("metric_key"),
+      ops.rpc("capacity_growth_summary"),
+      ops.from("operational_capacity_snapshots").select("snapshot_date,scope_type,scope_id,client_count,metadata,created_at").eq("scope_type", "CLIENT").gte("snapshot_date", historySince).order("snapshot_date", { ascending: true }).limit(12000),
+      ops.from("team_roster").select("person,role,access_level,is_former").eq("role", "GT").eq("is_former", false).order("person"),
+      ops.from("client_private_commercial_terms").select("client_id,monthly_value,service_fee_amount,service_fee_cadence,verified,confidence").limit(500),
+    ]);
+    if (metricsRes.error) return queryFailed(metricsRes.error);
+    if (settingsRes.error) return queryFailed(settingsRes.error);
+    if (overridesRes.error) return queryFailed(overridesRes.error);
+    if (weightsRes.error) return queryFailed(weightsRes.error);
+    if (historyRes.error) return queryFailed(historyRes.error);
+    if (rosterRes.error) return queryFailed(rosterRes.error);
+    const terms = termsRes.error ? [] : (termsRes.data ?? []);
+    const liveIds = new Set((metricsRes.data ?? []).map((row: any) => String(row.client_id)));
+    const commercialTerms = terms.filter((row: any) => liveIds.has(String(row.client_id)));
+    return respond({
+      metrics: metricsRes.data ?? [],
+      settings: settingsRes.data ?? [],
+      overrides: overridesRes.data ?? [],
+      weights: weightsRes.data ?? [],
+      growth: growthRes.error ? null : growthRes.data,
+      history: historyRes.data ?? [],
+      roster: rosterRes.data ?? [],
+      commercial_terms: commercialTerms,
+      calibration: {
+        configured_people: (settingsRes.data ?? []).filter((row: any) => row.scope_type === "PERSON" && Number(row.capacity_points) > 0).length,
+        active_gts: (rosterRes.data ?? []).length,
+      },
+      generated_at: new Date().toISOString(),
+    });
+  }
+
   if (req.method === "GET" && view === "creative") {
     if (isLocked || !canView("creative")) return respond({ error: "forbidden" }, 403);
     const [clientResult, ruleResult, candidateResult, brandResult, materialResult, adjustmentResult, briefingResult] = await Promise.all([
@@ -200,6 +261,56 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     if (view === "adjustment-create") return respond({ error: "deprecated_diary_endpoint" }, 410);
     if (view === "tasklog-create") return respond({ error: "deprecated_tasklog_endpoint" }, 410);
+    if (view === "capacity-setting-upsert") {
+      if (isLocked || !isAdler || !canView("capacity")) return respond({ error: "forbidden" }, 403);
+      const scopeType = String(body.scope_type ?? "PERSON").toUpperCase();
+      const scopeId = String(body.scope_id ?? "").trim();
+      if (!scopeId || !["PERSON","AREA"].includes(scopeType)) return respond({ error: "missing_fields" }, 400);
+      const rawCapacity = body.capacity_points;
+      const capacityPoints = rawCapacity === null || rawCapacity === "" ? null : Number(rawCapacity);
+      if (capacityPoints !== null && (!Number.isFinite(capacityPoints) || capacityPoints <= 0)) return respond({ error: "invalid_capacity" }, 400);
+      const warning = Number(body.warning_threshold ?? 70);
+      const high = Number(body.high_threshold ?? 85);
+      const critical = Number(body.critical_threshold ?? 90);
+      const overload = Number(body.overload_threshold ?? 100);
+      if (![warning,high,critical,overload].every(Number.isFinite) || !(warning < high && high < critical && critical <= overload)) return respond({ error: "invalid_thresholds" }, 400);
+      const leadTime = Math.max(1, Math.min(180, Math.round(Number(body.hiring_lead_time_days ?? 14))));
+      const monthlyCostRaw = body.monthly_cost;
+      const monthlyCost = monthlyCostRaw === null || monthlyCostRaw === "" ? null : Number(monthlyCostRaw);
+      const result = await ops.from("capacity_settings").upsert({
+        scope_type: scopeType, scope_id: scopeId, capacity_points: capacityPoints,
+        warning_threshold: warning, high_threshold: high, critical_threshold: critical,
+        overload_threshold: overload, hiring_lead_time_days: leadTime,
+        monthly_cost: Number.isFinite(monthlyCost as number) ? monthlyCost : null,
+        active: body.active !== false, metadata: typeof body.metadata === "object" && body.metadata ? body.metadata : {},
+        updated_by: profilePerson ?? "Adler Furtado", updated_at: new Date().toISOString(),
+      }, { onConflict: "scope_type,scope_id" }).select().single();
+      if (result.error) return queryFailed(result.error);
+      return respond({ ok: true, setting: result.data });
+    }
+    if (view === "capacity-override-upsert") {
+      if (isLocked || !isAdler || !canView("capacity")) return respond({ error: "forbidden" }, 403);
+      const clientId = String(body.client_id ?? "");
+      if (!clientId) return respond({ error: "missing_fields", required: ["client_id"] }, 400);
+      if (body.clear === true) {
+        const removed = await ops.from("client_workload_overrides").delete().eq("client_id", clientId).select("client_id");
+        if (removed.error) return queryFailed(removed.error);
+        return respond({ ok: true, cleared: true });
+      }
+      const score = Number(body.score_override);
+      const reason = String(body.reason ?? "").trim();
+      if (!Number.isFinite(score) || score <= 0 || score > 3 || !reason) return respond({ error: "invalid_override" }, 400);
+      const { data: client } = await ops.from("clients").select("id").eq("id", clientId).maybeSingle();
+      if (!client) return respond({ error: "client_not_found" }, 404);
+      const result = await ops.from("client_workload_overrides").upsert({
+        client_id: clientId, score_override: score, reason: reason.slice(0, 1000),
+        valid_until: body.valid_until || null, created_by: profilePerson ?? "Adler Furtado",
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "client_id" }).select().single();
+      if (result.error) return queryFailed(result.error);
+      return respond({ ok: true, override: result.data });
+    }
+
     if (view === "notifications-read") {
       const { data: candidates, error: candidateError } = await ops.from("platform_notifications").select("id,type,client_id,metadata").order("occurred_at", { ascending: false }).limit(1000);
       if (candidateError) return queryFailed(candidateError);
