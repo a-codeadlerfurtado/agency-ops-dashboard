@@ -25,6 +25,26 @@ function activate(name) {
 }
 tabs.forEach((button) => button.addEventListener("click", () => activate(button.dataset.tab)));
 
+
+function setHealth(id, label, tone = "") {
+  const el = $(id);
+  if (!el) return;
+  el.textContent = label;
+  el.className = `health-pill${tone ? ` ${tone}` : ""}`;
+}
+
+function renderHealth(state, rowsLength = 0) {
+  const rtcOk = Boolean(state?.rtc_active || (Array.isArray(state?.rtc_channels) && state.rtc_channels.length));
+  setHealth("healthRtc", rtcOk ? "RTC Â· conectado" : "RTC Â· aguardando", rtcOk ? "ok" : "warn");
+  const captionState = String(state?.captions_state || "unknown");
+  if (captionState === "active") setHealth("healthCaptions", "Legendas Â· ativas", "ok");
+  else if (captionState === "enabling") setHealth("healthCaptions", "Legendas Â· ativando", "warn");
+  else if (captionState === "rate_limited") setHealth("healthCaptions", "Legendas Â· retry limitado", "warn");
+  else setHealth("healthCaptions", "Legendas Â· inativas", "bad");
+  const hasFrames = rowsLength > 0 || Boolean(state?.first_caption_at);
+  setHealth("healthFrames", hasFrames ? "Frames Â· recebendo" : "Frames Â· aguardando", hasFrames ? "ok" : "warn");
+}
+
 function escapeHtml(value) {
   return String(value || "").replace(/[&<>"']/g, (ch) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
@@ -43,6 +63,7 @@ async function loadLive() {
   ]);
   currentSession = session;
   paused = Boolean(status?.state?.paused);
+  renderHealth(status?.state || {}, 0);
   $("ownerName").textContent = status?.device?.owner_person || "—";
   $("ownerState").textContent = status?.paired ? "Conectado" : "Não conectado";
   $("toggleCapture").textContent = paused ? "Retomar transcrição" : "Parar transcrição";
@@ -66,6 +87,7 @@ async function loadLive() {
   ]));
   $("infoParticipants").textContent = [...new Set([...speakerMap.values()].filter(Boolean))].join(", ") || "Identificando…";
   const rows = [...frames].sort((a, b) => Number(a.offset_ms || 0) - Number(b.offset_ms || 0));
+  renderHealth(status?.state || {}, rows.length);
   const last = rows.at(-1);
   const signature = `${session.id}:${rows.length}:${last?.message_version || 0}:${last?.text || ""}`;
   if (signature === lastSignature) return;
@@ -82,6 +104,16 @@ async function loadLive() {
   const box = $("transcript");
   box.scrollTop = box.scrollHeight;
 }
+
+
+$("retryCaptions")?.addEventListener("click", async () => {
+  const tabId = currentSession?.tab_id;
+  if (tabId == null) return;
+  await chrome.tabs.sendMessage(tabId, { type: "RELATO_FORCE_CAPTIONS" }).catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  lastSignature = "";
+  await loadLive().catch(() => {});
+});
 
 $("refresh").addEventListener("click", () => {
   lastSignature = "";

@@ -190,6 +190,30 @@ Deno.serve(async (req: Request) => {
       version: VERSION,
     });
   }
+  if (action === "session_heartbeat") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const raw = (body?.session || {}) as Row;
+    const localSessionId = clean(raw.local_session_id || raw.id, 180);
+    const startedAt = clean(raw.started_at, 80);
+    if (!localSessionId || !Number.isFinite(Date.parse(startedAt))) return respond({ error: "invalid_session_heartbeat" }, 400);
+    const requestedState = clean(raw.state, 40).toUpperCase();
+    const allowedState = ["CAPTURING","NEEDS_REVIEW","FINISHING"].includes(requestedState) ? requestedState : "CAPTURING";
+    const payload = {
+      device_id: device.id, owner_person: device.owner_person, local_session_id: localSessionId,
+      meeting_code: clean(raw.meeting_code, 80) || null, meeting_url: clean(raw.meeting_url, 1000) || null,
+      title: clean(raw.title, 500) || "ReuniÃ£o Google Meet", started_at: startedAt,
+      ended_at: Number.isFinite(Date.parse(clean(raw.ended_at,80))) ? clean(raw.ended_at,80) : null,
+      state: allowedState, capture_mode: clean(raw.capture_mode,40) || "MEET_RTC_CAPTIONS",
+      native_transcript_available: false, captions_available: Boolean(raw.captions_available),
+      metadata: { ...(raw.metadata || {}), extension_version: clean(raw.extension_version,40) || null, heartbeat_at: new Date().toISOString(), last_error: clean(raw.last_error,500) || null },
+      updated_at: new Date().toISOString(),
+    };
+    const { data, error } = await ops.from("meeting_capture_sessions").upsert(payload, { onConflict: "device_id,local_session_id" }).select("id,state,meeting_code,owner_person").single();
+    if (error) return respond({ error: "session_heartbeat_failed", detail: error.message }, 500);
+    return respond({ ok: true, session: data });
+  }
+
   if (action === "call_prepare") {
     const device = await resolveDevice(req, ops);
     if (!device) return respond({ error: "invalid_device" }, 401);

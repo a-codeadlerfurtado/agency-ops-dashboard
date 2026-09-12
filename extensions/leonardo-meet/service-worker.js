@@ -68,8 +68,10 @@ async function deliver(payload) {
 }
 
 async function setCaptureState(state) {
-  await chrome.storage.local.set({ [STATE_KEY]: state });
-  await chrome.action.setBadgeText({ text: state?.active ? "REC" : state?.error ? "!" : "" });
+  const previous = (await chrome.storage.local.get(STATE_KEY))[STATE_KEY] || {};
+  const merged = { ...previous, ...(state || {}), updated_at: new Date().toISOString() };
+  await chrome.storage.local.set({ [STATE_KEY]: merged });
+  await chrome.action.setBadgeText({ text: merged?.active ? "REC" : merged?.error ? "!" : "" });
 }
 
 function resolveSpeaker(frame, speakerMap) {
@@ -153,8 +155,18 @@ async function finalizeStoredSession(sessionId, finishOverride = null) {
   if (!stored) return { ok: false, error: "session_not_found" };
   const [frames, speakers] = await Promise.all([getFrames(sessionId), getSpeakers(sessionId)]);
   if (!frames.length) {
-    await putSession({ ...stored, state: "NEEDS_REVIEW", ended_at: finishOverride?.ended_at || stored.ended_at || new Date().toISOString(), last_error: "no_rtc_frames" });
-    await setCaptureState({ active: false, error: "NO_RTC_FRAMES", meeting_code: stored.meeting_code, ended_at: finishOverride?.ended_at || stored.ended_at });
+    const endedAt = finishOverride?.ended_at || stored.ended_at || new Date().toISOString();
+    const failed = { ...stored, state: "NEEDS_REVIEW", ended_at: endedAt, last_error: "no_rtc_frames" };
+    await putSession(failed);
+    await setCaptureState({ active: false, error: "NO_RTC_FRAMES", meeting_code: stored.meeting_code, ended_at: endedAt });
+    const device = await getDevice();
+    if (device?.device_token) {
+      await callApi("session_heartbeat", { session: {
+        ...failed, local_session_id: stored.id, capture_mode: "MEET_RTC_CAPTIONS",
+        captions_available: false, extension_version: chrome.runtime.getManifest().version,
+        metadata: { ...(stored.metadata || {}), diagnostics: stored.diagnostics || [] },
+      } }, device.device_token).catch(() => null);
+    }
     return { ok: false, error: "no_rtc_frames" };
   }
 
@@ -392,8 +404,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "RTC_SESSION_START") {
       const row = message.session || {};
       if (!row.id) return { ok: false, error: "session_id_required" };
-      await putSession({ ...row, tab_id: sender.tab?.id ?? null, state: "CAPTURING", attempts: 0, created_at: new Date().toISOString() });
+      const storedRow = { ...row, tab_id: sender.tab?.id ?? null, state: "CAPTURING", attempts: 0, created_at: new Date().toISOString() };
+      await putSession(storedRow);
       await setCaptureState({ active: true, meeting_code: row.meeting_code, title: row.title, started_at: row.started_at, mode: "MEET_RTC_CAPTIONS" });
+      const device = await getDevice();
+      if (device?.device_token) callApi("session_heartbeat", { session: { ...storedRow, local_session_id: row.id, capture_mode: "MEET_RTC_CAPTIONS", captions_available: false, extension_version: chrome.runtime.getManifest().version } }, device.device_token).catch(() => {});
       return { ok: true };
     }
 
