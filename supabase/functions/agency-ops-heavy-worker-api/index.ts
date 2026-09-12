@@ -3,7 +3,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.45.0";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
-const TOKEN_SHA256 = "48a435ee5c28bb73b44aeacfb8308da0f115979eda14ec9616fce4f493a5515a";
+let authCache = { value: "", expires: 0 };
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
   status,
@@ -15,10 +15,21 @@ async function sha256Hex(value: string) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+async function workerTokenSha256() {
+  if (authCache.value && authCache.expires > Date.now()) return authCache.value;
+  const sb = client("agency_ops");
+  const { data, error } = await sb.from("worker_runtime_config").select("value").eq("key", "heavy_worker_auth").maybeSingle();
+  if (error) throw error;
+  const expected = String(data?.value?.token_sha256 ?? "");
+  if (!/^[0-9a-f]{64}$/i.test(expected)) throw new Error("worker_auth_not_configured");
+  authCache = { value: expected, expires: Date.now() + 300000 };
+  return expected;
+}
+
 async function authorized(req: Request) {
   const token = req.headers.get("x-agency-worker-token") ?? "";
   if (!token || token.length < 32) return false;
-  return (await sha256Hex(token)) === TOKEN_SHA256;
+  return (await sha256Hex(token)) === await workerTokenSha256();
 }
 
 function client(schema: string) {
@@ -108,14 +119,11 @@ function blocoGestor(alertas: Record<string, unknown>[], nomes: Record<string, s
   return `âš ï¸ SLA estourado â€” a SDR precisa responder estes leads:\n${alertas.map((a) => linha(a, nomes)).join("\n")}`;
 }
 
-const RELATO_ZAPI_INSTANCE = "3F4D76359358E20A5B334EE998918E2A";
-const RELATO_ZAPI_PHONE = "5513997811685";
-
-async function sendWhatsApp(numero: string, texto: string) {
+async function sendWhatsApp(numero: string, texto: string, expectedInstance = "") {
   const instancia = Deno.env.get("RELATO_ZAPI_INSTANCE_ID") ?? "";
   const token = Deno.env.get("RELATO_ZAPI_TOKEN") ?? "";
   const clientToken = Deno.env.get("RELATO_ZAPI_CLIENT_TOKEN") ?? Deno.env.get("ZAPI_CLIENT_TOKEN") ?? "";
-  if (instancia !== RELATO_ZAPI_INSTANCE) throw new Error("relato_zapi_wrong_instance");
+  if (expectedInstance && instancia !== expectedInstance) throw new Error("relato_zapi_wrong_instance");
   if (!token || !clientToken) throw new Error("relato_zapi_not_configured");
   const phone = numero.replace(/\D/g, "");
   const res = await fetch(`https://api.z-api.io/instances/${instancia}/token/${token}/send-text`, {
@@ -132,7 +140,7 @@ async function sendWhatsApp(numero: string, texto: string) {
   return { message_id: messageId, instance_id: instancia, recipient_phone: phone };
 }
 
-async function confirmRelatoDelivery(messageId: string, recipientPhone: string, timeoutMs = 45000) {
+async function confirmRelatoDelivery(messageId: string, recipientPhone: string, expectedInstance: string, expectedConnectedPhone: string, timeoutMs = 45000) {
   const sb = client("agency_ops");
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -144,8 +152,8 @@ async function confirmRelatoDelivery(messageId: string, recipientPhone: string, 
       .maybeSingle();
     if (error) throw error;
     if (data) {
-      if (String(data.instance_id ?? "") !== RELATO_ZAPI_INSTANCE) throw new Error(`relato_zapi_delivery_wrong_instance:${String(data.instance_id ?? "")}`);
-      if (String(data.connected_phone ?? "") !== RELATO_ZAPI_PHONE) throw new Error(`relato_zapi_delivery_wrong_phone:${String(data.connected_phone ?? "")}`);
+      if (String(data.instance_id ?? "") !== expectedInstance) throw new Error(`relato_zapi_delivery_wrong_instance:${String(data.instance_id ?? "")}`);
+      if (String(data.connected_phone ?? "") !== expectedConnectedPhone) throw new Error(`relato_zapi_delivery_wrong_phone:${String(data.connected_phone ?? "")}`);
       if (!data.from_me) throw new Error("relato_zapi_delivery_not_from_me");
       const expectedChat = recipientPhone.replace(/\D/g, "");
       if (expectedChat && String(data.chat_id ?? "").replace(/\D/g, "") !== expectedChat) throw new Error(`relato_zapi_delivery_wrong_recipient:${String(data.chat_id ?? "")}`);
@@ -367,6 +375,9 @@ Deno.serve(async (req) => {
       if (cfgError) throw cfgError;
       const cfg = (cfgRow?.value ?? {}) as Record<string, unknown>;
       if (String(cfg.mode ?? "off") !== "execute") return json({ ok: true, skipped: true, reason: "meeting_notifications_off" });
+      const expectedInstance = String(cfg.instance_id ?? "").trim();
+      const expectedConnectedPhone = String(cfg.connected_phone ?? "").replace(/\D/g, "");
+      if (!expectedInstance || !expectedConnectedPhone) throw new Error("meeting_notifications_sender_not_configured");
 
       const claimed = await rpc("claim_meeting_ready_notification", { p_transcript_id: transcriptId }) as Array<Record<string, unknown>>;
       const notification = Array.isArray(claimed) ? claimed[0] : null;
@@ -375,8 +386,8 @@ Deno.serve(async (req) => {
       const message = `? Reunião processada\n\n${String(notification.title ?? "Reunião")}\n${String(notification.client_name ?? "Cliente não vinculado")}\n\nResumo e transcrição já estão disponíveis no Dashboard.`;
       try {
         const recipientPhone = String(notification.recipient_phone ?? "");
-        const queued = await sendWhatsApp(recipientPhone, message);
-        const delivery = await confirmRelatoDelivery(queued.message_id, recipientPhone);
+        const queued = await sendWhatsApp(recipientPhone, message, expectedInstance);
+        const delivery = await confirmRelatoDelivery(queued.message_id, recipientPhone, expectedInstance, expectedConnectedPhone);
         await rpc("finish_meeting_ready_notification", { p_notification_id: notification.notification_id, p_ok: true, p_error: null });
         return json({ ok: true, sent: true, confirmed: true, notification_id: notification.notification_id, message_id: queued.message_id, delivery });
       } catch (error) {
