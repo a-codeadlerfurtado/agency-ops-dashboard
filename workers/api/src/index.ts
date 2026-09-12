@@ -4,10 +4,11 @@ import {
 } from "./rotas/meta-oauth";
 import { rpc, sha256Hex, type Env } from "./lib/db";
 import { comCors, preflight } from "./lib/cors";
+import { trocarCodigoImobia, type EnvImobiaMetaBroker } from "./rotas/imobia-meta-broker";
 
 export { WorkflowSla } from "./sla-workflow";
 
-interface EnvComLimite extends EnvMeta {
+interface EnvComLimite extends EnvMeta, EnvImobiaMetaBroker {
   /** Rate limiting nativo da Cloudflare: sem Redis, sem KV, sem custo extra. */
   LIMITE_INGEST?: { limit(o: { key: string }): Promise<{ success: boolean }> };
   META_VERIFY_TOKEN?: string;
@@ -60,6 +61,11 @@ async function rotear(req: Request, env: EnvComLimite): Promise<Response> {
         }
 
         return ingerir(req, env, integracao);
+      }
+
+      // ------------------------------------------- broker Meta da ImoBia
+      if (url.pathname === "/internal/imobia/meta/exchange") {
+        return trocarCodigoImobia(req, env);
       }
 
       // ------------------------------------------- conexao com a Meta
