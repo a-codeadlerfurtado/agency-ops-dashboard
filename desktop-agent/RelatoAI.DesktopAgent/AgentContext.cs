@@ -9,6 +9,7 @@ internal sealed class AgentContext : ApplicationContext
     private readonly ToolStripMenuItem finishItem;
     private readonly WhatsAppDesktopCapture capture;
     private readonly Control dispatcher = new();
+    private RecordingIndicatorForm? recordingIndicator;
 
     public AgentContext()
     {
@@ -39,12 +40,15 @@ internal sealed class AgentContext : ApplicationContext
         {
             finishItem.Enabled = true;
             tray.Text = "Relato AI · REC WhatsApp";
+            recordingIndicator ??= new RecordingIndicatorForm();
+            recordingIndicator.ShowIndicator("WhatsApp Desktop");
             tray.ShowBalloonTip(2000, "Relato AI", $"Gravando chamada com {contact}", ToolTipIcon.Info);
         });
         capture.CallEnded += (sessionId, _) => Post(() =>
         {
             finishItem.Enabled = false;
             tray.Text = "Relato AI Desktop Agent";
+            recordingIndicator?.HideIndicator();
             tray.ShowBalloonTip(1500, "Relato AI", "Ligação encerrada. Enviando em segundo plano...", ToolTipIcon.Info);
             using var form = new FeedbackForm(config, sessionId);
             form.ShowDialog();
@@ -108,6 +112,7 @@ internal sealed class AgentContext : ApplicationContext
 
     protected override void ExitThreadCore()
     {
+        recordingIndicator?.Dispose();
         capture.Dispose();
         dispatcher.Dispose();
         tray.Visible = false;

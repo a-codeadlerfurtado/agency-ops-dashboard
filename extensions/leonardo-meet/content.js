@@ -1,4 +1,4 @@
-const VERSION = "0.3.1";
+const VERSION = "0.3.2";
 const MEETING_CODE_RE = /\/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})(?:[/?#]|$)/i;
 const LEAVE_RE = /(sair da chamada|encerrar chamada|sair da reunião|leave call|leave meeting|hang up|desligar)/i;
 const JOIN_RE = /(participar agora|pedir para participar|join now|ask to join)/i;
@@ -32,11 +32,34 @@ let lastRtcStatus = null;
 let captionAttemptTimestamps = [];
 let ownerPerson = "";
 let localDeviceKey = "";
+let recordingOverlay = null;
 const prebuffer = [];
 const speakerPrebuffer = new Map();
 
 function nowIso() { return new Date().toISOString(); }
 function norm(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
+
+function showRecordingOverlay(source = "Google Meet") {
+  if (recordingOverlay) return;
+  recordingOverlay = document.createElement("div");
+  recordingOverlay.id = "relato-recording-indicator";
+  recordingOverlay.innerHTML = `<span data-relato-dot>●</span><span><strong>Relato AI</strong> · Gravando e transcrevendo<small>${source}</small></span>`;
+  Object.assign(recordingOverlay.style, {
+    position: "fixed", top: "14px", right: "14px", zIndex: "2147483647",
+    display: "flex", alignItems: "center", gap: "9px", padding: "9px 12px",
+    borderRadius: "999px", background: "rgba(11,22,43,.96)", color: "#f3f7ff",
+    border: "1px solid rgba(79,108,166,.75)", font: "600 12px system-ui",
+    boxShadow: "0 10px 28px rgba(0,0,0,.32)", pointerEvents: "none", backdropFilter: "blur(10px)"
+  });
+  const dot = recordingOverlay.querySelector("[data-relato-dot]");
+  Object.assign(dot.style, { color: "#ef4444", fontSize: "16px", lineHeight: "1" });
+  const small = recordingOverlay.querySelector("small");
+  Object.assign(small.style, { display: "block", color: "#97a9ca", fontSize: "10px", marginTop: "1px" });
+  dot.animate([{ opacity: .45, transform: "scale(.86)" }, { opacity: 1, transform: "scale(1.06)" }, { opacity: .45, transform: "scale(.86)" }], { duration: 1400, iterations: Infinity });
+  document.documentElement.appendChild(recordingOverlay);
+}
+
+function hideRecordingOverlay() { recordingOverlay?.remove(); recordingOverlay = null; }
 
 function getMeetingCode(pathname = location.pathname) {
   return pathname.match(MEETING_CODE_RE)?.[1]?.toLowerCase() || null;
@@ -283,6 +306,7 @@ async function beginSession() {
   };
   warningSent = false;
   await runtime({ type: "RTC_SESSION_START", session: { ...session, extension_version: VERSION } });
+  showRecordingOverlay("Google Meet");
   for (const speaker of speakerPrebuffer.values()) await runtime({ type: "RTC_SPEAKER_MAP", session_id: session.id, speaker });
   speakerPrebuffer.clear();
   for (const frame of prebuffer.splice(0)) await runtime({ type: "RTC_CAPTION", session_id: session.id, frame: { ...frame, offset_ms: Math.max(0, Number(frame.observed_at || Date.now()) - started) } });
@@ -295,6 +319,7 @@ async function endSession(reason = "left_call") {
   if (!session) return;
   const closing = session;
   session = null;
+  hideRecordingOverlay();
   const endedAt = nowIso();
   await runtime({
     type: "RTC_SESSION_FINISH",

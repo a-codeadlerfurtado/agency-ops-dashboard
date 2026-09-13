@@ -24,13 +24,19 @@
     if (overlay) return;
     overlay = document.createElement("div");
     overlay.id = "relato-wa-call-indicator";
-    overlay.textContent = "Relato AI · REC chamada";
+    overlay.innerHTML = `<span data-relato-dot>●</span><span><strong>Relato AI</strong> · Gravando e transcrevendo<small>WhatsApp Web</small></span>`;
     Object.assign(overlay.style, {
       position: "fixed", top: "14px", right: "14px", zIndex: "2147483647",
-      padding: "8px 11px", borderRadius: "999px", background: "#0b162b",
-      color: "#f3f7ff", border: "1px solid #4f6ca6", font: "700 12px system-ui",
-      boxShadow: "0 8px 24px rgba(0,0,0,.28)", pointerEvents: "none",
+      display: "flex", alignItems: "center", gap: "9px", padding: "9px 12px",
+      borderRadius: "999px", background: "rgba(11,22,43,.96)", color: "#f3f7ff",
+      border: "1px solid rgba(79,108,166,.75)", font: "600 12px system-ui",
+      boxShadow: "0 10px 28px rgba(0,0,0,.32)", pointerEvents: "none", backdropFilter: "blur(10px)"
     });
+    const dot = overlay.querySelector("[data-relato-dot]");
+    Object.assign(dot.style, { color: "#ef4444", fontSize: "16px", lineHeight: "1" });
+    const small = overlay.querySelector("small");
+    Object.assign(small.style, { display: "block", color: "#97a9ca", fontSize: "10px", marginTop: "1px" });
+    dot.animate([{ opacity: .45, transform: "scale(.86)" }, { opacity: 1, transform: "scale(1.06)" }, { opacity: .45, transform: "scale(.86)" }], { duration: 1400, iterations: Infinity });
     document.documentElement.appendChild(overlay);
   }
   function hideOverlay() { overlay?.remove(); overlay = null; }
