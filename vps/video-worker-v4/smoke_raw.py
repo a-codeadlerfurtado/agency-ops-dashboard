@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import worker as w
-import worker_v43  # patches worker in-place with V4.3 vision/director/render path
+import worker_v431  # patches worker in-place with V4.3.1 vision/director/render/QA path
 
 
 def env_json(name: str):
@@ -43,7 +43,7 @@ def main() -> int:
     if not output_folder:
         raise RuntimeError("SMOKE_OUTPUT_FOLDER_ID_missing")
 
-    job_id = "v43-direct-smoke-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    job_id = "v431-direct-smoke-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     product_context = {"target_duration_seconds": target}
     for env_name, key in [
         ("SMOKE_PRICE", "price"),
@@ -63,7 +63,7 @@ def main() -> int:
         "product_id": "raw-property-test",
         "product_name": product_name,
         "strategy_version": "dynamic-strategy-v3",
-        "context_version": "direct-smoke-v43",
+        "context_version": "direct-smoke-v431",
         "product_context": product_context,
         "client_context": {"client": {"name": client_name} if client_name else {}, "fields": {}},
         "edit_strategy": {
@@ -75,7 +75,7 @@ def main() -> int:
         "output_drive_folder_id": output_folder,
     }
 
-    jobdir = Path(tempfile.mkdtemp(prefix="v43-direct-smoke-", dir=w.WORK))
+    jobdir = Path(tempfile.mkdtemp(prefix="v431-direct-smoke-", dir=w.WORK))
     try:
         paths = []
         total = 0
@@ -97,14 +97,14 @@ def main() -> int:
             }, ensure_ascii=False), flush=True)
 
         timeline = w.build_timeline(job, inputs, analyses)
-        output = jobdir / "V43_RAW_REAL_ESTATE_SMOKE.mp4"
+        output = jobdir / "V431_RAW_REAL_ESTATE_SMOKE.mp4"
         render_meta = w.render_timeline(paths, analyses, timeline, jobdir, output)
         report = w.qa(output, float(timeline["duration"]))
         print(json.dumps({"event": "qa", "pass": report["pass"], "checks": report["checks"], "render": render_meta}, ensure_ascii=False), flush=True)
         if not report["pass"]:
             raise RuntimeError("qa_failed:" + json.dumps(report["checks"]))
 
-        uploaded = w.drive_upload(output, output.name, output_folder, job_id, "v43_raw_real_smoke")
+        uploaded = w.drive_upload(output, output.name, output_folder, job_id, "v431_raw_real_smoke")
         result = {
             "ok": True,
             "job_id": job_id,
