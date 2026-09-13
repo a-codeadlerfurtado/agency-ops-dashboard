@@ -264,28 +264,45 @@ def _brand_plan(timeline):
     return timeline.get("brandPlan") or {}
 
 
+def _merge_vfx_window(original, effected, out, start, duration, target):
+    start = max(0.0, float(start or 0.0))
+    duration = max(0.0, float(duration or target))
+    end = min(float(target), start + duration)
+    full = start <= 0.001 and end >= float(target) - 0.001
+    cmd = [w.FFMPEG, "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", str(original), "-i", str(effected)]
+    if full:
+        cmd += ["-map", "1:v:0", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
+    else:
+        expr = f"if(between(T,{start:.3f},{end:.3f}),B,A)"
+        cmd += ["-filter_complex", f"[0:v][1:v]blend=all_expr='{expr}'[v]", "-map", "[v]", "-map", "0:a?", "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out)]
+    w.run(cmd, 1800)
+    return out
+
+
 def _apply_vfx(base, timeline, jobdir):
     rows = next((t.get("items", []) for t in timeline.get("tracks", []) if t.get("kind") == "vfx"), [])
     current = Path(base)
     applied = []
     skipped = []
+    target = float(timeline.get("duration") or 18.0)
     for idx, req in enumerate(rows):
         effect = str(req.get("effect") or "")
         if not effect:
             continue
-        if not providers.provider_status().get("vfx_provider"):
-            skipped.append({"effect": effect, "reason": "provider_not_configured"})
-            continue
-        out = jobdir / f"vfx-{idx:02d}-{effect}.mp4"
-        result = providers.request_vfx(current, effect, req.get("params") or {}, out)
-        candidate = Path(str(result.get("output_path") or out))
+        raw = jobdir / f"vfx-{idx:02d}-{effect}-raw.mp4"
+        merged = jobdir / f"vfx-{idx:02d}-{effect}.mp4"
+        result = providers.request_vfx(current, effect, req.get("params") or {}, raw)
+        candidate = Path(str(result.get("output_path") or raw))
         if result.get("available") and candidate.exists() and candidate.stat().st_size > 0:
-            current = candidate
-            applied.append(effect)
+            try:
+                _merge_vfx_window(current, candidate, merged, req.get("start"), req.get("duration"), target)
+                current = merged
+                applied.append({"effect": effect, "provider": result.get("provider"), "start": req.get("start"), "duration": req.get("duration")})
+            except Exception as exc:
+                skipped.append({"effect": effect, "reason": f"vfx_merge_failed:{exc}"})
         else:
             skipped.append({"effect": effect, "reason": result.get("reason") or "provider_no_output"})
     return current, applied, skipped
-
 
 def decorate(base, timeline, out):
     text_items = next((t.get("items", []) for t in timeline.get("tracks", []) if t.get("kind") == "text"), [])

@@ -6,7 +6,9 @@ from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 
-PROVIDER_VERSION = "provider-hooks-v4.3.0"
+import vfx_local_v44 as localvfx
+
+PROVIDER_VERSION = "provider-hooks-v4.4.0"
 VISION_URL = os.getenv("VIDEO_VISION_PROVIDER_URL", "").strip()
 VFX_URL = os.getenv("VIDEO_VFX_PROVIDER_URL", "").strip()
 PROVIDER_TOKEN = os.getenv("VIDEO_PROVIDER_TOKEN", "").strip()
@@ -31,48 +33,43 @@ def provider_status():
         "version": PROVIDER_VERSION,
         "vision_provider": bool(VISION_URL),
         "vfx_provider": bool(VFX_URL),
+        "local_tracking": True,
+        "local_segmentation": True,
+        "local_vfx": True,
+        "local_vfx_version": localvfx.VFX_LOCAL_VERSION,
     }
 
 
 def request_tracking(video_path, request):
-    if not VISION_URL:
-        return {"available": False, "reason": "vision_provider_not_configured"}
-    payload = {
-        "action": "track",
-        "video_path": str(video_path),
-        "request": request,
-        "contract_version": PROVIDER_VERSION,
-    }
-    return {"available": True, **_post_json(VISION_URL, payload)}
+    if VISION_URL:
+        payload = {"action": "track", "video_path": str(video_path), "request": request, "contract_version": PROVIDER_VERSION}
+        return {"available": True, "provider": "external", **_post_json(VISION_URL, payload)}
+    bbox = (request or {}).get("bbox") or [0.25, 0.2, 0.5, 0.6]
+    return {"provider": "local-opencv", **localvfx.track_bbox(video_path, bbox)}
 
 
 def request_segmentation(video_path, request):
-    if not VISION_URL:
-        return {"available": False, "reason": "vision_provider_not_configured"}
-    payload = {
-        "action": "segment",
-        "video_path": str(video_path),
-        "request": request,
-        "contract_version": PROVIDER_VERSION,
-    }
-    return {"available": True, **_post_json(VISION_URL, payload)}
+    if VISION_URL:
+        payload = {"action": "segment", "video_path": str(video_path), "request": request, "contract_version": PROVIDER_VERSION}
+        return {"available": True, "provider": "external", **_post_json(VISION_URL, payload)}
+    req = request or {}
+    output_path = req.get("output_path")
+    if not output_path:
+        return {"available": True, "provider": "local-opencv", "mode": "on-demand", "bbox": req.get("bbox")}
+    return {"provider": "local-opencv", **localvfx.segment(video_path, output_path, req)}
 
 
 def request_vfx(video_path, effect, params, output_path):
     effect = str(effect)
-    if not VFX_URL:
-        return {"available": False, "reason": "vfx_provider_not_configured", "effect": effect}
-    payload = {
-        "action": "video_vfx",
-        "effect": effect,
-        "video_path": str(video_path),
-        "output_path": str(output_path),
-        "params": params or {},
-        "contract_version": PROVIDER_VERSION,
-        "requires_disclosure": effect in MATERIAL_CHANGE_EFFECTS,
-    }
-    result = _post_json(VFX_URL, payload, timeout=1800)
-    return {"available": True, "effect": effect, **result}
+    payload = {"action": "video_vfx", "effect": effect, "video_path": str(video_path), "output_path": str(output_path), "params": params or {}, "contract_version": PROVIDER_VERSION, "requires_disclosure": effect in MATERIAL_CHANGE_EFFECTS}
+    if VFX_URL:
+        result = _post_json(VFX_URL, payload, timeout=1800)
+        return {"available": True, "provider": "external", "effect": effect, **result}
+    try:
+        result = localvfx.apply_effect(video_path, effect, params or {}, output_path)
+        return {"provider": "local-opencv", "output_path": str(output_path), **result}
+    except Exception as exc:
+        return {"available": False, "provider": "local-opencv", "effect": effect, "reason": str(exc)}
 
 
 def disclosure_for(effect):

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict
 from typing import Dict, Iterable, List
 
-CAPABILITY_VERSION = "video-capabilities-v4.3.0"
+CAPABILITY_VERSION = "video-capabilities-v4.4.0"
 
 
 @dataclass(frozen=True)
@@ -42,8 +42,8 @@ _REGISTRY: Dict[str, Capability] = {
     "brand_outro": Capability("brand_outro", "ffmpeg", True, "graphics"),
     "logo_overlay": Capability("logo_overlay", "ffmpeg", True, "graphics"),
     "subtitles": Capability("subtitles", "ffmpeg", True, "graphics"),
-    "perspective_text": Capability("perspective_text", "vision-hook", False, "graphics", "Timeline node supported; needs tracked-corner provider for real scene lock."),
-    "text_behind_object": Capability("text_behind_object", "segmentation-hook", False, "graphics", "Timeline node supported; needs segmentation provider."),
+    "perspective_text": Capability("perspective_text", "local-opencv+provider", True, "graphics", "Local tracked-perspective fallback; external vision provider optional for harder scenes."),
+    "text_behind_object": Capability("text_behind_object", "local-opencv+provider", True, "graphics", "Local GrabCut/tracking fallback; external segmentation provider optional."),
     # Audio
     "music_bed": Capability("music_bed", "native", True, "audio"),
     "beat_analysis": Capability("beat_analysis", "native", True, "audio"),
@@ -55,16 +55,16 @@ _REGISTRY: Dict[str, Capability] = {
     "room_tone": Capability("room_tone", "ffmpeg", True, "audio"),
     "ambient_layer": Capability("ambient_layer", "ffmpeg", True, "audio"),
     # AI / advanced VFX routing. The engine understands these nodes and can invoke a provider.
-    "object_tracking": Capability("object_tracking", "vision-provider", False, "vision", "Provider hook implemented in V4.3; external model endpoint required."),
-    "segmentation": Capability("segmentation", "vision-provider", False, "vision", "Provider hook implemented in V4.3; external model endpoint required."),
-    "sky_replacement": Capability("sky_replacement", "vfx-provider", False, "generative_vfx", "Provider hook implemented; disclosure metadata required."),
-    "day_to_dusk": Capability("day_to_dusk", "vfx-provider", False, "generative_vfx", "Provider hook implemented; disclosure metadata required."),
-    "object_removal": Capability("object_removal", "vfx-provider", False, "generative_vfx", "Provider hook implemented; review gate required."),
-    "screen_replacement": Capability("screen_replacement", "vfx-provider", False, "generative_vfx"),
-    "room_staging": Capability("room_staging", "vfx-provider", False, "generative_vfx", "Material property change; disclosure metadata required."),
-    "lot_to_project": Capability("lot_to_project", "vfx-provider", False, "generative_vfx", "Material property change; disclosure metadata required."),
+    "object_tracking": Capability("object_tracking", "local-opencv+provider", True, "vision", "CSRT/KCF local fallback; external vision provider optional."),
+    "segmentation": Capability("segmentation", "local-opencv+provider", True, "vision", "Tracked GrabCut local fallback; semantic provider optional."),
+    "sky_replacement": Capability("sky_replacement", "local-opencv+provider", True, "generative_vfx", "Local sky mask/enhancement or supplied-sky compositing; generative provider optional."),
+    "day_to_dusk": Capability("day_to_dusk", "local-opencv+provider", True, "generative_vfx", "Local relight/grade fallback; provider optional for photoreal generative relighting."),
+    "object_removal": Capability("object_removal", "local-opencv+provider", True, "generative_vfx", "Tracked local inpainting fallback; provider optional for complex occlusions."),
+    "screen_replacement": Capability("screen_replacement", "local-opencv+provider", True, "generative_vfx"),
+    "room_staging": Capability("room_staging", "reference-composite+provider", True, "generative_vfx", "Reference-driven local tracked composite; generation from scratch requires provider."),
+    "lot_to_project": Capability("lot_to_project", "reference-composite+provider", True, "generative_vfx", "Reference-driven local tracked composite; generation from scratch requires provider."),
     "before_after": Capability("before_after", "native+vfx-provider", True, "generative_vfx"),
-    "lights_on": Capability("lights_on", "vfx-provider", False, "generative_vfx", "Provider hook implemented; disclosure metadata may be required."),
+    "lights_on": Capability("lights_on", "local-opencv+provider", True, "generative_vfx", "Local warm-light relighting fallback; provider optional."),
 }
 
 

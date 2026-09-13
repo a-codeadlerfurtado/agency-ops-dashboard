@@ -1,0 +1,102 @@
+﻿name: Video V4.4 CI
+
+on:
+  push:
+    branches: [feat/video-engine-v4]
+    paths:
+      - 'vps/video-worker-v4/**'
+      - '.github/workflows/video-v44-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-v44:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      VIDEO_WORK_DIR: /tmp/video-v44-work
+      VIDEO_MUSIC_LIBRARY_DIR: /tmp/video-v44-music
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip
+          python -m pip install 'numpy>=1.26,<3' 'opencv-contrib-python-headless>=4.10,<5'
+      - name: Compile V4.4 modules
+        run: |
+          python -m py_compile vps/video-worker-v4/*.py
+      - name: Exercise local VFX primitives
+        working-directory: vps/video-worker-v4
+        run: |
+          mkdir -p /tmp/v44
+          python - <<'PY'
+          from pathlib import Path
+          import cv2, numpy as np
+          import vfx_local_v44 as vfx
+          root=Path('/tmp/v44'); src=root/'input.mp4'
+          fps=20; w=320; h=240
+          out=cv2.VideoWriter(str(src), cv2.VideoWriter_fourcc(*'mp4v'), fps, (w,h))
+          for i in range(50):
+              f=np.zeros((h,w,3),np.uint8); f[:95]=(210,170,95); f[95:]=(55,70,82)
+              x=78+int(i*0.5); cv2.rectangle(f,(x,95),(x+95,175),(225,225,225),-1)
+              cv2.rectangle(f,(x+12,108),(x+82,160),(35,35,35),-1)
+              cv2.circle(f,(250,150),20,(210,210,210),-1); out.write(f)
+          out.release()
+          asset=np.full((100,160,3),(30,120,230),np.uint8); cv2.putText(asset,'VIEW',(15,62),cv2.FONT_HERSHEY_SIMPLEX,1.4,(255,255,255),3)
+          assetp=root/'asset.jpg'; cv2.imwrite(str(assetp),asset)
+          tr=vfx.track_bbox(src,[0.24,0.38,0.30,0.34]); assert len(tr['frames'])>=45
+          tests=[
+            ('screen_replacement',{'asset_path':str(assetp),'bbox':[0.28,0.45,0.24,0.22]}),
+            ('perspective_text',{'text':'VISTA LIVRE','quad':[[.12,.18],[.78,.20],[.75,.36],[.15,.34]]}),
+            ('text_behind_object',{'text':'ARQUITETURA','bbox':[.72,.52,.16,.22],'x':.06,'y':.62}),
+            ('segmentation',{'bbox':[.72,.52,.16,.22]}),
+            ('sky_replacement',{'strength':.6}),
+            ('day_to_dusk',{'strength':.6}),
+            ('lights_on',{'strength':.5}),
+            ('object_removal',{'bbox':[.72,.52,.16,.22],'radius':3}),
+          ]
+          for name,params in tests:
+              dst=root/f'{name}.mp4'; result=vfx.apply_effect(src,name,params,dst)
+              assert result['available'] and dst.exists() and dst.stat().st_size>5000, (name,result)
+          print('LOCAL_VFX_OK',len(tests))
+          PY
+      - name: Run end-to-end V4.4 render with local VFX
+        working-directory: vps/video-worker-v4
+        run: |
+          mkdir -p /tmp/v44-src /tmp/video-v44-work/job /tmp/v44-out
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=size=720x1280:rate=30:duration=8" -f lavfi -i "sine=frequency=220:sample_rate=48000:duration=8" -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/v44-src/a.mp4
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc=size=720x1280:rate=30:duration=8" -f lavfi -i "sine=frequency=330:sample_rate=48000:duration=8" -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/v44-src/b.mp4
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "mandelbrot=size=720x1280:rate=30" -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=8" -t 8 -shortest -c:v libx264 -pix_fmt yuv420p -c:a aac /tmp/v44-src/c.mp4
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          import worker as w
+          import worker_v44
+          import capabilities_v43 as caps
+          paths=[Path('/tmp/v44-src/a.mp4'),Path('/tmp/v44-src/b.mp4'),Path('/tmp/v44-src/c.mp4')]
+          inputs=[{'id':f'i{i}','asset_id':f'a{i}','file_name':p.name} for i,p in enumerate(paths)]
+          jobdir=Path('/tmp/video-v44-work/job')
+          analyses=[w.temporal(p,jobdir,i) for i,p in enumerate(paths)]
+          job={'id':'v44-ci','client_id':'ci','product_id':'ci','product_name':'Apartamento CI','product_context':{'target_duration_seconds':12},'client_context':{'client':{'name':'CI'},'fields':{}},'edit_strategy':{'target_duration_seconds':12,'style':'LUXURY_CINEMATIC','vfx_requests':[{'effect':'day_to_dusk','start':2,'duration':2.5,'params':{'strength':.45}},{'effect':'perspective_text','start':6,'duration':2,'params':{'text':'VISTA LIVRE','quad':[[.10,.18],[.82,.20],[.78,.34],[.14,.33]]}}]}}
+          timeline=w.build_timeline(job,inputs,analyses)
+          out=Path('/tmp/v44-out/V44_CI_RENDER.mp4')
+          meta=w.render_timeline(paths,analyses,timeline,jobdir,out)
+          qa=w.qa(out,float(timeline['duration']))
+          assert qa['pass'] is True, qa
+          assert len(meta.get('vfx_applied') or [])==2, meta
+          assert w.ffprobe(out)['has_audio'] is True
+          summary=caps.capability_summary(); assert summary['implemented']>=43, summary
+          Path('/tmp/v44-out/report.json').write_text(json.dumps({'meta':meta,'qa':qa,'caps':summary},indent=2,default=str))
+          print('V44_E2E_OK',meta['vfx_applied'])
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: V44-ci-render
+          path: |
+            /tmp/v44-out/V44_CI_RENDER.mp4
+            /tmp/v44-out/report.json
+          retention-days: 5

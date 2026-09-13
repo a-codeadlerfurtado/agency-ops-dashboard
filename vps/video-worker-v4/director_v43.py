@@ -351,7 +351,7 @@ def build_timeline(w, job, inputs, analyses):
     warnings = []
     provider_state = providers.provider_status()
     for req in requested_vfx:
-        if req["effect"] in caps.missing([req["effect"]]) and not provider_state.get("vfx_provider"):
+        if req["effect"] in caps.missing([req["effect"]]) and not (provider_state.get("vfx_provider") or provider_state.get("local_vfx")):
             warnings.append(f"provider_required:{req['effect']}")
 
     music = job.get("_music_analysis") or {}

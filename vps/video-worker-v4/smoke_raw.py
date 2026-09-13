@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import worker as w
-import worker_v431  # patches worker in-place with V4.3.1 vision/director/render/QA path
+import worker_v44  # installs V4.4 local-VFX/director/render/QA path
 
 
 def env_json(name: str):
