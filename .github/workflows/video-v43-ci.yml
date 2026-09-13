@@ -1,0 +1,111 @@
+name: Video V4.3 CI
+
+on:
+  push:
+    branches:
+      - feat/video-engine-v4
+    paths:
+      - 'vps/video-worker-v4/**'
+      - '.github/workflows/video-v43-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-v43:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      VIDEO_WORK_DIR: /tmp/video-v43-work
+      VIDEO_MUSIC_LIBRARY_DIR: /tmp/video-v43-music
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip
+          python -m pip install 'numpy>=1.26,<3' 'opencv-contrib-python-headless>=4.10,<5'
+
+      - name: Compile V4.3 modules
+        run: |
+          python -m py_compile vps/video-worker-v4/worker.py
+          python -m py_compile vps/video-worker-v4/vision_v43.py
+          python -m py_compile vps/video-worker-v4/audio_v43.py
+          python -m py_compile vps/video-worker-v4/capabilities_v43.py
+          python -m py_compile vps/video-worker-v4/providers_v43.py
+          python -m py_compile vps/video-worker-v4/director_v43.py
+          python -m py_compile vps/video-worker-v4/worker_v43.py
+          python -m py_compile vps/video-worker-v4/smoke_raw.py
+
+      - name: Generate synthetic raw property-like footage and music
+        run: |
+          mkdir -p /tmp/v43-src /tmp/video-v43-music /tmp/video-v43-work /tmp/v43-out
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=size=720x1280:rate=30:duration=8" -vf "eq=saturation=0.75:brightness=0.01" -c:v libx264 -pix_fmt yuv420p /tmp/v43-src/a.mp4
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc=size=720x1280:rate=30:duration=8" -vf "hue=h=18:s=0.85" -c:v libx264 -pix_fmt yuv420p /tmp/v43-src/b.mp4
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "mandelbrot=size=720x1280:rate=30" -t 8 -vf "eq=contrast=1.06:saturation=0.65" -c:v libx264 -pix_fmt yuv420p /tmp/v43-src/c.mp4
+          ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=110:sample_rate=48000:duration=24" -filter_complex "[0:a]volume='0.12+0.08*gt(mod(t,0.5),0.44)'" -c:a aac /tmp/video-v43-music/cinematic-ci.m4a
+
+      - name: Run vision, director, render and QA contract
+        working-directory: vps/video-worker-v4
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json, tempfile
+          import worker as w
+          import worker_v43  # patches worker globals
+          import capabilities_v43 as caps
+          import director_v43 as director
+
+          paths = [Path('/tmp/v43-src/a.mp4'), Path('/tmp/v43-src/b.mp4'), Path('/tmp/v43-src/c.mp4')]
+          inputs = [
+              {'id': f'i{i+1}', 'asset_id': f'a{i+1}', 'drive_file_id': None, 'file_name': p.name}
+              for i, p in enumerate(paths)
+          ]
+          jobdir = Path('/tmp/video-v43-work/ci-job')
+          jobdir.mkdir(parents=True, exist_ok=True)
+          analyses = [w.temporal(p, jobdir, i) for i, p in enumerate(paths)]
+          assert all((a.get('vision') or {}).get('available') for a in analyses), analyses
+          assert all('quality_score' in a['vision'] for a in analyses)
+          job = {
+              'id': 'v43-ci-job',
+              'client_id': 'ci-client',
+              'product_id': 'ci-product',
+              'product_name': 'Apartamento CI',
+              'strategy_version': 'dynamic-strategy-v3',
+              'context_version': 'ci-v43',
+              'product_context': {'target_duration_seconds': 12, 'area': '184 m²', 'price': 'R$ 2.900.000', 'location': 'Jardins'},
+              'client_context': {'client': {'name': 'Cliente CI'}, 'fields': {}},
+              'edit_strategy': {'target_duration_seconds': 12, 'style': 'LUXURY_CINEMATIC'},
+          }
+          timeline = w.build_timeline(job, inputs, analyses)
+          creative = director.validate_creative_timeline(timeline)
+          assert creative['pass'] is True
+          assert timeline['directorVersion'] == 'creative-director-v4.3.0'
+          assert timeline['metadata']['rendererVersion'] == '4.3.0'
+          assert timeline['capabilities']['implemented'] >= 20
+          videos = next(t['items'] for t in timeline['tracks'] if t['kind'] == 'video')
+          assert len(videos) >= 6
+          assert all(any(e['kind'] == 'smart_reframe' for e in v['effects']) for v in videos)
+          out = Path('/tmp/v43-out/V43_CI_RENDER.mp4')
+          render = w.render_timeline(paths, analyses, timeline, jobdir, out)
+          qa = w.qa(out, float(timeline['duration']))
+          assert qa['pass'] is True, qa
+          assert render['renderer_version'] == '4.3.0'
+          assert out.stat().st_size > 100000
+          Path('/tmp/v43-out/timeline.json').write_text(json.dumps(timeline, indent=2, ensure_ascii=False))
+          Path('/tmp/v43-out/report.json').write_text(json.dumps({'creative': creative, 'render': render, 'qa': qa, 'caps': caps.capability_summary()}, indent=2, ensure_ascii=False))
+          print('V43_CI_OK', json.dumps({'creative': creative, 'qa': qa['checks'], 'vision': [a['vision'] for a in analyses]}, ensure_ascii=False))
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: V43-ci-render
+          path: |
+            /tmp/v43-out/V43_CI_RENDER.mp4
+            /tmp/v43-out/timeline.json
+            /tmp/v43-out/report.json
+          if-no-files-found: error
+          retention-days: 5
