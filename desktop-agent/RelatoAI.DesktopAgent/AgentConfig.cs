@@ -8,7 +8,8 @@ internal sealed record AgentConfig(
     string DeviceId,
     string OwnerPerson,
     string ProtectedToken,
-    bool Enabled = true)
+    bool Enabled = true,
+    string? LocalPhone = null)
 {
     private static readonly string Dir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
