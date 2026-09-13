@@ -30,7 +30,16 @@
       display: "flex", alignItems: "center", gap: "9px", padding: "9px 12px",
       borderRadius: "999px", background: "rgba(11,22,43,.96)", color: "#f3f7ff",
       border: "1px solid rgba(79,108,166,.75)", font: "600 12px system-ui",
-      boxShadow: "0 10px 28px rgba(0,0,0,.32)", pointerEvents: "none", backdropFilter: "blur(10px)"
+      boxShadow: "0 10px 28px rgba(0,0,0,.32)", pointerEvents: "auto", cursor: "pointer",
+      userSelect: "none", backdropFilter: "blur(10px)"
+    });
+    overlay.title = "Abrir transcrição ao vivo";
+    overlay.setAttribute("role", "button");
+    overlay.setAttribute("tabindex", "0");
+    const openLive = () => runtime({ type: "OPEN_LIVE_PANEL" }).catch(() => {});
+    overlay.addEventListener("click", openLive);
+    overlay.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openLive(); }
     });
     const dot = overlay.querySelector("[data-relato-dot]");
     Object.assign(dot.style, { color: "#ef4444", fontSize: "16px", lineHeight: "1" });

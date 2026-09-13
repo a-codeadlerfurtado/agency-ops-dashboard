@@ -1,4 +1,4 @@
-const VERSION = "0.3.2";
+const VERSION = "0.3.3";
 const MEETING_CODE_RE = /\/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})(?:[/?#]|$)/i;
 const LEAVE_RE = /(sair da chamada|encerrar chamada|sair da reunião|leave call|leave meeting|hang up|desligar)/i;
 const JOIN_RE = /(participar agora|pedir para participar|join now|ask to join)/i;
@@ -33,6 +33,8 @@ let captionAttemptTimestamps = [];
 let ownerPerson = "";
 let localDeviceKey = "";
 let recordingOverlay = null;
+let liveTranscriptPanel = null;
+const liveTranscriptRows = new Map();
 const prebuffer = [];
 const speakerPrebuffer = new Map();
 
@@ -49,7 +51,16 @@ function showRecordingOverlay(source = "Google Meet") {
     display: "flex", alignItems: "center", gap: "9px", padding: "9px 12px",
     borderRadius: "999px", background: "rgba(11,22,43,.96)", color: "#f3f7ff",
     border: "1px solid rgba(79,108,166,.75)", font: "600 12px system-ui",
-    boxShadow: "0 10px 28px rgba(0,0,0,.32)", pointerEvents: "none", backdropFilter: "blur(10px)"
+    boxShadow: "0 10px 28px rgba(0,0,0,.32)", pointerEvents: "auto", cursor: "pointer",
+    userSelect: "none", backdropFilter: "blur(10px)"
+  });
+  recordingOverlay.title = "Abrir transcrição ao vivo";
+  recordingOverlay.setAttribute("role", "button");
+  recordingOverlay.setAttribute("tabindex", "0");
+  const openLive = () => toggleLiveTranscriptPanel();
+  recordingOverlay.addEventListener("click", openLive);
+  recordingOverlay.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openLive(); }
   });
   const dot = recordingOverlay.querySelector("[data-relato-dot]");
   Object.assign(dot.style, { color: "#ef4444", fontSize: "16px", lineHeight: "1" });
@@ -60,6 +71,82 @@ function showRecordingOverlay(source = "Google Meet") {
 }
 
 function hideRecordingOverlay() { recordingOverlay?.remove(); recordingOverlay = null; }
+
+function renderLiveTranscript() {
+  if (!liveTranscriptPanel) return;
+  const body = liveTranscriptPanel.querySelector("[data-relato-live-body]");
+  if (!body) return;
+  body.replaceChildren();
+  const rows = [...liveTranscriptRows.values()].slice(-120);
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.textContent = "Aguardando a primeira fala…";
+    Object.assign(empty.style, { color: "#97a9ca", padding: "18px 4px", textAlign: "center", fontSize: "12px" });
+    body.appendChild(empty);
+    return;
+  }
+  for (const row of rows) {
+    const item = document.createElement("article");
+    Object.assign(item.style, { padding: "10px 0", borderBottom: "1px solid rgba(148,163,184,.12)" });
+    const who = document.createElement("div");
+    who.textContent = norm(row.speaker_name) || "Participante";
+    Object.assign(who.style, { color: "#8fb4ff", fontWeight: "700", fontSize: "11px", marginBottom: "3px" });
+    const text = document.createElement("div");
+    text.textContent = norm(row.text);
+    Object.assign(text.style, { color: "#eef4ff", fontSize: "13px", lineHeight: "1.45" });
+    item.append(who, text);
+    body.appendChild(item);
+  }
+  body.scrollTop = body.scrollHeight;
+}
+
+function ensureLiveTranscriptPanel() {
+  if (liveTranscriptPanel) return liveTranscriptPanel;
+  liveTranscriptPanel = document.createElement("section");
+  liveTranscriptPanel.id = "relato-live-transcript-panel";
+  Object.assign(liveTranscriptPanel.style, {
+    position: "fixed", top: "72px", right: "14px", zIndex: "2147483646", width: "390px",
+    height: "min(72vh, 680px)", display: "flex", flexDirection: "column", overflow: "hidden",
+    borderRadius: "18px", background: "rgba(9,18,34,.98)", color: "#eef4ff",
+    border: "1px solid rgba(79,108,166,.72)", boxShadow: "0 18px 52px rgba(0,0,0,.42)",
+    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif", backdropFilter: "blur(14px)"
+  });
+  const header = document.createElement("div");
+  Object.assign(header.style, { display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: "1px solid rgba(148,163,184,.14)" });
+  const title = document.createElement("div");
+  title.innerHTML = '<strong style="font-size:14px">Transcrição ao vivo</strong><small style="display:block;color:#97a9ca;margin-top:2px">Relato AI · Google Meet</small>';
+  const close = document.createElement("button");
+  close.type = "button"; close.textContent = "×"; close.title = "Fechar";
+  Object.assign(close.style, { border: "0", background: "transparent", color: "#c9d5ea", fontSize: "24px", cursor: "pointer", lineHeight: "1" });
+  close.addEventListener("click", () => { liveTranscriptPanel?.remove(); liveTranscriptPanel = null; });
+  header.append(title, close);
+  const body = document.createElement("div");
+  body.dataset.relatoLiveBody = "1";
+  Object.assign(body.style, { flex: "1", overflowY: "auto", padding: "6px 16px 14px" });
+  liveTranscriptPanel.append(header, body);
+  document.documentElement.appendChild(liveTranscriptPanel);
+  renderLiveTranscript();
+  return liveTranscriptPanel;
+}
+
+function toggleLiveTranscriptPanel() {
+  if (liveTranscriptPanel) { liveTranscriptPanel.remove(); liveTranscriptPanel = null; return; }
+  ensureLiveTranscriptPanel();
+}
+
+function pushLiveTranscript(frame) {
+  const text = norm(frame?.text);
+  if (!text) return;
+  const rawKey = norm(frame?.message_id || frame?.messageId);
+  const fallbackKey = `${norm(frame?.device_key || frame?.device_id || frame?.deviceId)}:${Math.floor(Number(frame?.offset_ms || Date.now()) / 1000)}`;
+  const key = rawKey || fallbackKey;
+  const version = Number(frame?.message_version ?? frame?.messageVersion ?? 0);
+  const previous = liveTranscriptRows.get(key);
+  if (previous && Number(previous.message_version ?? previous.messageVersion ?? 0) > version) return;
+  liveTranscriptRows.set(key, { ...frame, text });
+  while (liveTranscriptRows.size > 200) liveTranscriptRows.delete(liveTranscriptRows.keys().next().value);
+  renderLiveTranscript();
+}
 
 function getMeetingCode(pathname = location.pathname) {
   return pathname.match(MEETING_CODE_RE)?.[1]?.toLowerCase() || null;
@@ -305,6 +392,8 @@ async function beginSession() {
     path: location.pathname,
   };
   warningSent = false;
+  liveTranscriptRows.clear();
+  renderLiveTranscript();
   await runtime({ type: "RTC_SESSION_START", session: { ...session, extension_version: VERSION } });
   showRecordingOverlay("Google Meet");
   for (const speaker of speakerPrebuffer.values()) await runtime({ type: "RTC_SPEAKER_MAP", session_id: session.id, speaker });
@@ -357,6 +446,7 @@ function handleRtcCaption(payload) {
   lastCaptionAt = Date.now();
   captionsState = "active";
   warningSent = false;
+  pushLiveTranscript(frame);
   reportHealth({ first_caption_at: lastCaptionAt, last_caption_at: lastCaptionAt }).catch(() => {});
   if (!session) {
     prebuffer.push(frame);

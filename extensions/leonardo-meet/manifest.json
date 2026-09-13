@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Relato AI — Transcriber",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Relato AI — Transcriber: captura e inteligência de reuniões e chamadas para o Leonardo Imobi.",
   "permissions": [
     "storage",

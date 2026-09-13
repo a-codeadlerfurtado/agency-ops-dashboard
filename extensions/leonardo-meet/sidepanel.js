@@ -52,7 +52,7 @@ function escapeHtml(value) {
 }
 async function activeSession() {
   const sessions = await listSessions();
-  const active = sessions.filter((row) => ["CAPTURING", "FINISHING"].includes(String(row.state || "")));
+  const active = sessions.filter((row) => ["CAPTURING", "CALL_CAPTURING", "FINISHING"].includes(String(row.state || "")));
   active.sort((a, b) => Date.parse(b.updated_at || b.started_at || 0) - Date.parse(a.updated_at || a.started_at || 0));
   return active[0] || null;
 }
@@ -76,7 +76,9 @@ async function loadLive() {
     if (!lastSignature) $("transcript").innerHTML = '<div class="empty">A transcrição ao vivo aparecerá aqui.</div>';
     return;
   }
-  $("meetingTitle").textContent = session.title || session.meeting_code || "Google Meet";
+  const isCall = String(session.capture_mode || "").startsWith("WHATSAPP_") || String(session.state || "") === "CALL_CAPTURING";
+  $("meetingTitle").textContent = session.title || session.contact_name || session.meeting_code || (isCall ? "Chamada WhatsApp" : "Google Meet");
+  $("infoSource").textContent = isCall ? "WhatsApp Web" : "Google Meet";
   $("infoStatus").textContent = paused ? "Pausado" : "Transcrevendo";
   $("infoStarted").textContent = session.started_at
     ? new Date(session.started_at).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "—";

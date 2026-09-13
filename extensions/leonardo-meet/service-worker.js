@@ -349,6 +349,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return { ok: true, device: result };
     }
 
+    if (message?.type === "OPEN_LIVE_PANEL") {
+      const tabId = sender.tab?.id;
+      if (tabId == null) return { ok: false, error: "tab_required" };
+      await chrome.sidePanel.open({ tabId });
+      return { ok: true };
+    }
+
     if (message?.type === "GET_STATUS") {
       const [deviceData, stateData, legacyOutbox, storedSessions] = await Promise.all([
         chrome.storage.local.get(DEVICE_KEY),
