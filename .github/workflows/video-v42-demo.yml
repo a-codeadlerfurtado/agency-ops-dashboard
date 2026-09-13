@@ -29,52 +29,59 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ffmpeg
-          ffmpeg -version | head -1
 
-      - name: Download public real-estate footage
+      - name: Download varied real-estate footage
         run: |
           mkdir -p /tmp/v42-demo
           curl -L --fail --retry 3 -o /tmp/v42-demo/src1.mp4 'https://videos.pexels.com/video-files/36516351/15483420_2160_3840_60fps.mp4'
-          curl -L --fail --retry 3 -o /tmp/v42-demo/src2.mp4 'https://videos.pexels.com/video-files/36516358/15483456_2160_3840_60fps.mp4'
-          curl -L --fail --retry 3 -o /tmp/v42-demo/src3.mp4 'https://videos.pexels.com/video-files/36516349/15483596_2160_3840_60fps.mp4'
+          curl -L --fail --retry 3 -o /tmp/v42-demo/src2.mp4 'https://videos.pexels.com/video-files/36516356/15483445_2160_3840_60fps.mp4'
+          curl -L --fail --retry 3 -o /tmp/v42-demo/src3.mp4 'https://www.pexels.com/download/video/36516372/' || cp /tmp/v42-demo/src1.mp4 /tmp/v42-demo/src3.mp4
+          curl -L --fail --retry 3 -o /tmp/v42-demo/src4.mp4 'https://www.pexels.com/download/video/36516364/' || cp /tmp/v42-demo/src2.mp4 /tmp/v42-demo/src4.mp4
+          curl -L --fail --retry 3 -o /tmp/v42-demo/src5.mp4 'https://videos.pexels.com/video-files/36516358/15483456_2160_3840_60fps.mp4'
 
       - name: Prepare clean source windows
         run: |
-          for i in 1 2 3; do
-            ffmpeg -hide_banner -loglevel error -y -i /tmp/v42-demo/src${i}.mp4 -t 14 -an -vf "fps=30,scale=1080:1920:flags=lanczos" -c:v libx264 -preset veryfast -crf 21 /tmp/v42-demo/clip${i}.mp4
+          for i in 1 2 3 4 5; do
+            ffmpeg -hide_banner -loglevel error -y -i /tmp/v42-demo/src${i}.mp4 -t 11 -an -vf "fps=30,scale=1080:1920:flags=lanczos" -c:v libx264 -preset veryfast -crf 20 /tmp/v42-demo/clip${i}.mp4
           done
 
       - name: Run V4.2.1 creative director and renderer
         working-directory: vps/video-worker-v4
         run: |
           mkdir -p /tmp/video-v42-work /tmp/v42-out
-          python demo_v42_local.py /tmp/v42-out/V421_CINEMATIC_DEMO_SILENT.mp4 /tmp/v42-demo/clip1.mp4 /tmp/v42-demo/clip2.mp4 /tmp/v42-demo/clip3.mp4
+          python demo_v42_local.py /tmp/v42-out/V421_REAL_ESTATE_PRO_SILENT.mp4 \
+            /tmp/v42-demo/clip1.mp4 /tmp/v42-demo/clip2.mp4 /tmp/v42-demo/clip3.mp4 /tmp/v42-demo/clip4.mp4 /tmp/v42-demo/clip5.mp4
 
-      - name: Add restrained cinematic ambience
+      - name: Add licensed music and restrained sound accent
         run: |
-          if curl -L --fail --retry 2 -o /tmp/v42-demo/music.mp3 'https://cdn.pixabay.com/download/audio/2022/03/15/audio_c8b5f8f3b5.mp3?filename=cinematic-atmosphere-ambient-110290.mp3'; then
-            ffmpeg -hide_banner -loglevel error -y \
-              -i /tmp/v42-out/V421_CINEMATIC_DEMO_SILENT.mp4 \
-              -stream_loop -1 -i /tmp/v42-demo/music.mp3 \
-              -filter_complex "[1:a]atrim=duration=18,asetpts=PTS-STARTPTS,volume=0.17,afade=t=in:st=0:d=0.6,afade=t=out:st=16.0:d=2.0[m];[0:a][m]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.90[a]" \
-              -map 0:v -map '[a]' -c:v copy -c:a aac -b:a 192k -movflags +faststart -shortest \
-              /tmp/v42-out/V421_CINEMATIC_DEMO.mp4
-          else
-            cp /tmp/v42-out/V421_CINEMATIC_DEMO_SILENT.mp4 /tmp/v42-out/V421_CINEMATIC_DEMO.mp4
+          MUSIC='/tmp/v42-demo/music.mp3'
+          if ! curl -L --fail --retry 2 -o "$MUSIC" 'https://assets.mixkit.co/music/preview/mixkit-serene-view-443.mp3'; then
+            curl -L --fail --retry 2 -o "$MUSIC" 'https://raw.githubusercontent.com/anfasmhsn/Mental-Health-Tracker/main/mixkit-serene-view-443.mp3'
           fi
+          ffmpeg -hide_banner -loglevel error -y \
+            -i /tmp/v42-out/V421_REAL_ESTATE_PRO_SILENT.mp4 \
+            -stream_loop -1 -i "$MUSIC" \
+            -filter_complex "[1:a]atrim=duration=18.17,asetpts=PTS-STARTPTS,volume=0.23,afade=t=in:st=0:d=0.55,afade=t=out:st=16.0:d=2.0[m];anoisesrc=color=pink:amplitude=0.13:d=0.42,highpass=f=650,lowpass=f=4800,afade=t=in:st=0:d=0.05,afade=t=out:st=0.16:d=0.25,aformat=channel_layouts=stereo,adelay=4150|4150[w];[m][w]amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.88[a]" \
+            -map 0:v -map '[a]' -c:v copy -c:a aac -b:a 192k -movflags +faststart -shortest \
+            /tmp/v42-out/V421_REAL_ESTATE_PRO.mp4
 
-      - name: Final validation
+      - name: Final validation and frame sheet
         run: |
-          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,r_frame_rate -of json /tmp/v42-out/V421_CINEMATIC_DEMO.mp4 | tee /tmp/v42-out/V42_FINAL_FFPROBE.json
-          test -s /tmp/v42-out/V421_CINEMATIC_DEMO.mp4
+          ffprobe -v error -show_entries format=duration,size -show_entries stream=codec_name,width,height,r_frame_rate -of json /tmp/v42-out/V421_REAL_ESTATE_PRO.mp4 | tee /tmp/v42-out/V42_FINAL_FFPROBE.json
+          mkdir -p /tmp/v42-out/frames
+          for t in 0.5 2.7 5.0 7.8 10.7 13.6 16.7; do
+            ffmpeg -hide_banner -loglevel error -y -ss $t -i /tmp/v42-out/V421_REAL_ESTATE_PRO.mp4 -frames:v 1 /tmp/v42-out/frames/frame-${t}.jpg
+          done
+          test -s /tmp/v42-out/V421_REAL_ESTATE_PRO.mp4
 
       - uses: actions/upload-artifact@v4
         with:
-          name: V421-cinematic-demo
+          name: V421-real-estate-pro-demo
           path: |
-            /tmp/v42-out/V421_CINEMATIC_DEMO.mp4
+            /tmp/v42-out/V421_REAL_ESTATE_PRO.mp4
             /tmp/v42-out/V42_DEMO_TIMELINE.json
             /tmp/v42-out/V42_DEMO_QA.json
             /tmp/v42-out/V42_FINAL_FFPROBE.json
+            /tmp/v42-out/frames/*.jpg
           if-no-files-found: error
           retention-days: 7
