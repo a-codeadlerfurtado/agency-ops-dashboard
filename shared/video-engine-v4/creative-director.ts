@@ -218,7 +218,7 @@ function textForStage(stage: StageName, product: Record<string, unknown>): strin
   const bedrooms = firstString(product, ["bedrooms", "quartos", "dormitorios", "suites", "suites_count"]);
   const area = firstString(product, ["area", "area_m2", "metragem"]);
   if (stage === "VISUAL_HOOK") return hook ?? (location ? `Um novo jeito de viver em ${location}` : undefined);
-  if (stage === "PRIMARY_BENEFIT") return benefit ?? [bedrooms && `${bedrooms} dormitórios`, area && `${area} m²`].filter(Boolean).join(" • ") || undefined;
+  if (stage === "PRIMARY_BENEFIT") return benefit ?? ([bedrooms && `${bedrooms} dormitórios`, area && `${area} m²`].filter(Boolean).join(" • ") || undefined);
   if (stage === "COMMERCIAL_SAFE") return price ? `A partir de ${price}` : location;
   if (stage === "BRANDED_CLOSE") return firstString(product, ["cta", "call_to_action"]) ?? "Agende sua visita";
   return undefined;
