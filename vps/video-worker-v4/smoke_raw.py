@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import worker as w
+import worker_v42  # patches worker in-place with V4.2 director/render path
 
 
 def env_json(name: str):
@@ -36,43 +37,43 @@ def main() -> int:
             "file_name": file_name,
         })
 
-    target = max(12.0, min(30.0, float(os.getenv("SMOKE_DURATION_SECONDS", "22"))))
-    product_name = os.getenv("SMOKE_PRODUCT_NAME", "Imóvel — teste V4 com brutos reais")
+    target = max(12.0, min(30.0, float(os.getenv("SMOKE_DURATION_SECONDS", "18"))))
+    product_name = os.getenv("SMOKE_PRODUCT_NAME", "").strip()
     output_folder = os.getenv("SMOKE_OUTPUT_FOLDER_ID", "").strip()
     if not output_folder:
         raise RuntimeError("SMOKE_OUTPUT_FOLDER_ID_missing")
 
-    job_id = "v4-direct-smoke-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    job_id = "v42-direct-smoke-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    product_context = {"target_duration_seconds": target}
+    for env_name, key in [
+        ("SMOKE_PRICE", "price"),
+        ("SMOKE_AREA", "area"),
+        ("SMOKE_ADDRESS", "address"),
+        ("SMOKE_CTA", "cta"),
+    ]:
+        value = os.getenv(env_name, "").strip()
+        if value:
+            product_context[key] = value
+
+    client_name = os.getenv("SMOKE_CLIENT_NAME", "").strip()
     job = {
         "id": job_id,
         "client_id": "shadow-test",
         "product_id": "raw-property-test",
         "product_name": product_name,
         "strategy_version": "dynamic-strategy-v3",
-        "context_version": "direct-smoke-v4",
-        "product_context": {
-            "price": os.getenv("SMOKE_PRICE", "R$ 3.500.000"),
-            "area": os.getenv("SMOKE_AREA", "220 m²"),
-            "address": os.getenv("SMOKE_ADDRESS", "Imóvel em destaque"),
-            "target_duration_seconds": target,
-        },
-        "client_context": {"client": {"name": "V4 RAW TEST"}, "fields": {}},
+        "context_version": "direct-smoke-v42",
+        "product_context": product_context,
+        "client_context": {"client": {"name": client_name} if client_name else {}, "fields": {}},
         "edit_strategy": {
             "version": "dynamic-strategy-v3",
             "target_duration_seconds": target,
             "aspect_ratio": "9:16",
-            "stages": [
-                {"role": "VISUAL_HOOK", "from": 0, "to": target * 0.10},
-                {"role": "PRIMARY_BENEFIT", "from": target * 0.10, "to": target * 0.28},
-                {"role": "PROPERTY_TOUR", "from": target * 0.28, "to": target * 0.73},
-                {"role": "COMMERCIAL_SAFE", "from": target * 0.73, "to": target * 0.88},
-                {"role": "BRANDED_CLOSE", "from": target * 0.88, "to": target},
-            ],
         },
         "output_drive_folder_id": output_folder,
     }
 
-    jobdir = Path(tempfile.mkdtemp(prefix="v4-direct-smoke-", dir=w.WORK))
+    jobdir = Path(tempfile.mkdtemp(prefix="v42-direct-smoke-", dir=w.WORK))
     try:
         paths = []
         total = 0
@@ -91,14 +92,14 @@ def main() -> int:
             print(json.dumps({"event": "analyzed", "file": inputs[idx]["file_name"], "duration": analyses[-1]["duration_seconds"]}), flush=True)
 
         timeline = w.build_timeline(job, inputs, analyses)
-        output = jobdir / "V4_RAW_REAL_ESTATE_SMOKE_20260913.mp4"
+        output = jobdir / "V42_RAW_REAL_ESTATE_SMOKE.mp4"
         render_meta = w.render_timeline(paths, analyses, timeline, jobdir, output)
         report = w.qa(output, float(timeline["duration"]))
         print(json.dumps({"event": "qa", "pass": report["pass"], "checks": report["checks"], "render": render_meta}, ensure_ascii=False), flush=True)
         if not report["pass"]:
             raise RuntimeError("qa_failed:" + json.dumps(report["checks"]))
 
-        uploaded = w.drive_upload(output, output.name, output_folder, job_id, "v4_raw_real_smoke")
+        uploaded = w.drive_upload(output, output.name, output_folder, job_id, "v42_raw_real_smoke")
         result = {
             "ok": True,
             "job_id": job_id,
