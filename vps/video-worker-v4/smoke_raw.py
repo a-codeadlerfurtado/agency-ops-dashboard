@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import worker as w
-import worker_v42  # patches worker in-place with V4.2 director/render path
+import worker_v43  # patches worker in-place with V4.3 vision/director/render path
 
 
 def env_json(name: str):
@@ -37,13 +37,13 @@ def main() -> int:
             "file_name": file_name,
         })
 
-    target = max(12.0, min(30.0, float(os.getenv("SMOKE_DURATION_SECONDS", "18"))))
+    target = max(12.0, min(45.0, float(os.getenv("SMOKE_DURATION_SECONDS", "18"))))
     product_name = os.getenv("SMOKE_PRODUCT_NAME", "").strip()
     output_folder = os.getenv("SMOKE_OUTPUT_FOLDER_ID", "").strip()
     if not output_folder:
         raise RuntimeError("SMOKE_OUTPUT_FOLDER_ID_missing")
 
-    job_id = "v42-direct-smoke-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    job_id = "v43-direct-smoke-" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     product_context = {"target_duration_seconds": target}
     for env_name, key in [
         ("SMOKE_PRICE", "price"),
@@ -56,24 +56,26 @@ def main() -> int:
             product_context[key] = value
 
     client_name = os.getenv("SMOKE_CLIENT_NAME", "").strip()
+    style = os.getenv("SMOKE_STYLE", "").strip()
     job = {
         "id": job_id,
         "client_id": "shadow-test",
         "product_id": "raw-property-test",
         "product_name": product_name,
         "strategy_version": "dynamic-strategy-v3",
-        "context_version": "direct-smoke-v42",
+        "context_version": "direct-smoke-v43",
         "product_context": product_context,
         "client_context": {"client": {"name": client_name} if client_name else {}, "fields": {}},
         "edit_strategy": {
             "version": "dynamic-strategy-v3",
             "target_duration_seconds": target,
             "aspect_ratio": "9:16",
+            **({"style": style} if style else {}),
         },
         "output_drive_folder_id": output_folder,
     }
 
-    jobdir = Path(tempfile.mkdtemp(prefix="v42-direct-smoke-", dir=w.WORK))
+    jobdir = Path(tempfile.mkdtemp(prefix="v43-direct-smoke-", dir=w.WORK))
     try:
         paths = []
         total = 0
@@ -89,17 +91,20 @@ def main() -> int:
         analyses = []
         for idx, path in enumerate(paths):
             analyses.append(w.temporal(path, jobdir, idx))
-            print(json.dumps({"event": "analyzed", "file": inputs[idx]["file_name"], "duration": analyses[-1]["duration_seconds"]}), flush=True)
+            print(json.dumps({
+                "event": "analyzed", "file": inputs[idx]["file_name"],
+                "duration": analyses[-1]["duration_seconds"], "vision": analyses[-1].get("vision"),
+            }, ensure_ascii=False), flush=True)
 
         timeline = w.build_timeline(job, inputs, analyses)
-        output = jobdir / "V42_RAW_REAL_ESTATE_SMOKE.mp4"
+        output = jobdir / "V43_RAW_REAL_ESTATE_SMOKE.mp4"
         render_meta = w.render_timeline(paths, analyses, timeline, jobdir, output)
         report = w.qa(output, float(timeline["duration"]))
         print(json.dumps({"event": "qa", "pass": report["pass"], "checks": report["checks"], "render": render_meta}, ensure_ascii=False), flush=True)
         if not report["pass"]:
             raise RuntimeError("qa_failed:" + json.dumps(report["checks"]))
 
-        uploaded = w.drive_upload(output, output.name, output_folder, job_id, "v42_raw_real_smoke")
+        uploaded = w.drive_upload(output, output.name, output_folder, job_id, "v43_raw_real_smoke")
         result = {
             "ok": True,
             "job_id": job_id,
