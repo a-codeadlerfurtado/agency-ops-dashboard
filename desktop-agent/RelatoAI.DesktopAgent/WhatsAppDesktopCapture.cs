@@ -65,7 +65,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         var now = DateTimeOffset.Now;
         var remoteHot = now - lastRemoteActive < TimeSpan.FromSeconds(2.5);
         var localHot = now - lastLocalActive < TimeSpan.FromSeconds(8);
-        var audioSessionActive = IsTargetAudioSessionActive(process);
+        var callSessionActive = IsWhatsAppCaptureSessionActive();
 
         if (!IsRecording)
         {
@@ -77,8 +77,10 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             return;
         }
 
-        if (audioSessionActive)
+        if (callSessionActive)
         {
+            if (!callAudioSessionObservedActive)
+                StatusChanged?.Invoke("REC · chamada WhatsApp Desktop · mic WhatsApp ativo");
             callAudioSessionObservedActive = true;
             audioSessionInactiveAt = null;
         }
@@ -98,21 +100,26 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             await FinishCallAsync("audio_inactive_fallback");
     }
 
-    private static bool IsTargetAudioSessionActive(Process process)
+    private static bool IsWhatsAppCaptureSessionActive()
     {
         try
         {
+            var whatsappPids = Process.GetProcesses()
+                .Where(p => p.ProcessName.StartsWith("WhatsApp", StringComparison.OrdinalIgnoreCase))
+                .Select(p => (uint)p.Id)
+                .ToHashSet();
+            if (whatsappPids.Count == 0) return false;
+
             using var devices = new MMDeviceEnumerator();
-            foreach (var role in new[] { Role.Communications, Role.Multimedia, Role.Console })
+            foreach (var device in devices.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
             {
                 try
                 {
-                    using var device = devices.GetDefaultAudioEndpoint(DataFlow.Render, role);
                     var sessions = device.AudioSessionManager.Sessions;
                     for (var i = 0; i < sessions.Count; i++)
                     {
                         using var session = sessions[i];
-                        if (session.GetProcessID == (uint)process.Id
+                        if (whatsappPids.Contains(session.GetProcessID)
                             && string.Equals(session.State.ToString(), "AudioSessionStateActive", StringComparison.Ordinal))
                             return true;
                     }
@@ -191,7 +198,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         var now = DateTimeOffset.Now;
         sessionId = $"wa-desktop-{now:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
         callStarted = now;
-        callAudioSessionObservedActive = IsTargetAudioSessionActive(process);
+        callAudioSessionObservedActive = IsWhatsAppCaptureSessionActive();
         audioSessionInactiveAt = null;
         var dir = Path.Combine(Path.GetTempPath(), "RelatoAI", sessionId);
         Directory.CreateDirectory(dir);
@@ -207,7 +214,9 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         candidateAt = null;
         var contact = ResolveContactName(process);
         CallStarted?.Invoke(sessionId, contact);
-        StatusChanged?.Invoke("REC · chamada WhatsApp Desktop");
+        StatusChanged?.Invoke(callAudioSessionObservedActive
+            ? "REC · chamada WhatsApp Desktop · mic WhatsApp ativo"
+            : "REC · chamada WhatsApp Desktop · aguardando mic WhatsApp");
     }
 
     public Task FinishManualAsync() => FinishCallAsync("manual_stop");
