@@ -24,6 +24,8 @@ jobs:
           python -m py_compile vps/video-worker-v4/worker.py
           python -m py_compile vps/video-worker-v4/director_v42.py
           python -m py_compile vps/video-worker-v4/worker_v42.py
+          python -m py_compile vps/video-worker-v4/worker_v421.py
+          python -m py_compile vps/video-worker-v4/demo_v42_local.py
           python -m py_compile vps/video-worker-v4/smoke_raw.py
       - name: Validate creative director contract
         working-directory: vps/video-worker-v4
@@ -32,6 +34,7 @@ jobs:
           import os
           os.makedirs('/tmp/video-v42-work', exist_ok=True)
           import worker as w
+          import worker_v421
           import director_v42 as d
           inputs = [
               {'id': 'i1', 'asset_id': 'a1', 'drive_file_id': 'd1', 'file_name': 'one.mp4'},
@@ -49,7 +52,7 @@ jobs:
                   'audio_codec': 'aac',
                   'has_audio': True,
                   'size_bytes': 1_000_000,
-                  'cut_timestamps': [2.0, 4.1, 6.4, 8.7, 11.2, 13.9, 16.3, 18.4],
+                  'cut_timestamps': [],
                   'black_ranges': [],
               })
           job = {
@@ -61,13 +64,20 @@ jobs:
               'client_context': {'client': {'name': 'Cliente CI'}, 'fields': {}},
               'edit_strategy': {'target_duration_seconds': 18},
           }
-          timeline = d.build_timeline(w, job, inputs, analyses)
+          timeline = w.build_timeline(job, inputs, analyses)
           qa = d.validate_creative_timeline(timeline)
           videos = next(t['items'] for t in timeline['tracks'] if t['kind'] == 'video')
           assert qa['pass'] is True
           assert qa['visible_transitions'] == 0
           assert qa['speed_ramps'] <= 2
           assert len(videos) >= 8
-          assert timeline['directorVersion'] == 'creative-director-v4.2.0'
-          print('V42_CONTRACT_OK', qa)
+          assert timeline['directorVersion'] == 'creative-director-v4.2.1'
+          by_asset = {}
+          for v in videos:
+              by_asset.setdefault(v['assetId'], []).append(float(v['trimIn']))
+          repeated = [starts for starts in by_asset.values() if len(starts) > 1]
+          assert repeated, 'expected repeated assets in 18s/3-source test'
+          assert all(max(starts) - min(starts) > 1.0 for starts in repeated), by_asset
+          assert all(v.get('transitionIn') is None or v['transitionIn'].get('kind') == 'cut' for v in videos)
+          print('V421_CONTRACT_OK', qa, by_asset)
           PY
