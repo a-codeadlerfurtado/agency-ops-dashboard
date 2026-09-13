@@ -317,13 +317,21 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         var success = false; string? error = null;
         try
         {
-            var cfg = configProvider() ?? throw new InvalidOperationException("Desktop Agent não pareado");
+            var cfg = AgentConfig.Load() ?? configProvider() ?? throw new InvalidOperationException("Desktop Agent não pareado");
+            var identity = await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone);
+            if (!string.IsNullOrWhiteSpace(identity.LocalPhone) && identity.LocalPhone != cfg.LocalPhone)
+            {
+                cfg = cfg with { LocalPhone = identity.LocalPhone };
+                cfg.Save();
+            }
             var api = new RelatoApi(cfg);
             var roles = new List<string>();
             if (remotePath is not null && File.Exists(remotePath) && new FileInfo(remotePath).Length > 1000) roles.Add("remote");
             if (localPath is not null && File.Exists(localPath) && new FileInfo(localPath).Length > 1000) roles.Add("local");
             if (roles.Count == 0) throw new InvalidOperationException("Nenhum áudio capturado");
-            var prepared = await api.PrepareCallAsync(id, started, ended, contact, roles);
+            var prepared = await api.PrepareCallAsync(
+                id, started, ended, contact, roles,
+                identity.LocalPhone, identity.RemotePhone, identity.Source);
             var uploaded = new List<object>();
             foreach (var targetUpload in prepared.Uploads)
             {
@@ -365,6 +373,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             catch { }
         }
     }
+
     private void StopCaptureEngines()
     {
         try { remoteRecorder?.StopRecording(); } catch { }
