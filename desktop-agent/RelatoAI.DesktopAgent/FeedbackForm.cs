@@ -23,7 +23,17 @@ internal sealed class FeedbackForm : Form
     private readonly TextBox note = new();
     private readonly Button saveButton = new();
     private readonly Button laterButton = new();
+    private readonly Label contactStatus = new();
+    private readonly Label contactDetail = new();
+    private readonly ComboBox clientBinding = SelectBox(532);
+    private FeedbackContext? feedbackContext;
+    private bool contextReady;
     private bool submitted;
+
+    private sealed record BindingOption(string? Id, string Name, bool NoClient = false)
+    {
+        public override string ToString() => Name;
+    }
 
     public FeedbackForm(AgentConfig? config, string sessionId)
     {
@@ -50,7 +60,13 @@ internal sealed class FeedbackForm : Form
         tone.SelectedIndex = 2;
         direction.SelectedIndex = 1;
         BuildUi();
-        Shown += (_, _) => { Activate(); BringToFront(); };
+        saveButton.Enabled = false;
+        clientBinding.SelectedIndexChanged += (_, _) =>
+        {
+            if (feedbackContext?.RequiresSelection == true)
+                saveButton.Enabled = clientBinding.SelectedItem is BindingOption option && (option.Id is not null || option.NoClient);
+        };
+        Shown += async (_, _) => { Activate(); BringToFront(); await LoadContextAsync(); };
     }
 
     private void BuildUi()
@@ -90,6 +106,7 @@ internal sealed class FeedbackForm : Form
             Padding = new Padding(24, 20, 24, 20)
         };
 
+        body.Controls.Add(BuildContactCard());
         body.Controls.Add(SectionTitle("Leitura do cliente", "Percepção geral da conversa"));
         body.Controls.Add(FieldRow("Humor", mood));
         body.Controls.Add(FieldRow("Tom de voz", tone));
@@ -101,6 +118,28 @@ internal sealed class FeedbackForm : Form
         body.Controls.Add(BuildSignalsCard());
         body.Controls.Add(BuildNotesCard());
         return body;
+    }
+
+    private Control BuildContactCard()
+    {
+        var card = Card(570, 150);
+        card.Margin = new Padding(0, 0, 0, 16);
+        contactStatus.Text = "Identificando contato...";
+        contactStatus.ForeColor = Blue;
+        contactStatus.Font = new Font(Font.FontFamily, 10.5F, FontStyle.Bold);
+        contactStatus.AutoSize = true;
+        contactStatus.Location = new Point(18, 14);
+        contactDetail.Text = "Cruzando número, grupos e cadastro de clientes.";
+        contactDetail.ForeColor = Muted;
+        contactDetail.AutoSize = true;
+        contactDetail.MaximumSize = new Size(532, 42);
+        contactDetail.Location = new Point(18, 42);
+        clientBinding.Location = new Point(18, 92);
+        clientBinding.Visible = false;
+        card.Controls.Add(contactStatus);
+        card.Controls.Add(contactDetail);
+        card.Controls.Add(clientBinding);
+        return card;
     }
 
     private Control BuildSignalsCard()
@@ -238,6 +277,75 @@ internal sealed class FeedbackForm : Form
         button.Cursor = Cursors.Hand;
     }
 
+    private async Task LoadContextAsync()
+    {
+        if (config is null) return;
+        var api = new RelatoApi(config);
+        Exception? last = null;
+        for (var attempt = 0; attempt < 30; attempt++)
+        {
+            try
+            {
+                var context = await api.GetFeedbackContextAsync(sessionId);
+                if (context.Pending)
+                {
+                    await Task.Delay(300);
+                    continue;
+                }
+                feedbackContext = context;
+                contextReady = true;
+                ApplyContext(context);
+                return;
+            }
+            catch (Exception ex)
+            {
+                last = ex;
+                await Task.Delay(300);
+            }
+        }
+        contactStatus.Text = "Identificação pendente";
+        contactStatus.ForeColor = Accent;
+        contactDetail.Text = last is null
+            ? "Ainda estou aguardando os dados da ligação."
+            : "Não consegui carregar a identificação da ligação ainda.";
+    }
+
+    private void ApplyContext(FeedbackContext context)
+    {
+        var phone = string.IsNullOrWhiteSpace(context.RemotePhone) ? null : $"+{context.RemotePhone}";
+        var person = string.IsNullOrWhiteSpace(context.RemoteName) ? phone ?? "Contato não identificado" : context.RemoteName;
+        var identity = string.Join(" · ", new[] { person, phone }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct());
+        if (!context.RequiresSelection)
+        {
+            contactStatus.Text = "Identificado automaticamente";
+            contactStatus.ForeColor = Blue;
+            var relation = string.Join(" • ", new[] { context.RemoteRole, context.ClientName }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            contactDetail.Text = string.IsNullOrWhiteSpace(relation) ? identity : $"{identity}\n{relation}";
+            clientBinding.Visible = false;
+            saveButton.Enabled = true;
+            return;
+        }
+
+        contactStatus.Text = "Confirmação necessária";
+        contactStatus.ForeColor = Accent;
+        contactDetail.Text = $"{identity}\nNão identifiquei o vínculo com segurança. Selecione abaixo.";
+        clientBinding.Items.Clear();
+        clientBinding.Items.Add(new BindingOption(null, "Selecione o cliente..."));
+        foreach (var client in context.Clients)
+            clientBinding.Items.Add(new BindingOption(client.Id, client.Name));
+        clientBinding.Items.Add(new BindingOption(null, "Sem vínculo com cliente", true));
+        clientBinding.SelectedIndex = 0;
+        clientBinding.Visible = true;
+        saveButton.Enabled = false;
+    }
+
+    private bool HasRequiredBinding()
+    {
+        if (!contextReady) return false;
+        if (feedbackContext?.RequiresSelection != true) return true;
+        return clientBinding.SelectedItem is BindingOption option && (option.Id is not null || option.NoClient);
+    }
+
     private async Task SubmitAsync(bool dismissed)
     {
         if (submitted) return;
@@ -254,7 +362,7 @@ internal sealed class FeedbackForm : Form
         catch (Exception ex)
         {
             submitted = false;
-            saveButton.Enabled = true;
+            saveButton.Enabled = dismissed || HasRequiredBinding();
             laterButton.Enabled = true;
             saveButton.Text = "Salvar avaliação";
             MessageBox.Show(this, ex.Message, "Relato AI", MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -274,9 +382,18 @@ internal sealed class FeedbackForm : Form
             "Piorou" => "WORSENING",
             _ => "STABLE"
         };
+        if (!dismissed && !HasRequiredBinding())
+            throw new InvalidOperationException("Selecione o cliente relacionado à call ou 'Sem vínculo com cliente'.");
+        var selected = clientBinding.SelectedItem as BindingOption;
+        var manual = feedbackContext?.RequiresSelection == true;
+        var clientId = manual ? selected?.Id : feedbackContext?.ClientId;
+        var noClient = manual ? selected?.NoClient == true : string.IsNullOrWhiteSpace(feedbackContext?.ClientId);
         var feedback = new
         {
             channel = "WHATSAPP_DESKTOP",
+            client_id = clientId,
+            no_client = noClient,
+            binding_source = manual ? "MANUAL" : "AUTO",
             mood = mood.SelectedItem?.ToString(),
             tone = tone.SelectedItem?.ToString(),
             receptivity = (int)receptivity.Value,
