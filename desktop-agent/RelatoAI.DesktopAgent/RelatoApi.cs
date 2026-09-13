@@ -6,6 +6,10 @@ namespace RelatoAI.DesktopAgent;
 internal sealed record PairResult(string DeviceToken, string DeviceId, string OwnerPerson);
 internal sealed record UploadTarget(string Role, string Path, string SignedUrl);
 internal sealed record PreparedCall(string SessionId, IReadOnlyList<UploadTarget> Uploads);
+internal sealed record ClientOption(string Id, string Name);
+internal sealed record FeedbackContext(
+    bool Pending, bool RequiresSelection, string? RemotePhone, string? RemoteName, string? RemoteRole,
+    string? ClientId, string? ClientName, string? ResolutionStatus, IReadOnlyList<ClientOption> Clients);
 
 internal sealed class RelatoApi
 {
@@ -55,7 +59,8 @@ internal sealed class RelatoApi
 
     public async Task<PreparedCall> PrepareCallAsync(
         string localSessionId, DateTimeOffset started, DateTimeOffset ended,
-        string contactName, IReadOnlyList<string> roles)
+        string contactName, IReadOnlyList<string> roles,
+        string? localPhone = null, string? remotePhone = null, string? identitySource = null)
     {
         using var doc = await SendAsync(new
         {
@@ -66,6 +71,9 @@ internal sealed class RelatoApi
                 started_at = started.UtcDateTime.ToString("O"),
                 ended_at = ended.UtcDateTime.ToString("O"),
                 contact_name = contactName,
+                local_phone = localPhone,
+                remote_phone = remotePhone,
+                identity_source = identitySource,
                 finish_reason = "desktop_audio_session_ended",
                 extension_version = "desktop-0.1.0",
                 source = "WHATSAPP_DESKTOP",
@@ -81,6 +89,23 @@ internal sealed class RelatoApi
                 item.GetProperty("path").GetString() ?? "",
                 item.GetProperty("signed_url").GetString() ?? ""));
         return new PreparedCall(root.GetProperty("session_id").GetString() ?? "", uploads);
+    }
+
+    public async Task<FeedbackContext> GetFeedbackContextAsync(string localSessionId)
+    {
+        using var doc = await SendAsync(new { action = "call_feedback_context", local_session_id = localSessionId });
+        var root = doc.RootElement;
+        if (root.TryGetProperty("pending", out var pendingEl) && pendingEl.GetBoolean())
+            return new FeedbackContext(true, false, null, null, null, null, null, null, Array.Empty<ClientOption>());
+        var clients = new List<ClientOption>();
+        if (root.TryGetProperty("clients", out var clientEl) && clientEl.ValueKind == JsonValueKind.Array)
+            foreach (var item in clientEl.EnumerateArray())
+                clients.Add(new ClientOption(item.GetProperty("id").GetString() ?? "", item.GetProperty("name").GetString() ?? ""));
+        string? Read(string name) => root.TryGetProperty(name, out var el) && el.ValueKind != JsonValueKind.Null ? el.GetString() : null;
+        return new FeedbackContext(
+            false, root.GetProperty("requires_selection").GetBoolean(),
+            Read("remote_phone"), Read("remote_name"), Read("remote_role"),
+            Read("client_id"), Read("client_name"), Read("resolution_status"), clients);
     }
 
     public async Task UploadAsync(string signedUrl, string filePath)
