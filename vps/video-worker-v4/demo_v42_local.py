@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
 
 import worker as w
-import worker_v42  # patches worker with V4.2
+import worker_v421  # patches worker with V4.2.1
 import director_v42 as d42
 
 
@@ -32,20 +31,20 @@ def main():
         })
         analyses.append(w.temporal(p, jobdir, idx))
 
-    # Trigger luxury pacing without presenting a fake property price: all copy is removed below.
+    # Price is used only to select restrained luxury pacing. All stock-demo copy
+    # is explicitly removed before rendering, so no property fact is asserted.
     job = {
-        "id": "v42-public-demo",
+        "id": "v421-public-demo",
         "client_id": "demo",
         "product_id": "demo",
         "product_name": "",
         "strategy_version": "dynamic-strategy-v3",
-        "context_version": "public-demo",
+        "context_version": "public-demo-v421",
         "product_context": {"target_duration_seconds": 18, "price": "R$ 2.000.000"},
         "client_context": {"client": {}, "fields": {}},
         "edit_strategy": {"target_duration_seconds": 18},
     }
     timeline = w.build_timeline(job, inputs, analyses)
-    # Stock footage demo must not assert property facts.
     for track in timeline["tracks"]:
         if track.get("kind") == "text":
             track["items"] = []
@@ -57,6 +56,7 @@ def main():
     (output.parent / "V42_DEMO_TIMELINE.json").write_text(json.dumps(timeline, ensure_ascii=False, indent=2), encoding="utf-8")
     (output.parent / "V42_DEMO_QA.json").write_text(json.dumps({"technical": qa, "creative": creative, "render": render}, ensure_ascii=False, indent=2), encoding="utf-8")
     print("DEMO_OK=" + str(output))
+    print("DIRECTOR=" + timeline["directorVersion"])
     print("CREATIVE_QA=" + json.dumps(creative, ensure_ascii=False))
     print("TECH_QA=" + json.dumps(qa, ensure_ascii=False))
 
