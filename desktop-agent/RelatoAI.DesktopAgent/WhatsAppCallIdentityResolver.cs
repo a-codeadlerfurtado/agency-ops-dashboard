@@ -63,11 +63,11 @@ internal static class WhatsAppCallIdentityResolver
                 ScoreText(text, started, ended, knownLocalPhone, candidates);
             }
 
-            var remote = candidates
+            var ordered = candidates
                 .Where(kv => kv.Key != knownLocalPhone)
                 .OrderByDescending(kv => kv.Value)
-                .Select(kv => kv.Key)
-                .FirstOrDefault();
+                .ToArray();
+            var remote = ordered.Length == 1 ? ordered[0].Key : null;
 
             return new(NormalizePhone(knownLocalPhone), NormalizePhone(remote),
                 string.IsNullOrWhiteSpace(remote) ? null : "WHATSAPP_LEVELDB_EXACT_CALL_WINDOW");
