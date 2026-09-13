@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Win32;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
@@ -20,8 +21,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     private DateTimeOffset lastRemoteActive = DateTimeOffset.MinValue;
     private DateTimeOffset lastLocalActive = DateTimeOffset.MinValue;
     private DateTimeOffset? callStarted;
-    private bool callAudioSessionObservedActive;
-    private DateTimeOffset? audioSessionInactiveAt;
+    private bool callPrivacyObservedActive;
+    private long callPrivacyStart;
     private string? sessionId;
     private string? remotePath;
     private string? localPath;
@@ -38,7 +39,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     public WhatsAppDesktopCapture(Func<AgentConfig?> configProvider)
     {
         this.configProvider = configProvider;
-        timer = new System.Threading.Timer(_ => TickSafe(), null, TimeSpan.Zero, TimeSpan.FromSeconds(1));
+        timer = new System.Threading.Timer(_ => TickSafe(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(250));
     }
 
     private void TickSafe()
@@ -65,10 +66,16 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         var now = DateTimeOffset.Now;
         var remoteHot = now - lastRemoteActive < TimeSpan.FromSeconds(2.5);
         var localHot = now - lastLocalActive < TimeSpan.FromSeconds(8);
-        var callSessionActive = IsWhatsAppCaptureSessionActive();
+        var micUsage = ReadWhatsAppMicrophoneUsage();
 
         if (!IsRecording)
         {
+            if (micUsage.Available)
+            {
+                candidateAt = null;
+                if (micUsage.Active) StartCall(process, micUsage.Start);
+                return;
+            }
             if (!remoteHot) { candidateAt = null; return; }
             candidateAt ??= now;
             var age = now - candidateAt.Value;
@@ -77,27 +84,45 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             return;
         }
 
-        if (callSessionActive)
+        if (micUsage.Available && micUsage.Active)
         {
-            if (!callAudioSessionObservedActive)
-                StatusChanged?.Invoke("REC · chamada WhatsApp Desktop · mic WhatsApp ativo");
-            callAudioSessionObservedActive = true;
-            audioSessionInactiveAt = null;
+            if (!callPrivacyObservedActive || callPrivacyStart != micUsage.Start)
+                StatusChanged?.Invoke("REC · chamada WhatsApp Desktop · Windows confirmou call ativa");
+            callPrivacyObservedActive = true;
+            callPrivacyStart = micUsage.Start;
         }
-        else if (callAudioSessionObservedActive)
+        else if (micUsage.Available && callPrivacyObservedActive
+            && callPrivacyStart > 0 && micUsage.Stop >= callPrivacyStart)
         {
-            audioSessionInactiveAt ??= now;
-            if (now - audioSessionInactiveAt.Value >= TimeSpan.FromSeconds(1.2))
-            {
-                await FinishCallAsync("audio_session_closed");
-                return;
-            }
+            await FinishCallAsync("windows_mic_released");
+            return;
         }
 
-        // Fallback only. Normal hangup is detected by the Windows audio-session state above.
-        if (now - lastRemoteActive > TimeSpan.FromSeconds(12)
-            && now - lastLocalActive > TimeSpan.FromSeconds(12))
+        // Safety fallback only. The privacy usage record is the primary hangup signal.
+        if (!micUsage.Available && !callPrivacyObservedActive
+            && now - lastRemoteActive > TimeSpan.FromSeconds(45)
+            && now - lastLocalActive > TimeSpan.FromSeconds(45))
             await FinishCallAsync("audio_inactive_fallback");
+    }
+
+    private readonly record struct MicUsageSnapshot(bool Available, bool Active, long Start, long Stop);
+
+    private static MicUsageSnapshot ReadWhatsAppMicrophoneUsage()
+    {
+        const string rootPath = @"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone";
+        try
+        {
+            using var root = Registry.CurrentUser.OpenSubKey(rootPath);
+            if (root is null) return new(false, false, 0, 0);
+            var subName = root.GetSubKeyNames()
+                .FirstOrDefault(x => x.Contains("WhatsAppDesktop", StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrWhiteSpace(subName)) return new(false, false, 0, 0);
+            using var key = root.OpenSubKey(subName);
+            var start = Convert.ToInt64(key?.GetValue("LastUsedTimeStart") ?? 0L);
+            var stop = Convert.ToInt64(key?.GetValue("LastUsedTimeStop") ?? 0L);
+            return new(true, start > 0 && start > stop, start, stop);
+        }
+        catch { return new(false, false, 0, 0); }
     }
 
     private static bool IsWhatsAppCaptureSessionActive()
@@ -241,14 +266,14 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         }
     }
 
-    private void StartCall(Process process)
+    private void StartCall(Process process, long privacyStart = 0)
     {
         if (remoteRecorder is null || localRecorder is null || IsRecording) return;
         var now = DateTimeOffset.Now;
         sessionId = $"wa-desktop-{now:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
         callStarted = now;
-        callAudioSessionObservedActive = IsWhatsAppCaptureSessionActive();
-        audioSessionInactiveAt = null;
+        callPrivacyObservedActive = privacyStart > 0;
+        callPrivacyStart = privacyStart;
         var dir = Path.Combine(Path.GetTempPath(), "RelatoAI", sessionId);
         Directory.CreateDirectory(dir);
         remotePath = Path.Combine(dir, "remote.wav");
@@ -263,9 +288,9 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         candidateAt = null;
         var contact = ResolveContactName(process);
         CallStarted?.Invoke(sessionId, contact);
-        StatusChanged?.Invoke(callAudioSessionObservedActive
-            ? "REC · chamada WhatsApp Desktop · mic WhatsApp ativo"
-            : "REC · chamada WhatsApp Desktop · aguardando mic WhatsApp");
+        StatusChanged?.Invoke(callPrivacyObservedActive
+            ? "REC · chamada WhatsApp Desktop · Windows confirmou call ativa"
+            : "REC · chamada WhatsApp Desktop · aguardando confirmação do Windows");
     }
 
     public Task FinishManualAsync() => FinishCallAsync("manual_stop");
@@ -283,10 +308,10 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             localWriter?.Dispose(); localWriter = null;
         }
         sessionId = null; callStarted = null; candidateAt = null;
-        callAudioSessionObservedActive = false;
-        audioSessionInactiveAt = null;
-        StatusChanged?.Invoke(reason == "audio_session_closed"
-            ? "Ligação encerrada automaticamente"
+        callPrivacyObservedActive = false;
+        callPrivacyStart = 0;
+        StatusChanged?.Invoke(reason == "windows_mic_released"
+            ? "Ligação encerrada automaticamente pelo Windows"
             : $"Ligação encerrada ({reason})");
         CallEnded?.Invoke(id, contact);
         var success = false; string? error = null;
