@@ -39,7 +39,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     public WhatsAppDesktopCapture(Func<AgentConfig?> configProvider)
     {
         this.configProvider = configProvider;
-        timer = new System.Threading.Timer(_ => TickSafe(), null, TimeSpan.Zero, TimeSpan.FromMilliseconds(250));
+        // Give AgentContext time to subscribe to StatusChanged/Call events before the first tick.
+        timer = new System.Threading.Timer(_ => TickSafe(), null, TimeSpan.FromMilliseconds(500), TimeSpan.FromMilliseconds(250));
     }
 
     private void TickSafe()
