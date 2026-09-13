@@ -14,10 +14,6 @@ internal static class WhatsAppCallIdentityResolver
         @"(?<fromme>true|false)_(?<phone>\d{10,15})@c\.us_[A-Za-z0-9]+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    private static readonly Regex AnyPhoneRegex = new(
-        @"(?<phone>\d{10,15})@c\.us",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
     public static async Task<WhatsAppCallIdentity> ResolveAsync(
         DateTimeOffset started,
         DateTimeOffset ended,
@@ -60,12 +56,11 @@ internal static class WhatsAppCallIdentityResolver
                 .ToArray();
 
             var candidates = new Dictionary<string, int>(StringComparer.Ordinal);
-            var localCandidates = new Dictionary<string, int>(StringComparer.Ordinal);
             foreach (var file in files)
             {
                 var text = ReadTailLatin1(file.FullName, 4 * 1024 * 1024);
                 if (string.IsNullOrEmpty(text)) continue;
-                ScoreText(text, started, ended, knownLocalPhone, candidates, localCandidates);
+                ScoreText(text, started, ended, knownLocalPhone, candidates);
             }
 
             var remote = candidates
@@ -74,18 +69,8 @@ internal static class WhatsAppCallIdentityResolver
                 .Select(kv => kv.Key)
                 .FirstOrDefault();
 
-            var local = knownLocalPhone;
-            if (string.IsNullOrWhiteSpace(local))
-            {
-                local = localCandidates
-                    .Where(kv => kv.Key != remote)
-                    .OrderByDescending(kv => kv.Value)
-                    .Select(kv => kv.Key)
-                    .FirstOrDefault();
-            }
-
-            return new(NormalizePhone(local), NormalizePhone(remote),
-                string.IsNullOrWhiteSpace(remote) ? null : "WHATSAPP_LEVELDB_CALL_CONTEXT");
+            return new(NormalizePhone(knownLocalPhone), NormalizePhone(remote),
+                string.IsNullOrWhiteSpace(remote) ? null : "WHATSAPP_LEVELDB_EXACT_CALL_WINDOW");
         }
         catch
         {
@@ -98,56 +83,36 @@ internal static class WhatsAppCallIdentityResolver
         DateTimeOffset started,
         DateTimeOffset ended,
         string? knownLocalPhone,
-        Dictionary<string, int> remoteScores,
-        Dictionary<string, int> localScores)
+        Dictionary<string, int> remoteScores)
     {
-        var anchors = FindAnchors(text, started, ended);
+        var anchors = FindExactCallAnchors(text, started, ended);
+        if (anchors.Count == 0) return;
+
         foreach (Match match in ChatPhoneRegex.Matches(text))
         {
             var phone = NormalizePhone(match.Groups["phone"].Value);
-            if (phone is null) continue;
-
-            var score = match.Groups["fromme"].Value.Equals("true", StringComparison.OrdinalIgnoreCase) ? 30 : 18;
-            score += ProximityScore(match.Index, anchors);
-            if (phone == knownLocalPhone) score -= 100;
+            if (phone is null || phone == knownLocalPhone) continue;
+            var distance = anchors.Min(anchor => Math.Abs(anchor - match.Index));
+            if (distance > 12_000) continue;
+            var score = 100_000 - distance;
             AddScore(remoteScores, phone, score);
-
-            if (match.Groups["fromme"].Value.Equals("true", StringComparison.OrdinalIgnoreCase))
-                ScoreNearbyLocalPhones(text, match.Index, match.Length, phone, localScores);
         }
     }
 
-    private static void ScoreNearbyLocalPhones(
-        string text,
-        int matchIndex,
-        int matchLength,
-        string remotePhone,
-        Dictionary<string, int> localScores)
-    {
-        var start = Math.Max(0, matchIndex - 4096);
-        var end = Math.Min(text.Length, matchIndex + matchLength + 4096);
-        var window = text.Substring(start, end - start);
-        foreach (Match nearby in AnyPhoneRegex.Matches(window))
-        {
-            var phone = NormalizePhone(nearby.Groups["phone"].Value);
-            if (phone is null || phone == remotePhone) continue;
-            AddScore(localScores, phone, 12);
-        }
-    }
-
-    private static List<int> FindAnchors(
+    private static List<int> FindExactCallAnchors(
         string text,
         DateTimeOffset started,
         DateTimeOffset ended)
     {
         var anchors = new List<int>();
-        AddAllIndexes(text, started.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss"), anchors);
-        AddAllIndexes(text, ended.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss"), anchors);
-        if (anchors.Count > 0) return anchors;
-
-        var callAnchors = new List<int>();
-        AddAllIndexes(text, "call_log", callAnchors);
-        return callAnchors.TakeLast(8).ToList();
+        foreach (var moment in new[] { started, ended })
+        {
+            AddAllIndexes(text, moment.LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss"), anchors);
+            AddAllIndexes(text, moment.UtcDateTime.ToString("yyyy-MM-ddTHH:mm:ss"), anchors);
+            AddAllIndexes(text, moment.ToUnixTimeSeconds().ToString(), anchors);
+            AddAllIndexes(text, moment.ToUnixTimeMilliseconds().ToString(), anchors);
+        }
+        return anchors.Distinct().ToList();
     }
 
     private static void AddAllIndexes(string text, string needle, List<int> output)
@@ -158,16 +123,6 @@ internal static class WhatsAppCallIdentityResolver
             output.Add(index);
             index += Math.Max(1, needle.Length);
         }
-    }
-
-    private static int ProximityScore(int index, List<int> anchors)
-    {
-        if (anchors.Count == 0) return 0;
-        var distance = anchors.Min(anchor => Math.Abs(anchor - index));
-        if (distance <= 8_000) return 70;
-        if (distance <= 64_000) return 40;
-        if (distance <= 256_000) return 15;
-        return 0;
     }
 
     private static string? ResolveLevelDbDirectory()
