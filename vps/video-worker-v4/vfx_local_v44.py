@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import math
 from pathlib import Path
@@ -73,7 +73,7 @@ def track_bbox(video_path, bbox):
         raise RuntimeError("tracking_first_frame_failed")
     box = _bbox(bbox, w, h)
     tracker = _tracker()
-    tracker.init(frame, tuple(float(v) for v in box))
+    tracker.init(frame, tuple(int(v) for v in box))
     rows = [{"frame": 0, "time": 0.0, "bbox": [box[0] / w, box[1] / h, box[2] / w, box[3] / h], "ok": True}]
     index = 1
     while True:
@@ -351,3 +351,4 @@ def apply_effect(video_path, effect, params, output_path):
     if effect in ("room_staging","lot_to_project"):
         return asset_overlay(video_path,output_path,params,effect)
     raise RuntimeError(f"local_vfx_unsupported:{effect}")
+
