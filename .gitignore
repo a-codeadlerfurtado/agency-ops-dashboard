@@ -14,3 +14,6 @@ dist/
 
 # voz de referencia local da Jarvis (nao versionar)
 vps/jarvis-tts/reference/
+
+__pycache__/
+*.py[cod]
