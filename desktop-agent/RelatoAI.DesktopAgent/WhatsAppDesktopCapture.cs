@@ -104,10 +104,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     {
         try
         {
-            var whatsappPids = Process.GetProcesses()
-                .Where(p => p.ProcessName.StartsWith("WhatsApp", StringComparison.OrdinalIgnoreCase))
-                .Select(p => (uint)p.Id)
-                .ToHashSet();
+            var whatsappPids = GetWhatsAppProcessTreePids();
             if (whatsappPids.Count == 0) return false;
 
             using var devices = new MMDeviceEnumerator();
@@ -130,6 +127,58 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         catch { }
         return false;
     }
+
+    private static HashSet<uint> GetWhatsAppProcessTreePids()
+    {
+        var ids = Process.GetProcesses()
+            .Where(p => p.ProcessName.StartsWith("WhatsApp", StringComparison.OrdinalIgnoreCase))
+            .Select(p => (uint)p.Id)
+            .ToHashSet();
+        if (ids.Count == 0) return ids;
+
+        var snapshot = CreateToolhelp32Snapshot(0x00000002, 0);
+        if (snapshot == new IntPtr(-1)) return ids;
+        try
+        {
+            var rows = new List<(uint pid, uint parent)>();
+            var entry = new PROCESSENTRY32 { dwSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf<PROCESSENTRY32>() };
+            if (Process32First(snapshot, ref entry))
+            {
+                do { rows.Add((entry.th32ProcessID, entry.th32ParentProcessID)); }
+                while (Process32Next(snapshot, ref entry));
+            }
+            var changed = true;
+            while (changed)
+            {
+                changed = false;
+                foreach (var row in rows)
+                    if (ids.Contains(row.parent) && ids.Add(row.pid)) changed = true;
+            }
+        }
+        finally { CloseHandle(snapshot); }
+        return ids;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private struct PROCESSENTRY32
+    {
+        public uint dwSize, cntUsage, th32ProcessID;
+        public IntPtr th32DefaultHeapID;
+        public uint th32ModuleID, cntThreads, th32ParentProcessID;
+        public int pcPriClassBase;
+        public uint dwFlags;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szExeFile;
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32First(IntPtr snapshot, ref PROCESSENTRY32 entry);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode, SetLastError = true)]
+    private static extern bool Process32Next(IntPtr snapshot, ref PROCESSENTRY32 entry);
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr handle);
 
     private static Process? FindWhatsApp()
     {
