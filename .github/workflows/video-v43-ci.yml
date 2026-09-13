@@ -37,7 +37,11 @@ jobs:
           python -m py_compile vps/video-worker-v4/capabilities_v43.py
           python -m py_compile vps/video-worker-v4/providers_v43.py
           python -m py_compile vps/video-worker-v4/director_v43.py
+          python -m py_compile vps/video-worker-v4/qa_v43.py
+          python -m py_compile vps/video-worker-v4/learning_v43.py
+          python -m py_compile vps/video-worker-v4/variants_v43.py
           python -m py_compile vps/video-worker-v4/worker_v43.py
+          python -m py_compile vps/video-worker-v4/worker_v431.py
           python -m py_compile vps/video-worker-v4/smoke_raw.py
 
       - name: Generate synthetic raw property-like footage and music
@@ -53,9 +57,9 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import json, tempfile
+          import json
           import worker as w
-          import worker_v43  # patches worker globals
+          import worker_v431  # patches worker globals through V4.3.1
           import capabilities_v43 as caps
           import director_v43 as director
 
@@ -70,41 +74,45 @@ jobs:
           assert all((a.get('vision') or {}).get('available') for a in analyses), analyses
           assert all('quality_score' in a['vision'] for a in analyses)
           job = {
-              'id': 'v43-ci-job',
+              'id': 'v431-ci-job',
               'client_id': 'ci-client',
               'product_id': 'ci-product',
               'product_name': 'Apartamento CI',
               'strategy_version': 'dynamic-strategy-v3',
-              'context_version': 'ci-v43',
+              'context_version': 'ci-v431',
               'product_context': {'target_duration_seconds': 12, 'area': '184 m²', 'price': 'R$ 2.900.000', 'location': 'Jardins'},
-              'client_context': {'client': {'name': 'Cliente CI'}, 'fields': {}},
+              'client_context': {'client': {'name': 'Cliente CI'}, 'fields': {}, 'brand_profile': {'primary_color': '#071C3D', 'accent_color': '#FD6801'}},
               'edit_strategy': {'target_duration_seconds': 12, 'style': 'LUXURY_CINEMATIC'},
           }
           timeline = w.build_timeline(job, inputs, analyses)
           creative = director.validate_creative_timeline(timeline)
           assert creative['pass'] is True
-          assert timeline['directorVersion'] == 'creative-director-v4.3.0'
-          assert timeline['metadata']['rendererVersion'] == '4.3.0'
+          assert timeline['directorVersion'] == 'creative-director-v4.3.1'
+          assert timeline['metadata']['rendererVersion'] == '4.3.1'
+          assert timeline['metadata']['learningVector']['shots'] >= 6
+          assert timeline['variantPlan']['variants']
+          assert timeline['brandPlan']['primaryColor'] == '#071C3D'
           assert timeline['capabilities']['implemented'] >= 20
           videos = next(t['items'] for t in timeline['tracks'] if t['kind'] == 'video')
           assert len(videos) >= 6
           assert all(any(e['kind'] == 'smart_reframe' for e in v['effects']) for v in videos)
-          out = Path('/tmp/v43-out/V43_CI_RENDER.mp4')
+          out = Path('/tmp/v43-out/V431_CI_RENDER.mp4')
           render = w.render_timeline(paths, analyses, timeline, jobdir, out)
           qa = w.qa(out, float(timeline['duration']))
           assert qa['pass'] is True, qa
-          assert render['renderer_version'] == '4.3.0'
+          assert qa['qa_version'] == 'video-qa-v4.3.0'
+          assert render['renderer_version'] == '4.3.1'
           assert out.stat().st_size > 100000
           Path('/tmp/v43-out/timeline.json').write_text(json.dumps(timeline, indent=2, ensure_ascii=False))
           Path('/tmp/v43-out/report.json').write_text(json.dumps({'creative': creative, 'render': render, 'qa': qa, 'caps': caps.capability_summary()}, indent=2, ensure_ascii=False))
-          print('V43_CI_OK', json.dumps({'creative': creative, 'qa': qa['checks'], 'vision': [a['vision'] for a in analyses]}, ensure_ascii=False))
+          print('V431_CI_OK', json.dumps({'creative': creative, 'qa': qa['checks'], 'vision': [a['vision'] for a in analyses]}, ensure_ascii=False))
           PY
 
       - uses: actions/upload-artifact@v4
         with:
-          name: V43-ci-render
+          name: V431-ci-render
           path: |
-            /tmp/v43-out/V43_CI_RENDER.mp4
+            /tmp/v43-out/V431_CI_RENDER.mp4
             /tmp/v43-out/timeline.json
             /tmp/v43-out/report.json
           if-no-files-found: error
