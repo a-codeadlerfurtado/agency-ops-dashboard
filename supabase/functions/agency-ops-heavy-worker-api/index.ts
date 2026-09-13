@@ -223,6 +223,8 @@ Deno.serve(async (req) => {
         .eq("id", sessionId).maybeSingle();
       if (error) throw error;
       if (!session) return json({ error: "call_session_not_found" }, 404);
+      await sb.from("meeting_capture_sessions").update({ state: "PROCESSING", updated_at: new Date().toISOString() }).eq("id", sessionId).in("state", ["QUEUED","CAPTURED"]);
+      session.state = "PROCESSING";
       const audioPaths = session.metadata?.audio_paths && typeof session.metadata.audio_paths === "object" ? session.metadata.audio_paths : {};
       const audio: Record<string, unknown>[] = [];
       for (const [role, path] of Object.entries(audioPaths)) {
@@ -248,39 +250,62 @@ Deno.serve(async (req) => {
       const isDesktop = String(session.capture_mode || "").toUpperCase() === "WHATSAPP_DESKTOP_AUDIO";
       const transcriptSource = isDesktop ? "WHATSAPP_DESKTOP_WHISPER" : "WHATSAPP_WEB_AUDIO_WHISPER";
       const channel = isDesktop ? "WHATSAPP_DESKTOP_CALL" : "WHATSAPP_WEB_CALL";
+      const phone = (value: unknown) => { const digits = String(value || "").replace(/\D/g, ""); return digits.length >= 10 && digits.length <= 15 ? digits : null; };
+      const localPhone = phone(session.metadata?.local_phone);
+      const remotePhone = phone(session.metadata?.remote_phone);
+      const contactName = String(session.metadata?.contact_name || "Contato WhatsApp").slice(0,160);
+      const ownerName = String(session.owner_person || "Colaborador").slice(0,160);
+      const formatPhone = (value: string | null) => value ? `+${value}` : "";
+      const localLabel = localPhone ? `${ownerName} · ${formatPhone(localPhone)}` : ownerName;
+      const remoteBase = contactName === "Contato WhatsApp Desktop" || contactName === "Contato WhatsApp" ? "Contato WhatsApp" : contactName;
+      const remoteLabel = remotePhone ? `${remoteBase} · ${formatPhone(remotePhone)}` : remoteBase;
       const rawSegments = Array.isArray(body.segments) ? body.segments.slice(0, 20000) : [];
-      const segments = rawSegments.map((seg: Record<string, unknown>, index: number) => ({
-        sequence_no: Number.isFinite(Number(seg.sequence_no)) ? Number(seg.sequence_no) : index,
-        started_ms: Number.isFinite(Number(seg.started_ms)) ? Math.max(0, Math.round(Number(seg.started_ms))) : null,
-        ended_ms: Number.isFinite(Number(seg.ended_ms)) ? Math.max(0, Math.round(Number(seg.ended_ms))) : null,
-        speaker_key: String(seg.speaker_key || "").slice(0,180) || null,
-        speaker_name: String(seg.speaker_name || "Participante").slice(0,160),
-        text: String(seg.text || "").trim().slice(0,8000),
-        confidence: Number.isFinite(Number(seg.confidence)) ? Math.max(0, Math.min(1, Number(seg.confidence))) : null,
-        source: transcriptSource,
-      })).filter((seg: Record<string, unknown>) => String(seg.text || "").length > 0);
+      const segments = rawSegments.map((seg: Record<string, unknown>, index: number) => {
+        const rawKey = String(seg.speaker_key || "").slice(0,180);
+        const rawName = String(seg.speaker_name || "Participante").slice(0,160);
+        const isLocal = rawKey === ownerName || rawName === ownerName;
+        return {
+          sequence_no: Number.isFinite(Number(seg.sequence_no)) ? Number(seg.sequence_no) : index,
+          started_ms: Number.isFinite(Number(seg.started_ms)) ? Math.max(0, Math.round(Number(seg.started_ms))) : null,
+          ended_ms: Number.isFinite(Number(seg.ended_ms)) ? Math.max(0, Math.round(Number(seg.ended_ms))) : null,
+          speaker_key: isLocal ? (localPhone || rawKey || ownerName) : (remotePhone || rawKey || remoteBase),
+          speaker_name: isLocal ? localLabel : remoteLabel,
+          text: String(seg.text || "").trim().slice(0,8000),
+          confidence: Number.isFinite(Number(seg.confidence)) ? Math.max(0, Math.min(1, Number(seg.confidence))) : null,
+          source: transcriptSource,
+        };
+      }).filter((seg: Record<string, unknown>) => String(seg.text || "").length > 0);
       const durationSeconds = session.started_at && session.ended_at
         ? Math.max(0, Math.round((Date.parse(String(session.ended_at)) - Date.parse(String(session.started_at))) / 1000)) : null;
-      const contentHash = await sha256Hex(transcriptText);
-      const contactName = String(session.metadata?.contact_name || "Contato WhatsApp").slice(0,160);
-      const participants = [...new Set([session.owner_person, contactName].filter(Boolean))];
+      const clock = (value: unknown) => {
+        const total = Math.max(0, Math.floor(Number(value || 0) / 1000));
+        const hh = String(Math.floor(total / 3600)).padStart(2, "0");
+        const mm = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
+        const ss = String(total % 60).padStart(2, "0");
+        return `${hh}:${mm}:${ss}`;
+      };
+      const canonicalTranscriptText = segments.length
+        ? segments.map((seg: Record<string, unknown>) => `[${clock(seg.started_ms)}] ${String(seg.speaker_name || "Participante")}: ${String(seg.text || "")}`).join("\n\n")
+        : transcriptText;
+      const contentHash = await sha256Hex(canonicalTranscriptText);
+      const participants = [...new Set([localLabel, remoteLabel].filter(Boolean))];
       const transcriptPayload = {
         source_system: "RELATO_AI",
         source_file_id: session.local_session_id,
-        source_file_name: `WhatsApp Call - ${contactName}.txt`,
+        source_file_name: `WhatsApp Call - ${remoteLabel}.txt`,
         source_url: isDesktop ? null : "https://web.whatsapp.com/",
         meeting_key: `relato:whatsapp:${session.owner_person}:${session.local_session_id}:${session.started_at}`,
         meeting_code: null,
         meeting_started_at: session.started_at,
         meeting_ended_at: session.ended_at,
         duration_seconds: durationSeconds,
-        transcript_text: transcriptText,
+        transcript_text: canonicalTranscriptText,
         content_sha256: contentHash,
         source_file_ids: [session.local_session_id],
         copies_seen: 1,
         participants,
         owner_person: session.owner_person,
-        processing_status: "CAPTURED",
+        processing_status: "PROCESSING",
         transcript_source: transcriptSource,
         capture_session_id: session.id,
         metadata: { ...(session.metadata || {}), capture_mode: session.capture_mode, channel },
@@ -301,7 +326,7 @@ Deno.serve(async (req) => {
         const { error } = await sb.from("meeting_transcript_segments").upsert(rows, { onConflict: "session_id,sequence_no" });
         if (error) throw error;
       }
-      await sb.from("meeting_capture_sessions").update({ transcript_id: transcriptId, state: "CAPTURED", updated_at: new Date().toISOString() }).eq("id", session.id);
+      await sb.from("meeting_capture_sessions").update({ transcript_id: transcriptId, state: "PROCESSING", updated_at: new Date().toISOString() }).eq("id", session.id);
       await sb.from("meeting_human_feedback").update({ transcript_id: transcriptId, updated_at: new Date().toISOString() })
         .eq("capture_session_id", session.id).is("transcript_id", null);
       const { data: jobId, error: jobError } = await sb.rpc("enqueue_heavy_job", {
@@ -312,7 +337,7 @@ Deno.serve(async (req) => {
         p_available_at: new Date().toISOString(),
       });
       if (jobError) throw jobError;
-      await sb.from("meeting_capture_sessions").update({ state: "QUEUED", updated_at: new Date().toISOString() }).eq("id", session.id);
+      await sb.from("meeting_capture_sessions").update({ state: "PROCESSING", updated_at: new Date().toISOString() }).eq("id", session.id);
       return json({ ok: true, transcript_id: transcriptId, segments: segments.length, job_id: jobId || null });
     }
 
