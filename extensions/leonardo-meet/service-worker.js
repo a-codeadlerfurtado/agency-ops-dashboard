@@ -117,7 +117,7 @@ function buildSegments(frames, speakers) {
       message_version: Number.isFinite(Number(frame.message_version ?? frame.messageVersion)) ? Math.round(Number(frame.message_version ?? frame.messageVersion)) : null,
       text: body,
       confidence: null,
-      source: "MEET_RTC_CAPTIONS",
+      source: norm(frame.source) || "MEET_RTC_CAPTIONS",
     });
   }
   return output;
@@ -142,7 +142,7 @@ function buildParticipants(frames, speakers) {
     rows.set(key, {
       participant_key: key,
       display_name: norm(frame.speaker_name) || (key.match(/@(\d+)/)?.[1] ? `Participant ${key.match(/@(\d+)/)[1]}` : "Participant"),
-      source: "MEET_RTC_CAPTIONS",
+      source: norm(frame.source) || "MEET_RTC_CAPTIONS",
       identity_confidence: norm(frame.speaker_name).startsWith("Participant ") ? 0.3 : 0.7,
       metadata: { raw_device_id: frame.device_id || frame.deviceId || null },
     });

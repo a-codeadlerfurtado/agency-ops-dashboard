@@ -1,4 +1,4 @@
-const VERSION = "0.3.3";
+const VERSION = "0.3.4";
 const MEETING_CODE_RE = /\/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})(?:[/?#]|$)/i;
 const LEAVE_RE = /(sair da chamada|encerrar chamada|sair da reunião|leave call|leave meeting|hang up|desligar)/i;
 const JOIN_RE = /(participar agora|pedir para participar|join now|ask to join)/i;
@@ -34,6 +34,11 @@ let ownerPerson = "";
 let localDeviceKey = "";
 let recordingOverlay = null;
 let liveTranscriptPanel = null;
+let domCaptionObserver = null;
+let domCaptionScanTimer = null;
+let domCaptionCounter = 0;
+let lastRtcDataCaptionAt = 0;
+const domCaptionState = new Map();
 const liveTranscriptRows = new Map();
 const prebuffer = [];
 const speakerPrebuffer = new Map();
@@ -146,6 +151,83 @@ function pushLiveTranscript(frame) {
   liveTranscriptRows.set(key, { ...frame, text });
   while (liveTranscriptRows.size > 200) liveTranscriptRows.delete(liveTranscriptRows.keys().next().value);
   renderLiveTranscript();
+}
+
+function domCaptionCandidate(element) {
+  if (!(element instanceof HTMLElement)) return null;
+  const knownText = element.matches?.(".ygicle,.VbkSUe") ? norm(element.textContent) : "";
+  let row = element;
+  for (let depth = 0; row && depth < 5; depth++, row = row.parentElement) {
+    const label = labelOf(row);
+    const hasSignal = CAPTION_LABEL_RE.test(label) || row.matches?.("[aria-live='polite'],[aria-live='assertive'],.iTTPOb,.a4cQT,.ygicle,.VbkSUe");
+    if (!hasSignal && !knownText) continue;
+    const speakerNode = row.querySelector?.(".NWpY1d,.zs7s8d,[data-speaker-name]");
+    let speaker = norm(speakerNode?.textContent || speakerNode?.getAttribute?.("data-speaker-name"));
+    let text = knownText || norm(row.querySelector?.(".ygicle,.VbkSUe")?.textContent);
+    if (!text) {
+      const lines = String(row.innerText || row.textContent || "").split(/\n+/).map(norm).filter(Boolean);
+      if (lines.length >= 2 && lines[0].length <= 100) {
+        speaker ||= lines[0];
+        text = norm(lines.slice(1).join(" "));
+      } else text = norm(row.textContent);
+    }
+    if (!text || text.length < 2 || text.length > 900) continue;
+    if (CAPTION_LABEL_RE.test(text) && text.length < 90) continue;
+    if (/^(você|voce|you)$/i.test(speaker)) speaker = ownerPerson || "Você";
+    return { speaker: speaker || "Participante", text };
+  }
+  return null;
+}
+
+function emitDomCaption(speaker, text) {
+  const now = Date.now();
+  if (lastRtcDataCaptionAt && now - lastRtcDataCaptionAt < 2500) return;
+  const normalizedSpeaker = norm(speaker) || "Participante";
+  const normalizedText = norm(text);
+  if (!normalizedText) return;
+  const key = normalizedSpeaker.toLocaleLowerCase("pt-BR");
+  const previous = domCaptionState.get(key);
+  if (previous && previous.text === normalizedText && now - previous.at < 12000) return;
+  const extendsPrevious = previous && now - previous.at < 9000 && (normalizedText.startsWith(previous.text) || previous.text.startsWith(normalizedText));
+  const messageId = extendsPrevious ? previous.message_id : `dom-${now}-${++domCaptionCounter}`;
+  const version = extendsPrevious ? previous.version + 1 : 0;
+  domCaptionState.set(key, { text: normalizedText, message_id: messageId, version, at: now });
+  handleRtcCaption({
+    message_id: messageId,
+    message_version: version,
+    device_id: `dom:${key}`,
+    device_key: `dom:${key}`,
+    speaker_name: normalizedSpeaker,
+    text: normalizedText,
+    source: "MEET_DOM_CAPTIONS",
+  });
+}
+
+function scanDomCaptions() {
+  domCaptionScanTimer = null;
+  if (!session || manualPaused) return;
+  const nodes = document.querySelectorAll("[aria-live='polite'],[aria-live='assertive'],[role='region'][aria-label],.iTTPOb,.a4cQT,.ygicle,.VbkSUe");
+  const seen = new Set();
+  for (const node of nodes) {
+    const candidate = domCaptionCandidate(node);
+    if (!candidate) continue;
+    const signature = `${candidate.speaker}|${candidate.text}`;
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    emitDomCaption(candidate.speaker, candidate.text);
+  }
+}
+
+function scheduleDomCaptionScan() {
+  if (domCaptionScanTimer) return;
+  domCaptionScanTimer = setTimeout(scanDomCaptions, 80);
+}
+
+function startDomCaptionObserver() {
+  if (domCaptionObserver || !document.documentElement) return;
+  domCaptionObserver = new MutationObserver(scheduleDomCaptionScan);
+  domCaptionObserver.observe(document.documentElement, { subtree: true, childList: true, characterData: true });
+  scheduleDomCaptionScan();
 }
 
 function getMeetingCode(pathname = location.pathname) {
@@ -312,6 +394,8 @@ async function ensureNativeCaptions(reason = "watchdog", force = false) {
   if (manualPaused || !getMeetingCode()) return false;
   if (nativeCaptionsActive()) {
     captionsState = "active";
+    startDomCaptionObserver();
+    scheduleDomCaptionScan();
     hideKnownCaptionRegions();
     await reportHealth();
     return true;
@@ -336,8 +420,11 @@ async function ensureNativeCaptions(reason = "watchdog", force = false) {
   }
   await new Promise((resolve) => setTimeout(resolve, 900));
   captionsState = nativeCaptionsActive() ? "active" : "not_active";
-  if (captionsState === "active") hideKnownCaptionRegions();
-  else requestRtcCapture(true);
+  if (captionsState === "active") {
+    startDomCaptionObserver();
+    scheduleDomCaptionScan();
+    hideKnownCaptionRegions();
+  } else requestRtcCapture(true);
   await reportHealth();
   return captionsState === "active";
 }
@@ -392,10 +479,15 @@ async function beginSession() {
     path: location.pathname,
   };
   warningSent = false;
+  domCaptionState.clear();
+  lastRtcDataCaptionAt = 0;
   liveTranscriptRows.clear();
+  for (const frame of prebuffer) pushLiveTranscript(frame);
   renderLiveTranscript();
-  await runtime({ type: "RTC_SESSION_START", session: { ...session, extension_version: VERSION } });
   showRecordingOverlay("Google Meet");
+  startDomCaptionObserver();
+  scheduleDomCaptionScan();
+  await runtime({ type: "RTC_SESSION_START", session: { ...session, extension_version: VERSION } });
   for (const speaker of speakerPrebuffer.values()) await runtime({ type: "RTC_SPEAKER_MAP", session_id: session.id, speaker });
   speakerPrebuffer.clear();
   for (const frame of prebuffer.splice(0)) await runtime({ type: "RTC_CAPTION", session_id: session.id, frame: { ...frame, offset_ms: Math.max(0, Number(frame.observed_at || Date.now()) - started) } });
@@ -434,13 +526,15 @@ async function endSession(reason = "left_call") {
 }
 
 function handleRtcCaption(payload) {
+  const source = norm(payload?.source) || "MEET_RTC_CAPTIONS";
+  if (source === "MEET_RTC_CAPTIONS") lastRtcDataCaptionAt = Date.now();
   const localSpeaker = resolveLocalSpeaker(payload);
   hideNativeCaptionForFrame(payload?.text || "");
   const frame = {
     ...payload,
     speaker_name: localSpeaker || payload?.speaker_name,
     observed_at: Date.now(),
-    source: "MEET_RTC_CAPTIONS",
+    source,
   };
   lastRtcSignalAt = Date.now();
   lastCaptionAt = Date.now();
