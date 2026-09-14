@@ -73,8 +73,9 @@ import NotificationReadOnClick from "./notification-read-on-click";
 import WorkCenterScopeNetwork from "./work-center-scope-network";
 import AutomationNavBridge from "./automation-nav-bridge";
 import DonnahNavBridge from "./donnah-nav-bridge";
-import NavBrandIcons from "./nav-brand-icons";
-import NavBrandIconsOutlineFix from "./nav-brand-icons-outline-fix";
+import DiagnosticsNavBridge from "./diagnostics-nav-bridge";
+import SidebarInformationArchitecture from "./sidebar-information-architecture-v2";
+import NavBrandIcons from "./nav-brand-icons-v3";
 import LearningShortcut from "./learning-shortcut";
 import HomeShortcut from "./home-shortcut";
 import LogoutShortcut from "./logout-shortcut";
@@ -214,8 +215,9 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <NotificationReadOnClick />
         <AutomationNavBridge />
         <DonnahNavBridge />
+        <DiagnosticsNavBridge />
+        <SidebarInformationArchitecture />
         <NavBrandIcons />
-        <NavBrandIconsOutlineFix />
         <TeamAccessAdmin />
         <GabrielTasklogMode />
         <DailyGreeting />
