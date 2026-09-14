@@ -57,6 +57,7 @@ import ClientNotificationsBridge from "./client-notifications-bridge";
 import ClientCommercialProfileBridge from "./client-commercial-profile-bridge";
 import ClientAccessVaultBridge from "./client-access-vault-bridge";
 import AdlerPasswordManagerBridge from "./adler-password-manager-bridge";
+import JoelBriefingVaultShortcut from "./joel-briefing-vault-shortcut";
 import ImobiBoardCentralBridge from "./imobi-board-central-bridge";
 import ClientMetaAssetsBridge from "./client-meta-assets-bridge";
 import ClientContextUploadBridge from "./client-context-upload-bridge";
@@ -189,6 +190,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         {/* Cofre global e central do CRM: ambos se escondem sozinhos para
             quem nao e o perfil MGMT do Adler. */}
         <AdlerPasswordManagerBridge />
+        <JoelBriefingVaultShortcut />
         <ImobiBoardCentralBridge />
         <ClientMetaAssetsBridge />
         <ClientContextUploadBridge />
