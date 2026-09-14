@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { authenticatedFetch, SUPABASE_URL } from "./shared";
+import { authenticatedFetch, SUPABASE_URL, supabase } from "./shared";
 
 type Row = Record<string, any>;
 
@@ -25,7 +25,19 @@ export default function JoelBriefingVaultShortcut() {
     }
   }, []);
 
-  useEffect(() => { void checkAccess(); }, [checkAccess]);
+  useEffect(() => {
+    void checkAccess();
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") {
+        setAllowed(false);
+        return;
+      }
+      if (event === "SIGNED_IN" || event === "USER_UPDATED" || event === "TOKEN_REFRESHED") {
+        window.setTimeout(() => { void checkAccess(); }, 0);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [checkAccess]);
 
   useEffect(() => {
     if (!allowed) return;
