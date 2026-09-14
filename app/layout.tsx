@@ -73,7 +73,7 @@ import AutomationNavBridge from "./automation-nav-bridge";
 import DonnahNavBridge from "./donnah-nav-bridge";
 import DiagnosticsNavBridge from "./diagnostics-nav-bridge";
 import SidebarInformationArchitecture from "./sidebar-information-architecture-v2";
-import NavBrandIcons from "./nav-brand-icons-v2";
+import NavBrandIcons from "./nav-brand-icons-v3";
 import LearningShortcut from "./learning-shortcut";
 import HomeShortcut from "./home-shortcut";
 import LogoutShortcut from "./logout-shortcut";
