@@ -1,4 +1,4 @@
-const VERSION = "0.3.6";
+const VERSION = "0.3.7";
 const MEETING_CODE_RE = /\/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})(?:[/?#]|$)/i;
 const LEAVE_RE = /(sair da chamada|encerrar chamada|sair da reunião|leave call|leave meeting|hang up|desligar)/i;
 const JOIN_RE = /(participar agora|pedir para participar|join now|ask to join)/i;
@@ -14,6 +14,8 @@ const CAPTION_ATTEMPT_MAX = 3;
 const CAPTION_LABEL_RE = /(legendas|caption|captions|subtitles|closed captions)/i;
 const CAPTION_ENABLE_RE = /(ativar|mostrar|enable|turn on|show)/i;
 const CAPTION_DISABLE_RE = /(desativar|ocultar|disable|turn off|hide)/i;
+const CAPTION_ACCESSORY_RE = /(idioma (das?|de) legendas?|caption language|subtitle language|tamanho do texto|text size|cor (do texto|da legenda|de fundo)|text color|background color|configurações? (das?|de) legendas?|caption settings|subtitle settings|personalizar legendas|customize captions)/i;
+const CAPTION_LANGUAGE_NAME_RE = /^(portugu[eê]s(?:\s*\([^)]*\))?|english(?:\s*\([^)]*\))?|espa[nñ]ol(?:\s*\([^)]*\))?|fran[cç]ais(?:\s*\([^)]*\))?)$/i;
 const LOCAL_CAPTION_LABEL_RE = /^(você|voce|you)$/i;
 
 let session = null;
@@ -33,6 +35,7 @@ let captionAttemptTimestamps = [];
 let ownerPerson = "";
 let localDeviceKey = "";
 let recordingOverlay = null;
+let savedToast = null;
 let liveTranscriptPanel = null;
 let domCaptionObserver = null;
 let domCaptionScanTimer = null;
@@ -76,6 +79,29 @@ function showRecordingOverlay(source = "Google Meet") {
 }
 
 function hideRecordingOverlay() { recordingOverlay?.remove(); recordingOverlay = null; }
+
+function showSavedToast(transcriptId = null) {
+  savedToast?.remove();
+  savedToast = document.createElement("div");
+  savedToast.id = "relato-saved-toast";
+  savedToast.innerHTML = `<div style="font-size:18px;line-height:1">✓</div><div><strong style="display:block;font-size:13px">Relato AI</strong><span style="display:block;font-size:12px;margin-top:2px">Transcrição enviada para o banco de dados${transcriptId ? ` · #${transcriptId}` : ""}</span></div>`;
+  Object.assign(savedToast.style, {
+    position: "fixed", right: "18px", bottom: "22px", zIndex: "2147483647",
+    display: "flex", alignItems: "center", gap: "10px", padding: "12px 14px",
+    borderRadius: "14px", background: "rgba(9,31,23,.97)", color: "#ecfdf5",
+    border: "1px solid rgba(52,211,153,.55)", boxShadow: "0 16px 40px rgba(0,0,0,.38)",
+    fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif",
+    pointerEvents: "none", opacity: "0", transform: "translateY(8px)", transition: "opacity .18s ease, transform .18s ease"
+  });
+  document.documentElement.appendChild(savedToast);
+  requestAnimationFrame(() => { if (savedToast) { savedToast.style.opacity = "1"; savedToast.style.transform = "translateY(0)"; } });
+  setTimeout(() => {
+    if (!savedToast) return;
+    savedToast.style.opacity = "0";
+    savedToast.style.transform = "translateY(8px)";
+    setTimeout(() => { savedToast?.remove(); savedToast = null; }, 220);
+  }, 5200);
+}
 
 function renderLiveTranscript() {
   if (!liveTranscriptPanel) return;
@@ -338,6 +364,24 @@ function captionVisualContainer(leaf) {
 function hideKnownCaptionRegions() {
   const leaves = document.querySelectorAll(".ygicle,.VbkSUe");
   for (const leaf of leaves) hideCaptionElement(captionVisualContainer(leaf));
+  hideCaptionAccessoryControls();
+}
+
+function hideCaptionAccessoryControls() {
+  if (captionsState !== "active") return;
+  const toggle = findCaptionsToggle();
+  const controls = document.querySelectorAll("[aria-label],[data-tooltip],[title],button,[role='button']");
+  for (const el of controls) {
+    if (!(el instanceof HTMLElement) || el === toggle || el.closest?.("#relato-live-transcript-panel,#relato-recording-indicator,#relato-saved-toast")) continue;
+    const value = `${labelOf(el)} ${norm(el.textContent)}`;
+    const rect = el.getBoundingClientRect?.();
+    const looksLikeCaptionAccessory = CAPTION_ACCESSORY_RE.test(value);
+    const looksLikeLanguagePill = CAPTION_LANGUAGE_NAME_RE.test(norm(el.textContent)) && rect && rect.top > window.innerHeight * 0.45 && rect.width < 360 && rect.height < 90;
+    if (!looksLikeCaptionAccessory && !looksLikeLanguagePill) continue;
+    el.dataset.relatoSilentCaptionAccessory = "1";
+    el.style.setProperty("visibility", "hidden", "important");
+    el.style.setProperty("pointer-events", "none", "important");
+  }
 }
 
 function hideNativeCaptionForFrame(frameText) {
@@ -611,6 +655,7 @@ chrome.runtime.onMessage.addListener((message) => {
   }
   if (message?.type === "REINJECT_RTC") requestRtcCapture(true);
   if (message?.type === "RELATO_FORCE_CAPTIONS") ensureNativeCaptions("manual_retry", true).catch(() => {});
+  if (message?.type === "RELATO_UPLOAD_CONFIRMED") showSavedToast(message.transcript_id || null);
   if (message?.type === "RELATO_CAPTURE_CONTROL") {
     const paused = Boolean(message.paused);
     manualPaused = paused;

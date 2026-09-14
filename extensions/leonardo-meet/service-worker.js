@@ -196,7 +196,10 @@ async function finalizeStoredSession(sessionId, finishOverride = null) {
     const result = await deliver(payload);
     await setCaptureState({ active: false, saved: true, error: null, meeting_code: meeting.meeting_code, ended_at: meeting.ended_at, transcript_id: result?.transcript_id || null });
     const feedback = { local_session_id: stored.id, transcript_id: result?.transcript_id || null, capture_session_id: result?.session_id || null, channel: "MEET", title: meeting.title || "ReuniÃ£o Google Meet" };
-    if (stored.tab_id != null) chrome.tabs.sendMessage(stored.tab_id, { type: "RELATO_SHOW_FEEDBACK", feedback }).catch(() => {});
+    if (stored.tab_id != null) {
+      chrome.tabs.sendMessage(stored.tab_id, { type: "RELATO_UPLOAD_CONFIRMED", transcript_id: result?.transcript_id || null, capture_session_id: result?.session_id || null }).catch(() => {});
+      chrome.tabs.sendMessage(stored.tab_id, { type: "RELATO_SHOW_FEEDBACK", feedback }).catch(() => {});
+    }
     await clearSession(sessionId);
     return { ok: true, result };
   } catch (error) {
