@@ -161,15 +161,6 @@ function SidebarEnhancer({ data, work }: { data: HomeData | null; work: Row }) {
       const container = document.querySelector(".side-nav-items");
       if (!container) return;
       container.querySelectorAll(".ops-nav-group-label,.ops-nav-badge").forEach((node) => node.remove());
-      const children = Array.from(container.children) as HTMLElement[];
-      const starts: Record<string, string> = { "Visão geral": "OPERAÇÃO", "Clientes": "CLIENTES", "Central Criativa": "MÍDIA", "Equipe": "GESTÃO", "ClickUp": "SISTEMA" };
-      children.forEach((child) => {
-        const label = child.getAttribute("title") || child.textContent?.trim() || "";
-        const group = starts[label];
-        if (!group) return;
-        const marker = document.createElement("div"); marker.className = "ops-nav-group-label"; marker.textContent = group;
-        container.insertBefore(marker, child);
-      });
       const counts: Record<string, number> = {
         Alertas: (data?.alerts || []).length,
         Onboarding: (data?.clients || []).filter((client) => client.lifecycle === "ONBOARDING" || client.onboarding_status === "OPEN").length,
