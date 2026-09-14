@@ -1,4 +1,4 @@
-const VERSION = "0.3.4";
+const VERSION = "0.3.5";
 const MEETING_CODE_RE = /\/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})(?:[/?#]|$)/i;
 const LEAVE_RE = /(sair da chamada|encerrar chamada|sair da reunião|leave call|leave meeting|hang up|desligar)/i;
 const JOIN_RE = /(participar agora|pedir para participar|join now|ask to join)/i;
@@ -271,7 +271,10 @@ function findCaptionsToggle() {
   const controls = document.querySelectorAll("button[aria-label], [role='button'][aria-label], button[data-tooltip], [role='button'][data-tooltip]");
   for (const control of controls) {
     const value = `${labelOf(control)} ${norm(control.textContent)}`;
-    if (CAPTION_LABEL_RE.test(value)) return control;
+    if (!CAPTION_LABEL_RE.test(value)) continue;
+    const pressed = control.getAttribute("aria-pressed");
+    if (pressed === "true" || pressed === "false") return control;
+    if (CAPTION_ENABLE_RE.test(value) || CAPTION_DISABLE_RE.test(value)) return control;
   }
   return null;
 }
@@ -307,10 +310,8 @@ function textsOverlap(a, b) {
 }
 
 function hideCaptionElement(el) {
-  if (!el || !(el instanceof HTMLElement)) return;
-  el.dataset.relatoSilentCaption = "1";
-  el.style.setProperty("visibility", "hidden", "important");
-  el.style.setProperty("pointer-events", "none", "important");
+  // Preserve Google Meet controls and layout. Native captions are a fallback source.
+  return;
 }
 
 function hideKnownCaptionRegions() {
