@@ -1,4 +1,4 @@
-const VERSION = "0.3.7";
+const VERSION = "0.3.8";
 const MEETING_CODE_RE = /\/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})(?:[/?#]|$)/i;
 const LEAVE_RE = /(sair da chamada|encerrar chamada|sair da reunião|leave call|leave meeting|hang up|desligar)/i;
 const JOIN_RE = /(participar agora|pedir para participar|join now|ask to join)/i;
@@ -17,6 +17,10 @@ const CAPTION_DISABLE_RE = /(desativar|ocultar|disable|turn off|hide)/i;
 const CAPTION_ACCESSORY_RE = /(idioma (das?|de) legendas?|caption language|subtitle language|tamanho do texto|text size|cor (do texto|da legenda|de fundo)|text color|background color|configurações? (das?|de) legendas?|caption settings|subtitle settings|personalizar legendas|customize captions)/i;
 const CAPTION_LANGUAGE_NAME_RE = /^(portugu[eê]s(?:\s*\([^)]*\))?|english(?:\s*\([^)]*\))?|espa[nñ]ol(?:\s*\([^)]*\))?|fran[cç]ais(?:\s*\([^)]*\))?)$/i;
 const LOCAL_CAPTION_LABEL_RE = /^(você|voce|you)$/i;
+const MIC_CONTROL_RE = /(microfone|microphone|mute|ativar áudio|desativar áudio)/i;
+const CAMERA_CONTROL_RE = /(câmera|camera|ativar vídeo|desativar vídeo|turn on camera|turn off camera)/i;
+const END_CALL_CONTROL_RE = /(encerrar chamada|sair da chamada|desligar|leave call|hang up)/i;
+const CLOSE_RE = /^(fechar|close)$/i;
 
 let session = null;
 let inCallSince = 0;
@@ -384,6 +388,51 @@ function hideCaptionAccessoryControls() {
   }
 }
 
+function dismissCaptionCustomization() {
+  const accessories = [...document.querySelectorAll("[aria-label],[data-tooltip],[title],button,[role='button']")].filter((el) => {
+    if (!(el instanceof HTMLElement)) return false;
+    const value = `${labelOf(el)} ${norm(el.textContent)}`;
+    const rect = el.getBoundingClientRect?.();
+    const style = getComputedStyle(el);
+    if (!rect || rect.width <= 0 || rect.height <= 0 || style.visibility === "hidden" || style.display === "none" || style.opacity === "0") return false;
+    return CAPTION_ACCESSORY_RE.test(value) || (CAPTION_LANGUAGE_NAME_RE.test(norm(el.textContent)) && rect.width < 360 && rect.height < 90);
+  });
+  if (!accessories.length) return false;
+  const close = [...document.querySelectorAll("button[aria-label],[role='button'][aria-label]")].find((el) => /((fechar|close).*(legenda|caption)|(legenda|caption).*(fechar|close))/i.test(labelOf(el)));
+  if (close) { try { close.click(); } catch {} }
+  try {
+    document.activeElement?.blur?.();
+    const init = { key: "Escape", code: "Escape", keyCode: 27, which: 27, bubbles: true, cancelable: true };
+    for (const target of [document.activeElement, document.body, document]) for (const type of ["keydown","keyup"]) target?.dispatchEvent?.(new KeyboardEvent(type, init));
+  } catch {}
+  return true;
+}
+
+function keepMeetCallControlsVisible() {
+  const candidates = [...document.querySelectorAll("button[aria-label],[role='button'][aria-label],[data-tooltip]")];
+  const mic = candidates.find((el) => MIC_CONTROL_RE.test(labelOf(el)));
+  const cam = candidates.find((el) => CAMERA_CONTROL_RE.test(labelOf(el)));
+  const end = candidates.find((el) => END_CALL_CONTROL_RE.test(labelOf(el)));
+  const controls = [mic, cam, end].filter(Boolean);
+  if (controls.length < 2) return false;
+  let toolbar = controls[0]?.closest?.("[role='toolbar']") || null;
+  if (!toolbar || !controls.every((control) => toolbar.contains(control))) {
+    let node = controls[0]?.parentElement || null;
+    for (let depth = 0; node && depth < 8; depth++, node = node.parentElement) {
+      const rect = node.getBoundingClientRect?.();
+      if (controls.every((control) => node.contains(control)) && rect && rect.width > 240 && rect.height > 32 && rect.height < 190) { toolbar = node; break; }
+    }
+  }
+  const targets = [toolbar, ...controls].filter((el) => el instanceof HTMLElement);
+  for (const el of targets) {
+    el.style.setProperty("opacity", "1", "important");
+    el.style.setProperty("visibility", "visible", "important");
+    el.style.setProperty("pointer-events", "auto", "important");
+    if (el === toolbar) el.style.setProperty("transform", "none", "important");
+  }
+  return Boolean(toolbar);
+}
+
 function hideNativeCaptionForFrame(frameText) {
   const leaves = document.querySelectorAll(".ygicle,.VbkSUe");
   for (const leaf of leaves) {
@@ -457,9 +506,11 @@ async function ensureNativeCaptions(reason = "watchdog", force = false) {
   if (manualPaused || !getMeetingCode()) return false;
   if (nativeCaptionsActive()) {
     captionsState = "active";
+    dismissCaptionCustomization();
     startDomCaptionObserver();
     scheduleDomCaptionScan();
     hideKnownCaptionRegions();
+    keepMeetCallControlsVisible();
     await reportHealth();
     return true;
   }
@@ -484,9 +535,11 @@ async function ensureNativeCaptions(reason = "watchdog", force = false) {
   await new Promise((resolve) => setTimeout(resolve, 900));
   captionsState = nativeCaptionsActive() ? "active" : "not_active";
   if (captionsState === "active") {
+    dismissCaptionCustomization();
     startDomCaptionObserver();
     scheduleDomCaptionScan();
     hideKnownCaptionRegions();
+    keepMeetCallControlsVisible();
   } else requestRtcCapture(true);
   await reportHealth();
   return captionsState === "active";
@@ -681,6 +734,9 @@ setInterval(async () => {
     if (!inCallSince) inCallSince = Date.now();
     if (!session && Date.now() - inCallSince >= JOIN_STABLE_MS) await beginSession();
     if (session) {
+      dismissCaptionCustomization();
+      hideKnownCaptionRegions();
+      keepMeetCallControlsVisible();
       if (!pageReady || Date.now() - lastRtcSignalAt > RTC_SILENCE_RECOVERY_MS) requestRtcCapture(true);
       if (!lastCaptionAt || Date.now() - lastCaptionAt > CAPTION_FRESH_MS) ensureNativeCaptions("no_recent_caption").catch(() => {});
       if (!lastCaptionAt && Date.now() - session.started_epoch > NO_FIRST_CAPTION_WARN_MS && !warningSent) {
