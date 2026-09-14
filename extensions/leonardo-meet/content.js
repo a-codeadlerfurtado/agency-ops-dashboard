@@ -1,4 +1,4 @@
-const VERSION = "0.3.5";
+const VERSION = "0.3.6";
 const MEETING_CODE_RE = /\/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})(?:[/?#]|$)/i;
 const LEAVE_RE = /(sair da chamada|encerrar chamada|sair da reunião|leave call|leave meeting|hang up|desligar)/i;
 const JOIN_RE = /(participar agora|pedir para participar|join now|ask to join)/i;
@@ -310,23 +310,41 @@ function textsOverlap(a, b) {
 }
 
 function hideCaptionElement(el) {
-  // Preserve Google Meet controls and layout. Native captions are a fallback source.
-  return;
+  if (!el || !(el instanceof HTMLElement)) return;
+  if (el.closest?.("#relato-live-transcript-panel,#relato-recording-indicator")) return;
+  if (el.matches?.("button,[role='button']") || el.querySelector?.("button,[role='button']")) return;
+  el.dataset.relatoSilentCaption = "1";
+  el.style.setProperty("opacity", "0", "important");
+  el.style.setProperty("pointer-events", "none", "important");
+  el.style.setProperty("user-select", "none", "important");
+}
+
+function captionVisualContainer(leaf) {
+  if (!(leaf instanceof HTMLElement)) return null;
+  let node = leaf;
+  for (let depth = 0; node && depth < 5; depth++, node = node.parentElement) {
+    if (node.matches?.("button,[role='button']") || node.querySelector?.("button,[role='button']")) break;
+    const text = norm(node.textContent);
+    const rect = node.getBoundingClientRect?.();
+    if (text && text.length <= 1800 && rect && rect.height > 0 && rect.height <= 240 && rect.width >= 120) {
+      const hasSpeaker = Boolean(node.querySelector?.(".NWpY1d,.zs7s8d,[data-speaker-name]"));
+      const hasCaptionLeaf = Boolean(node.querySelector?.(".ygicle,.VbkSUe"));
+      if (hasCaptionLeaf && hasSpeaker) return node;
+    }
+  }
+  return leaf;
 }
 
 function hideKnownCaptionRegions() {
-  const regions = document.querySelectorAll("[aria-live='polite'], [role='region'][aria-label]");
-  for (const el of regions) {
-    const label = labelOf(el);
-    if (CAPTION_LABEL_RE.test(label)) hideCaptionElement(el);
-  }
+  const leaves = document.querySelectorAll(".ygicle,.VbkSUe");
+  for (const leaf of leaves) hideCaptionElement(captionVisualContainer(leaf));
 }
 
 function hideNativeCaptionForFrame(frameText) {
-  const candidates = document.querySelectorAll("[aria-live='polite'], [role='region']");
-  for (const el of candidates) {
-    const body = norm(el.textContent);
-    if (body.length <= 1600 && textsOverlap(body, frameText)) hideCaptionElement(el);
+  const leaves = document.querySelectorAll(".ygicle,.VbkSUe");
+  for (const leaf of leaves) {
+    const body = norm(leaf.textContent);
+    if (body && textsOverlap(body, frameText)) hideCaptionElement(captionVisualContainer(leaf));
   }
 }
 
