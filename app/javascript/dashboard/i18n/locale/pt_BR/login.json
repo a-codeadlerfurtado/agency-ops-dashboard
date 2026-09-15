@@ -1,0 +1,41 @@
+{
+  "LOGIN": {
+    "TITLE": "Entrar na ImoBia",
+    "EMAIL": {
+      "LABEL": "E-mail",
+      "PLACEHOLDER": "voce{'@'}empresa.com.br",
+      "ERROR": "Informe um e-mail válido"
+    },
+    "PASSWORD": {
+      "LABEL": "Senha",
+      "PLACEHOLDER": "Sua senha"
+    },
+    "API": {
+      "SUCCESS_MESSAGE": "Acesso realizado com sucesso",
+      "ERROR_MESSAGE": "Não foi possível acessar a ImoBia. Tente novamente.",
+      "UNAUTH": "E-mail ou senha incorretos."
+    },
+    "OAUTH": {
+      "GOOGLE_LOGIN": "Entrar com Google",
+      "BUSINESS_ACCOUNTS_ONLY": "Use seu e-mail corporativo para entrar",
+      "NO_ACCOUNT_FOUND": "Não encontramos uma conta para este e-mail."
+    },
+    "FORGOT_PASSWORD": "Esqueceu sua senha?",
+    "CREATE_NEW_ACCOUNT": "Criar nova conta",
+    "SUBMIT": "Entrar na ImoBia",
+    "SAML": {
+      "LABEL": "Entrar com SSO",
+      "TITLE": "Acesso corporativo",
+      "SUBTITLE": "Informe seu e-mail de trabalho para acessar sua operação",
+      "BACK_TO_LOGIN": "Entrar com senha",
+      "WORK_EMAIL": {
+        "LABEL": "E-mail corporativo",
+        "PLACEHOLDER": "voce{'@'}empresa.com.br"
+      },
+      "SUBMIT": "Continuar",
+      "API": {
+        "ERROR_MESSAGE": "A autenticação SSO falhou. Verifique seus dados e tente novamente."
+      }
+    }
+  }
+}
