@@ -1,0 +1,443 @@
+[
+  {
+    "client": "FMI Prime",
+    "source_id": "0PaHRTz6WVU3BNqa",
+    "clone_id": "03a3033ac1109392",
+    "source_name": "[FMI Prime] Transferir Para Humano",
+    "clone_name": "[ImoBia] [FMI Prime] Transferir Para Humano",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Kronos",
+    "source_id": "QURJrKyqWprwPDhT",
+    "clone_id": "1c17aeb44c978d68",
+    "source_name": "[KRONOS] Notificar Corretor",
+    "clone_name": "[ImoBia] [KRONOS] Notificar Corretor",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "UDI Lar",
+    "source_id": "9KnfbNhH0d3ok2Ac",
+    "clone_id": "56533ac2720c503d",
+    "source_name": "[UDI LAR] Fluxo Principal",
+    "clone_name": "[ImoBia] [UDI LAR] Fluxo Principal",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "_DEPENDENCY_",
+    "source_id": "Th70nVCQ28hIKFZa",
+    "clone_id": "f2cdf0d4ea4432c2",
+    "source_name": "Envia Imoveis - Fotos",
+    "clone_name": "[ImoBia] Envia Imoveis - Fotos",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Kronos",
+    "source_id": "tiHQYgAJB3Vn8hhB",
+    "clone_id": "89feffd963a6c280",
+    "source_name": "[KRONOS] agente_principal",
+    "clone_name": "[ImoBia] [KRONOS] agente_principal",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "_DEPENDENCY_",
+    "source_id": "QLHwyKs2SHj1E4tu",
+    "clone_id": "038b7a0797d7fdc6",
+    "source_name": "Enviar_Carrossel",
+    "clone_name": "[ImoBia] Enviar_Carrossel",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Sabino",
+    "source_id": "SGVba1WDxjEak2TJ",
+    "clone_id": "673cfde204e03899",
+    "source_name": "[Sabino] Followup - Zuckzapgo",
+    "clone_name": "[ImoBia] [Sabino] Followup - Zuckzapgo",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "FMI Prime",
+    "source_id": "jffkLElXarQV51yi",
+    "clone_id": "69b202cf028e5ae9",
+    "source_name": "[FMI Prime] Notifica Setor",
+    "clone_name": "[ImoBia] [FMI Prime] Notifica Setor",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Sabino",
+    "source_id": "hYbraklnjyFplfID",
+    "clone_id": "5eb831a3d5325ca7",
+    "source_name": "[Sabino] Transfere Atendimento - Zuzkzapgo",
+    "clone_name": "[ImoBia] [Sabino] Transfere Atendimento - Zuzkzapgo",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "View Imoveis",
+    "source_id": "XUALOjAMzeOMes8X",
+    "clone_id": "50cd5de4095e1e03",
+    "source_name": "[View Imoveis] Disparo Reativacao Base Leads CRM",
+    "clone_name": "[ImoBia] [View Imoveis] Disparo Reativacao Base Leads CRM",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "View Imoveis",
+    "source_id": "EreU03rOdoD3Bfbh",
+    "clone_id": "eed6d2b8cf0e8822",
+    "source_name": "[View Imoveis] Fluxo Principal - Ycloud",
+    "clone_name": "[ImoBia] [View Imoveis] Fluxo Principal - Ycloud",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "UDI Lar",
+    "source_id": "7Bexnp5ZwpaUfLW1",
+    "clone_id": "83f4d3d1cf73d6eb",
+    "source_name": "[UDI Lar] Fluxo Followup",
+    "clone_name": "[ImoBia] [UDI Lar] Fluxo Followup",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Caio Montenegro",
+    "source_id": "bV17OiVOuU4RtZAN",
+    "clone_id": "9bf0e4dc58942dea",
+    "source_name": "[CAIO MONTENEGO] Agente IA",
+    "clone_name": "[ImoBia] [CAIO MONTENEGO] Agente IA",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Sabino",
+    "source_id": "mHDFibuHFfqVkRER",
+    "clone_id": "2d38858d90637a4d",
+    "source_name": "[Sabino] Fluxo Principal - Zuckzapgo",
+    "clone_name": "[ImoBia] [Sabino] Fluxo Principal - Zuckzapgo",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Caio Montenegro",
+    "source_id": "M7IGvBewdICrnmHR",
+    "clone_id": "fc4fd6509fecadef",
+    "source_name": "[Follow-up Caio montenegro]",
+    "clone_name": "[ImoBia] [Follow-up Caio montenegro]",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "View Imoveis",
+    "source_id": "BSTx98IlFfxCtOSN",
+    "clone_id": "a5b019e483a95984",
+    "source_name": "[View Imoveis] Followup - Reativacao Base CRM",
+    "clone_name": "[ImoBia] [View Imoveis] Followup - Reativacao Base CRM",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Inovart",
+    "source_id": "6xLBtFKptcyUgi7c",
+    "clone_id": "68e730c0a5a5b6b1",
+    "source_name": "[INOVART]-Disparo Mensagem",
+    "clone_name": "[ImoBia] [INOVART]-Disparo Mensagem",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Inovart",
+    "source_id": "RypNLI9rVwHFjdEd",
+    "clone_id": "ae8f5a176bed5d2c",
+    "source_name": "[INOVART] Transfere Atendimento",
+    "clone_name": "[ImoBia] [INOVART] Transfere Atendimento",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "FMI Prime",
+    "source_id": "mOpd469nxUhnQIDG",
+    "clone_id": "91770824fe873444",
+    "source_name": "[FMI] Fluxo Principal",
+    "clone_name": "[ImoBia] [FMI] Fluxo Principal",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Garcia Haus",
+    "source_id": "lGumnoKI4BNVj170",
+    "clone_id": "59902ad82e9a6d5d",
+    "source_name": "[Garcia-Haus]-Agente-Chatwoot",
+    "clone_name": "[ImoBia] [Garcia-Haus]-Agente-Chatwoot",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Urbe",
+    "source_id": "ZjqAfmGLeWbPh11q",
+    "clone_id": "6ec75ce34f61fd32",
+    "source_name": "[URBE]-Atende-leads-Portais-Leads-Leadfy",
+    "clone_name": "[ImoBia] [URBE]-Atende-leads-Portais-Leads-Leadfy",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Kronos",
+    "source_id": "iQBQJja6ZJtaitKr",
+    "clone_id": "98d7cc0c8137daba",
+    "source_name": "[KRONOS] Followup",
+    "clone_name": "[ImoBia] [KRONOS] Followup",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "NC",
+    "source_id": "2PNuTgx6uZdWR1Oe",
+    "clone_id": "800a8bd81e85d605",
+    "source_name": "[NC] Dispara Mensagem",
+    "clone_name": "[ImoBia] [NC] Dispara Mensagem",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Garcia Haus",
+    "source_id": "EvqVl4yrZnsUEmJR",
+    "clone_id": "4b0593302c580b10",
+    "source_name": "[Garcia Haus]-Notifica",
+    "clone_name": "[ImoBia] [Garcia Haus]-Notifica",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Direcional",
+    "source_id": "iCDqHW4Xmb0x0beo",
+    "clone_id": "e2c718df1daa61d7",
+    "source_name": "[DIRECIONAL] Transfere Atendimento",
+    "clone_name": "[ImoBia] [DIRECIONAL] Transfere Atendimento",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Garcia Haus",
+    "source_id": "ulAM7tjRi93Q3zzM",
+    "clone_id": "9af8c133b75d1114",
+    "source_name": "[Garcia Haus]-Sub Agente ChavesNaMao-Otimizado",
+    "clone_name": "[ImoBia] [Garcia Haus]-Sub Agente ChavesNaMao-Otimizado",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "_SHARED_ENGINE_",
+    "source_id": "tMSnp6Fd2PHtNn2d",
+    "clone_id": "29fdd7ee1f00a4a3",
+    "source_name": "Agente-Imobi-Coexistencia",
+    "clone_name": "[ImoBia] Agente-Imobi-Coexistencia",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Sabino",
+    "source_id": "8JiFcVb973Fm3dSb",
+    "clone_id": "c55a67011d63af87",
+    "source_name": "[Sabino] Fluxo Dispara Mensagem - ZuckZapGo",
+    "clone_name": "[ImoBia] [Sabino] Fluxo Dispara Mensagem - ZuckZapGo",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Inovart",
+    "source_id": "o9zSviWExTFOn3kM",
+    "clone_id": "d31d55847cd31cb9",
+    "source_name": "[INOVART]-Fluxo Principal",
+    "clone_name": "[ImoBia] [INOVART]-Fluxo Principal",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Urbe",
+    "source_id": "xmcOBWZIyVW1TMXV",
+    "clone_id": "cc41a4ec7a06c0c9",
+    "source_name": "[Urbe]-NotificaCorretor",
+    "clone_name": "[ImoBia] [Urbe]-NotificaCorretor",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "View Imoveis",
+    "source_id": "8H3vUWjp11gDC6dV",
+    "clone_id": "56f9bb068fcbdb83",
+    "source_name": "[View Imoveis] Transfere Para Humano",
+    "clone_name": "[ImoBia] [View Imoveis] Transfere Para Humano",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "View Imoveis",
+    "source_id": "ZejLgPzX8eOV4Qxd",
+    "clone_id": "5ae95fe58b2e2ca8",
+    "source_name": "[View Imoveis] Cadastra Lead No CRM",
+    "clone_name": "[ImoBia] [View Imoveis] Cadastra Lead No CRM",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Urbe",
+    "source_id": "dX16Wa1Q8JXxg6zP",
+    "clone_id": "7604fcf0abc08ec6",
+    "source_name": "[Urbe]-Sub-AgenteIA-BD-Otimizado",
+    "clone_name": "[ImoBia] [Urbe]-Sub-AgenteIA-BD-Otimizado",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Urbe",
+    "source_id": "o95mN75SXh0UBD2d",
+    "clone_id": "be055c8766dd79e9",
+    "source_name": "[Urbe]-Envia-Fotos-Imoveis",
+    "clone_name": "[ImoBia] [Urbe]-Envia-Fotos-Imoveis",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "FMI Prime",
+    "source_id": "3fn1joMd4rze6fVw",
+    "clone_id": "f3c8d58bdcd46069",
+    "source_name": "[FMI Prime] Cadastra No CRM",
+    "clone_name": "[ImoBia] [FMI Prime] Cadastra No CRM",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "FMI Prime",
+    "source_id": "A2ZVcb9B2FHfE7y7",
+    "clone_id": "64e7f62e5be807ac",
+    "source_name": "[FMI Prime] Inicia Atendimento",
+    "clone_name": "[ImoBia] [FMI Prime] Inicia Atendimento",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "_DEPENDENCY_",
+    "source_id": "kvKe54nMWbnDct6F",
+    "clone_id": "916c8f72f13bd0da",
+    "source_name": "Tranferir - NC",
+    "clone_name": "[ImoBia] Tranferir - NC",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Core Investt",
+    "source_id": "czhbBzNFG4pQAjnH",
+    "clone_id": "f1d8399c873163cf",
+    "source_name": "[Core] Inicia Atendimento",
+    "clone_name": "[ImoBia] [Core] Inicia Atendimento",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Core Investt",
+    "source_id": "Cou3xQdM5oQCOFHe",
+    "clone_id": "7e1598af6150ed8d",
+    "source_name": "[CORE INVESTT] agente_principal",
+    "clone_name": "[ImoBia] [CORE INVESTT] agente_principal",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Urbe",
+    "source_id": "si36ARtJWmopptg9",
+    "clone_id": "0c4f0f9ddefaddf9",
+    "source_name": "[Urbe]-Agente-mega-api",
+    "clone_name": "[ImoBia] [Urbe]-Agente-mega-api",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Core Investt",
+    "source_id": "OOakB6ZNVztKbACi",
+    "clone_id": "3d57a14b20b33d76",
+    "source_name": "[Core] Transfere Atendimento",
+    "clone_name": "[ImoBia] [Core] Transfere Atendimento",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Arini Negocios Imobiliarios",
+    "source_id": "RrewNlRqUipQ7PqA",
+    "clone_id": "2471b2898848f646",
+    "source_name": "[ARINI] Fluxo Principal",
+    "clone_name": "[ImoBia] [ARINI] Fluxo Principal",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Direcional",
+    "source_id": "QmrKnEih12onoFaw",
+    "clone_id": "8e469ce39ef3a40b",
+    "source_name": "[DIRECIONAL] Inicia Atendimento",
+    "clone_name": "[ImoBia] [DIRECIONAL] Inicia Atendimento",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Core Investt",
+    "source_id": "O51sfAP5flZqe9gc",
+    "clone_id": "d21284f8a5d59d64",
+    "source_name": "[CORE INVEST] enviar_video",
+    "clone_name": "[ImoBia] [CORE INVEST] enviar_video",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "UDI Lar",
+    "source_id": "w7Z1RXHPuoeYhiYs",
+    "clone_id": "1d2f70905a0d679d",
+    "source_name": "[UDI Lar] Transfere Atendimento",
+    "clone_name": "[ImoBia] [UDI Lar] Transfere Atendimento",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Kronos",
+    "source_id": "5inPk0ciF6Ts0BuW",
+    "clone_id": "db6acc70325d5c11",
+    "source_name": "follow-up_Kronos",
+    "clone_name": "[ImoBia] follow-up_Kronos",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "Caio Montenegro",
+    "source_id": "6vcqKBKpugDiVSi2",
+    "clone_id": "a7384225f0cd649b",
+    "source_name": "[CAIO MONTENEGRO] Notifica Corretor",
+    "clone_name": "[ImoBia] [CAIO MONTENEGRO] Notifica Corretor",
+    "seed_ai": false,
+    "active": false
+  },
+  {
+    "client": "Direcional",
+    "source_id": "ZPGfBrBd7emdramL",
+    "clone_id": "5b49ca585f1db159",
+    "source_name": "[DIRECIONAL] Fluxo Principal",
+    "clone_name": "[ImoBia] [DIRECIONAL] Fluxo Principal",
+    "seed_ai": true,
+    "active": false
+  },
+  {
+    "client": "View Imoveis",
+    "source_id": "y2sajESxgaWJ8Oj0",
+    "clone_id": "4be6fb38fab8c206",
+    "source_name": "[View Imoveis] Busca Imovel Portal-Site",
+    "clone_name": "[ImoBia] [View Imoveis] Busca Imovel Portal-Site",
+    "seed_ai": false,
+    "active": false
+  }
+]

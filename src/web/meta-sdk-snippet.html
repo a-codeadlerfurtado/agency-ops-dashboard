@@ -1,0 +1,9 @@
+<!-- Colocar uma unica vez no layout do Next (adaptar para next/script). -->
+<div id="fb-root"></div>
+<script>
+  window.fbAsyncInit = async function () {
+    const cfg = await fetch('/api/v1/whatsapp/embedded-signup/config', {credentials:'include'}).then(r=>r.json());
+    FB.init({ appId: cfg.appId, cookie: true, xfbml: true, version: cfg.graphVersion });
+  };
+</script>
+<script async defer crossorigin="anonymous" src="https://connect.facebook.net/en_US/sdk.js"></script>

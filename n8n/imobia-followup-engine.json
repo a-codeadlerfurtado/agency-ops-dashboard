@@ -1,0 +1,367 @@
+{
+  "id": "ImoBiaFollowup202609",
+  "name": "ImoBia â€” Follow-up Engine",
+  "active": false,
+  "nodes": [
+    {
+      "id": "4ae26299-3384-4c8b-89fe-81b06b692dfe",
+      "name": "Webhook Followup",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -900,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "imobia-followup",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "webhookId": "9b42892c-b18d-4fd7-8d68-4bf22eedf911"
+    },
+    {
+      "id": "9c4b0526-35cc-4374-8d3d-50363f171ccd",
+      "name": "Contexto ImoBia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -680,
+        0
+      ],
+      "parameters": {
+        "url": "={{ $('Webhook Followup').item.json.body.imobiaBaseUrl + '/v1/internal/context' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Webhook Followup').item.json.body.agentToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "f6a8bcae-23d8-40ef-b6f0-d479a721d960",
+      "name": "Preparar Followup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -450,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const ctx=$json; const req=$('Webhook Followup').item.json.body; const c=ctx.conversation||{}; const history=(ctx.messages||[]).slice(-24).map(m=>`${m.direcao==='IN'?'Cliente':'Atendente'}: ${m.conteudo||'['+m.tipo+']'}`).join('\\n'); const attempt=req.payload?.attemptIndex||1; const after=req.payload?.afterMinutes||0; const prompt=`VocÃª Ã© o motor de follow-up da ImoBia. Analise o histÃ³rico e decida se ainda faz sentido reengajar. Tentativa ${attempt}; janela de inatividade configurada ${after} minutos. Se a conversa estiver manual, resolvida, houver pedido de parar, desinteresse, assunto encerrado ou qualquer sinal de que nÃ£o deve insistir, responda EXATAMENTE __SKIP__. Caso contrÃ¡rio escreva somente a mensagem a ser enviada: portuguÃªs do Brasil, humana, curta, 1 ou 2 frases, no mÃ¡ximo uma pergunta, retomando o contexto real. NÃ£o invente imÃ³vel, desconto, urgÃªncia, condiÃ§Ã£o, financiamento ou informaÃ§Ã£o. NÃ£o use markdown. NÃ£o diga que Ã© automaÃ§Ã£o. HistÃ³rico:\\n${history}`; return [{json:{...ctx,systemPrompt:prompt,userMessage:'Decida e gere o prÃ³ximo follow-up agora.'}}];"
+      }
+    },
+    {
+      "id": "221800b1-6cbe-460b-bfad-3bf5bc76584f",
+      "name": "Agente Followup",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        -180,
+        0
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.userMessage }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "={{ $json.systemPrompt }}"
+        }
+      }
+    },
+    {
+      "id": "94e5176b-c252-421c-9d32-ec7d0aef7049",
+      "name": "OpenAI Principal",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -280,
+        240
+      ],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1"
+        },
+        "responsesApiEnabled": false,
+        "options": {
+          "temperature": 0.35
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "UaivfiENgTeGatF3",
+          "name": "FMI Prime OpenAI"
+        }
+      }
+    },
+    {
+      "id": "eef63162-8d76-491e-84e1-81059e8023dd",
+      "name": "OpenAI Fallback",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -60,
+        240
+      ],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1"
+        },
+        "responsesApiEnabled": false,
+        "options": {
+          "temperature": 0.2
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "UaivfiENgTeGatF3",
+          "name": "FMI Prime OpenAI"
+        }
+      }
+    },
+    {
+      "id": "f0ead1cf-b40a-483c-ba16-440825095ce3",
+      "name": "Validar Followup",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const raw=String($json.output||'').trim(); const skip=!raw||raw==='__SKIP__'; const blocked=/(desconto garantido|aprova[cÃ§][aÃ£]o garantida|financiamento garantido|parecer jur[iÃ­]dico|boleto|contrato)/i.test(raw); return [{json:{...$json,skip:skip||blocked,text:raw.slice(0,1500),reason:blocked?'guardrail':'agent'}}];"
+      }
+    },
+    {
+      "id": "66bdef7c-86dd-4559-9c38-8e84bd0d8e1f",
+      "name": "Enviar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        300,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "b4084115-4278-459d-bb51-1affb9451144",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "8ad633ac-93c2-4b59-9334-a3349f4d1c9e",
+      "name": "Enviar Followup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        540,
+        -80
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Webhook Followup').item.json.body.imobiaBaseUrl + '/v1/internal/followup/send' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Webhook Followup').item.json.body.agentToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.text }}"
+            },
+            {
+              "name": "scheduledJobId",
+              "value": "={{ $('Webhook Followup').item.json.body.scheduledJobId }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "cc76c982-19f6-4935-8a75-c5475c3c2ee0",
+      "name": "Skip Followup",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        540,
+        100
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "268c7e90-e005-46ae-ab00-d5a306ec31ea",
+              "name": "ok",
+              "type": "boolean",
+              "value": true
+            },
+            {
+              "id": "3b4fc9f1-528a-4d1a-b685-2b31bc0768a8",
+              "name": "skipped",
+              "type": "boolean",
+              "value": true
+            },
+            {
+              "id": "4801256a-4258-4b6e-a33b-d6d70870ed08",
+              "name": "reason",
+              "type": "string",
+              "value": "={{ $json.reason }}"
+            }
+          ]
+        },
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook Followup": {
+      "main": [
+        [
+          {
+            "node": "Contexto ImoBia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contexto ImoBia": {
+      "main": [
+        [
+          {
+            "node": "Preparar Followup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Followup": {
+      "main": [
+        [
+          {
+            "node": "Agente Followup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente Followup": {
+      "main": [
+        [
+          {
+            "node": "Validar Followup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Principal": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agente Followup",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Fallback": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agente Followup",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Validar Followup": {
+      "main": [
+        [
+          {
+            "node": "Enviar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar?": {
+      "main": [
+        [
+          {
+            "node": "Enviar Followup",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip Followup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

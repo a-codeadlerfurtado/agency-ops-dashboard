@@ -1,0 +1,331 @@
+[
+  {
+    "client": "Caio Montenegro",
+    "account_id": 2,
+    "user_id": 2,
+    "team_id": 1,
+    "workflows": [
+      {
+        "id": "9bf0e4dc58942dea",
+        "name": "[ImoBia] [CAIO MONTENEGO] Agente IA",
+        "seed_ai": true
+      },
+      {
+        "id": "fc4fd6509fecadef",
+        "name": "[ImoBia] [Follow-up Caio montenegro]",
+        "seed_ai": true
+      },
+      {
+        "id": "a7384225f0cd649b",
+        "name": "[ImoBia] [CAIO MONTENEGRO] Notifica Corretor",
+        "seed_ai": false
+      }
+    ]
+  },
+  {
+    "client": "Urbe",
+    "account_id": 3,
+    "user_id": 3,
+    "team_id": 2,
+    "workflows": [
+      {
+        "id": "6ec75ce34f61fd32",
+        "name": "[ImoBia] [URBE]-Atende-leads-Portais-Leads-Leadfy",
+        "seed_ai": true
+      },
+      {
+        "id": "cc41a4ec7a06c0c9",
+        "name": "[ImoBia] [Urbe]-NotificaCorretor",
+        "seed_ai": false
+      },
+      {
+        "id": "7604fcf0abc08ec6",
+        "name": "[ImoBia] [Urbe]-Sub-AgenteIA-BD-Otimizado",
+        "seed_ai": false
+      },
+      {
+        "id": "be055c8766dd79e9",
+        "name": "[ImoBia] [Urbe]-Envia-Fotos-Imoveis",
+        "seed_ai": false
+      },
+      {
+        "id": "0c4f0f9ddefaddf9",
+        "name": "[ImoBia] [Urbe]-Agente-mega-api",
+        "seed_ai": true
+      }
+    ]
+  },
+  {
+    "client": "Sabino",
+    "account_id": 4,
+    "user_id": 4,
+    "team_id": 3,
+    "workflows": [
+      {
+        "id": "673cfde204e03899",
+        "name": "[ImoBia] [Sabino] Followup - Zuckzapgo",
+        "seed_ai": true
+      },
+      {
+        "id": "5eb831a3d5325ca7",
+        "name": "[ImoBia] [Sabino] Transfere Atendimento - Zuzkzapgo",
+        "seed_ai": false
+      },
+      {
+        "id": "2d38858d90637a4d",
+        "name": "[ImoBia] [Sabino] Fluxo Principal - Zuckzapgo",
+        "seed_ai": true
+      },
+      {
+        "id": "c55a67011d63af87",
+        "name": "[ImoBia] [Sabino] Fluxo Dispara Mensagem - ZuckZapGo",
+        "seed_ai": true
+      }
+    ]
+  },
+  {
+    "client": "View Imoveis",
+    "account_id": 5,
+    "user_id": 5,
+    "team_id": 4,
+    "workflows": [
+      {
+        "id": "50cd5de4095e1e03",
+        "name": "[ImoBia] [View Imoveis] Disparo Reativacao Base Leads CRM",
+        "seed_ai": false
+      },
+      {
+        "id": "eed6d2b8cf0e8822",
+        "name": "[ImoBia] [View Imoveis] Fluxo Principal - Ycloud",
+        "seed_ai": true
+      },
+      {
+        "id": "a5b019e483a95984",
+        "name": "[ImoBia] [View Imoveis] Followup - Reativacao Base CRM",
+        "seed_ai": false
+      },
+      {
+        "id": "56f9bb068fcbdb83",
+        "name": "[ImoBia] [View Imoveis] Transfere Para Humano",
+        "seed_ai": false
+      },
+      {
+        "id": "5ae95fe58b2e2ca8",
+        "name": "[ImoBia] [View Imoveis] Cadastra Lead No CRM",
+        "seed_ai": false
+      },
+      {
+        "id": "4be6fb38fab8c206",
+        "name": "[ImoBia] [View Imoveis] Busca Imovel Portal-Site",
+        "seed_ai": false
+      }
+    ]
+  },
+  {
+    "client": "NC",
+    "account_id": 6,
+    "user_id": 6,
+    "team_id": 5,
+    "workflows": [
+      {
+        "id": "800a8bd81e85d605",
+        "name": "[ImoBia] [NC] Dispara Mensagem",
+        "seed_ai": true
+      }
+    ]
+  },
+  {
+    "client": "UDI Lar",
+    "account_id": 7,
+    "user_id": 7,
+    "team_id": 6,
+    "workflows": [
+      {
+        "id": "56533ac2720c503d",
+        "name": "[ImoBia] [UDI LAR] Fluxo Principal",
+        "seed_ai": true
+      },
+      {
+        "id": "83f4d3d1cf73d6eb",
+        "name": "[ImoBia] [UDI Lar] Fluxo Followup",
+        "seed_ai": true
+      },
+      {
+        "id": "1d2f70905a0d679d",
+        "name": "[ImoBia] [UDI Lar] Transfere Atendimento",
+        "seed_ai": false
+      }
+    ]
+  },
+  {
+    "client": "FMI Prime",
+    "account_id": 8,
+    "user_id": 8,
+    "team_id": 7,
+    "workflows": [
+      {
+        "id": "03a3033ac1109392",
+        "name": "[ImoBia] [FMI Prime] Transferir Para Humano",
+        "seed_ai": false
+      },
+      {
+        "id": "69b202cf028e5ae9",
+        "name": "[ImoBia] [FMI Prime] Notifica Setor",
+        "seed_ai": false
+      },
+      {
+        "id": "91770824fe873444",
+        "name": "[ImoBia] [FMI] Fluxo Principal",
+        "seed_ai": true
+      },
+      {
+        "id": "f3c8d58bdcd46069",
+        "name": "[ImoBia] [FMI Prime] Cadastra No CRM",
+        "seed_ai": false
+      },
+      {
+        "id": "64e7f62e5be807ac",
+        "name": "[ImoBia] [FMI Prime] Inicia Atendimento",
+        "seed_ai": true
+      }
+    ]
+  },
+  {
+    "client": "Garcia Haus",
+    "account_id": 9,
+    "user_id": 9,
+    "team_id": 8,
+    "workflows": [
+      {
+        "id": "59902ad82e9a6d5d",
+        "name": "[ImoBia] [Garcia-Haus]-Agente-Chatwoot",
+        "seed_ai": true
+      },
+      {
+        "id": "4b0593302c580b10",
+        "name": "[ImoBia] [Garcia Haus]-Notifica",
+        "seed_ai": false
+      },
+      {
+        "id": "9af8c133b75d1114",
+        "name": "[ImoBia] [Garcia Haus]-Sub Agente ChavesNaMao-Otimizado",
+        "seed_ai": false
+      }
+    ]
+  },
+  {
+    "client": "Kronos",
+    "account_id": 10,
+    "user_id": 10,
+    "team_id": 9,
+    "workflows": [
+      {
+        "id": "1c17aeb44c978d68",
+        "name": "[ImoBia] [KRONOS] Notificar Corretor",
+        "seed_ai": false
+      },
+      {
+        "id": "89feffd963a6c280",
+        "name": "[ImoBia] [KRONOS] agente_principal",
+        "seed_ai": true
+      },
+      {
+        "id": "98d7cc0c8137daba",
+        "name": "[ImoBia] [KRONOS] Followup",
+        "seed_ai": true
+      },
+      {
+        "id": "db6acc70325d5c11",
+        "name": "[ImoBia] follow-up_Kronos",
+        "seed_ai": true
+      }
+    ]
+  },
+  {
+    "client": "Arini Negocios Imobiliarios",
+    "account_id": 11,
+    "user_id": 11,
+    "team_id": 10,
+    "workflows": [
+      {
+        "id": "2471b2898848f646",
+        "name": "[ImoBia] [ARINI] Fluxo Principal",
+        "seed_ai": true
+      }
+    ]
+  },
+  {
+    "client": "Core Investt",
+    "account_id": 12,
+    "user_id": 12,
+    "team_id": 11,
+    "workflows": [
+      {
+        "id": "f1d8399c873163cf",
+        "name": "[ImoBia] [Core] Inicia Atendimento",
+        "seed_ai": true
+      },
+      {
+        "id": "7e1598af6150ed8d",
+        "name": "[ImoBia] [CORE INVESTT] agente_principal",
+        "seed_ai": true
+      },
+      {
+        "id": "3d57a14b20b33d76",
+        "name": "[ImoBia] [Core] Transfere Atendimento",
+        "seed_ai": false
+      },
+      {
+        "id": "d21284f8a5d59d64",
+        "name": "[ImoBia] [CORE INVEST] enviar_video",
+        "seed_ai": false
+      }
+    ]
+  },
+  {
+    "client": "Inovart",
+    "account_id": 13,
+    "user_id": 13,
+    "team_id": 12,
+    "workflows": [
+      {
+        "id": "68e730c0a5a5b6b1",
+        "name": "[ImoBia] [INOVART]-Disparo Mensagem",
+        "seed_ai": true
+      },
+      {
+        "id": "ae8f5a176bed5d2c",
+        "name": "[ImoBia] [INOVART] Transfere Atendimento",
+        "seed_ai": false
+      },
+      {
+        "id": "d31d55847cd31cb9",
+        "name": "[ImoBia] [INOVART]-Fluxo Principal",
+        "seed_ai": true
+      }
+    ]
+  },
+  {
+    "client": "Direcional",
+    "account_id": 14,
+    "user_id": 14,
+    "team_id": 13,
+    "workflows": [
+      {
+        "id": "e2c718df1daa61d7",
+        "name": "[ImoBia] [DIRECIONAL] Transfere Atendimento",
+        "seed_ai": false
+      },
+      {
+        "id": "8e469ce39ef3a40b",
+        "name": "[ImoBia] [DIRECIONAL] Inicia Atendimento",
+        "seed_ai": true
+      },
+      {
+        "id": "5b49ca585f1db159",
+        "name": "[ImoBia] [DIRECIONAL] Fluxo Principal",
+        "seed_ai": true
+      }
+    ]
+  }
+]

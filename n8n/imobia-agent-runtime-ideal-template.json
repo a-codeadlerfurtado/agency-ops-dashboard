@@ -1,0 +1,840 @@
+{
+  "id": "ImoBiaBlueprint202609",
+  "name": "[TEMPLATE] ImoBia â€” Agent Runtime Ideal",
+  "active": false,
+  "nodes": [
+    {
+      "id": "0ab0b726-6dc1-4c81-83dc-f22d24a85051",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -900,
+        0
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "imobia-agent-blueprint",
+        "options": {}
+      },
+      "webhookId": "92b7b3ea-b77e-45d8-98b6-63ef6fb79db1"
+    },
+    {
+      "id": "dbb3df14-2ca0-47a8-a64b-94ed243343f9",
+      "name": "Contexto ImoBia",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -760,
+        0
+      ],
+      "parameters": {
+        "url": "={{ $('Webhook').item.json.body.imobiaBaseUrl + '/v1/internal/context' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Webhook').item.json.body.agentToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "509e31e4-cc6f-4b77-bb72-c58e5e2ca238",
+      "name": "Preparar Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -280,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const ctx=$json;\nconst incoming=[...(ctx.messages||[])].reverse().find(m=>m.direcao==='IN');\nconst cfg=ctx.config||{}; const lead=ctx.conversation||{};\nconst questions=[...(ctx.essentialQuestions||[]),...(ctx.qualifyingQuestions||[])]\n  .map(q=>`- ${q.pergunta}${q.obrigatoria?' (obrigatoria)':''}`).join('\\n');\nconst knowledge=(ctx.knowledge||[]).map(k=>`- [${k.escopo}] ${k.chave}: ${k.valor}`).join('\\n');\nconst history=(ctx.messages||[]).slice(-20).map(m=>`${m.direcao==='IN'?'Cliente':'Atendente'}: ${m.conteudo||'['+m.tipo+']'}`).join('\\n');\nconst persona=cfg.persona_nome||'ImoBia'; const tone=cfg.tom_voz||'cordial, humana e objetiva';\nconst priority=ctx.priorityAction||'AGENTE'; const macro=ctx.macroState||'ATENDIMENTO';\nconst prompt=`Você é ${persona}, atendente da imobiliária deste tenant, operada pela plataforma ImoBia.\nFale em português do Brasil com tom ${tone}. Mensagens curtas, naturais, sem markdown. ${cfg.usar_emoji?'Emojis discretos são permitidos.':'Não use emojis.'}\nSua missão é qualificar o lead, consultar imóveis reais quando fizer sentido e entregar um briefing claro ao corretor.\nNunca invente imóvel ou informação, negocie desconto, dê parecer jurídico, prometa financiamento, trate pagamento/boletos/contratos/vistoria/manutenção, nem feche negócio.\nPara assuntos administrativos, financeiros, contratos, vistoria/manutenção, pedido explícito de humano ou irritação: use a tool Handoff imediatamente.\nFaça uma pergunta por vez. Quando aprender dados estruturados ou uma resposta de qualificação, use Salvar Qualificação.\nUse Buscar Imóveis apenas com dados disponíveis no contexto; nunca invente resultados. Depois de apresentar imóvel e concluir qualificação, faça Handoff.\nSe houver desinteresse explícito ou pedido para parar mensagens, use Cancelar Follow-up.\nSe fizer Handoff, inclua na tool a última mensagem que o cliente deve receber; depois não tente continuar o atendimento.\nDados atuais do lead: ${JSON.stringify(lead)}\nPerguntas configuradas:\\n${questions||'(nenhuma configurada)'}\nConhecimento da operação:\\n${knowledge||'(nenhum cadastrado)'}\nHistórico recente:\\n${history}`;\nreturn [{json:{...ctx,userMessage:incoming?.conteudo||'',systemPrompt:prompt}}];"
+      }
+    },
+    {
+      "id": "537ef8b9-4072-4a65-b322-79a08124ce43",
+      "name": "Agente ImoBia",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        0,
+        0
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.userMessage }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "={{ $json.systemPrompt }}"
+        }
+      }
+    },
+    {
+      "id": "a82664a7-b875-47cf-8413-f84ce207e38b",
+      "name": "OpenAI Principal",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -260,
+        260
+      ],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1"
+        },
+        "responsesApiEnabled": false,
+        "options": {
+          "temperature": 0.35
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "UaivfiENgTeGatF3",
+          "name": "FMI Prime OpenAI"
+        }
+      }
+    },
+    {
+      "id": "1332cfdf-378c-4c30-a1fd-f221cdbb7247",
+      "name": "OpenAI Fallback",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        -40,
+        260
+      ],
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1"
+        },
+        "responsesApiEnabled": false,
+        "options": {
+          "temperature": 0.25
+        }
+      },
+      "credentials": {
+        "openAiApi": {
+          "id": "UaivfiENgTeGatF3",
+          "name": "FMI Prime OpenAI"
+        }
+      }
+    },
+    {
+      "id": "9eac0145-c73c-46ff-b5a0-a2695e34d67c",
+      "name": "Buscar Imoveis",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.3,
+      "position": [
+        180,
+        250
+      ],
+      "parameters": {
+        "toolDescription": "Busca somente imoveis reais e disponiveis do tenant atual. Use no maximo 3 resultados. Nunca invente um imovel fora desta tool.",
+        "method": "POST",
+        "url": "={{ $('Webhook').item.json.body.imobiaBaseUrl + '/v1/internal/properties/search' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Webhook').item.json.body.agentToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "operation",
+              "value": "={{ $fromAI('operation','VENDA ou LOCACAO; vazio se ainda nao souber','string') }}"
+            },
+            {
+              "name": "type",
+              "value": "={{ $fromAI('type','Tipo de imovel, por exemplo apartamento, casa, terreno','string') }}"
+            },
+            {
+              "name": "city",
+              "value": "={{ $fromAI('city','Cidade desejada','string') }}"
+            },
+            {
+              "name": "neighborhood",
+              "value": "={{ $fromAI('neighborhood','Bairro desejado','string') }}"
+            },
+            {
+              "name": "priceMin",
+              "value": "={{ $fromAI('priceMin','Preco minimo em reais; 0 se desconhecido','number') }}"
+            },
+            {
+              "name": "priceMax",
+              "value": "={{ $fromAI('priceMax','Preco maximo em reais; 0 se desconhecido','number') }}"
+            },
+            {
+              "name": "bedroomsMin",
+              "value": "={{ $fromAI('bedroomsMin','Quantidade minima de quartos; 0 se desconhecido','number') }}"
+            },
+            {
+              "name": "parkingMin",
+              "value": "={{ $fromAI('parkingMin','Quantidade minima de vagas; 0 se desconhecido','number') }}"
+            },
+            {
+              "name": "limit",
+              "value": "={{ $fromAI('limit','Quantidade de resultados, de 1 a 3','number') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "0abf2719-8501-469a-b434-1404af3a042e",
+      "name": "Salvar Qualificacao",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.3,
+      "position": [
+        390,
+        250
+      ],
+      "parameters": {
+        "toolDescription": "Salva informacoes estruturadas e respostas de qualificacao do lead. Use sempre que aprender algo novo relevante.",
+        "method": "POST",
+        "url": "={{ $('Webhook').item.json.body.imobiaBaseUrl + '/v1/internal/qualify' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Webhook').item.json.body.agentToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "operation",
+              "value": "={{ $fromAI('operation','VENDA ou LOCACAO; vazio se nao souber','string') }}"
+            },
+            {
+              "name": "desiredType",
+              "value": "={{ $fromAI('desiredType','Tipo de imovel desejado','string') }}"
+            },
+            {
+              "name": "city",
+              "value": "={{ $fromAI('city','Cidade desejada','string') }}"
+            },
+            {
+              "name": "neighborhood",
+              "value": "={{ $fromAI('neighborhood','Bairro desejado','string') }}"
+            },
+            {
+              "name": "bedroomsMin",
+              "value": "={{ $fromAI('bedroomsMin','Quartos minimos; 0 se desconhecido','number') }}"
+            },
+            {
+              "name": "parkingMin",
+              "value": "={{ $fromAI('parkingMin','Vagas minimas; 0 se desconhecido','number') }}"
+            },
+            {
+              "name": "budgetMin",
+              "value": "={{ $fromAI('budgetMin','Orcamento minimo; 0 se desconhecido','number') }}"
+            },
+            {
+              "name": "budgetMax",
+              "value": "={{ $fromAI('budgetMax','Orcamento maximo; 0 se desconhecido','number') }}"
+            },
+            {
+              "name": "qualificationStatus",
+              "value": "={{ $fromAI('qualificationStatus','NOVO, EM_QUALIFICACAO, QUALIFICADO, FRIO ou DESQUALIFICADO','string') }}"
+            },
+            {
+              "name": "score",
+              "value": "={{ $fromAI('score','Score de 0 a 100; 0 se ainda nao houver base','number') }}"
+            },
+            {
+              "name": "summary",
+              "value": "={{ $fromAI('summary','Resumo curto do que ja se sabe do lead','string') }}"
+            },
+            {
+              "name": "question",
+              "value": "={{ $fromAI('question','Pergunta cuja resposta acabou de ser aprendida','string') }}"
+            },
+            {
+              "name": "answer",
+              "value": "={{ $fromAI('answer','Resposta do cliente para a pergunta','string') }}"
+            },
+            {
+              "name": "origin",
+              "value": "={{ $fromAI('origin','ESSENCIAL ou QUALIFICATORIA','string') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "2daee954-daa6-449b-ab69-02a15f94f5b6",
+      "name": "Handoff",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.3,
+      "position": [
+        600,
+        250
+      ],
+      "parameters": {
+        "toolDescription": "Transfere o atendimento para humano. Use em pedido de humano, irritacao, assunto financeiro/administrativo/contratual/vistoria/manutencao, ou quando o lead estiver pronto apos qualificacao e apresentacao do imovel.",
+        "method": "POST",
+        "url": "={{ $('Webhook').item.json.body.imobiaBaseUrl + '/v1/internal/handoff' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Webhook').item.json.body.agentToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "reason",
+              "value": "={{ $fromAI('reason','Motivo objetivo da transferencia para humano','string') }}"
+            },
+            {
+              "name": "summary",
+              "value": "={{ $fromAI('summary','Briefing completo para o corretor ou setor humano','string') }}"
+            },
+            {
+              "name": "department",
+              "value": "={{ $fromAI('department','Setor ou equipe destino; vazio se nao souber','string') }}"
+            },
+            {
+              "name": "userMessage",
+              "value": "={{ $fromAI('userMessage','Ultima mensagem curta que deve ser enviada ao cliente antes da transferencia','string') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "0733929f-8c27-49db-a4e4-eed40e02b8b0",
+      "name": "Cancelar Follow-up",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "typeVersion": 4.3,
+      "position": [
+        810,
+        250
+      ],
+      "parameters": {
+        "toolDescription": "Cancela follow-ups e reengajamentos pendentes quando houver desinteresse explicito ou pedido para parar mensagens.",
+        "method": "POST",
+        "url": "={{ $('Webhook').item.json.body.imobiaBaseUrl + '/v1/internal/cancel-followup' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Webhook').item.json.body.agentToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "reason",
+              "value": "={{ $fromAI('reason','Motivo do cancelamento: desinteresse explicito, opt-out ou lead ja resolveu','string') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "006a0675-d9f4-4aee-8366-306f116efef2",
+      "name": "Responder WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        700,
+        -40
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Webhook').item.json.body.imobiaBaseUrl + '/v1/internal/reply' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Webhook').item.json.body.agentToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "text",
+              "value": "={{ $json.safeText }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "2dadcb52-b7cf-45bd-b04a-e04d893ae150",
+      "name": "Maquina de Estado",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -520,
+        0
+      ],
+      "parameters": {
+        "jsCode": "const ctx=$json;\nconst c=ctx.conversation||{};\nconst last=[...(ctx.messages||[])].reverse().find(m=>m.direcao==='IN');\nconst text=(last?.conteudo||'').toLowerCase();\nconst manual=c.modo!=='IA'||c.status==='RESOLVIDA';\nconst optout=/\\b(n[aÃ£]o tenho interesse|pare de mandar|n[aÃ£]o quero mais|j[aÃ¡] resolvi|remova meu contato)\\b/i.test(text);\nconst human=/\\b(humano|atendente|corretor|boleto|contrato|vistoria|reparo|manuten[cÃ§][aÃ£]o|financeiro|pagamento|jur[iÃ­]dico)\\b/i.test(text);\nconst priority=optout?'CANCELAR_FOLLOWUP':human?'HANDOFF_IMEDIATO':'AGENTE';\nreturn [{json:{...ctx,macroState:manual?'MANUAL':(c.estado_maquina||'ATENDIMENTO'),priorityAction:priority,shouldRun:!manual}}];"
+      }
+    },
+    {
+      "id": "73341b9f-3454-49cf-8835-e322848ac88a",
+      "name": "IA Permitida?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -400,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "run-ai",
+              "leftValue": "={{ $json.shouldRun }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "59540c6f-01d5-469b-859c-af8800d32a50",
+      "name": "Encerrar sem IA",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        -180,
+        -180
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "8a97f418-29c0-4e75-832e-01b4aaf5149e",
+      "name": "Guardrail de Saida",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        0
+      ],
+      "parameters": {
+        "jsCode": "let text=String($json.output||'').trim();\ntext=text.replace(/\\*\\*/g,'').replace(/^[-â€¢]\\s+/gm,'').replace(/#{1,6}\\s*/g,'');\nconst forbidden=[/desconto de \\d+/i,/garanto.*financi/i,/aprova[cÃ§][aÃ£]o.*garant/i,/parecer jur[iÃ­]dico/i,/certeza de aprova[cÃ§][aÃ£]o/i];\nconst hit=forbidden.find(r=>r.test(text));\nif(hit){return [{json:{...$json,needsSafeHandoff:true,blockedReason:'policy_output',safeText:'Vou encaminhar isso para um especialista da equipe, que consegue te orientar com seguranÃ§a.'}}]};\nreturn [{json:{...$json,needsSafeHandoff:false,safeText:text.slice(0,8000)}}];"
+      }
+    },
+    {
+      "id": "2d502b50-edef-4016-8124-bd3291b5cc55",
+      "name": "Saida Segura?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        480,
+        0
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "safe-out",
+              "leftValue": "={{ $json.needsSafeHandoff }}",
+              "rightValue": false,
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ab56505f-b3ca-4903-a46c-ddd69aa48095",
+      "name": "Handoff de Seguranca",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        700,
+        160
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Webhook').item.json.body.imobiaBaseUrl + '/v1/internal/handoff' }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Bearer ' + $('Webhook').item.json.body.agentToken }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "reason",
+              "value": "guardrail_output"
+            },
+            {
+              "name": "summary",
+              "value": "A resposta planejada pelo agente acionou um guardrail deterministico e o atendimento foi escalado."
+            },
+            {
+              "name": "department",
+              "value": ""
+            },
+            {
+              "name": "userMessage",
+              "value": "={{ $json.safeText }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000
+    },
+    {
+      "id": "a4827741-5aa5-4b58-85d1-0840adf45b1b",
+      "name": "Nota ARQUITETURA",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        -420
+      ],
+      "parameters": {
+        "content": "## ARQUITETURA\nCanal, deduplicacao, buffer de 10s, midia e persistencia ficam na ImoBia. O n8n recebe evento normalizado. Isso substitui o acoplamento AirysChat/YCloud dos fluxos antigos.",
+        "height": 220,
+        "width": 620,
+        "color": 7
+      }
+    },
+    {
+      "id": "700e7e31-e262-47f5-8435-a539291c80f7",
+      "name": "Nota ESTADO",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        -420
+      ],
+      "parameters": {
+        "content": "## ESTADO\nA maquina de estado e deterministica. O LLM decide a conversa dentro do estado, nunca se pode ou nao assumir o atendimento.",
+        "height": 220,
+        "width": 500,
+        "color": 7
+      }
+    },
+    {
+      "id": "8dacd1ce-5d73-4262-b942-8f7ddbb0a207",
+      "name": "Nota AGENTE + TOOLS",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -420
+      ],
+      "parameters": {
+        "content": "## AGENTE + TOOLS\nO agente usa apenas tools validadas: imoveis, qualificacao, handoff e cancelamento de follow-up. Sem SQL livre e sem segredo do canal no workflow.",
+        "height": 220,
+        "width": 570,
+        "color": 7
+      }
+    },
+    {
+      "id": "eb274fb2-84cd-497c-ac4a-5c6d48033cd6",
+      "name": "Nota GUARDRAIL",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        480,
+        -420
+      ],
+      "parameters": {
+        "content": "## GUARDRAIL\nToda resposta passa por filtro deterministico antes do WhatsApp. Violacao de politica faz handoff seguro.",
+        "height": 220,
+        "width": 480,
+        "color": 7
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Contexto ImoBia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contexto ImoBia": {
+      "main": [
+        [
+          {
+            "node": "Maquina de Estado",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar Prompt": {
+      "main": [
+        [
+          {
+            "node": "Agente ImoBia",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agente ImoBia": {
+      "main": [
+        [
+          {
+            "node": "Guardrail de Saida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Principal": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agente ImoBia",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Fallback": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agente ImoBia",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Buscar Imoveis": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente ImoBia",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Salvar Qualificacao": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente ImoBia",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handoff": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente ImoBia",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cancelar Follow-up": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agente ImoBia",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Maquina de Estado": {
+      "main": [
+        [
+          {
+            "node": "IA Permitida?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IA Permitida?": {
+      "main": [
+        [
+          {
+            "node": "Preparar Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Encerrar sem IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Guardrail de Saida": {
+      "main": [
+        [
+          {
+            "node": "Saida Segura?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Saida Segura?": {
+      "main": [
+        [
+          {
+            "node": "Responder WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handoff de Seguranca",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
