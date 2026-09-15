@@ -1,0 +1,432 @@
+﻿import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+import { createClient } from "jsr:@supabase/supabase-js@2";
+
+const ALLOWED_ORIGINS = new Set([
+  "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
+  "http://localhost:3000",
+  "http://localhost:5173",
+]);
+
+/**
+ * Previews do MESMO Worker tambem podem chamar a API.
+ *
+ * O `wrangler versions upload` publica em
+ * https://<versao>-agency-ops-dashboard.lakassessoriadigital.workers.dev, uma
+ * origem diferente da canonica. Sem isto o browser bloqueia a chamada antes de
+ * sair, o dashboard fica eternamente em "Atualizando..." e qualquer diagnostico
+ * feito em preview mede o CORS, nao o bug que se quer investigar.
+ *
+ * Casa por hostname exato, nunca por `includes`: "evil-agency-ops-dashboard.
+ * lakassessoriadigital.workers.dev.attacker.com" nao pode passar. O prefixo de
+ * versao e' restrito ao alfabeto que a Cloudflare usa (hex e hifen).
+ */
+const PREVIEW_HOST = /^[0-9a-f][0-9a-f-]{0,62}-agency-ops-dashboard\.lakassessoriadigital\.workers\.dev$/;
+
+function origemPermitida(origin: string): boolean {
+  if (ALLOWED_ORIGINS.has(origin)) return true;
+  let url: URL;
+  try { url = new URL(origin); } catch { return false; }
+  if (url.protocol !== "https:") return false;
+  return PREVIEW_HOST.test(url.hostname);
+}
+const CORS_BASE = {
+  "access-control-allow-headers": "content-type,x-dashboard-key,authorization,apikey",
+  "access-control-allow-methods": "GET,POST,OPTIONS",
+  "access-control-max-age": "86400",
+};
+
+async function sha256(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+const number = (value: unknown) => Number(value ?? 0);
+const value = <T>(result: any, fallback: T): T => result?.error ? fallback : (result?.data ?? fallback);
+const norm = (s: unknown) => String(s ?? "").trim().toLowerCase();
+const SYNTHETIC_NAME = /^[A-Za-z]+-\d{9,}-[a-z0-9]{4,8}$/;
+const ALL_VIEWS = ["overview","focus","work","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health","opsperf","creative","capacity","view-oncall","finance","executive"];
+const opsDay = (date = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+
+const aggregateMedia = (rows: any[]) => {
+  const daily = rows.filter((row) => (row.granularity ?? "day") === "day");
+  const dates = daily.map((row) => row.date).filter(Boolean).sort();
+  const latestDate = dates.at(-1) ?? null;
+  const latest = latestDate ? daily.filter((row) => row.date === latestDate) : [];
+  const spend = latest.reduce((sum, row) => sum + number(row.spend), 0);
+  const leads = latest.reduce((sum, row) => sum + number(row.leads), 0);
+  const clicks = latest.reduce((sum, row) => sum + number(row.clicks), 0);
+  const impressions = latest.reduce((sum, row) => sum + number(row.impressions), 0);
+  const ageDays = latestDate ? Math.max(0, Math.floor((Date.now() - new Date(`${latestDate}T23:59:59Z`).getTime()) / 86400000)) : null;
+  return { latest_date: latestDate, age_days: ageDays, is_stale: ageDays === null || ageDays > 2, accounts: new Set(latest.map((row) => row.account_key).filter(Boolean)).size, clients_with_media: new Set(latest.map((row) => row.client_id).filter(Boolean)).size, spend: Number(spend.toFixed(2)), leads, impressions, clicks, ctr: impressions ? Number((clicks / impressions * 100).toFixed(2)) : null, cpc: clicks ? Number((spend / clicks).toFixed(2)) : null, cpl: leads ? Number((spend / leads).toFixed(2)) : null };
+};
+const aggregateTaskLog = (rows: any[]) => {
+  const byCategory: Record<string, number> = {};
+  const byCollaborator: Record<string, { total: number; by_category: Record<string, number> }> = {};
+  for (const row of rows) {
+    byCategory[row.category] = (byCategory[row.category] ?? 0) + 1;
+    const bucket = byCollaborator[row.collaborator_name] ?? { total: 0, by_category: {} };
+    bucket.total += 1;
+    bucket.by_category[row.category] = (bucket.by_category[row.category] ?? 0) + 1;
+    byCollaborator[row.collaborator_name] = bucket;
+  }
+  return { total: rows.length, by_category: byCategory, by_collaborator: byCollaborator, recent: rows.slice(0, 100) };
+};
+
+Deno.serve(async (req) => {
+  const requestId = crypto.randomUUID();
+  const origin = req.headers.get("origin");
+  const originAllowed = !origin || origemPermitida(origin);
+  const cors = origin && originAllowed ? { ...CORS_BASE, "access-control-allow-origin": origin, "vary": "Origin" } : CORS_BASE;
+  const respond = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+    status,
+    headers: { ...cors, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+  });
+
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: originAllowed ? 204 : 403, headers: cors });
+  }
+  if (!originAllowed) return respond({ error: "origin_not_allowed" }, 403);
+  if (!['GET','POST'].includes(req.method)) return respond({ error: "method_not_allowed" }, 405);
+  const queryFailed = (error: unknown) => {
+    console.error({
+      event: "dashboard_query_failed",
+      request_id: requestId,
+      error: String((error as { message?: unknown } | null)?.message ?? error),
+    });
+    return respond({ error: "query_failed", request_id: requestId }, 500);
+  };
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  if (!supabaseUrl || !serviceRole || !anonKey) return respond({ error: "server_configuration" }, 500);
+  const db = createClient(supabaseUrl, serviceRole, { auth: { persistSession: false, autoRefreshToken: false } });
+  const ops = db.schema("agency_ops");
+  const url = new URL(req.url);
+  const view = url.searchParams.get("view") ?? "home";
+
+  // Abas antigas continuavam abrindo home/work em paralelo mesmo depois do deploy,
+  // mantendo o Postgres saturado por minutos. O bundle atual marca suas chamadas;
+  // somente o navegador do dashboard recebe 409 quando ainda esta' desatualizado.
+  if (
+    req.method === "GET"
+    && origin === "https://agency-ops-dashboard.lakassessoriadigital.workers.dev"
+    && ["home", "work"].includes(view)
+    && url.searchParams.get("client") !== "hotfix-20260824"
+  ) {
+    return respond({ error: "client_update_required", reload: true }, 409);
+  }
+
+  if (req.method === "GET" && view === "roster") {
+    const [{ data: rosterRows }, { data: claimedRows }] = await Promise.all([
+      ops.from("team_roster").select("person").eq("is_former", false).order("person"),
+      ops.from("user_preferences").select("collaborator_person").not("collaborator_person", "is", null),
+    ]);
+    const claimed = new Set((claimedRows ?? []).map((row: any) => row.collaborator_person));
+    const available = (rosterRows ?? []).filter((row: any) => !claimed.has(row.person));
+    return respond({ roster: available });
+  }
+
+  let currentUserKey = "adler-furtado";
+  let authenticated = false;
+  let viaLogin = false;
+  const suppliedKey = req.headers.get("x-dashboard-key") ?? "";
+  if (suppliedKey.length >= 40) {
+    const keyHash = await sha256(suppliedKey);
+    const { data: apiKey } = await ops.from("dashboard_api_keys").select("active,expires_at").eq("key_hash", keyHash).maybeSingle();
+    if (apiKey?.active && !(apiKey.expires_at && new Date(apiKey.expires_at) <= new Date())) {
+      authenticated = true;
+      await ops.from("dashboard_api_keys").update({ last_used_at: new Date().toISOString() }).eq("key_hash", keyHash);
+    }
+  }
+  const authHeader = req.headers.get("Authorization") ?? "";
+  if (!authenticated && authHeader.startsWith("Bearer ")) {
+    const authClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: authHeader } } });
+    const { data: userData } = await authClient.auth.getUser();
+    if (userData?.user) { authenticated = true; viaLogin = true; currentUserKey = userData.user.id; }
+  }
+  if (!authenticated) return respond({ error: "unauthorized" }, 401);
+
+  type AccessLevel = "FULL" | "WALLET_ONLY" | "RESTRICTED";
+  let profilePerson: string | null = null;
+  let profileRole: string | null = null;
+  let profileClickupUser: string | null = null;
+  let profileClickupUserId: string | null = null;
+  let accessLevel: AccessLevel = "FULL";
+  let elevated = false;
+  let accountApproved = true;
+  if (viaLogin) {
+    accessLevel = "RESTRICTED";
+    const { data: prefRow } = await ops.from("user_preferences").select("collaborator_person").eq("user_key", currentUserKey).maybeSingle();
+    const collaboratorPerson = prefRow?.collaborator_person ?? null;
+    if (collaboratorPerson) {
+      const [{ data: rosterRow }, { data: identityRow }] = await Promise.all([
+        ops.from("team_roster").select("person,role,access_level,clickup_user").eq("person", collaboratorPerson).eq("is_former", false).maybeSingle(),
+        ops.from("team_identity_map").select("clickup_user_id,clickup_username").eq("person", collaboratorPerson).maybeSingle(),
+      ]);
+      if (rosterRow) {
+        profilePerson = rosterRow.person; profileRole = rosterRow.role;
+        profileClickupUser = identityRow?.clickup_username ?? rosterRow.clickup_user;
+        profileClickupUserId = identityRow?.clickup_user_id ? String(identityRow.clickup_user_id) : null;
+        accessLevel = (rosterRow.access_level as AccessLevel) ?? "RESTRICTED";
+      }
+    }
+    const { data: decisions } = await ops.from("access_requests").select("kind,status").eq("user_key", currentUserKey).eq("status", "APPROVED");
+    const approvals = decisions ?? [];
+    accountApproved = approvals.some((row: any) => row.kind === "SIGNUP");
+    if (accessLevel === "RESTRICTED" && approvals.some((row: any) => row.kind === "ELEVATION")) elevated = true;
+  }
+  const isFull = elevated || (accessLevel === "FULL" && (!viaLogin || ["MGMT", "AI"].includes(profileRole ?? "")));
+  const isWalletOnly = accessLevel === "WALLET_ONLY" && !elevated;
+  const isGtScoped = viaLogin && profileRole === "GT" && !elevated;
+  const isPortfolioScoped = isWalletOnly || isGtScoped;
+  // Regra operacional: somente GT possui carteira. CS atende as 3 carteiras.
+  const isCsScoped = false;
+  const isRestrictedBase = accessLevel === "RESTRICTED" && !elevated;
+  const isLocked = viaLogin && (!accountApproved || (!profilePerson && !elevated));
+  const canDecideAccessRequests = isFull && (!viaLogin || profileRole === "MGMT");
+  const isDesignRestricted = profileRole === "DESIGN";
+  let allowedViews: string[] = ALL_VIEWS;
+  let viewsStale = false;
+  if (viaLogin) {
+    if (isLocked) allowedViews = ["overview"];
+    else {
+      const { data: viewRows, error: viewError } = await ops.rpc("dashboard_allowed_views", { p_person: profilePerson, p_role: profileRole });
+      if (viewError || !Array.isArray(viewRows)) { viewsStale = true; allowedViews = ["overview", "focus"]; }
+      else allowedViews = viewRows;
+    }
+  }
+  const isAdler = !viaLogin || profilePerson === "Adler Furtado";
+  const isLeonardo = profilePerson === "Leonardo Augusto";
+  const canViewOperationalAlerts = isAdler || profileRole === "CS" || profileRole === "GT";
+  if (!canViewOperationalAlerts) allowedViews = allowedViews.filter((key) => key !== "alerts");
+  const canView = (key: string) => allowedViews.includes(key);
+
+  if (req.method === "GET" && view === "capacity") {
+    if (isLocked || !isAdler || !canView("capacity")) return respond({ error: "forbidden" }, 403);
+    const historySince = opsDay(new Date(Date.now() - 89 * 86400000));
+    const [metricsRes, settingsRes, overridesRes, weightsRes, growthRes, historyRes, rosterRes, termsRes] = await Promise.all([
+      ops.rpc("capacity_current_metrics"),
+      ops.from("capacity_settings").select("*").eq("active", true).order("scope_type").order("scope_id"),
+      ops.from("client_workload_overrides").select("*").order("updated_at", { ascending: false }),
+      ops.from("workload_weight_config").select("*").order("metric_key"),
+      ops.rpc("capacity_growth_summary"),
+      ops.from("operational_capacity_snapshots").select("snapshot_date,scope_type,scope_id,client_count,metadata,created_at").eq("scope_type", "CLIENT").gte("snapshot_date", historySince).order("snapshot_date", { ascending: true }).limit(12000),
+      ops.from("team_roster").select("person,role,access_level,is_former").eq("role", "GT").eq("is_former", false).order("person"),
+      ops.from("client_private_commercial_terms").select("client_id,monthly_value,service_fee_amount,service_fee_cadence,verified,confidence").limit(500),
+    ]);
+    if (metricsRes.error) return queryFailed(metricsRes.error);
+    if (settingsRes.error) return queryFailed(settingsRes.error);
+    if (overridesRes.error) return queryFailed(overridesRes.error);
+    if (weightsRes.error) return queryFailed(weightsRes.error);
+    if (historyRes.error) return queryFailed(historyRes.error);
+    if (rosterRes.error) return queryFailed(rosterRes.error);
+    const terms = termsRes.error ? [] : (termsRes.data ?? []);
+    const liveIds = new Set((metricsRes.data ?? []).map((row: any) => String(row.client_id)));
+    const commercialTerms = terms.filter((row: any) => liveIds.has(String(row.client_id)));
+    return respond({
+      metrics: metricsRes.data ?? [],
+      settings: settingsRes.data ?? [],
+      overrides: overridesRes.data ?? [],
+      weights: weightsRes.data ?? [],
+      growth: growthRes.error ? null : growthRes.data,
+      history: historyRes.data ?? [],
+      roster: rosterRes.data ?? [],
+      commercial_terms: commercialTerms,
+      calibration: {
+        configured_people: (settingsRes.data ?? []).filter((row: any) => row.scope_type === "PERSON" && Number(row.capacity_points) > 0).length,
+        active_gts: (rosterRes.data ?? []).length,
+      },
+      generated_at: new Date().toISOString(),
+    });
+  }
+
+  if (req.method === "GET" && view === "creative") {
+    if (isLocked || !canView("creative")) return respond({ error: "forbidden" }, 403);
+    const [clientResult, ruleResult, candidateResult, brandResult, materialResult, adjustmentResult, briefingResult] = await Promise.all([
+      ops.from("clients").select("id,display_name,lifecycle,designer_owner").in("lifecycle", ["ACTIVE","ONBOARDING"]).order("display_name"),
+      ops.from("creative_client_rules").select("*").not("status","eq","REJECTED").order("created_at",{ascending:false}),
+      ops.from("creative_rule_candidates").select("*").in("status",["PENDING","CONFIRMED_FIXED","CONFIRMED_PRODUCT"]).order("source_at",{ascending:false}),
+      ops.from("creative_brand_profiles").select("*"),
+      ops.from("client_raw_material_uploads").select("id,client_id,file_name,file_kind,drive_uploaded_at,detected_at,metadata").order("detected_at",{ascending:false}).limit(1000),
+      ops.from("client_adjustments").select("id,client_id,tipo,descricao,occurred_at,metadata").order("occurred_at",{ascending:false}).limit(1000),
+      ops.from("notion_briefing_pages").select("client_id,title,page_url,sync_status,match_status,extracted_profile,last_fetched_at").order("last_fetched_at",{ascending:false}).limit(1000),
+    ]);
+    const clients = value<any[]>(clientResult, []); const rules = value<any[]>(ruleResult, []); const candidates = value<any[]>(candidateResult, []); const brands = value<any[]>(brandResult, []); const materials = value<any[]>(materialResult, []); const adjustments = value<any[]>(adjustmentResult, []); const briefings = value<any[]>(briefingResult, []);
+    const grouped = clients.map((client: any) => {
+      const cr = rules.filter((r: any) => r.client_id === client.id); const cc = candidates.filter((r: any) => r.client_id === client.id); const cb = brands.find((r: any) => r.client_id === client.id) ?? null; const cm = materials.filter((r: any) => r.client_id === client.id); const ca = adjustments.filter((r: any) => r.client_id === client.id); const bf = briefings.filter((r: any) => r.client_id === client.id); const historical = cr.filter((r: any) => r.status === "HISTORICAL" || r.status === "NEEDS_VALIDATION").length;
+      return { client_id: client.id, display_name: client.display_name, lifecycle: client.lifecycle, designer_owner: client.designer_owner, brand: cb, rules: cr, candidates: cc, recent_materials: cm.slice(0,20), recent_adjustments: ca.slice(0,20), briefings: bf, health: { total_rules: cr.length, historical_rules: historical, pending_candidates: cc.filter((r: any) => r.status === "PENDING").length, brand_status: cb?.status ?? "INCOMPLETE", briefing_count: bf.length, material_count: cm.length, needs_attention: historical > 0 || !cb || cc.some((r: any) => r.status === "PENDING") } };
+    });
+    return respond({ clients: grouped, summary: { active_clients: clients.length, clients_with_rules: grouped.filter((c: any) => c.rules.length > 0).length, clients_without_rules: grouped.filter((c: any) => c.rules.length === 0).length, pending_candidates: candidates.filter((c: any) => c.status === "PENDING").length, incomplete_brand_profiles: grouped.filter((c: any) => !c.brand || c.brand.status !== "CONFIRMED").length }, taxonomy: { classifications: ["REGRA_FIXA","POR_PRODUTO","TESTE_PENDENTE","TESTE_ESTRATEGICO","SEM_REGRA_CONFIRMADA"], rule_kinds: ["DESEJA","EVITAR","COMO_APLICAR","IDENTIDADE","PROCESSO","DADO_TECNICO"], candidate_statuses: ["PENDING","CONFIRMED_FIXED","CONFIRMED_PRODUCT","REJECTED","DUPLICATE"] }, generated_at: new Date().toISOString() });
+  }
+
+  if (req.method === "POST") {
+    const body = await req.json().catch(() => ({}));
+    if (view === "adjustment-create") return respond({ error: "deprecated_diary_endpoint" }, 410);
+    if (view === "tasklog-create") return respond({ error: "deprecated_tasklog_endpoint" }, 410);
+    if (view === "capacity-setting-upsert") {
+      if (isLocked || !isAdler || !canView("capacity")) return respond({ error: "forbidden" }, 403);
+      const scopeType = String(body.scope_type ?? "PERSON").toUpperCase();
+      const scopeId = String(body.scope_id ?? "").trim();
+      if (!scopeId || !["PERSON","AREA"].includes(scopeType)) return respond({ error: "missing_fields" }, 400);
+      const rawCapacity = body.capacity_points;
+      const capacityPoints = rawCapacity === null || rawCapacity === "" ? null : Number(rawCapacity);
+      if (capacityPoints !== null && (!Number.isFinite(capacityPoints) || capacityPoints <= 0)) return respond({ error: "invalid_capacity" }, 400);
+      const warning = Number(body.warning_threshold ?? 70);
+      const high = Number(body.high_threshold ?? 85);
+      const critical = Number(body.critical_threshold ?? 90);
+      const overload = Number(body.overload_threshold ?? 100);
+      if (![warning,high,critical,overload].every(Number.isFinite) || !(warning < high && high < critical && critical <= overload)) return respond({ error: "invalid_thresholds" }, 400);
+      const leadTime = Math.max(1, Math.min(180, Math.round(Number(body.hiring_lead_time_days ?? 14))));
+      const monthlyCostRaw = body.monthly_cost;
+      const monthlyCost = monthlyCostRaw === null || monthlyCostRaw === "" ? null : Number(monthlyCostRaw);
+      const result = await ops.from("capacity_settings").upsert({
+        scope_type: scopeType, scope_id: scopeId, capacity_points: capacityPoints,
+        warning_threshold: warning, high_threshold: high, critical_threshold: critical,
+        overload_threshold: overload, hiring_lead_time_days: leadTime,
+        monthly_cost: Number.isFinite(monthlyCost as number) ? monthlyCost : null,
+        active: body.active !== false, metadata: typeof body.metadata === "object" && body.metadata ? body.metadata : {},
+        updated_by: profilePerson ?? "Adler Furtado", updated_at: new Date().toISOString(),
+      }, { onConflict: "scope_type,scope_id" }).select().single();
+      if (result.error) return queryFailed(result.error);
+      return respond({ ok: true, setting: result.data });
+    }
+    if (view === "capacity-override-upsert") {
+      if (isLocked || !isAdler || !canView("capacity")) return respond({ error: "forbidden" }, 403);
+      const clientId = String(body.client_id ?? "");
+      if (!clientId) return respond({ error: "missing_fields", required: ["client_id"] }, 400);
+      if (body.clear === true) {
+        const removed = await ops.from("client_workload_overrides").delete().eq("client_id", clientId).select("client_id");
+        if (removed.error) return queryFailed(removed.error);
+        return respond({ ok: true, cleared: true });
+      }
+      const score = Number(body.score_override);
+      const reason = String(body.reason ?? "").trim();
+      if (!Number.isFinite(score) || score <= 0 || score > 3 || !reason) return respond({ error: "invalid_override" }, 400);
+      const { data: client } = await ops.from("clients").select("id").eq("id", clientId).maybeSingle();
+      if (!client) return respond({ error: "client_not_found" }, 404);
+      const result = await ops.from("client_workload_overrides").upsert({
+        client_id: clientId, score_override: score, reason: reason.slice(0, 1000),
+        valid_until: body.valid_until || null, created_by: profilePerson ?? "Adler Furtado",
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "client_id" }).select().single();
+      if (result.error) return queryFailed(result.error);
+      return respond({ ok: true, override: result.data });
+    }
+
+    if (view === "notifications-read") {
+      const { data: candidates, error: candidateError } = await ops.from("platform_notifications").select("id,type,client_id,metadata").order("occurred_at", { ascending: false }).limit(1000);
+      if (candidateError) return queryFailed(candidateError);
+      let walletClientIds: Set<string> | null = null;
+      if (isPortfolioScoped) { const { data: walletClients } = await ops.from("dashboard_client_overview").select("client_id").eq("gt_owner", profilePerson ?? ""); walletClientIds = new Set((walletClients ?? []).map((row: any) => String(row.client_id))); }
+      const visible = (row: any) => { if (isAdler) return true; if (walletClientIds && row.client_id && !walletClientIds.has(String(row.client_id))) return false; const isWork = String(row.type).startsWith("WORK_ITEM_"); if (isWork) return row.metadata?.target_person === profilePerson || (!row.metadata?.target_person && row.metadata?.target_role === profileRole); if (isDesignRestricted) return ["DESIGNER_MENTION","MATERIAL_UPLOADED"].includes(String(row.type)) && row.metadata?.target_role === "DESIGN" && row.metadata?.target_person === profilePerson; return true; };
+      const requested = body.id ? (candidates ?? []).filter((row: any) => String(row.id) === String(body.id) && visible(row)) : (candidates ?? []).filter(visible);
+      if (body.id && !requested.length) return respond({ error: "not_found_or_forbidden" }, 404); if (!requested.length) return respond({ ok: true, updated: 0 });
+      const readRows = requested.map((row: any) => ({ notification_id: row.id, user_key: currentUserKey, read_at: new Date().toISOString() }));
+      const result = await ops.from("platform_notification_reads").upsert(readRows, { onConflict: "notification_id,user_key" }).select("notification_id");
+      if (result.error) return queryFailed(result.error); return respond({ ok: true, updated: result.data?.length ?? 0 });
+    }
+    if (view === "preferences") {
+      const allowed = ["theme","sounds_enabled","win_sound_enabled","win_celebration_enabled","notifications_enabled","animations_enabled","interface_density","name","role"];
+      const patch = Object.fromEntries(Object.entries(body).filter(([key]) => allowed.includes(key)));
+      const result = await ops.from("user_preferences").update({ ...patch, updated_at: new Date().toISOString() }).eq("user_key", currentUserKey).select().single();
+      if (result.error) return queryFailed(result.error); return respond({ ok: true, preferences: result.data });
+    }
+    if (view === "access-request") {
+      if (!viaLogin || !profilePerson) return respond({ error: "collaborator_required" }, 400);
+      const { data: pending } = await ops.from("access_requests").select("id").eq("user_key", currentUserKey).eq("status", "PENDING").maybeSingle();
+      if (pending) return respond({ ok: true, request: pending, already_pending: true });
+      const result = await ops.from("access_requests").insert({ user_key: currentUserKey, person: profilePerson, status: "PENDING", note: typeof body.note === "string" ? body.note.slice(0, 500) : null }).select().single();
+      if (result.error) return queryFailed(result.error); return respond({ ok: true, request: result.data });
+    }
+    if (view === "access-request-decide") {
+      if (!canDecideAccessRequests) return respond({ error: "forbidden" }, 403);
+      const id = String(body.id ?? ""); const decision = body.decision === "APPROVED" ? "APPROVED" : body.decision === "DENIED" ? "DENIED" : null;
+      if (!id || !decision) return respond({ error: "missing_fields" }, 400);
+      const result = await ops.from("access_requests").update({ status: decision, decided_at: new Date().toISOString(), decided_by: profilePerson ?? "adler-furtado" }).eq("id", id).select().single();
+      if (result.error) return queryFailed(result.error); return respond({ ok: true, request: result.data });
+    }
+    if (view === "work-item-create") {
+      if (isLocked || !canView("work")) return respond({ error: "forbidden" }, 403);
+      const title = typeof body.title === "string" ? body.title.trim() : ""; const description = typeof body.description === "string" ? body.description.trim() : ""; const clientId = body.client_id ? String(body.client_id) : null;
+      if (!title) return respond({ error: "missing_fields", required: ["title"] }, 400);
+      let scopedClient: any = null;
+      if (clientId) { const { data } = await ops.from("dashboard_client_overview").select("client_id,display_name,gt_owner,cs_owner,designer_owner").eq("client_id", clientId).maybeSingle(); scopedClient = data; if (!scopedClient) return respond({ error: "client_not_found" }, 404); if (isPortfolioScoped && scopedClient.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403); if (isCsScoped && scopedClient.cs_owner !== profilePerson) return respond({ error: "forbidden" }, 403); }
+      const itemType = ["ESCALATION","CREATIVE_REQUEST","TECHNICAL","CLIENT_FOLLOWUP","CLICKUP","FINANCE","GENERAL"].includes(String(body.type)) ? String(body.type) : "GENERAL"; const priority = ["CRITICAL","HIGH","MEDIUM","LOW"].includes(String(body.priority)) ? String(body.priority) : "MEDIUM"; const targetRole = typeof body.target_role === "string" ? body.target_role.slice(0, 40) : null; const targetPerson = typeof body.target_person === "string" ? body.target_person.slice(0, 160) : null; const metadata = typeof body.metadata === "object" && body.metadata ? { ...body.metadata } : {}; let clickupTask: any = null;
+      if (body.create_clickup === true || itemType === "CLICKUP") {
+        const config: any = value(await ops.rpc("get_clickup_config"), {}); if (!config?.token) return respond({ error: "clickup_not_configured" }, 503);
+        const listByRole: Record<string, string> = { GT: "901317155229", DESIGN: "901317155418", CS: "1000210000004387", MGMT: "901326095338", AI: "901326095338" }; const listId = listByRole[targetRole ?? ""] ?? "901326095338"; const assignees: number[] = [];
+        if (targetPerson) { const { data: rosterTarget } = await ops.from("team_roster").select("clickup_user").eq("person", targetPerson).maybeSingle(); if (rosterTarget?.clickup_user) { const { data: assigneeRows } = await ops.from("clickup_task_assignees").select("user_id,username").ilike("username", rosterTarget.clickup_user).limit(1); const assigneeId = Number(assigneeRows?.[0]?.user_id); if (Number.isFinite(assigneeId)) assignees.push(assigneeId); } }
+        const clickupName = scopedClient?.display_name ? `[${scopedClient.display_name}] ${title}` : title;
+        const clickupResponse = await fetch(`https://api.clickup.com/api/v2/list/${listId}/task`, { method: "POST", headers: { Authorization: config.token, "content-type": "application/json" }, body: JSON.stringify({ name: clickupName.slice(0, 240), description: description.slice(0, 4000) || undefined, assignees, due_date: body.due_at ? new Date(body.due_at).getTime() : undefined }) });
+        if (!clickupResponse.ok) return respond({ error: "clickup_create_failed", detail: await clickupResponse.text() }, 502); clickupTask = await clickupResponse.json(); metadata.clickup_task_id = String(clickupTask.id); metadata.clickup_url = clickupTask.url ?? null; metadata.clickup_list_id = listId;
+      }
+      const result = await ops.from("work_items").insert({ client_id: clientId, type: itemType, priority, title: title.slice(0, 240), description: description.slice(0, 4000) || null, source: typeof body.source === "string" ? body.source.slice(0, 80) : "dashboard", source_id: typeof body.source_id === "string" ? body.source_id.slice(0, 240) : (clickupTask?.id ? String(clickupTask.id) : null), created_by_user_key: currentUserKey, created_by_person: profilePerson ?? "Adler Furtado", target_role: targetRole, target_person: targetPerson, due_at: body.due_at ?? null, metadata }).select().single();
+      if (result.error) return queryFailed(result.error); return respond({ ok: true, item: result.data, clickup: clickupTask ? { id: String(clickupTask.id), url: clickupTask.url ?? null } : null });
+    }
+    if (view === "work-item-update") {
+      if (isLocked || !canView("work")) return respond({ error: "forbidden" }, 403); const id = String(body.id ?? ""); if (!id) return respond({ error: "missing_fields", required: ["id"] }, 400); const { data: current } = await ops.from("work_items").select("*").eq("id", id).maybeSingle(); if (!current) return respond({ error: "not_found" }, 404); const canAct = isAdler || current.created_by_person === profilePerson || current.target_person === profilePerson || (!current.target_person && current.target_role === profileRole); if (!canAct) return respond({ error: "forbidden" }, 403); const status = ["OPEN","IN_PROGRESS","WAITING","SNOOZED","COMPLETED","DISMISSED"].includes(String(body.status)) ? String(body.status) : current.status; const patch: Record<string, unknown> = { status, completed_by: status === "COMPLETED" ? (profilePerson ?? "Adler Furtado") : current.completed_by, resolution: typeof body.resolution === "string" ? body.resolution.slice(0, 4000) : current.resolution, snoozed_until: status === "SNOOZED" ? body.snoozed_until ?? current.snoozed_until : null }; if (typeof body.target_person === "string") patch.target_person = body.target_person.slice(0, 160) || null; if (typeof body.target_role === "string") patch.target_role = body.target_role.slice(0, 40) || null; if (typeof body.priority === "string" && ["CRITICAL","HIGH","MEDIUM","LOW"].includes(body.priority)) patch.priority = body.priority; const result = await ops.from("work_items").update(patch).eq("id", id).select().single(); if (result.error) return queryFailed(result.error); return respond({ ok: true, item: result.data });
+    }
+    if (view === "finance-control-upsert") {
+      if (!isAdler || !canView("finance")) return respond({ error: "forbidden" }, 403); const clientId = String(body.client_id ?? ""); if (!clientId) return respond({ error: "missing_fields", required: ["client_id"] }, 400); const { data: client } = await ops.from("clients").select("id,display_name,cs_owner,gt_owner,designer_owner").eq("id", clientId).maybeSingle(); if (!client) return respond({ error: "client_not_found" }, 404); const paymentStatus = ["UNKNOWN","CURRENT","DUE_SOON","OVERDUE","NEGOTIATING","PAID","CANCELLED"].includes(String(body.payment_status)) ? String(body.payment_status) : "UNKNOWN"; const operationalStatus = ["RELEASED","PAUSE_REQUESTED","PAUSED"].includes(String(body.operational_status)) ? String(body.operational_status) : "RELEASED";
+      const financePatch = { client_id: clientId, payment_status: paymentStatus, operational_status: operationalStatus, monthly_value: body.monthly_value === null || body.monthly_value === "" ? null : Number(body.monthly_value), next_due_date: body.next_due_date || null, overdue_since: body.overdue_since || null, pause_reason: typeof body.pause_reason === "string" ? body.pause_reason.slice(0, 1000) : null, notes: typeof body.notes === "string" ? body.notes.slice(0, 4000) : null, last_contact_at: body.last_contact_at || null, last_payment_at: body.last_payment_at || null, updated_by: profilePerson ?? "Adler Furtado", updated_at: new Date().toISOString() };
+      const result = await ops.from("client_finance_controls").upsert(financePatch, { onConflict: "client_id" }).select().single(); if (result.error) return queryFailed(result.error);
+      if (["PAUSE_REQUESTED","PAUSED"].includes(operationalStatus)) { const targets = [{ role: "GT", person: client.gt_owner },{ role: "CS", person: client.cs_owner },{ role: "DESIGN", person: client.designer_owner }].filter((target) => target.person); for (const target of targets) { const sourceId = `finance:${clientId}:${operationalStatus}:${target.role}`; const { data: existing } = await ops.from("work_items").select("id").eq("source_id", sourceId).in("status", ["OPEN","IN_PROGRESS","WAITING","SNOOZED"]).maybeSingle(); if (!existing) await ops.from("work_items").insert({ client_id: clientId, type: "FINANCE", status: "OPEN", priority: operationalStatus === "PAUSED" ? "CRITICAL" : "HIGH", title: `${operationalStatus === "PAUSED" ? "Trabalhos pausados" : "Pausa operacional solicitada"} â€” ${client.display_name}`, description: financePatch.pause_reason || "Verifique a orientaÃ§Ã£o financeira antes de continuar qualquer entrega.", source: "finance_center", source_id: sourceId, created_by_user_key: currentUserKey, created_by_person: profilePerson ?? "Adler Furtado", target_role: target.role, target_person: target.person, metadata: { payment_status: paymentStatus, operational_status: operationalStatus } }); } }
+      return respond({ ok: true, control: result.data });
+    }
+    if (view === "note-create") { const texto = typeof body.body === "string" ? body.body.trim() : ""; if (!texto) return respond({ error: "missing_fields", required: ["body"] }, 400); const { data, error } = await ops.rpc("ingest_ops_note", { p: { body: texto, author_user_key: currentUserKey, author_name: profilePerson ?? null, client_id: body.client_id ?? null, occurred_at: body.occurred_at ?? null } }); if (error) return queryFailed(error); return respond(data); }
+    if (view === "review-resolve") { const id = Number(body.id ?? 0); const decisao = String(body.decisao ?? "").toUpperCase(); if (!id || !["VINCULAR", "IGNORAR"].includes(decisao)) return respond({ error: "missing_fields", required: ["id", "decisao"] }, 400); const { data, error } = await ops.rpc("resolve_match_review", { p: { id, decisao, client_id: body.client_id ?? null, nota: body.nota ?? null, quem: profilePerson ?? currentUserKey } }); if (error) return queryFailed(error); return respond(data); }
+    if (view === "note-confirm") { const id = String(body.id ?? ""); if (!id) return respond({ error: "missing_fields", required: ["id"] }, 400); const clientId = body.client_id ? String(body.client_id) : null; const result = await ops.from("ops_notes").update({ client_id: clientId, match_status: clientId ? "MANUAL" : "UNMATCHED", match_confidence: clientId ? 1 : null, confirmado_em: new Date().toISOString(), confirmado_por: profilePerson ?? currentUserKey }).eq("id", id).select().single(); if (result.error) return queryFailed(result.error); return respond({ ok: true, note: result.data }); }
+    return respond({ error: "unknown_action" }, 404);
+  }
+
+  if (view === "work") {
+    if (isLocked || !canView("work")) return respond({ error: "forbidden" }, 403); const { data, error } = await ops.from("work_items").select("*,clients(display_name,gt_owner,cs_owner,designer_owner)").order("created_at", { ascending: false }).limit(800); if (error) return queryFailed(error); const rows = (data ?? []).filter((row: any) => { if (isAdler) return true; if (row.created_by_person === profilePerson || row.target_person === profilePerson) return true; if (!row.target_person && row.target_role === profileRole) return true; return false; }); const open = rows.filter((row: any) => !["COMPLETED","DISMISSED"].includes(row.status)); return respond({ items: rows, summary: { open: open.length, critical: open.filter((row: any) => row.priority === "CRITICAL").length, overdue: open.filter((row: any) => row.due_at && new Date(row.due_at) < new Date()).length, waiting: open.filter((row: any) => ["WAITING","SNOOZED"].includes(row.status)).length, completed_30d: rows.filter((row: any) => row.status === "COMPLETED" && row.completed_at && new Date(row.completed_at) >= new Date(Date.now() - 30 * 86400000)).length }, roster: value<any[]>(await ops.from("team_roster").select("person,role").eq("is_former", false).order("person"), []), generated_at: new Date().toISOString() });
+  }
+
+  if (view === "finance") {
+    if (!isAdler || !canView("finance")) return respond({ error: "forbidden" }, 403); const [controlsRes, clientsRes, contractsRes, notesRes] = await Promise.all([ops.from("client_finance_controls").select("*").order("updated_at", { ascending: false }),ops.from("clients").select("id,display_name,lifecycle,cs_owner,gt_owner,designer_owner,entrada").in("lifecycle", ["ACTIVE","ONBOARDING"]).order("display_name"),ops.from("client_contract_status").select("client_id,contract_state,contract_end_date,days_remaining,renewal_pending,document_status"),ops.from("client_billing_notes").select("*").order("reference_date", { ascending: false }).limit(1000)]); const controls = value<any[]>(controlsRes, []); const controlByClient = new Map(controls.map((row: any) => [row.client_id, row])); const contractByClient = new Map(value<any[]>(contractsRes, []).map((row: any) => [row.client_id, row])); const notesByClient = new Map<string, any[]>(); for (const row of value<any[]>(notesRes, [])) notesByClient.set(row.client_id, [...(notesByClient.get(row.client_id) ?? []), row]); const clients = value<any[]>(clientsRes, []).map((client: any) => ({ ...client, finance: controlByClient.get(client.id) ?? null, contract: contractByClient.get(client.id) ?? null, billing_notes: (notesByClient.get(client.id) ?? []).slice(0, 10) })); return respond({ clients, summary: { tracked: controls.length, overdue: controls.filter((row: any) => row.payment_status === "OVERDUE").length, due_soon: controls.filter((row: any) => row.payment_status === "DUE_SOON").length, paused: controls.filter((row: any) => row.operational_status === "PAUSED").length, pause_requested: controls.filter((row: any) => row.operational_status === "PAUSE_REQUESTED").length, mrr_tracked: controls.reduce((sum: number, row: any) => sum + number(row.monthly_value), 0) }, generated_at: new Date().toISOString() });
+  }
+
+  if (view === "review-queue") { const [fila, clientes] = await Promise.all([ops.from("review_queue").select("*").order("dias_esperando", { ascending: false }).limit(400),ops.from("clients").select("id,display_name,lifecycle").order("display_name")]); if (fila.error) return queryFailed(fila.error); return respond({ fila: fila.data ?? [], clients: clientes.data ?? [] }); }
+  if (view === "clickup-range") { if (isLocked || !canView("clickup")) return respond({ error: "forbidden" }, 403); const isDay = (raw: string | null) => Boolean(raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)); const untilParam = url.searchParams.get("until"); const sinceParam = url.searchParams.get("since"); const until = isDay(untilParam) ? untilParam! : opsDay(); const since = isDay(sinceParam) ? sinceParam! : opsDay(new Date(Date.now() - 29 * 86400000)); const requested = (url.searchParams.get("people") ?? "").split(",").map((name) => name.trim()).filter(Boolean); const people = isFull ? requested : [profileClickupUser ?? "__sem_vinculo__"]; const { data, error } = await ops.rpc("clickup_range_report", { p_since: since, p_until: until, p_people: people.length ? people : null }); if (error) return queryFailed(error); return respond({ ...(data ?? {}), scoped: !isFull, generated_at: new Date().toISOString() }); }
+
+  if (view === "opsperf") {
+    if (isLocked || !canView("opsperf")) return respond({ error: "forbidden" }, 403); const isDay = (raw: string | null) => Boolean(raw && /^\d{4}-\d{2}-\d{2}$/.test(raw)); const untilParam = url.searchParams.get("until"); const sinceParam = url.searchParams.get("since"); const until = isDay(untilParam) ? untilParam! : opsDay(); const since = isDay(sinceParam) ? sinceParam! : opsDay(new Date(Date.now() - 89 * 86400000)); const heatmapSince = opsDay(new Date(Date.now() - 371 * 86400000)); const [factsRes, activityRes, workloadRes, unmappedRes, csRes, rosterRes] = await Promise.all([ops.from("op_perf_task_facts").select("person,role,completed,is_adjustment,hours_to_close,on_time,date_created").gte("date_created", `${since}T00:00:00`).limit(6000),ops.from("op_perf_daily_activity").select("*").gte("activity_date", heatmapSince).limit(8000),ops.from("op_perf_current_workload").select("*"),ops.from("op_perf_unmapped_collaborators").select("*"),ops.from("op_perf_cs_response_times").select("cs_person,response_minutes,client_msg_at").gte("client_msg_at", `${since}T00:00:00`).limit(6000),ops.from("team_roster").select("person,role").eq("is_former", false)]); if (factsRes.error) return queryFailed(factsRes.error); const facts = value<any[]>(factsRes, []); const activity = value<any[]>(activityRes, []); const workload = value<any[]>(workloadRes, []); const unmapped = value<any[]>(unmappedRes, []); const csTimes = value<any[]>(csRes, []).filter((row: any) => typeof row.response_minutes === "number" && row.response_minutes >= 0 && row.response_minutes < 60 * 24 * 3); const roster = value<any[]>(rosterRes, []); const workloadByPerson = new Map(workload.map((row: any) => [row.person, row])); const byPerson = new Map<string, any>(); for (const r of roster) { const w = workloadByPerson.get(r.person); byPerson.set(r.person, { person: r.person, role: r.role, tasksCompleted: 0, tasksOpen: w?.open_tasks ?? 0, overdueTasks: w?.overdue_tasks ?? 0, onTime: 0, onTimeTotal: 0, novoHours: [] as number[], ajusteHours: [] as number[], csResponseMinutes: [] as number[] }); } for (const f of facts) { const bucket = byPerson.get(f.person); if (!bucket) continue; if (f.completed) { bucket.tasksCompleted += 1; if (typeof f.hours_to_close === "number" && f.hours_to_close >= 0) (f.is_adjustment ? bucket.ajusteHours : bucket.novoHours).push(f.hours_to_close); } if (f.on_time !== null && f.on_time !== undefined) { bucket.onTimeTotal += 1; if (f.on_time) bucket.onTime += 1; } } for (const c of csTimes) { const bucket = byPerson.get(c.cs_person); if (bucket) bucket.csResponseMinutes.push(c.response_minutes); } const avg = (arr: number[]) => arr.length ? Number((arr.reduce((sum, v) => sum + v, 0) / arr.length).toFixed(1)) : null; const people = [...byPerson.values()].map((b: any) => ({ person: b.person, role: b.role, tasks_completed: b.tasksCompleted, tasks_open: b.tasksOpen, overdue_tasks: b.overdueTasks, on_time_rate: b.onTimeTotal ? Number((100 * b.onTime / b.onTimeTotal).toFixed(1)) : null, avg_hours_novo: avg(b.novoHours), avg_hours_ajuste: avg(b.ajusteHours), creatives_novo: b.novoHours.length, creatives_ajuste: b.ajusteHours.length, avg_cs_response_minutes: avg(b.csResponseMinutes), cs_replies: b.csResponseMinutes.length })).sort((a, b) => b.tasks_completed - a.tasks_completed); const heatmap: Record<string, Record<string, number>> = {}; for (const row of activity) { if (!row.person) continue; heatmap[row.person] = heatmap[row.person] ?? {}; heatmap[row.person][row.activity_date] = (heatmap[row.person][row.activity_date] ?? 0) + Number(row.events ?? 0); } return respond({ period: { since, until, heatmap_since: heatmapSince }, people, heatmap, unmapped_collaborators: unmapped, generated_at: new Date().toISOString() });
+  }
+
+  if (view === "client") {
+    if (isDesignRestricted) return respond({ error: "forbidden" }, 403); const clientId = url.searchParams.get("id"); if (!clientId) return respond({ error: "missing_client_id" }, 400); const core = await Promise.all([ops.from("dashboard_client_overview").select("*").eq("client_id", clientId).maybeSingle(),ops.from("conversation_state").select("*").eq("client_id", clientId).order("updated_at", { ascending: false }),ops.from("operational_alerts").select("*").eq("client_id", clientId).order("last_detected_at", { ascending: false }).limit(50),ops.from("commitments").select("*").eq("client_id", clientId).order("created_at", { ascending: false }).limit(50)]); if (core[0].error) return queryFailed(core[0].error); const clientRow: any = core[0].data; if (!clientRow) return respond({ error: "not_found" }, 404); if (isPortfolioScoped && clientRow.gt_owner !== profilePerson) return respond({ error: "forbidden" }, 403); if (isCsScoped && clientRow.cs_owner !== profilePerson) return respond({ error: "forbidden" }, 403); const [context, history] = await Promise.all([Promise.all([ops.from("notion_briefing_pages").select("notion_page_id,title,page_url,sync_status,match_status,extracted_profile,last_fetched_at").eq("client_id", clientId).order("updated_at", { ascending: false }),ops.from("client_daily_summary").select("*").eq("client_id", clientId).order("summary_date", { ascending: false }).limit(30),ops.from("media_metrics_daily").select("*").eq("client_id", clientId).order("date", { ascending: false }).limit(180),ops.from("client_timeline").select("*").eq("client_id", clientId).order("at", { ascending: false }).limit(100)]),Promise.all([ops.from("client_health_scores").select("*").eq("client_id", clientId).order("date", { ascending: false }).limit(90),ops.from("client_integrations").select("*").eq("client_id", clientId),ops.from("clickup_tasks").select("task_id,name,status,is_closed,date_created,date_closed,due_date,list_name,url,last_synced_at").eq("client_id", clientId).order("date_updated", { ascending: false }).limit(100),ops.from("onboarding_cases").select("*,onboarding_stages(*)").eq("client_id", clientId).order("created_at", { ascending: false }).limit(3),ops.from("client_lifecycle_events").select("*").eq("client_id", clientId).order("occurred_at", { ascending: false }).limit(100),ops.from("client_won_events").select("*").eq("client_id", clientId).order("occurred_at", { ascending: false }).limit(20),ops.from("ops_notes").select("*").eq("client_id", clientId).order("occurred_at", { ascending: false }).limit(50)])]); const results = [...core, ...context, ...history]; const { data: walletRow } = await ops.from("wallet_registry").select("carteira").eq("gt_owner", clientRow.gt_owner ?? "").maybeSingle(); return respond({ client: { ...(results[0].data as any), carteira: walletRow?.carteira ?? null }, conversations: value(results[1], []), alerts: value(results[2], []), commitments: value(results[3], []), briefings: value(results[4], []), daily_summaries: value(results[5], []), media: value(results[6], []), timeline: value(results[7], []), health_history: value(results[8], []), integrations: value(results[9], []), clickup_tasks: value(results[10], []), onboarding_cases: value(results[11], []), lifecycle_events: value(results[12], []), won_events: value(results[13], []), ops_notes: value(results[14], []), generated_at: new Date().toISOString() });
+  }
+
+  const [core, sources, operationsData, clickupData, platformData, teamData] = await Promise.all([
+    Promise.all([ops.from("dashboard_client_overview").select("*").limit(300),ops.from("operational_alerts").select("*").eq("status", "OPEN").limit(500),ops.from("commitments").select("*").in("status", ["OPEN", "IN_PROGRESS"]).limit(500),ops.from("conversation_state").select("*").limit(500)]),
+    Promise.all([ops.from("notion_briefing_pages").select("notion_page_id,client_id,match_status,sync_status,updated_at").limit(500),ops.from("notion_briefing_sync_runs").select("*").order("started_at", { ascending: false }).limit(1),ops.from("job_runs").select("job_name,status,started_at,finished_at,error").order("started_at", { ascending: false }).limit(40),ops.from("conversation_processing_queue").select("chat_id,status,dirty_since,last_error").limit(500)]),
+    Promise.all([ops.from("whatsapp_messages").select("id,event_at,received_at,chat_id").order("id", { ascending: false }).limit(1),ops.from("media_metrics_daily").select("*").order("date", { ascending: false }).limit(3000),Promise.resolve({ data: [], error: null }),ops.from("client_health_scores").select("*").order("date", { ascending: false }).limit(1000)]),
+    Promise.all([ops.from("clickup_productivity_30d").select("*").order("tasks_done", { ascending: false }),ops.from("clickup_productivity_daily").select("*").gte("date", new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)).order("date", { ascending: true }),ops.from("clickup_tasks").select("task_id,name,status,date_closed,due_date,list_name,client_id,url,clickup_task_assignees(user_id,username,email)", { count: "exact" }).eq("is_closed", true).order("date_closed", { ascending: false }).limit(100),ops.from("clickup_sync_runs").select("*").order("started_at", { ascending: false }).limit(1),ops.rpc("get_clickup_config"),ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).not("client_id", "is", null),ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).eq("client_match_status", "UNMATCHED"),ops.from("clickup_tasks").select("task_id", { count: "exact", head: true }).eq("client_match_status", "NO_LABEL"),ops.from("clickup_client_label_audit").select("client_label,task_count,status").eq("status", "UNMATCHED").order("task_count", { ascending: false }).limit(30),ops.from("clickup_tasks").select("task_id,name,status,status_type,date_created,date_updated,start_date,due_date,time_estimate_ms,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", false).order("due_date", { ascending: true, nullsFirst: false }).limit(1000),ops.from("clickup_tasks").select("task_id,name,status,date_closed,list_name,client_id,url,clickup_task_assignees(user_id,username,email)").eq("is_closed", true).gte("date_closed", new Date(Date.now() - 36 * 86400000 / 24).toISOString()).order("date_closed", { ascending: false }).limit(500)]),
+    Promise.all([ops.from("platform_notifications").select("*").order("occurred_at", { ascending: false }).limit(100),ops.from("crm_preclients").select("*").order("updated_at", { ascending: false }).limit(200),ops.from("client_won_events").select("*").order("occurred_at", { ascending: false }).limit(100),ops.from("data_audit_runs").select("*").order("started_at", { ascending: false }).limit(2),ops.from("data_audit_issues").select("id,severity,category,issue_code,entity_type,entity_id,resolution_status,explanation,created_at").order("created_at", { ascending: false }).limit(100),ops.from("user_preferences").select("*").eq("user_key", currentUserKey).maybeSingle(),ops.from("automation_health").select("*").order("updated_at", { ascending: false }),ops.from("task_log_entries").select("id,user_key,category,collaborator_name,task_name,task_date,synced_at").is("deleted_at", null).order("task_date", { ascending: false }).limit(3000),ops.from("client_adjustments").select("id,client_id,source,tipo,descricao,occurred_at,metadata").order("occurred_at", { ascending: false }).limit(300)]),
+    Promise.all([ops.from("team_roster").select("*").eq("is_former", false).order("person"),ops.from("team_former_members").select("*").order("left_at", { ascending: false }),ops.from("team_overview").select("*").order("role_order", { ascending: true }).order("tasks_done", { ascending: false }),ops.from("onboarding_stage_definitions").select("code,label").order("ordem"),canDecideAccessRequests ? ops.from("access_requests").select("*,team_roster(role)").eq("status", "PENDING").order("requested_at", { ascending: false }) : Promise.resolve({ data: [], error: null }),ops.from("access_requests").select("*").eq("user_key", currentUserKey).order("requested_at", { ascending: false }).limit(1),ops.from("whatsapp_chat_registry").select("chat_id,chat_name,message_count,last_seen_at").limit(500),ops.from("portfolio_live").select("*"),ops.from("portfolio_timeline").select("*").order("month", { ascending: false }),ops.from("portfolio_client_status").select("*"),ops.from("portfolio_tenure_distribution").select("*"),ops.from("portfolio_audit_log").select("*").order("occurred_at", { ascending: false }).limit(100),ops.from("client_churn_log").select("*").order("saida", { ascending: false }).limit(200),ops.from("portfolio_survival").select("*").order("ordem"),ops.from("portfolio_gt_retention").select("*"),ops.from("portfolio_monthly_computed").select("*").gte("month", "2026-01-01").order("month"),ops.from("portfolio_operational_signal").select("*"),ops.from("wallet_overview").select("*").order("ordem")])
+  ]);
+  const results = [...core, ...sources, ...operationsData, ...clickupData]; if (results[0].error) return queryFailed(results[0].error);
+  const allClients: any[] = value(results[0], []); const walletSet = isLocked ? new Set<string>() : isPortfolioScoped ? new Set(allClients.filter((row) => row.gt_owner === profilePerson).map((row) => row.client_id)) : isCsScoped ? new Set(allClients.filter((row) => row.cs_owner === profilePerson).map((row) => row.client_id)) : null; const inScope = (clientId: string | null) => !walletSet || (clientId && walletSet.has(clientId)); const clients = walletSet ? allClients.filter((row) => walletSet.has(row.client_id)) : allClients; const activeClients = clients.filter((row) => ["ACTIVE", "ONBOARDING"].includes(row.lifecycle)); const activeIds = new Set(activeClients.map((row) => row.client_id)); const alerts: any[] = canViewOperationalAlerts ? value(results[1], []).filter((row: any) => inScope(row.client_id)) : []; const commitments: any[] = value(results[2], []).filter((row: any) => inScope(row.client_id)); const conversations: any[] = value(results[3], []).filter((row: any) => inScope(row.client_id)); const briefings: any[] = value(results[4], []).filter((row: any) => inScope(row.client_id)); const jobs: any[] = value(results[6], []); const queue: any[] = value(results[7], []); const mediaRows: any[] = value(results[9], []).filter((row: any) => inScope(row.client_id)); const activeMediaRows = mediaRows.filter((row) => row.client_id && activeIds.has(row.client_id)); const latestHealthByClient = new Map<string, any>(); for (const row of value<any[]>(results[11], [])) if (!latestHealthByClient.has(row.client_id)) latestHealthByClient.set(row.client_id, row); const wallets = value<any[]>(teamData[17], []); const walletByOwner = new Map(wallets.map((row: any) => [row.gt_owner, row.carteira])); const walletName = (owner: unknown) => walletByOwner.get(String(owner ?? "")) ?? null; const enrichedClients = clients.map(({ briefing_profile: _ignorado, ...client }) => ({ ...client, carteira: walletName(client.gt_owner), health: latestHealthByClient.get(client.client_id) ?? null })); const clientsBasic = activeClients.map((row) => ({ client_id: row.client_id, display_name: row.display_name, gt_owner: row.gt_owner ?? null, client_days: row.client_days })); const count = (fn: (row: any) => boolean) => activeClients.filter(fn).length; const severity: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 }; const now = new Date(); const overdue = commitments.filter((row) => row.due_at && new Date(row.due_at) < now); const evidenceReview = activeClients.filter((row) => row.needs_semantic_review || ["PARTIAL", "INCOMPLETE"].includes(row.data_coverage)).map((row) => ({ client_id: row.client_id, display_name: row.display_name, data_coverage: row.data_coverage, summary_today: row.summary_today, current_subject: row.current_subject, confidence: row.confidence, needs_semantic_review: row.needs_semantic_review })); const clientNames = new Map(clients.map((row) => [row.client_id, row.display_name])); const clientLifecycles = new Map(clients.map((row) => [row.client_id, row.lifecycle])); const clientMeta = new Map(allClients.map((row) => [row.client_id, row])); const mediaGroups = new Map<string, any[]>(); for (const row of mediaRows) { const key = `${row.client_id ?? "unlinked"}:${row.account_key ?? "unknown"}`; mediaGroups.set(key, [...(mediaGroups.get(key) ?? []), row]); }
+  const campaigns = [...mediaGroups.values()].map((rows) => { const latestDate = rows.map((row) => row.date).filter(Boolean).sort().at(-1) ?? null; const latest = rows.filter((row) => row.date === latestDate); const spend = latest.reduce((sum, row) => sum + number(row.spend), 0); const leads = latest.reduce((sum, row) => sum + number(row.leads), 0); const clicks = latest.reduce((sum, row) => sum + number(row.clicks), 0); const impressions = latest.reduce((sum, row) => sum + number(row.impressions), 0); const ageDays = latestDate ? Math.floor((Date.now() - new Date(`${latestDate}T23:59:59Z`).getTime()) / 86400000) : null; return { client_id: latest[0]?.client_id ?? null, display_name: clientNames.get(latest[0]?.client_id) ?? null, lifecycle: clientLifecycles.get(latest[0]?.client_id) ?? "UNLINKED", account_key: latest[0]?.account_key ?? null, latest_date: latestDate, age_days: ageDays, is_stale: ageDays === null || ageDays > 2, spend: Number(spend.toFixed(2)), leads, clicks, impressions, cpl: leads ? Number((spend / leads).toFixed(2)) : null, ctr: impressions ? Number((clicks / impressions * 100).toFixed(2)) : null, campaign_count: latest.reduce((sum, row) => sum + number(row.campaign_count), 0) }; }).sort((a, b) => b.spend - a.spend);
+  const lastClickupSync = value<any[]>(results[15], [])[0] ?? null; const clickupConfig: any = value(results[16], {}); const totalClickup = results[14].count ?? 0; const matchedClickup = results[17].count ?? 0; const stageDefs = value<any[]>(teamData[3], []); const stageLabels = Object.fromEntries(stageDefs.map((row: any) => [row.code, row.label])); const accessByPerson = new Map(value<any[]>(teamData[0], []).map((row: any) => [norm(row.person), row.access_level])); const fullTeam = value<any[]>(teamData[2], []).map((member: any) => ({ ...member, access_level: accessByPerson.get(norm(member.person)) ?? null, carteira: member.role === "GT" ? walletName(member.person) : null, portfolio: member.role === "GT" ? allClients.filter((row) => row.gt_owner === member.person && ["ACTIVE", "ONBOARDING"].includes(row.lifecycle)).map((row) => ({ client_id: row.client_id, display_name: row.display_name, priority: row.priority, lifecycle: row.lifecycle, next_step: row.next_step, data_coverage: row.data_coverage })) : [] })); const team = canView("team") && isFull ? fullTeam : fullTeam.filter((row) => row.person === profilePerson); const unassignedClients = isFull ? allClients.filter((row) => ["ACTIVE", "ONBOARDING"].includes(row.lifecycle) && !String(row.gt_owner ?? "").trim()).map((row) => ({ client_id: row.client_id, display_name: row.display_name, lifecycle: row.lifecycle, priority: row.priority, entrada: row.entrada, client_days: row.client_days })).sort((a, b) => String(a.display_name ?? "").localeCompare(String(b.display_name ?? ""), "pt-BR")) : [];
+  const rawProductivity30 = value<any[]>(results[12], []); const rawProductivityDaily = value<any[]>(results[13], []); const rawRecentCompleted = value<any[]>(results[14], []); const currentOwnerKeys = new Set([norm(profileClickupUserId), norm(profileClickupUser), norm(profilePerson)].filter(Boolean)); const assignedToCurrent = (row: any) => (row.clickup_task_assignees ?? []).some((assignee: any) => { const email = norm(assignee.email); return [assignee.user_id, assignee.username, assignee.email, email.split("@")[0]].some((candidate) => currentOwnerKeys.has(norm(candidate))); }); const clickupScoped = isFull; const productivity30 = clickupScoped ? rawProductivity30 : rawProductivity30.filter((row) => norm(row.person) === norm(profileClickupUser)); const productivityDaily = clickupScoped ? rawProductivityDaily : rawProductivityDaily.filter((row) => norm(row.person) === norm(profileClickupUser)); const recentCompleted = clickupScoped ? rawRecentCompleted : rawRecentCompleted.filter(assignedToCurrent);
+  const exposePersonalTask = (row: any) => ({ task_id: row.task_id, name: row.name, status: row.status, status_type: row.status_type ?? null, date_created: row.date_created ?? null, date_updated: row.date_updated ?? null, start_date: row.start_date ?? null, due_date: row.due_date ?? null, time_estimate_ms: row.time_estimate_ms ?? null, list_name: row.list_name ?? null, client_id: row.client_id ?? null, client_display_name: row.client_id ? (clientMeta.get(row.client_id)?.display_name ?? null) : null, url: row.url ?? null }); const personalOpenTasks = viaLogin ? value<any[]>(clickupData[9], []).filter(assignedToCurrent).map(exposePersonalTask) : []; const personalClosedToday = viaLogin ? value<any[]>(clickupData[10], []).filter((row: any) => assignedToCurrent(row) && row.date_closed && opsDay(new Date(row.date_closed)) === opsDay()).map(exposePersonalTask) : []; const isDesignRelevantTask = (row: any) => /criativ|design|arte|video|vÃ­deo|imagem|copy|roteiro|edicao|ediÃ§Ã£o|revisao|revisÃ£o|ajuste na campanha/.test(norm(`${row.list_name ?? ""} ${row.name ?? ""}`)); const designOpenTasks = isDesignRestricted ? value<any[]>(clickupData[9], []).filter((row: any) => assignedToCurrent(row) && isDesignRelevantTask(row)).map(exposePersonalTask) : []; const designClosedToday = isDesignRestricted ? value<any[]>(clickupData[10], []).filter((row: any) => assignedToCurrent(row) && isDesignRelevantTask(row) && row.date_closed && opsDay(new Date(row.date_closed)) === opsDay()).map(exposePersonalTask) : [];
+  const preclientsRaw = value<any[]>(platformData[1], []).filter((row) => !SYNTHETIC_NAME.test(String(row.name ?? "").trim()) && !SYNTHETIC_NAME.test(String(row.company ?? "").trim())); const preclients = isPortfolioScoped ? [] : preclientsRaw; const notificationReadRows = value<any[]>(await ops.from("platform_notification_reads").select("notification_id,read_at").eq("user_key", currentUserKey), []); const notificationReadAt = new Map(notificationReadRows.map((row: any) => [String(row.notification_id), row.read_at])); const notifications = value<any[]>(platformData[0], []).filter((row) => inScope(row.client_id)).filter((row) => !String(row.type).startsWith("WORK_ITEM_") || isAdler || row.metadata?.target_person === profilePerson || (!row.metadata?.target_person && row.metadata?.target_role === profileRole)).filter((row) => !isDesignRestricted || ((["DESIGNER_MENTION", "MATERIAL_UPLOADED"].includes(String(row.type)) && row.metadata?.target_role === "DESIGN" && row.metadata?.target_person === profilePerson) || (String(row.type).startsWith("WORK_ITEM_") && (row.metadata?.target_person === profilePerson || (!row.metadata?.target_person && row.metadata?.target_role === "DESIGN"))))).map((row) => { const meta = row.client_id ? clientMeta.get(row.client_id) : null; return { ...row, read_at: notificationReadAt.get(String(row.id)) ?? null, client_display_name: meta?.display_name ?? null, gestor: meta?.gt_owner ?? null, cs_owner: meta?.cs_owner ?? null, carteira: walletName(meta?.gt_owner) }; }); const chatMeta = new Map(value<any[]>(teamData[6], []).map((row: any) => [row.chat_id, row])); const conversationsEnriched = conversations.map((row: any) => { const meta = chatMeta.get(row.chat_id); return { ...row, chat_name: meta?.chat_name ?? null, message_count: meta?.message_count ?? null, last_seen_at: meta?.last_seen_at ?? null }; });
+  const pfLive = value<any[]>(teamData[7], []); const pfTimeline = value<any[]>(teamData[8], []); const pfClients = value<any[]>(teamData[9], []); const pfTenure = value<any[]>(teamData[10], []); const pfAudit = value<any[]>(teamData[11], []); const pfChurn = value<any[]>(teamData[12], []); const somaSetores = (campo: string) => pfLive.reduce((total, row: any) => total + number(row[campo]), 0); const portfolio = isFull ? { reference: new Date().toISOString().slice(0, 10), total_active: somaSetores("active_clients"), sectors: pfLive, status_summary: { inadimplentes: somaSetores("inadimplentes"), juridico: somaSetores("juridico"), churn_previsto: somaSetores("churn_previsto") }, transitions: pfClients.filter((row: any) => row.urgencia === "urgente").sort((a: any, b: any) => number(a.dias_para_proxima) - number(b.dias_para_proxima)), clients: pfClients, tenure_distribution: pfTenure, timeline: pfTimeline, churns: pfChurn, audit: pfAudit, survival: value<any[]>(teamData[13], []), gt_retention: value<any[]>(teamData[14], []), long_series: value<any[]>(teamData[15], []), operational_signal: value<any[]>(teamData[16], []).filter((row: any) => row.sinal !== "ativo" && row.sinal !== "churned"), signal_summary: value<any[]>(teamData[16], []).filter((row: any) => ["ACTIVE","ONBOARDING"].includes(row.lifecycle)).reduce((acc: any, row: any) => { acc[row.sinal] = (acc[row.sinal] ?? 0) + 1; return acc; }, {}) } : null;
+  const wonEvents = value<any[]>(platformData[2], []).filter((row) => inScope(row.client_id)); const preferencesRow = value(platformData[5], {}); const myAccessRequest = value<any[]>(teamData[5], [])[0] ?? null; const taskLogRows = value<any[]>(platformData[7], []); const taskLog = aggregateTaskLog(taskLogRows.filter((row: any) => row.user_key === currentUserKey)); const adjustments: any[] = [];
+  return respond({
+    kpis: { active_clients: activeClients.length, churned_clients: clients.filter((row) => row.lifecycle === "CHURNED").length, onboarding_clients: clients.filter((row) => row.lifecycle === "ONBOARDING").length, operation_clients: clients.filter((row) => row.lifecycle === "ACTIVE").length, attention_now: count((row) => row.priority === "ATTENTION"), follow_up: count((row) => row.priority === "FOLLOW_UP"), ok: count((row) => row.priority === "OK"), undetermined: count((row) => row.priority === "UNDETERMINED"), data_incomplete: count((row) => row.priority === "DATA_INCOMPLETE"), client_waiting_agency: count((row) => row.waiting_direction === "CLIENT_WAITING_AGENCY"), agency_waiting_client: count((row) => row.waiting_direction === "AGENCY_WAITING_CLIENT"), overdue_commitments: overdue.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, open_alerts: alerts.filter((row) => !row.client_id || activeIds.has(row.client_id)).length, critical_alerts: alerts.filter((row) => (!row.client_id || activeIds.has(row.client_id)) && ["CRITICAL", "HIGH"].includes(row.severity)).length, semantic_review: conversations.filter((row) => row.needs_semantic_review && (!row.client_id || activeIds.has(row.client_id))).length, briefing_pages: briefings.length, briefing_pending: briefings.filter((row) => row.sync_status === "DISCOVERED").length, briefing_unlinked: briefings.filter((row) => !row.client_id).length, queue_pending: isFull ? queue.filter((row) => row.status === "PENDING").length : 0, queue_errors: isFull ? queue.filter((row) => row.status === "ERROR").length : 0, team_members: team.filter((row) => row.in_roster).length, clients_unassigned: unassignedClients.length, team_unassigned: team.filter((row) => !row.in_roster && !row.is_former).length },
+    clients: isDesignRestricted ? clientsBasic : enrichedClients, campaigns,
+    alerts: alerts.sort((a, b) => (severity[a.severity] ?? 9) - (severity[b.severity] ?? 9)).slice(0, 100), commitments, conversations: conversationsEnriched, media: aggregateMedia(activeMediaRows),
+    operations: { sla: { waiting_agency: conversationsEnriched.filter((row: any) => row.waiting_for_agency), waiting_client: conversationsEnriched.filter((row: any) => row.waiting_for_client), overdue_commitments: overdue }, evidence_review: canView("evidence") ? evidenceReview.slice(0, 100) : [], task_log: taskLog, personal_focus: viaLogin ? { owner: profilePerson, clickup_user_id: profileClickupUserId, open_tasks: personalOpenTasks, closed_today: personalClosedToday } : null, design_focus: isDesignRestricted ? { owner: profilePerson, clickup_user_id: profileClickupUserId, open_tasks: designOpenTasks, closed_today: designClosedToday } : null },
+    adjustments,
+    clickup: isFull ? { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: totalClickup, last_sync: lastClickupSync, configured: Boolean(clickupConfig?.token && clickupConfig?.team_id), webhook_configured: Boolean(clickupConfig?.webhook_secret), indexing: { matched: matchedClickup, match_rate: totalClickup ? Number((100 * matchedClickup / totalClickup).toFixed(1)) : 0, unmatched_label: results[18].count ?? 0, without_label: results[19].count ?? 0, unmatched_labels: value(results[20], []) } } : { productivity_30d: productivity30, productivity_daily: productivityDaily, recent_completed: recentCompleted, total_completed: recentCompleted.length, last_sync: null, configured: null, webhook_configured: null, indexing: null },
+    coverage: { complete: count((row) => row.data_coverage === "COMPLETE"), partial: count((row) => row.data_coverage === "PARTIAL"), incomplete: count((row) => row.data_coverage === "INCOMPLETE") }, notifications, preclients: canView("preclients") ? preclients : [], won_events: wonEvents,
+    audit_runs: canView("audit") ? value(platformData[3], []) : [], audit_issues: canView("audit") ? value(platformData[4], []) : [], preferences: { ...preferencesRow, my_access_request: myAccessRequest }, integration_health: isFull ? value(platformData[6], []) : [], team, unassigned_clients: canView("team") ? unassignedClients : [], wallets: canView("team") ? wallets : [], portfolio: (canView("clients") && !isDesignRestricted) ? portfolio : null, stage_labels: stageLabels, access_requests_pending: canDecideAccessRequests ? value(teamData[4], []) : [],
+    profile: { person: profilePerson, role: profileRole, access_level: accessLevel, clickup_user: profileClickupUser, clickup_user_id: profileClickupUserId, portfolio_scoped: isPortfolioScoped, elevated, can_decide_access_requests: canDecideAccessRequests, can_view_operational_alerts: canViewOperationalAlerts, can_manage_finance: isAdler && canView("finance"), is_executive: isLeonardo && canView("executive"), locked: isLocked, account_approved: accountApproved, views: allowedViews, views_stale: viewsStale, carteira: walletName(profilePerson), scope_model: profileRole === "GT" ? "OWN_WALLET" : (["CS","DESIGN"].includes(profileRole ?? "") ? "ALL_WALLETS" : "ROLE_DEFAULT") },
+    health: isFull ? { latest_whatsapp_message: value<any[]>(results[8], [])[0] ?? null, latest_notion_sync: value<any[]>(results[5], [])[0] ?? null, failed_jobs_24h: jobs.filter((row) => row.status === "ERROR" && new Date(row.started_at) > new Date(Date.now() - 86400000)), last_jobs: jobs.slice(0, 10) } : { latest_whatsapp_message: null, latest_notion_sync: null, failed_jobs_24h: [], last_jobs: [] },
+    auth_mode: currentUserKey === "adler-furtado" && suppliedKey.length >= 40 ? "dashboard_key" : "login",
+    generated_at: new Date().toISOString(),
+  });
+});
+

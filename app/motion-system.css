@@ -1,0 +1,219 @@
+/*
+ * Motion + visual polish inspired by Anime.js' own product language:
+ * strong easing, restrained stagger, soft depth and clear interaction feedback.
+ * This layer intentionally avoids changing data density or operational hierarchy.
+ */
+:root{
+  --motion-ease-out:cubic-bezier(.16,1,.3,1);
+  --motion-ease-spring:cubic-bezier(.34,1.56,.64,1);
+  --motion-fast:160ms;
+  --motion-base:260ms;
+  --motion-slow:440ms;
+  --surface-glow:color-mix(in srgb,var(--blue) 20%,transparent);
+  --surface-glow-strong:color-mix(in srgb,var(--brand) 34%,transparent);
+}
+
+html{scroll-behavior:smooth}
+body{position:relative;isolation:isolate}
+body::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  z-index:-1;
+  opacity:.3;
+  background-image:
+    linear-gradient(color-mix(in srgb,var(--line) 14%,transparent) 1px,transparent 1px),
+    linear-gradient(90deg,color-mix(in srgb,var(--line) 14%,transparent) 1px,transparent 1px);
+  background-size:44px 44px;
+  mask-image:linear-gradient(to bottom,rgba(0,0,0,.7),transparent 72%);
+}
+body::after{
+  content:"";
+  position:fixed;
+  width:42vw;
+  height:42vw;
+  min-width:420px;
+  min-height:420px;
+  right:-19vw;
+  top:-20vw;
+  border-radius:50%;
+  pointer-events:none;
+  z-index:-1;
+  background:radial-gradient(circle,color-mix(in srgb,var(--brand) 15%,transparent),transparent 68%);
+  filter:blur(12px);
+}
+
+::selection{background:color-mix(in srgb,var(--accent) 42%,transparent);color:var(--text)}
+*{scrollbar-width:thin;scrollbar-color:color-mix(in srgb,var(--line) 78%,var(--blue)) transparent}
+*::-webkit-scrollbar{width:8px;height:8px}
+*::-webkit-scrollbar-track{background:transparent}
+*::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--line) 78%,var(--blue));border-radius:999px}
+
+button,a,.btn,.control,.action-card,.stage button,.ops-cockpit-items>button,.ops-monitor-list>button,.ops-sla-list>button{
+  transition:
+    transform var(--motion-fast) var(--motion-ease-out),
+    border-color var(--motion-base) ease,
+    background-color var(--motion-base) ease,
+    color var(--motion-base) ease,
+    box-shadow var(--motion-base) var(--motion-ease-out),
+    opacity var(--motion-fast) ease;
+}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[role="button"]:focus-visible{
+  outline:2px solid color-mix(in srgb,var(--blue) 78%,white);
+  outline-offset:3px;
+}
+button:not(:disabled):hover,.btn:hover,[role="button"]:not([aria-disabled="true"]):hover{transform:translateY(-1px)}
+button:disabled,[aria-disabled="true"]{opacity:.55;cursor:not-allowed}
+
+.card,
+.action-card,
+.ops-cockpit-lane,
+.ops-monitor-list>button,
+.ops-sla-list>button,
+.ops-incident,
+.ops-integrity-grid article,
+.health-item,
+.stage button{
+  position:relative;
+  isolation:isolate;
+  transition:
+    transform var(--motion-base) var(--motion-ease-out),
+    border-color var(--motion-base) ease,
+    box-shadow var(--motion-base) var(--motion-ease-out),
+    background-color var(--motion-base) ease;
+}
+.card::before,
+.action-card::before,
+.ops-cockpit-lane::before,
+.ops-incident::before,
+.ops-integrity-grid article::before,
+.health-item::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  z-index:-1;
+  pointer-events:none;
+  border-radius:inherit;
+  opacity:0;
+  background:radial-gradient(circle at 18% 0%,color-mix(in srgb,var(--blue) 11%,transparent),transparent 43%);
+  transition:opacity var(--motion-slow) ease;
+}
+.card:hover::before,
+.action-card:hover::before,
+.ops-cockpit-lane:hover::before,
+.ops-incident:hover::before,
+.ops-integrity-grid article:hover::before,
+.health-item:hover::before{opacity:1}
+.card:hover,
+.action-card:hover,
+.ops-cockpit-lane:hover,
+.ops-incident:hover,
+.ops-integrity-grid article:hover,
+.health-item:hover{
+  border-color:color-mix(in srgb,var(--blue) 36%,var(--line));
+  box-shadow:0 18px 48px rgba(0,0,0,.26),0 0 0 1px color-mix(in srgb,var(--blue) 5%,transparent);
+}
+
+.metric{transition:transform var(--motion-base) var(--motion-ease-out),border-color var(--motion-base) ease,box-shadow var(--motion-base) var(--motion-ease-out)}
+.metric:hover{transform:translateY(-3px)}
+.metric .value{transform-origin:left center;transition:transform var(--motion-base) var(--motion-ease-spring),color var(--motion-base) ease}
+.metric:hover .value{transform:scale(1.035)}
+.metric::after{transition:transform var(--motion-slow) var(--motion-ease-out),opacity var(--motion-base) ease}
+.metric:hover::after{transform:scale(1.22);opacity:.85}
+
+.logo{position:relative;overflow:hidden;transition:transform var(--motion-base) var(--motion-ease-spring),box-shadow var(--motion-base) ease}
+.logo::after{
+  content:"";
+  position:absolute;
+  inset:-60%;
+  background:linear-gradient(110deg,transparent 40%,rgba(255,255,255,.28) 50%,transparent 60%);
+  transform:translateX(-65%) rotate(8deg);
+  transition:transform 700ms var(--motion-ease-out);
+}
+.logo:hover{transform:translateY(-2px) rotate(-2deg);box-shadow:0 14px 34px rgba(3,89,166,.42)}
+.logo:hover::after{transform:translateX(65%) rotate(8deg)}
+
+.side-nav{
+  background:
+    linear-gradient(180deg,color-mix(in srgb,var(--panel2) 94%,var(--brand) 6%),var(--panel2));
+  box-shadow:18px 0 50px rgba(0,0,0,.12);
+  backdrop-filter:blur(18px);
+}
+.side-nav-items button,.side-nav-items a{position:relative}
+.side-nav-items button::before,.side-nav-items a::before{
+  content:"";
+  position:absolute;
+  left:0;
+  top:50%;
+  width:3px;
+  height:0;
+  border-radius:99px;
+  background:linear-gradient(var(--accent),color-mix(in srgb,var(--accent) 55%,var(--blue)));
+  transform:translateY(-50%);
+  transition:height var(--motion-base) var(--motion-ease-out),opacity var(--motion-base) ease;
+  opacity:0;
+}
+.side-nav-items button:hover::before,.side-nav-items a:hover::before{height:42%;opacity:.55}
+.side-nav-items button.active::before,.side-nav-items a.active::before{height:64%;opacity:1}
+.side-nav-items button.active,.side-nav-items a.active{
+  background:linear-gradient(90deg,color-mix(in srgb,var(--brand) 31%,transparent),color-mix(in srgb,var(--brand) 11%,transparent));
+  box-shadow:none;
+}
+
+.top,.workspace-head,.section-head,.panel-heading,.ops-cockpit-head,.ops-monitor-head,.ops-incidents-head,.ops-integrity-head{
+  text-wrap:balance;
+}
+h1,h2,h3,.section-title,.workspace-head h2,.ops-cockpit-head h2,.ops-360-head h2{
+  text-rendering:optimizeLegibility;
+}
+
+.chip,.counter,.ops-cockpit-summary span{
+  transition:transform var(--motion-fast) var(--motion-ease-spring),border-color var(--motion-base) ease,background-color var(--motion-base) ease;
+}
+.chip:hover,.counter:hover,.ops-cockpit-summary span:hover{transform:translateY(-1px)}
+
+.table-wrap{box-shadow:inset 0 1px 0 color-mix(in srgb,var(--text) 3%,transparent)}
+tbody tr{transition:background-color var(--motion-fast) ease,transform var(--motion-fast) var(--motion-ease-out)}
+tbody tr:hover{background:color-mix(in srgb,var(--blue) 8%,transparent)}
+
+.ops-search-overlay{animation:ops-overlay-in 220ms ease both}
+.ops-search-modal,.ops-360,[role="dialog"]{will-change:transform,opacity}
+.ops-search-input{background:linear-gradient(180deg,color-mix(in srgb,var(--panel) 96%,white 4%),var(--panel))}
+.ops-search-results>button:hover{transform:translateX(2px);background:color-mix(in srgb,var(--blue) 8%,transparent)}
+
+.ops-cockpit-lane-head strong,.ops-cockpit-summary b,.value{font-variant-numeric:tabular-nums}
+.ops-integrity-dot.ok,.dot:not(.loading):not(.error){animation:ops-status-breathe 2.8s ease-in-out infinite}
+
+@keyframes ops-overlay-in{from{opacity:0}to{opacity:1}}
+@keyframes ops-status-breathe{
+  0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 18%,transparent)}
+  50%{box-shadow:0 0 0 5px transparent}
+}
+
+:root[data-theme="light"] body::before{opacity:.45}
+:root[data-theme="light"] .card:hover,
+:root[data-theme="light"] .action-card:hover,
+:root[data-theme="light"] .ops-cockpit-lane:hover,
+:root[data-theme="light"] .ops-incident:hover,
+:root[data-theme="light"] .ops-integrity-grid article:hover,
+:root[data-theme="light"] .health-item:hover{
+  box-shadow:0 16px 40px rgba(1,23,42,.11),0 0 0 1px color-mix(in srgb,var(--blue) 5%,transparent);
+}
+
+@media (max-width:720px){
+  body::before{background-size:34px 34px;opacity:.18}
+  .card:hover,.action-card:hover,.ops-cockpit-lane:hover,.ops-incident:hover,.health-item:hover{transform:none}
+}
+
+@media (prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  *,*::before,*::after{
+    animation-duration:.001ms!important;
+    animation-iteration-count:1!important;
+    transition-duration:.001ms!important;
+    scroll-behavior:auto!important;
+  }
+  .metric:hover,.card:hover,.action-card:hover,.ops-cockpit-lane:hover,.ops-incident:hover,.health-item:hover,
+  button:hover,.btn:hover,[role="button"]:hover{transform:none!important}
+}

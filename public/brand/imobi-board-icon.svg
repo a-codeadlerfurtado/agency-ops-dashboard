@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Imobi-Board">
+  <title>Imobi-Board</title>
+  <!--
+    Marca do Imobi-Board, o mesmo desenho que o CRM usa no favicon e no
+    cabecalho: o funil de vendas, onde o V recolhe o que entra e a haste e o
+    que sai convertido. O vinco e aberto por baixo, entao a forma e uma so, sem
+    furo, e mostra o fundo seja ele qual for.
+
+    Copiado de apps/web/src/Marca.tsx (CAMINHO_MARCA) no repo imobi-board, com
+    o degrade equivalente ao padrao de la. Se a marca mudar no CRM, este
+    arquivo precisa ser atualizado junto: sao duas copias do mesmo traco, e a
+    unica coisa que as mantem iguais e alguem lembrar.
+  -->
+  <defs>
+    <linearGradient id="ib" x1="0" y1="0" x2="0.55" y2="1">
+      <stop offset="0" stop-color="#76C6FF"/>
+      <stop offset="1" stop-color="#2F79C7"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#ib)" d="M4.37 4.3 H27.63 A1.49 1.49 0 0 1 28.83 6.7 L21.36 16.58 C20.73 17.41 18.36 19.68 18.36 22.04 L18.36 24.45 C18.36 24.85 17.78 26.77 14.18 27.73 A0.84 0.84 0 0 1 13.28 26.89 L13.28 22.59 C13.28 17.22 20.53 13.35 25.56 8.61 C19.38 11.95 13.34 15.39 12.3 18.76 L3.18 6.7 A1.49 1.49 0 0 1 4.37 4.3 Z"/>
+</svg>
