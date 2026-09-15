@@ -1,20 +1,22 @@
-using NAudio.Wave;
+﻿using NAudio.Wave;
 
 namespace RelatoAI.DesktopAgent;
 
 internal static class AudioLevel
 {
     public static bool IsActive(byte[] data, WaveFormat format, double threshold)
+        => Rms(data, format) >= threshold;
+
+    public static double Rms(byte[] data, WaveFormat format)
     {
-        if (data.Length == 0) return false;
+        if (data.Length == 0) return 0;
         try
         {
-            var rms = format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32
+            return format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32
                 ? FloatRms(data)
                 : format.BitsPerSample == 16 ? Pcm16Rms(data) : ByteActivity(data);
-            return rms >= threshold;
         }
-        catch { return false; }
+        catch { return 0; }
     }
 
     private static double FloatRms(byte[] data)

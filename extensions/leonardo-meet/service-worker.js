@@ -2,6 +2,7 @@ import { clearSession, getAudioChunks, getFrames, getSession, getSpeakers, listS
 
 const API = "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-meeting-capture-api";
 const STT_API = "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/api/jarvis/stt";
+const DESKTOP_BRIDGE = "http://127.0.0.1:17654";
 const OUTBOX_KEY = "meeting_capture_outbox";
 const DEVICE_KEY = "meeting_capture_device";
 const STATE_KEY = "meeting_capture_state";
@@ -10,6 +11,17 @@ const RPC_MARKER = "$rpc/google.rtc.meetings.v1.";
 const liveHeartbeatAt = new Map();
 
 function norm(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
+
+async function callDesktopBridge(path, method = "GET", body = null) {
+  const safePath = String(path || "");
+  if (!(safePath === "/health" || safePath.startsWith("/meet/"))) throw new Error("invalid_desktop_bridge_path");
+  const options = { method: String(method || "GET").toUpperCase(), headers: {} };
+  if (body != null) { options.headers["content-type"] = "application/json"; options.body = JSON.stringify(body); }
+  const response = await fetch(`${DESKTOP_BRIDGE}${safePath}`, options);
+  let payload = {}; try { payload = await response.json(); } catch {}
+  if (!response.ok) throw new Error(payload?.error || `desktop_bridge_${response.status}`);
+  return payload;
+}
 
 async function recordSttTelemetry(sessionId, outcome, detail = {}) {
   const row = await getSession(sessionId);
@@ -399,11 +411,9 @@ async function flushAll() {
   await retryStoredSessions();
 }
 
-async function injectMainCapture(tabId) {
-  if (!Number.isInteger(tabId) || tabId < 0) return;
-  try {
-    await chrome.scripting.executeScript({ target: { tabId }, world: "MAIN", files: ["page-rtc-capture.js"], injectImmediately: true });
-  } catch {}
+async function injectMainCapture(_tabId) {
+  // Meet 0.5+: audio capture belongs exclusively to the Desktop Agent.
+  return;
 }
 
 async function injectExistingMeetTabs() {
@@ -433,6 +443,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   (async () => {
+    const state = (await chrome.storage.local.get(STATE_KEY))[STATE_KEY] || {};
+    if (state.active && state.mode === "MEET_DESKTOP_AGENT_AUDIO" && state.tab_id === tabId) {
+      await callDesktopBridge("/meet/finish", "POST", { reason: "tab_closed" }).catch(() => null);
+      await setCaptureState({ active: false, ended_at: new Date().toISOString(), mode: "MEET_DESKTOP_AGENT_AUDIO" });
+    }
     const sessions = await listSessions();
     for (const row of sessions.filter((item) => item.tab_id === tabId && item.state === "CAPTURING")) {
       await putSession({ ...row, state: "FINISHING", ended_at: new Date().toISOString(), finish_reason: "tab_closed" });
@@ -450,6 +465,17 @@ chrome.webRequest.onBeforeRequest.addListener((details) => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    if (message?.type === "DESKTOP_BRIDGE") {
+      const path = String(message.path || "");
+      const method = String(message.method || "GET").toUpperCase();
+      const result = await callDesktopBridge(path, method, message.body ?? null);
+      if (path === "/meet/start" && method === "POST") {
+        await setCaptureState({ active: true, mode: "MEET_DESKTOP_AGENT_AUDIO", meeting_code: message.body?.meeting_code || null, title: message.body?.title || "Google Meet", started_at: message.body?.started_at || new Date().toISOString(), desktop_session_id: message.body?.local_session_id || null, tab_id: sender.tab?.id ?? null, error: null });
+      } else if (path === "/meet/finish" && method === "POST") {
+        await setCaptureState({ active: false, mode: "MEET_DESKTOP_AGENT_AUDIO", ended_at: new Date().toISOString(), error: null });
+      }
+      return result;
+    }
     if (message?.type === "PAIR") {
       const result = await callApi("pair_redeem", { code: norm(message.code).toUpperCase(), device_name: message.device_name || "Chrome", extension_version: chrome.runtime.getManifest().version });
       await setDevice(result);

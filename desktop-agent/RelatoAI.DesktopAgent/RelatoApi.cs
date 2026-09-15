@@ -11,7 +11,7 @@ internal sealed record FeedbackContext(
     bool Pending, bool RequiresSelection, string? RemotePhone, string? RemoteName, string? RemoteRole,
     string? ClientId, string? ClientName, string? ResolutionStatus, IReadOnlyList<ClientOption> Clients);
 
-internal sealed class RelatoApi
+internal sealed partial class RelatoApi
 {
     private const string Endpoint =
         "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-meeting-capture-api";

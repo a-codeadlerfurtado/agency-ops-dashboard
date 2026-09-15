@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Relato AI â€” Transcriber",
-  "version": "0.4.11",
+  "version": "0.5.0",
   "description": "Relato AI â€” Transcriber: captura e inteligÃªncia de reuniÃµes e chamadas para o Leonardo Imobi.",
   "permissions": [
     "storage",
@@ -17,7 +17,8 @@
     "https://meet.google.com/*",
     "https://web.whatsapp.com/*",
     "https://bfzdetibfcwihfkltbkp.supabase.co/*",
-    "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/*"
+    "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/*",
+    "http://127.0.0.1:17654/*"
   ],
   "background": {
     "service_worker": "service-worker.js",
@@ -32,18 +33,8 @@
         "https://meet.google.com/*"
       ],
       "js": [
-        "page-rtc-capture.js"
-      ],
-      "run_at": "document_start",
-      "world": "MAIN"
-    },
-    {
-      "matches": [
-        "https://meet.google.com/*"
-      ],
-      "js": [
         "feedback-ui.js",
-        "content.js"
+        "meet-desktop-content.js"
       ],
       "run_at": "document_idle"
     },
@@ -68,14 +59,6 @@
     }
   ],
   "web_accessible_resources": [
-    {
-      "resources": [
-        "page-rtc-capture.js"
-      ],
-      "matches": [
-        "https://meet.google.com/*"
-      ]
-    },
     {
       "resources": [
         "wa-call-capture.js"
