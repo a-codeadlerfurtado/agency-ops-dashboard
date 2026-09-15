@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#030b14" />
+    <meta name="description" content="Imobi-Board — CRM imobiliário que conecta anúncio, lead, corretor e venda." />
+
+    <!-- favicon e o simbolo puro: uma forma so, sem furo, entao a 16px o
+         funil continua fechando e o vinco ainda aparece como entalhe -->
+    <link rel="icon" type="image/svg+xml" href="/marca/logo-symbol.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/marca/favicon-32.png" />
+    <!-- o iOS e inconsistente com SVG na Tela de Inicio: o apple-touch-icon
+         precisa ser PNG, e opaco, porque o proprio iOS aplica a mascara -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/marca/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+
+    <!-- abre em tela cheia a partir da Tela de Inicio, sem a barra do
+         Safari. status-bar-style "black" e nao "black-translucent": o
+         translucido joga o conteudo por baixo da barra de status. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Imobi-Board" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+
+    <title>Imobi-Board</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

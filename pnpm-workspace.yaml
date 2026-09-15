@@ -1,0 +1,12 @@
+packages:
+  - apps/*
+  - workers/*
+
+allowBuilds:
+  esbuild: set this to true or false
+  workerd: set this to true or false
+
+# esbuild precisa do postinstall para colocar o binario da plataforma.
+onlyBuiltDependencies:
+  - esbuild
+  - workerd

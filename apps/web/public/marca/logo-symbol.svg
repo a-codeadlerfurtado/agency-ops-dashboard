@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Imobi-Board">
+  <defs>
+    <linearGradient id="a" x1="0" y1="0" x2="0.55" y2="1">
+      <stop offset="0" stop-color="#76c6ff"/><stop offset="1" stop-color="#2f79c7"/>
+    </linearGradient>
+  </defs>
+  <path d="M4.37 4.3 H27.63 A1.49 1.49 0 0 1 28.83 6.7 L21.36 16.58 C20.73 17.41 18.36 19.68 18.36 22.04 L18.36 24.45 C18.36 24.85 17.78 26.77 14.18 27.73 A0.84 0.84 0 0 1 13.28 26.89 L13.28 22.59 C13.28 17.22 20.53 13.35 25.56 8.61 C19.38 11.95 13.34 15.39 12.3 18.76 L3.18 6.7 A1.49 1.49 0 0 1 4.37 4.3 Z" fill="url(#a)"/>
+</svg>

@@ -1,0 +1,38 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "imobi-board-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // SLA sem cron (spec 32): o Workflow dorme o tempo do SLA e so acorda uma
+  // vez, por lead. Nao ha varredura periodica competindo por CPU com os
+  // outros projetos que rodam nesta conta.
+  "workflows": [
+    {
+      "name": "imobi-board-sla",
+      "binding": "SLA",
+      "class_name": "WorkflowSla"
+    }
+  ],
+
+  // Rate limit nativo (spec 63): sem Redis, sem KV, sem servico extra.
+  "ratelimits": [
+    { "name": "LIMITE_INGEST", "namespace_id": "1001",
+      "simple": { "limit": 120, "period": 60 } }
+  ],
+
+  "vars": {
+    "AMBIENTE": "development",
+
+    // Para onde o worker devolve o navegador depois do login da Meta, e qual
+    // origem ele libera no CORS. Sao a mesma coisa: o unico navegador que
+    // conversa com este worker e o do proprio app.
+    "APP_URL": "https://imobi-board-app.lakassessoriadigital.workers.dev",
+    "IMOBIA_WEBHOOK_URL": "https://portainer.leonardoimobi.com.br/imobia/webhooks/whatsapp"
+  }
+
+  // Secrets (wrangler secret put): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY,
+  // AGENCY_BRIDGE_TOKEN. Nunca em vars nem no repositorio.
+}

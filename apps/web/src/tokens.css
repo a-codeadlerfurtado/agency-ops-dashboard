@@ -1,0 +1,138 @@
+/* ===========================================================================
+   Imobi-Board — tokens extraídos do Agency Ops em produção
+   Fonte: https://agency-ops-dashboard.lakassessoriadigital.workers.dev
+   Extração read-only do CSS servido em 03/09/2026.
+
+   IMPORTANTE: estes valores substituem os do briefing de design. O briefing
+   descrevia um grafite neutro (--bg #070a0d, --line #35414b cinza). A produção
+   é AZUL-MARINHO (--bg #030b14, --line #14324e). Era exatamente por isso que o
+   Imobi-Board parecia "preto demais e genérico": construído em cinza-preto um
+   produto cuja família é azul.
+   =========================================================================== */
+
+:root {
+  /* ---- família da marca: o azul que o Agency Ops usa como identidade ---- */
+  --brand:      #0359a6;
+  --brand-mid:  #02437d;
+  --brand-deep: #01172a;
+  --brand-ink:  #000101;
+
+  /* ---- superfícies ---- */
+  --bg:      #030b14;
+  --panel:   #08182a;
+  --panel-2: #051220;
+  /* a sidebar do Agency Ops não tem cor própria: é o mesmo azul profundo, e a
+     separação vem da borda e do contraste com o painel */
+  --sidebar: #051220;
+
+  /* ---- linhas, com hierarquia (o Agency Ops só tem --line; as duas
+     variações abaixo são nossas, para não usar a mesma borda em tudo) ---- */
+  --line:      #14324e;
+  --line-soft: #14324e7a;
+  --line-card: #14324e;
+
+  /* ---- texto ---- */
+  --text:         #eaf2fb;
+  --text-heading: #eaf2fb;
+  --muted:        #8aa3c0;
+  --text-subtle:  #8aa3c0b8;
+
+  /* ---- interação ---- */
+  --blue:      #3e92dc;
+  --blue-soft: #3e92dc1f;
+  --blue-wash: #3e92dc12;   /* --wash do Agency Ops */
+  --wash:      #3e92dc12;
+
+  /* ---- ação ---- */
+  --accent:       #f26b21;
+  --accent-hover: #ff843e;
+  --accent-light: #ff9a61;
+  --accent-soft:  #f26b2124;
+
+  /* ---- semântica ---- */
+  --success: #31d49b;
+  --warning: #f7c95c;
+  --danger:  #ff6b75;
+  --purple:  #a98bff;
+
+  /* ---- profundidade ---- */
+  --shadow:       0 18px 50px #0000006b;
+  --shadow-hover: 0 22px 65px #0000004d;
+
+  /* ---- luz e gradientes ----
+     Regra da casa: gradiente entra como background-IMAGE por cima da cor que
+     ja existe, nunca no lugar dela. E o que permite dar profundidade ao badge
+     sem que o "won" deixe de ser verde e o "lost" de ser vermelho, e o que
+     torna tudo isto revertivel apagando um bloco.
+
+     Amplitude baixa de proposito: 6% a 10% de branco. Acima disso a interface
+     escura comeca a parecer plastico, e o texto perde contraste no topo do
+     gradiente, que e justamente onde ele fica mais claro. */
+  --luz-card:   linear-gradient(157deg, #ffffff0d 0%, #ffffff03 42%, #00000017 100%);
+  --luz-suave:  linear-gradient(160deg, #ffffff08, #0000 62%);
+  --luz-topo:   linear-gradient(180deg, #ffffff0a, #0000 72%);
+  --luz-campo:  linear-gradient(180deg, #00000024, #ffffff05 62%);
+
+  /* brilhos de marca: azul entra pela esquerda-alta, laranja pela direita-alta.
+     A direcao e fixa em toda a interface para o olho ler como uma fonte de luz
+     so, e nao como enfeite espalhado. */
+  --brilho-azul:    radial-gradient(125% 150% at 0% 0%, #3e92dc29, transparent 58%);
+  --brilho-laranja: radial-gradient(125% 150% at 100% 0%, #f26b211f, transparent 55%);
+
+  /* Azul claro: o mesmo #76c6ff da marca. O --blue e azul de informacao, para
+     link e estado; este e luz, e so aparece em gradiente. Separar os dois
+     evita o erro de usar cor de marca onde o usuario espera significado. */
+  --azul-claro: #76c6ff;
+  --brilho-azul-claro: radial-gradient(120% 140% at 0% 0%, #76c6ff1f, transparent 56%);
+
+  /* Duo: as duas pontas na mesma peca, azul a esquerda e laranja a direita.
+     Reservado a superficie larga -- topbar, faixa, cabecalho de card. Numa
+     peca estreita as duas fontes se encavalam e viram um borrao sujo. */
+  --duo-marca:
+    radial-gradient(120% 150% at 0% 0%,   #76c6ff1c, transparent 55%),
+    radial-gradient(120% 150% at 100% 0%, #f26b211c, transparent 52%);
+
+  /* Fio: gradiente de 1px na borda superior. Da a leitura de cor sem tingir a
+     superficie inteira, entao serve onde ja ha texto por cima e o contraste
+     nao pode cair. */
+  --fio-marca:
+    linear-gradient(90deg, #76c6ff59, #76c6ff14 34%, transparent 62%, #f26b2140);
+
+  /* ---- geometria ---- */
+  --r-sm: 10px;   /* botões e inputs no Agency Ops são 10px */
+  --r:    12px;   /* table-wrap */
+  --r-lg: 14px;   /* cards */
+  --sidebar-w:     250px;
+  --sidebar-w-min:  84px;
+  --topbar-h:       64px;
+  --shell-max:    1480px;
+
+  /* ---- motion: valores exatos do Agency Ops ---- */
+  --d-instant: 90ms;
+  --d-fast:    160ms;   /* --motion-fast  */
+  --d-base:    260ms;   /* --motion-base  */
+  --d-slow:    440ms;   /* --motion-slow  */
+  --ease:        cubic-bezier(.16, 1, .3, 1);    /* --motion-ease-out    */
+  --ease-enter:  cubic-bezier(.16, 1, .3, 1);
+  --ease-exit:   cubic-bezier(.4, 0, 1, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1); /* --motion-ease-spring */
+
+  --t-fast: var(--d-fast) var(--ease);
+  --t:      var(--d-base) var(--ease);
+
+  /* ---- marca ----
+     A marca e o funil, monocromatico, como na arte de referencia. A arte
+     original e azul-marinho; aqui ela vira azul-claro porque a interface e
+     escura e marinho sobre marinho nao aparece. As variaveis de laranja
+     ficam: o design system continua com laranja = acao e azul = informacao,
+     e o laranja segue nos botoes e acentos, so nao entra mais na logo. */
+  --marca-azul:         #76c6ff;
+  --marca-azul-fundo:   #2f79c7;
+  --marca-laranja:      #ff9a4f;
+  --marca-laranja-fundo:#e9621d;
+
+  --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+
+  color-scheme: dark;
+}
