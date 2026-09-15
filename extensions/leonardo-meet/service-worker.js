@@ -7,6 +7,7 @@ const DEVICE_KEY = "meeting_capture_device";
 const STATE_KEY = "meeting_capture_state";
 const RETRY_ALARM = "meeting-capture-outbox";
 const RPC_MARKER = "$rpc/google.rtc.meetings.v1.";
+const liveHeartbeatAt = new Map();
 
 function norm(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
 function normalizeDeviceKey(value) {
@@ -566,7 +567,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message?.type === "CAPTURE_STATE") {
-      await setCaptureState(message.state || {});
+      const state = message.state || {};
+      await setCaptureState(state);
+      const tabId = sender.tab?.id;
+      if (state.active && Number.isInteger(tabId)) {
+        const sessions = await listSessions();
+        const row = sessions.filter((item) => item.tab_id === tabId && item.state === "CAPTURING").sort((a,b) => String(a.created_at||"").localeCompare(String(b.created_at||""))).at(-1);
+        const last = row ? Number(liveHeartbeatAt.get(row.id) || 0) : 0;
+        if (row && Date.now() - last >= 8000) {
+          liveHeartbeatAt.set(row.id, Date.now());
+          const device = await getDevice();
+          const telemetry = { rtc_active: Boolean(state.rtc_active), rtc_channels: state.rtc_channels || [], audio_tracks: Number(state.audio_tracks || 0), local_audio_tracks: Number(state.local_audio_tracks || 0), remote_audio_tracks: Number(state.remote_audio_tracks || 0), known_local_tracks: Number(state.known_local_tracks || 0), local_rms: Number(state.local_rms || 0), remote_rms: Number(state.remote_rms || 0), last_audio_chunk_at: state.last_audio_chunk_at || null };
+          if (device?.device_token) callApi("session_heartbeat", { session: { ...row, local_session_id: row.id, capture_mode: row.capture_mode || state.mode || "MEET_RTC_AUDIO", captions_available: false, extension_version: chrome.runtime.getManifest().version, metadata: { ...(row.metadata || {}), telemetry } } }, device.device_token).catch(() => {});
+        }
+      }
       return { ok: true };
     }
 

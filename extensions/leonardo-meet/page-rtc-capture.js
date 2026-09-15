@@ -13,6 +13,9 @@
   const seenPeerConnections = new WeakSet();
   const peerConnections = new Set();
   const audioRecorders = new Map();
+  const knownLocalTracks = new Set();
+  const lastRmsByRole = { local: 0, remote: 0 };
+  let lastAudioChunkAt = 0;
   let audioCaptureEnabled = false;
   let audioSeq = 0;
   const boundChannels = new WeakSet();
@@ -325,7 +328,7 @@
         const samples = new Float32Array(analyser.fftSize); entry.audioContext = ctx; entry.segmentHasVoice = false; entry.segmentPeakRms = 0;
         ctx.resume?.().catch(() => {});
         entry.energyTimer = setInterval(() => {
-          try { analyser.getFloatTimeDomainData(samples); let sum = 0; for (const value of samples) sum += value * value; const rms = Math.sqrt(sum / samples.length); entry.segmentPeakRms = Math.max(entry.segmentPeakRms, rms); const voiceThreshold = role === "local" ? 0.00055 : 0.00075; if (rms >= voiceThreshold) entry.segmentHasVoice = true; } catch {}
+          try { analyser.getFloatTimeDomainData(samples); let sum = 0; for (const value of samples) sum += value * value; const rms = Math.sqrt(sum / samples.length); lastRmsByRole[role] = rms; entry.segmentPeakRms = Math.max(entry.segmentPeakRms, rms); const voiceThreshold = role === "local" ? 0.00055 : 0.00075; if (rms >= voiceThreshold) entry.segmentHasVoice = true; } catch {}
         }, 80);
       }
     } catch {}
@@ -335,22 +338,31 @@
       if (!audioCaptureEnabled || entry.stopping || track.readyState === "ended") { cleanup(); audioRecorders.delete(key); return; }
       let recorder; try { recorder = new MediaRecorder(new MediaStream([track]), { mimeType: mime, audioBitsPerSecond: 64000 }); } catch { recorder = new MediaRecorder(new MediaStream([track])); mime = recorder.mimeType || mime; entry.mime = mime; }
       entry.recorder = recorder; entry.segmentStartedAt = Date.now(); entry.segmentHasVoice = entry.audioContext ? false : true; entry.segmentPeakRms = entry.audioContext ? 0 : 1; let emitted = false;
-      recorder.ondataavailable = (event) => { if (!event.data?.size || emitted) return; emitted = true; const duration = Math.max(1, Date.now() - entry.segmentStartedAt); if (!entry.segmentHasVoice) { emit("DIAGNOSTIC", { code: "audio_silence_skipped", role, rms: entry.segmentPeakRms, duration_ms: duration }); return; } emit("AUDIO_CHUNK", { role, track_key: key, seq: ++audioSeq, mime_type: event.data.type || mime, duration_ms: duration, rms: entry.segmentPeakRms, blob: event.data }); };
+      recorder.ondataavailable = (event) => { if (!event.data?.size || emitted) return; emitted = true; const duration = Math.max(1, Date.now() - entry.segmentStartedAt); if (!entry.segmentHasVoice) { emit("DIAGNOSTIC", { code: "audio_silence_skipped", role, rms: entry.segmentPeakRms, duration_ms: duration }); return; } lastAudioChunkAt = Date.now(); emit("AUDIO_CHUNK", { role, track_key: key, seq: ++audioSeq, mime_type: event.data.type || mime, duration_ms: duration, rms: entry.segmentPeakRms, blob: event.data }); };
       recorder.onstop = () => { clearTimeout(entry.timer); entry.timer = null; entry.recorder = null; if (audioCaptureEnabled && !entry.stopping && track.readyState !== "ended") setTimeout(startSegment, 0); else { cleanup(); audioRecorders.delete(key); emit("AUDIO_TRACK_END", { role, track_key: key }); } };
       try { recorder.start(); entry.timer = setTimeout(() => { try { if (recorder.state !== "inactive") recorder.stop(); } catch {} }, 2500); } catch (error) { cleanup(); audioRecorders.delete(key); emit("DIAGNOSTIC", { code: "audio_recorder_start_failed", role, message: String(error?.message || error) }); }
     };
     track.addEventListener("ended", () => { entry.stopping = true; clearTimeout(entry.timer); try { if (entry.recorder?.state !== "inactive") entry.recorder.stop(); } catch {} }, { once: true }); startSegment();
   }
 
+  function rememberLocalTrack(track, source = "unknown") {
+    if (!track || track.kind !== "audio") return;
+    knownLocalTracks.add(track);
+    emit("LOCAL_TRACK_SEEN", { track_id: track.id || null, source, ready_state: track.readyState || null });
+    track.addEventListener?.("ended", () => knownLocalTracks.delete(track), { once: true });
+    if (audioCaptureEnabled) attachAudioTrack(track, "local");
+  }
+
   function scanAudioTracks(pc) {
     if (!audioCaptureEnabled || !pc) return;
-    try { for (const sender of pc.getSenders?.() || []) if (sender?.track?.kind === "audio") attachAudioTrack(sender.track, "local"); } catch {}
+    try { for (const sender of pc.getSenders?.() || []) if (sender?.track?.kind === "audio") { rememberLocalTrack(sender.track, "rtp_sender"); attachAudioTrack(sender.track, "local"); } } catch {}
     try { for (const receiver of pc.getReceivers?.() || []) if (receiver?.track?.kind === "audio") attachAudioTrack(receiver.track, "remote"); } catch {}
   }
 
   function startAudioCapture() {
     if (!audioCaptureEnabled) audioSeq = 0;
     audioCaptureEnabled = true;
+    for (const track of knownLocalTracks) attachAudioTrack(track, "local");
     for (const pc of peerConnections) scanAudioTracks(pc);
     emit("RTC_STATUS", currentStatus());
   }
@@ -407,6 +419,12 @@
       speakers: new Set([...speakerMap.values()].map((row) => row.deviceKey)).size,
       audio_capture: audioCaptureEnabled,
       audio_tracks: audioRecorders.size,
+      local_audio_tracks: [...audioRecorders.values()].filter((row) => row.role === "local").length,
+      remote_audio_tracks: [...audioRecorders.values()].filter((row) => row.role === "remote").length,
+      known_local_tracks: knownLocalTracks.size,
+      local_rms: lastRmsByRole.local,
+      remote_rms: lastRmsByRole.remote,
+      last_audio_chunk_at: lastAudioChunkAt || null,
     };
   }
 
@@ -442,13 +460,25 @@
 
   try {
     const nativeAddTrack = NativePC.prototype.addTrack;
-    if (nativeAddTrack) NativePC.prototype.addTrack = function(track, ...streams) { const sender = nativeAddTrack.call(this, track, ...streams); observePeerConnection(this); attachAudioTrack(track, "local"); return sender; };
+    if (nativeAddTrack) NativePC.prototype.addTrack = function(track, ...streams) { const sender = nativeAddTrack.call(this, track, ...streams); observePeerConnection(this); rememberLocalTrack(track, "addTrack"); return sender; };
     const nativeAddTransceiver = NativePC.prototype.addTransceiver;
-    if (nativeAddTransceiver) NativePC.prototype.addTransceiver = function(trackOrKind, init) { const tx = nativeAddTransceiver.call(this, trackOrKind, init); observePeerConnection(this); if (trackOrKind?.kind === "audio") attachAudioTrack(trackOrKind, "local"); return tx; };
+    if (nativeAddTransceiver) NativePC.prototype.addTransceiver = function(trackOrKind, init) { const tx = nativeAddTransceiver.call(this, trackOrKind, init); observePeerConnection(this); if (trackOrKind?.kind === "audio") rememberLocalTrack(trackOrKind, "addTransceiver"); return tx; };
     const nativeReplaceTrack = window.RTCRtpSender?.prototype?.replaceTrack;
-    if (nativeReplaceTrack) window.RTCRtpSender.prototype.replaceTrack = function(track) { if (track?.kind === "audio") attachAudioTrack(track, "local"); return nativeReplaceTrack.call(this, track); };
+    if (nativeReplaceTrack) window.RTCRtpSender.prototype.replaceTrack = function(track) { if (track?.kind === "audio") rememberLocalTrack(track, "replaceTrack"); return nativeReplaceTrack.call(this, track); };
   } catch (error) { emit("DIAGNOSTIC", { code: "audio_track_patch_failed", message: String(error?.message || error) }); }
 
+  try {
+    const mediaDevices = typeof navigator !== "undefined" ? navigator.mediaDevices : null;
+    const mediaProto = mediaDevices ? Object.getPrototypeOf(mediaDevices) : null;
+    const nativeGetUserMedia = mediaProto?.getUserMedia;
+    if (nativeGetUserMedia) {
+      mediaProto.getUserMedia = async function(constraints) {
+        const stream = await nativeGetUserMedia.call(this, constraints);
+        try { for (const track of stream?.getAudioTracks?.() || []) rememberLocalTrack(track, "getUserMedia"); } catch {}
+        return stream;
+      };
+    }
+  } catch (error) { emit("DIAGNOSTIC", { code: "get_user_media_patch_failed", message: String(error?.message || error) }); }
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.data?.source !== CONTROL_SOURCE) return;
     if (event.data.type === "START_AUDIO_CAPTURE") startAudioCapture();
