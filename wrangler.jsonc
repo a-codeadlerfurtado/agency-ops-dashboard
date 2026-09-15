@@ -1,0 +1,24 @@
+{
+  "name": "agency-briefing-hub",
+  "main": "home-screen-entry.js",
+  "compatibility_date": "2026-08-31",
+
+  // O worker e servido em *.workers.dev; declarar isso evita que um deploy
+  // futuro remova a rota. preview_urls liga a URL por versao, que e como se
+  // testa uma mudanca sem tocar em producao.
+  "workers_dev": true,
+  "preview_urls": true,
+
+  // Reproduz exatamente os bindings lidos da versao publicada em 03/09/2026.
+  // O database_id e o valor de DRIVE_BRIDGE_URL vieram da API de settings do
+  // proprio worker -- nao sao chute. Os tres secrets NAO entram aqui: secret
+  // sobrevive a deploy e escrever segredo em arquivo versionado seria pior.
+  //   BRIEFING_SUPABASE_BRIDGE_SECRET, CRM_VAULT_SECRET, DRIVE_BRIDGE_KEY
+  "d1_databases": [
+    { "binding": "DB", "database_id": "5b0c2bd6-d493-4f30-a981-3f4265296bc8" }
+  ],
+
+  "vars": {
+    "DRIVE_BRIDGE_URL": "https://script.google.com/macros/s/AKfycbwHlQBaHruK64qvKCZVaOBdLv1Ghc1QPB4jcnT-KKvJ0XJGA6E80jUUx_wMgm8lOmE5fA/exec"
+  }
+}
