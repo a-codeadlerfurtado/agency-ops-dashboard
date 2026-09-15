@@ -10,6 +10,26 @@ const RPC_MARKER = "$rpc/google.rtc.meetings.v1.";
 const liveHeartbeatAt = new Map();
 
 function norm(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
+
+async function recordSttTelemetry(sessionId, outcome, detail = {}) {
+  const row = await getSession(sessionId);
+  if (!row) return null;
+  const prev = row.stt_telemetry || row.metadata?.stt_telemetry || {};
+  const next = {
+    chunks_seen: Number(prev.chunks_seen || 0) + 1,
+    text_segments: Number(prev.text_segments || 0) + (outcome === "text" ? 1 : 0),
+    empty_segments: Number(prev.empty_segments || 0) + (outcome === "empty" ? 1 : 0),
+    errors: Number(prev.errors || 0) + (outcome === "error" ? 1 : 0),
+    last_outcome: outcome,
+    last_role: detail.role || null,
+    last_seq: Number(detail.seq || 0),
+    last_latency_ms: Number(detail.latency_ms || 0),
+    last_at: new Date().toISOString(),
+    last_error: outcome === "error" ? String(detail.error || "stt_error").slice(0, 300) : null,
+  };
+  await putSession({ ...row, stt_telemetry: next });
+  return next;
+}
 function normalizeDeviceKey(value) {
   const raw = norm(value);
   const canonical = raw.match(/spaces\/[A-Za-z0-9_-]+\/devices\/(\d+)/i);
@@ -524,12 +544,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const role = String(message.role || "");
       if (!message.session_id || !["local", "remote"].includes(role) || !chunk.base64) return { ok: false, error: "invalid_rtc_audio_chunk" };
       await putAudioChunk(message.session_id, role, { seq: Number(chunk.seq || 0), base64: String(chunk.base64), mime_type: String(chunk.mime_type || "audio/webm"), offset_ms: Number(chunk.offset_ms || 0), duration_ms: Number(chunk.duration_ms || 2500), track_key: String(chunk.track_key || ""), captured_at: chunk.captured_at || new Date().toISOString() });
+      const sttStartedAt = Date.now();
       try {
         const text = await transcribeMeetAudio(chunk.base64, chunk.mime_type);
         const segment = await storeMeetAudioFrame(message.session_id, role, chunk, text);
+        await recordSttTelemetry(message.session_id, norm(text) ? "text" : "empty", { role, seq: chunk.seq, latency_ms: Date.now() - sttStartedAt });
         return { ok: true, empty: !segment, segment };
       } catch (error) {
-        return { ok: false, stored: true, retry_on_finalize: true, error: String(error?.message || error) };
+        const errorText = String(error?.message || error);
+        await recordSttTelemetry(message.session_id, "error", { role, seq: chunk.seq, latency_ms: Date.now() - sttStartedAt, error: errorText }).catch(() => {});
+        return { ok: false, stored: true, retry_on_finalize: true, error: errorText };
       }
     }
 
@@ -582,7 +606,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (row && Date.now() - last >= 8000) {
           liveHeartbeatAt.set(row.id, Date.now());
           const device = await getDevice();
-          const telemetry = { rtc_active: Boolean(state.rtc_active), rtc_channels: state.rtc_channels || [], audio_tracks: Number(state.audio_tracks || 0), local_audio_tracks: Number(state.local_audio_tracks || 0), remote_audio_tracks: Number(state.remote_audio_tracks || 0), known_local_tracks: Number(state.known_local_tracks || 0), own_microphone_active: Boolean(state.own_microphone_active), local_rms: Number(state.local_rms || 0), remote_rms: Number(state.remote_rms || 0), last_audio_chunk_at: state.last_audio_chunk_at || null };
+          const telemetry = { rtc_active: Boolean(state.rtc_active), rtc_channels: state.rtc_channels || [], audio_tracks: Number(state.audio_tracks || 0), local_audio_tracks: Number(state.local_audio_tracks || 0), remote_audio_tracks: Number(state.remote_audio_tracks || 0), known_local_tracks: Number(state.known_local_tracks || 0), own_microphone_active: Boolean(state.own_microphone_active), local_rms: Number(state.local_rms || 0), remote_rms: Number(state.remote_rms || 0), last_audio_chunk_at: state.last_audio_chunk_at || null, stt: row.stt_telemetry || row.metadata?.stt_telemetry || null };
           if (device?.device_token) callApi("session_heartbeat", { session: { ...row, local_session_id: row.id, capture_mode: row.capture_mode || state.mode || "MEET_RTC_AUDIO", captions_available: false, extension_version: chrome.runtime.getManifest().version, metadata: { ...(row.metadata || {}), telemetry } } }, device.device_token).catch(() => {});
         }
       }
