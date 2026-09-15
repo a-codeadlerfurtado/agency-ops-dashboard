@@ -1,0 +1,10 @@
+alter function agency_ops.ai_canonical_name(text) set search_path to pg_catalog, agency_ops, extensions;
+alter function agency_ops.billing_note_ativa(date) set search_path to pg_catalog, agency_ops, extensions;
+alter function agency_ops.billing_note_silencia(text,date) set search_path to pg_catalog, agency_ops, extensions;
+alter function agency_ops.business_minutes(timestamp with time zone,timestamp with time zone,time without time zone) set search_path to pg_catalog, agency_ops, extensions;
+alter function agency_ops.classify_churn_tipo() set search_path to pg_catalog, agency_ops, extensions;
+alter function agency_ops.donnah_meeting_key(text) set search_path to pg_catalog, agency_ops, extensions;
+alter function agency_ops.is_contract_private_notification(text,text,jsonb) set search_path to pg_catalog, agency_ops, extensions;
+alter function agency_ops.match_client_by_whatsapp_text(text) set search_path to pg_catalog, agency_ops, extensions;
+alter function agency_ops.parse_donnah_filename(text) set search_path to pg_catalog, agency_ops, extensions;
+alter function agency_ops.tg_onboarding_stage_transition() set search_path to pg_catalog, agency_ops, extensions;

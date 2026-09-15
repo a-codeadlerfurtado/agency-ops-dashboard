@@ -1,0 +1,6 @@
+/* Mantém a aba de Onboarding com o layout original anterior ao cockpit operacional.
+   A camada de melhorias continua ativa no restante do dashboard (inclusive Cliente 360°),
+   mas o bloco extra de SLA injetado especificamente no Onboarding fica oculto. */
+#ops-onboarding-sla-slot {
+  display: none !important;
+}

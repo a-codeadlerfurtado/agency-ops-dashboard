@@ -1,0 +1,31 @@
+{
+  "name": "agency-ops-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vinext dev",
+    "build": "vinext build && node -e \"const f=require('fs');f.mkdirSync('dist/.openai',{recursive:true});f.copyFileSync('.openai/hosting.json','dist/.openai/hosting.json')\"",
+    "start": "vinext start",
+    "typecheck": "tsc --noEmit",
+    "test:capacity": "node --test shared/capacity/capacity.test.ts",
+    "test:jarvis": "node --test worker/jarvis/guards.test.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-server-dom-webpack": "19.2.8",
+    "vinext": "1.0.0-beta.6"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.53.0",
+    "@types/node": "22.13.10",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "6.0.5",
+    "@vitejs/plugin-rsc": "0.5.34",
+    "typescript": "5.8.2",
+    "vite": "8.2.1"
+  }
+}

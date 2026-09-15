@@ -1,0 +1,205 @@
+/*
+ * Sidebar hard-stability layer.
+ *
+ * The dashboard historically had multiple runtime systems touching the same
+ * .side-nav-items container. Runtime information-architecture reordering is no
+ * longer mounted. This file keeps navigation geometry stable and defines a
+ * deterministic semantic order with CSS only, so role-specific tabs are simply
+ * omitted when the profile does not have access.
+ */
+
+/* Never let legacy runtime group labels enter layout. */
+.side-nav-items > .ops-nav-group-label {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+
+/* Legacy badges may still be recreated imperatively by dashboard enhancements.
+ * Keep them completely out of document flow so a refresh cannot resize rows. */
+.side-nav-items > button,
+.side-nav-items > a {
+  position: relative;
+}
+
+.side-nav-items > button .ops-nav-badge,
+.side-nav-items > a .ops-nav-badge {
+  position: absolute !important;
+  right: 10px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  margin: 0 !important;
+  pointer-events: none !important;
+}
+
+/* Chrome/Windows can show ghosting on a frequently updated sidebar when
+ * backdrop-filter promotes it to a separate compositing surface. Keep the
+ * navigation fully opaque and deterministic instead of blurring content behind it. */
+.side-nav {
+  background: var(--panel2) !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+
+/* Global motion-system styles translate every button on hover. Navigation should
+ * stay physically fixed: only color/background feedback is allowed here. */
+.side-nav button:hover,
+.side-nav a:hover,
+.side-nav button:active,
+.side-nav a:active {
+  transform: none !important;
+}
+
+/* Prevent layout animation/jitter if classes or badges are refreshed while data
+ * is loading. Do not animate geometry inside the sidebar. */
+.side-nav,
+.side-nav-items,
+.side-nav-items > button,
+.side-nav-items > a {
+  transition-property: background-color, color, border-color, box-shadow, opacity !important;
+}
+
+/*
+ * Stable semantic order for the shared/native dashboard (MGMT, GT, CS, DESIGN,
+ * AI and every non-Leonardo profile).
+ *
+ * IMPORTANT: this uses flex `order`; it never moves DOM nodes, never starts a
+ * timer and never observes mutations. A role only sees the buttons it is already
+ * authorized to see. Missing tabs leave no gap because order is ordinal only.
+ */
+.side-nav-items > button,
+.side-nav-items > a { order: 900; }
+
+/* 1. Trabalho do dia */
+.side-nav-items > [title="Visão geral"],
+.side-nav-items > [title="Visao geral"] { order: 10; }
+.side-nav-items > [title="Foco do dia"],
+.side-nav-items > [title="Meu dia"] { order: 20; }
+.side-nav-items > [title^="Central de Trabalho"] { order: 30; }
+.side-nav-items > [title="Alertas"],
+.side-nav-items > [title^="Alertas operacionais"] { order: 40; }
+.side-nav-items > [title="Diário"] { order: 50; }
+.side-nav-items > [data-commercial-funnel-nav] { order: 60; }
+
+/* 2. Carteira / jornada do cliente */
+.side-nav-items > [title="Clientes"],
+.side-nav-items > [title="Carteira"] { order: 100; }
+.side-nav-items > [title="Saúde"],
+.side-nav-items > [title^="Saúde da carteira"] { order: 110; }
+.side-nav-items > [title="Conversas"] { order: 120; }
+.side-nav-items > [title="Onboarding"],
+.side-nav-items > [title^="Jornada do cliente"] { order: 130; }
+.side-nav-items > [title="Pré-clientes"],
+.side-nav-items > [title^="Pré-clientes"] { order: 140; }
+
+/* Briefing Hub is injected at runtime, but belongs to the same horizontal grid
+ * as native navigation items. Keep its icon in normal flex flow so the generic
+ * sidebar ::before motion layer cannot overlap the label. */
+.shell .side-nav .side-nav-items > .brief-staff-nav {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 12px !important;
+  box-sizing: border-box !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+  text-indent: 0 !important;
+}
+.shell .side-nav .side-nav-items > .brief-staff-nav::before {
+  display: inline-block !important;
+  position: static !important;
+  width: 18px !important;
+  min-width: 18px !important;
+  height: 18px !important;
+  flex: 0 0 18px !important;
+  margin: 0 !important;
+  transform: none !important;
+  inset: auto !important;
+  pointer-events: none !important;
+}
+.shell .side-nav:not(.open) .side-nav-items > .brief-staff-nav {
+  justify-content: center !important;
+  gap: 0 !important;
+  padding-left: 0 !important;
+  padding-right: 0 !important;
+}
+.shell .side-nav:not(.open) .side-nav-items > .brief-staff-nav::before {
+  margin: 0 auto !important;
+}
+
+/* 3. Mídia / performance */
+.side-nav-items > [title="Campanhas"] { order: 200; }
+.side-nav-items > [data-ads-intelligence-nav] { order: 210; }
+.side-nav-items > [data-meta-consultant-nav] { order: 220; }
+.side-nav-items > [data-meta-performance-nav] { order: 230; }
+.side-nav-items > [data-meta-analysis-nav] { order: 240; }
+.side-nav-items > [data-client-balances-nav] { order: 250; }
+
+/* The Meta-branded nav layer used a 34px left inset, pushing both icon and label
+ * to the right. Normalize those runtime entries to the native 12px sidebar inset. */
+.shell .side-nav .side-nav-items > [data-ads-intelligence-nav],
+.shell .side-nav .side-nav-items > [data-meta-consultant-nav],
+.shell .side-nav .side-nav-items > [data-meta-performance-nav],
+.shell .side-nav .side-nav-items > [data-meta-analysis-nav] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 12px !important;
+  box-sizing: border-box !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+  text-indent: 0 !important;
+}
+
+/* 4. Criativo */
+.side-nav-items > [title^="Central Criativa"] { order: 300; }
+.side-nav-items > [title^="Produção de Roteiros"],
+.side-nav-items > [data-video-scripts-nav] { order: 310; }
+.side-nav-items > [data-meta-radar-nav] { order: 320; }
+
+/* 5. Gestão */
+.side-nav-items > [title="Equipe"]:not([data-meetings-nav]) { order: 400; }
+.side-nav-items > [title^="Desempenho OP"],
+.side-nav-items > [title^="Desempenho da operação"] { order: 410; }
+.side-nav-items > [data-meetings-nav],
+.side-nav-items > [title="Reuniões"] { order: 420; }
+.side-nav-items > [title="Auditoria"] { order: 430; }
+.side-nav-items > [title="Evidências"] { order: 440; }
+.side-nav-items > [title="Contratos"] { order: 450; }
+.side-nav-items > [data-adler-finance-nav] { order: 460; }
+
+/* 6. Sistemas / integrações */
+.side-nav-items > [title="ClickUp"] { order: 500; }
+.side-nav-items > [data-donnah-nav] { order: 510; }
+.side-nav-items > [data-automation-health-nav] { order: 520; }
+.side-nav-items > [title="IA"],
+.side-nav-items > [title^="IA (Beta"] { order: 530; }
+.side-nav-items > [data-system-updates-nav] { order: 540; }
+.side-nav-items > [data-security-center-nav] { order: 550; }
+
+/*
+ * Leonardo / COMMERCIAL has a deliberately different information architecture.
+ * Scope by a component that only exists in LeonardoNativeDashboard so these
+ * overrides cannot leak into GT/CS/DESIGN/AI/MGMT.
+ */
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Home Comercial"] { order: 10; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Funil Comercial"] { order: 20; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Clientes"] { order: 30; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Onboarding"] { order: 40; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Campanhas"] { order: 50; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Reuniões"] { order: 60; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Direção Comercial"] { order: 70; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Financeiro"] { order: 80; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title^="Central Criativa"] { order: 90; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title^="Produção de Roteiros"] { order: 100; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title^="Central de Trabalho"] { order: 110; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="ClickUp"] { order: 120; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Diário"] { order: 130; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="TaskLog"] { order: 140; }

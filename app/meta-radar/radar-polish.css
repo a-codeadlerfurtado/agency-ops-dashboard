@@ -1,0 +1,467 @@
+/* Visual hierarchy pass for /meta-radar. The page keeps its data/logic; this file only changes presentation. */
+
+body .mr-shell {
+  background:
+    radial-gradient(circle at 18% -10%, rgba(31, 102, 153, .13), transparent 32%),
+    #06131f !important;
+  padding: 28px 34px 88px !important;
+}
+
+body .mr-head {
+  max-width: 1460px !important;
+  align-items: center !important;
+  padding: 2px 0 22px !important;
+  border-bottom-color: rgba(90, 137, 172, .22) !important;
+}
+body .mr-head h1 {
+  font-size: 36px !important;
+  line-height: 1 !important;
+  letter-spacing: -.035em !important;
+  margin-top: 6px !important;
+}
+body .mr-head p {
+  font-size: 12px !important;
+  margin-top: 8px !important;
+  max-width: 680px;
+}
+body .mr-head-actions a {
+  background: rgba(11, 30, 45, .76) !important;
+  border-color: rgba(85, 139, 177, .28) !important;
+  padding: 10px 14px !important;
+}
+
+/* First fold: three decisions dominate, coverage becomes secondary. */
+body .mr-summary {
+  max-width: 1460px !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) minmax(210px, .72fr) !important;
+  gap: 12px !important;
+  margin: 20px auto 16px !important;
+}
+body .mr-summary > button,
+body .mr-summary > article {
+  min-height: 112px !important;
+  padding: 17px 18px !important;
+  border-radius: 15px !important;
+  background: rgba(8, 25, 39, .84) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.018) !important;
+}
+body .mr-summary > button {
+  transition: transform .16s ease, border-color .16s ease, background .16s ease !important;
+}
+body .mr-summary > button:hover {
+  transform: translateY(-1px) !important;
+  background: #0b2132 !important;
+}
+body .mr-summary > button.active {
+  outline: none !important;
+  box-shadow: inset 0 0 0 1px currentColor, 0 8px 28px rgba(0,0,0,.12) !important;
+}
+body .mr-summary small {
+  font-size: 9px !important;
+  letter-spacing: .07em !important;
+  font-weight: 800 !important;
+}
+body .mr-summary b {
+  font-size: 34px !important;
+  letter-spacing: -.04em !important;
+  margin: 7px 0 3px !important;
+}
+body .mr-summary span {
+  font-size: 9px !important;
+}
+body .mr-summary > article {
+  opacity: .78;
+}
+
+/* Toolbar behaves like a compact cockpit control strip. */
+body .mr-toolbar {
+  max-width: 1460px !important;
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 35 !important;
+  margin: 0 auto 22px !important;
+  padding: 10px 0 !important;
+  background: rgba(6, 19, 31, .92) !important;
+  backdrop-filter: blur(14px) !important;
+  border-bottom: 1px solid rgba(66, 111, 144, .16) !important;
+}
+body .mr-toolbar nav {
+  padding: 3px !important;
+  border: 1px solid rgba(67, 112, 145, .22) !important;
+  border-radius: 11px !important;
+  background: rgba(4, 15, 24, .7) !important;
+}
+body .mr-toolbar nav button {
+  border: 0 !important;
+  background: transparent !important;
+  padding: 8px 13px !important;
+}
+body .mr-toolbar nav button.active {
+  background: #164467 !important;
+  box-shadow: 0 1px 0 rgba(255,255,255,.06) inset !important;
+}
+body .mr-toolbar > div {
+  align-items: center !important;
+}
+body .mr-toolbar input {
+  width: 240px !important;
+}
+
+body .mr-section-title {
+  max-width: 1460px !important;
+  margin: 28px auto 13px !important;
+}
+body .mr-section-title h2 {
+  font-size: 23px !important;
+  letter-spacing: -.025em !important;
+}
+
+/* Radar row: client + single primary reason + next action. Metrics support the decision instead of competing with it. */
+body .mr-list {
+  max-width: 1460px !important;
+  gap: 11px !important;
+}
+body .mr-card {
+  grid-template-columns: 104px minmax(0, 1fr) 42px !important;
+  min-height: 128px !important;
+  border-radius: 16px !important;
+  background: rgba(8, 25, 39, .9) !important;
+  border-color: rgba(55, 101, 134, .35) !important;
+  box-shadow: 0 4px 22px rgba(0,0,0,.08) !important;
+  transition: transform .15s ease, border-color .15s ease, background .15s ease !important;
+}
+body .mr-card:hover {
+  transform: translateY(-1px) !important;
+  background: #0a2031 !important;
+  border-color: rgba(86, 143, 184, .48) !important;
+}
+body .mr-card.good {
+  background: rgba(7, 25, 34, .72) !important;
+}
+body .mr-card-state {
+  padding: 19px 15px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  border-right-color: rgba(57, 100, 131, .26) !important;
+}
+body .mr-card-state span {
+  font-size: 13px !important;
+}
+body .mr-card-state b {
+  font-size: 10px !important;
+  margin-top: 8px !important;
+}
+body .mr-card-state small {
+  font-size: 8px !important;
+  opacity: .72;
+}
+body .mr-card-main {
+  padding: 15px 17px !important;
+  display: grid !important;
+  grid-template-columns: minmax(220px, .9fr) minmax(230px, 1fr) minmax(350px, 1.45fr) !important;
+  grid-template-areas:
+    "name reason next"
+    "metrics metrics next" !important;
+  gap: 10px 18px !important;
+  align-items: center !important;
+}
+body .mr-card-name { grid-area: name !important; }
+body .mr-card-name h3 {
+  font-size: 16px !important;
+  line-height: 1.12 !important;
+  letter-spacing: -.02em !important;
+  margin-bottom: 6px !important;
+}
+body .mr-card-name span {
+  font-size: 9px !important;
+}
+body .mr-card-metrics {
+  grid-area: metrics !important;
+  display: flex !important;
+  gap: 0 !important;
+  align-items: center !important;
+  border-top: 1px solid rgba(54, 98, 129, .18) !important;
+  padding-top: 9px !important;
+}
+body .mr-card-metrics > span {
+  min-width: 110px !important;
+  padding-right: 18px !important;
+  margin-right: 18px !important;
+  border-right: 1px solid rgba(55, 100, 131, .22) !important;
+}
+body .mr-card-metrics > span:last-child {
+  border-right: 0 !important;
+  margin-right: 0 !important;
+}
+body .mr-card-metrics small {
+  font-size: 7px !important;
+  letter-spacing: .02em;
+}
+body .mr-card-metrics b {
+  font-size: 11px !important;
+  margin-top: 3px !important;
+}
+body .mr-reasons {
+  grid-area: reason !important;
+  align-content: center !important;
+}
+body .mr-reasons span {
+  border-radius: 8px !important;
+  padding: 7px 9px !important;
+  font-size: 9px !important;
+  line-height: 1.25 !important;
+  background: rgba(5, 16, 25, .42) !important;
+}
+body .mr-reasons span:nth-child(n+2) {
+  display: none !important;
+}
+body .mr-next {
+  grid-area: next !important;
+  min-height: 82px !important;
+  align-self: stretch !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  padding: 12px 14px !important;
+  border: 1px solid rgba(63, 112, 147, .24) !important;
+  border-radius: 11px !important;
+  background: rgba(9, 33, 49, .75) !important;
+}
+body .mr-next small {
+  font-size: 7px !important;
+  letter-spacing: .08em !important;
+  color: #6fb9ea !important;
+  font-weight: 900 !important;
+}
+body .mr-next p {
+  font-size: 11px !important;
+  line-height: 1.42 !important;
+  margin: 6px 0 0 !important;
+  color: #d0dee7 !important;
+}
+body .mr-open {
+  color: #62b8f0 !important;
+  background: rgba(7, 22, 34, .35) !important;
+  border-left-color: rgba(57, 100, 131, .25) !important;
+}
+
+/* Changes become visual event cards rather than another spreadsheet. */
+body .mr-change-list {
+  max-width: 1460px !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+}
+body .mr-change {
+  grid-template-columns: 88px minmax(0,1fr) !important;
+  min-height: 88px !important;
+  padding: 15px !important;
+  border-radius: 14px !important;
+  background: rgba(8, 25, 39, .85) !important;
+}
+body .mr-change > small {
+  grid-column: 2 !important;
+  text-align: left !important;
+  margin-top: 5px !important;
+}
+body .mr-change b {
+  font-size: 12px !important;
+}
+body .mr-change p {
+  font-size: 10px !important;
+  line-height: 1.35 !important;
+}
+
+body .mr-creative-overview {
+  max-width: 1460px !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 11px !important;
+}
+body .mr-creative-overview button {
+  border-radius: 15px !important;
+  padding: 16px !important;
+  background: rgba(8, 25, 39, .86) !important;
+}
+body .mr-creative-overview button > div span {
+  font-size: 13px !important;
+}
+body .mr-creative-overview dl {
+  grid-template-columns: 1.5fr repeat(3, .72fr) !important;
+  gap: 10px !important;
+}
+body .mr-creative-overview dd {
+  font-size: 10px !important;
+}
+
+/* Client detail: decision hero first, then readable 3-column evidence blocks. */
+body .mr-drawer {
+  width: min(1180px, 95vw) !important;
+  background: #071520 !important;
+  box-shadow: -24px 0 70px rgba(0,0,0,.32) !important;
+}
+body .mrd-head {
+  padding: 19px 24px !important;
+  background: rgba(7, 23, 36, .96) !important;
+  backdrop-filter: blur(12px) !important;
+}
+body .mrd-head h2 {
+  font-size: 24px !important;
+  letter-spacing: -.025em !important;
+}
+body .mrd-body {
+  padding: 22px 24px 54px !important;
+}
+body .mrd-next {
+  padding: 20px !important;
+  border-radius: 16px !important;
+  background: linear-gradient(135deg, rgba(12, 43, 64, .94), rgba(8, 29, 44, .92)) !important;
+  border-color: rgba(79, 145, 191, .34) !important;
+}
+body .mrd-next h3 {
+  max-width: 900px !important;
+  font-size: 20px !important;
+  line-height: 1.28 !important;
+  letter-spacing: -.018em !important;
+  margin: 8px 0 13px !important;
+}
+body .mrd-next span {
+  font-size: 9px !important;
+  border-radius: 8px !important;
+  padding: 6px 9px !important;
+}
+body .mrd-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+  margin-top: 12px !important;
+}
+body .mrd-info {
+  min-height: 150px !important;
+  padding: 15px !important;
+  border-radius: 13px !important;
+  background: rgba(8, 26, 40, .82) !important;
+}
+body .mrd-info > span {
+  font-size: 9px !important;
+  letter-spacing: .07em !important;
+}
+body .mrd-info p {
+  font-size: 10px !important;
+  line-height: 1.4 !important;
+  padding-top: 8px !important;
+  margin-top: 8px !important;
+}
+body .mrd-changes {
+  padding: 14px 0 2px !important;
+}
+body .mrd-changes span {
+  font-size: 9px !important;
+  padding: 7px 9px !important;
+}
+body .mrd-creative-head {
+  margin-top: 28px !important;
+  padding-top: 2px !important;
+}
+body .mrd-creative-head h3,
+body .mrd-tasks h3 {
+  font-size: 17px !important;
+  letter-spacing: -.015em !important;
+}
+body .mrd-creatives {
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+}
+body .mrd-creatives article {
+  border-radius: 14px !important;
+  background: rgba(8, 25, 39, .9) !important;
+}
+body .mrd-img {
+  height: 220px !important;
+}
+body .mrd-creatives article > div:last-child {
+  padding: 12px !important;
+}
+body .mrd-creatives h4 {
+  font-size: 11px !important;
+  line-height: 1.25 !important;
+}
+body .mrd-creatives p {
+  font-size: 8px !important;
+}
+body .mrd-brief {
+  margin-top: 26px !important;
+  padding: 18px !important;
+  border-radius: 15px !important;
+}
+body .mrd-brief h3 {
+  font-size: 17px !important;
+}
+body .mrd-brief p {
+  font-size: 10px !important;
+  line-height: 1.45 !important;
+}
+body .mrd-tasks a {
+  padding: 11px 8px !important;
+}
+
+/* Designer view gets fewer, larger cards so the actual creative is the focus. */
+body .mdi-grid {
+  max-width: 1460px !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+}
+body .mdi-grid > article {
+  border-radius: 15px !important;
+  background: rgba(8, 25, 39, .9) !important;
+}
+body .mdi-img {
+  height: 300px !important;
+}
+body .mdi-grid > article > div:last-child {
+  padding: 14px !important;
+}
+body .mdi-grid h3 {
+  font-size: 13px !important;
+}
+body .mdi-grid p {
+  font-size: 9px !important;
+}
+
+@media (max-width: 1180px) {
+  body .mr-summary { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  body .mr-card-main {
+    grid-template-columns: minmax(200px,.8fr) minmax(220px,1fr) !important;
+    grid-template-areas: "name reason" "metrics next" !important;
+  }
+  body .mrd-grid { grid-template-columns: repeat(2, minmax(0,1fr)) !important; }
+  body .mdi-grid { grid-template-columns: repeat(2, minmax(0,1fr)) !important; }
+}
+
+@media (max-width: 760px) {
+  body .mr-shell { padding: 18px 12px 72px !important; }
+  body .mr-head { display: block !important; }
+  body .mr-head h1 { font-size: 30px !important; }
+  body .mr-summary { grid-template-columns: 1fr 1fr !important; }
+  body .mr-summary > button,
+  body .mr-summary > article { min-height: 98px !important; padding: 13px !important; }
+  body .mr-summary b { font-size: 28px !important; }
+  body .mr-toolbar { position: static !important; display: block !important; }
+  body .mr-toolbar > div { margin-top: 8px !important; flex-wrap: wrap !important; }
+  body .mr-toolbar input { width: 150px !important; }
+  body .mr-card { grid-template-columns: 74px minmax(0,1fr) 28px !important; }
+  body .mr-card-main {
+    grid-template-columns: 1fr !important;
+    grid-template-areas: "name" "reason" "next" "metrics" !important;
+    padding: 13px !important;
+  }
+  body .mr-card-metrics { display: grid !important; grid-template-columns: 1fr 1fr !important; }
+  body .mr-card-metrics > span { min-width: 0 !important; border-right: 0 !important; margin: 0 !important; padding: 5px 0 !important; }
+  body .mr-next { min-height: 0 !important; }
+  body .mr-change-list,
+  body .mr-creative-overview,
+  body .mrd-grid,
+  body .mrd-creatives,
+  body .mdi-grid { grid-template-columns: 1fr !important; }
+  body .mr-change { grid-template-columns: 72px minmax(0,1fr) !important; }
+  body .mrd-img { height: 250px !important; }
+  body .mdi-img { height: 320px !important; }
+}

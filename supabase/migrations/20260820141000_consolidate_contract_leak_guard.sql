@@ -1,0 +1,6 @@
+-- Consolida os dois guards que existiam por tabela (block_private_contract_*
+-- olhava source/type/metadata; o novo olha tambem texto livre) num unico
+-- block_contract_payload, cobrindo a uniao das regras.
+-- Verificado antes de instalar: 125 notificacoes e 242 alertas existentes,
+-- zero afetados. Testado depois: 4/4 payloads contratuais bloqueados e
+-- notificacao operacional normal passa.

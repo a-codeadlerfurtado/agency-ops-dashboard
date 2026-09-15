@@ -1,0 +1,23 @@
+{
+  "name": "agency-ops-ai-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Backend principal da IA da Central de Operacoes (VPS Hostinger).",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/index.js",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
+    "express": "^5.1.0",
+    "openai": "^4.104.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "22.13.10",
+    "typescript": "5.8.2"
+  }
+}

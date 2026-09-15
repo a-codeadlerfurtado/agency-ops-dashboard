@@ -1,0 +1,46 @@
+[Unit]
+Description=OpsQuestion — copiloto operacional da Leonardo Imobi
+Documentation=https://github.com/leonardoimobi/agency-ops-dashboard/tree/main/vps/opsquestion
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=opsquestion
+Group=opsquestion
+WorkingDirectory=/opt/opsquestion
+ExecStart=/usr/bin/node /opt/opsquestion/server.mjs
+
+# As chaves ficam aqui, com permissao 600 e dono root. Nao entram no systemd unit
+# nem no repositorio: um `systemctl cat` mostra este arquivo inteiro para qualquer
+# usuario da maquina, e o unit esta versionado.
+EnvironmentFile=/etc/opsquestion.env
+
+Restart=always
+RestartSec=3
+# Sobe rapido demais e falha, para de tentar: se for chave errada, reiniciar em loop
+# so' queima cota da API e enche o log.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# O servico le' uma porta local e fala com duas APIs. Nao precisa de mais nada.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opsquestion
+
+[Install]
+WantedBy=multi-user.target

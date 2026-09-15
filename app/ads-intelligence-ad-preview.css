@@ -1,0 +1,11 @@
+.aii-ad-name img.aii-preview-bound{cursor:zoom-in;transition:transform .14s ease,border-color .14s ease,box-shadow .14s ease;background:#071019}
+.aii-ad-name img.aii-preview-bound:hover,.aii-ad-name img.aii-preview-bound:focus{transform:scale(1.05);border-color:rgba(255,132,64,.55);box-shadow:0 0 0 2px rgba(255,132,64,.08);outline:none}
+.aii-ad-hover-preview{position:fixed;z-index:2147483200;width:320px;max-width:calc(100vw - 24px);overflow:hidden;border:1px solid #2b3d4d;border-radius:15px;background:#0a1219;box-shadow:0 24px 72px rgba(0,0,0,.62);text-decoration:none;color:var(--text);cursor:pointer;animation:aiiPreviewIn .12s ease-out}
+.aii-ad-hover-frame{position:relative;width:100%;aspect-ratio:4/5;max-height:360px;display:grid;place-items:center;background:#05090d;border-bottom:1px solid var(--line);overflow:hidden}
+.aii-ad-hover-frame img{width:100%;height:100%;object-fit:contain;display:block}
+.aii-ad-hover-play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:42px;height:42px;border-radius:999px;display:grid;place-items:center;padding-left:2px;background:rgba(5,10,15,.78);border:1px solid rgba(255,255,255,.24);color:#fff;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,.32);pointer-events:none}
+.aii-ad-hover-copy{padding:11px 12px 12px;display:grid;gap:8px;background:linear-gradient(180deg,#101a23,#0a1219)}
+.aii-ad-hover-copy>div{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.aii-ad-hover-copy b{font-size:10px;line-height:1.35;max-width:225px}.aii-ad-hover-copy span{font-size:7px;color:#8da3b5;text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}.aii-ad-hover-copy em{font-size:8px;color:#ffad79;font-style:normal;font-weight:800}
+.aii-ad-hover-preview:hover{border-color:rgba(255,132,64,.42);box-shadow:0 28px 84px rgba(0,0,0,.68),0 0 0 1px rgba(255,132,64,.05)}
+@keyframes aiiPreviewIn{from{opacity:0;transform:translateY(4px) scale(.985)}to{opacity:1;transform:none}}
+@media(max-width:700px){.aii-ad-hover-preview{display:none}.aii-ad-name img.aii-preview-bound{cursor:pointer}}

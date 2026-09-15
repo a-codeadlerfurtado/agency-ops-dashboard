@@ -1,0 +1,27 @@
+# /etc/caddy/Caddyfile na VPS srv1837879.hstgr.cloud (179.197.228.160)
+#
+# O Caddy tira e renova o certificado sozinho. Para isso as portas 80 e 443 precisam
+# estar abertas no firewall da Hostinger e livres na maquina - se algo ja' escuta na
+# 80, o certificado nunca sai e o erro fica so' no log do Caddy.
+#
+# O server.mjs escuta apenas em 127.0.0.1. Quem fala com a internet e' este proxy.
+
+srv1837879.hstgr.cloud {
+	# Uma pergunta pode levar ate' ~50s investigando o banco. O padrao do Caddy corta
+	# antes disso e o usuario recebe erro no meio de uma resposta que estava vindo.
+	reverse_proxy 127.0.0.1:8787 {
+		transport http {
+			response_header_timeout 90s
+			read_timeout 90s
+		}
+	}
+
+	# So' a rota do OpsQuestion e o health. Qualquer outro caminho nao existe aqui.
+	@fora not path /opsquestion* /health
+	respond @fora 404
+
+	log {
+		output file /var/log/caddy/opsquestion.log
+		format console
+	}
+}
