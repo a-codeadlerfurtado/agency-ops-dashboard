@@ -1,0 +1,229 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v9.0/win-x64",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v9.0": {},
+    ".NETCoreApp,Version=v9.0/win-x64": {
+      "RelatoAI.DesktopAgent/1.0.0": {
+        "dependencies": {
+          "Microsoft.NET.ILLink.Tasks": "9.0.20",
+          "NAudio": "3.1.0",
+          "System.Security.Cryptography.ProtectedData": "9.0.0",
+          "runtimepack.Microsoft.Windows.SDK.NET.Ref": "10.0.19041.57"
+        },
+        "runtime": {
+          "RelatoAI.DesktopAgent.dll": {}
+        }
+      },
+      "runtimepack.Microsoft.Windows.SDK.NET.Ref/10.0.19041.57": {
+        "runtime": {
+          "Microsoft.Windows.SDK.NET.dll": {
+            "assemblyVersion": "10.0.19041.38",
+            "fileVersion": "10.0.19041.55"
+          },
+          "WinRT.Runtime.dll": {
+            "assemblyVersion": "2.2.0.0",
+            "fileVersion": "2.2.0.48161"
+          }
+        }
+      },
+      "Microsoft.NET.ILLink.Tasks/9.0.20": {},
+      "NAudio/3.1.0": {
+        "dependencies": {
+          "NAudio.Asio": "3.1.0",
+          "NAudio.Core": "3.1.0",
+          "NAudio.Dmo": "3.1.0",
+          "NAudio.Midi": "3.1.0",
+          "NAudio.Wasapi": "3.1.0",
+          "NAudio.WinForms": "3.1.0",
+          "NAudio.WinMM": "3.1.0"
+        },
+        "runtime": {
+          "lib/net9.0-windows10.0.19041/NAudio.dll": {
+            "assemblyVersion": "3.1.0.0",
+            "fileVersion": "3.1.0.0"
+          }
+        }
+      },
+      "NAudio.Asio/3.1.0": {
+        "dependencies": {
+          "NAudio.Core": "3.1.0"
+        },
+        "runtime": {
+          "lib/net9.0-windows7.0/NAudio.Asio.dll": {
+            "assemblyVersion": "3.1.0.0",
+            "fileVersion": "3.1.0.0"
+          }
+        }
+      },
+      "NAudio.Core/3.1.0": {
+        "dependencies": {
+          "System.Numerics.Tensors": "9.0.0"
+        },
+        "runtime": {
+          "lib/net9.0/NAudio.Core.dll": {
+            "assemblyVersion": "3.1.0.0",
+            "fileVersion": "3.1.0.0"
+          }
+        }
+      },
+      "NAudio.Dmo/3.1.0": {
+        "dependencies": {
+          "NAudio.Core": "3.1.0"
+        },
+        "runtime": {
+          "lib/net9.0-windows7.0/NAudio.Dmo.dll": {
+            "assemblyVersion": "3.1.0.0",
+            "fileVersion": "3.1.0.0"
+          }
+        }
+      },
+      "NAudio.Midi/3.1.0": {
+        "dependencies": {
+          "NAudio.Core": "3.1.0"
+        },
+        "runtime": {
+          "lib/net9.0-windows10.0.19041/NAudio.Midi.dll": {
+            "assemblyVersion": "3.1.0.0",
+            "fileVersion": "3.1.0.0"
+          }
+        }
+      },
+      "NAudio.Wasapi/3.1.0": {
+        "dependencies": {
+          "NAudio.Core": "3.1.0"
+        },
+        "runtime": {
+          "lib/net9.0/NAudio.Wasapi.dll": {
+            "assemblyVersion": "3.1.0.0",
+            "fileVersion": "3.1.0.0"
+          }
+        }
+      },
+      "NAudio.WinForms/3.1.0": {
+        "dependencies": {
+          "NAudio.WinMM": "3.1.0"
+        },
+        "runtime": {
+          "lib/net9.0-windows7.0/NAudio.WinForms.dll": {
+            "assemblyVersion": "3.1.0.0",
+            "fileVersion": "3.1.0.0"
+          }
+        }
+      },
+      "NAudio.WinMM/3.1.0": {
+        "dependencies": {
+          "NAudio.Core": "3.1.0",
+          "NAudio.Midi": "3.1.0"
+        },
+        "runtime": {
+          "lib/net9.0-windows7.0/NAudio.WinMM.dll": {
+            "assemblyVersion": "3.1.0.0",
+            "fileVersion": "3.1.0.0"
+          }
+        }
+      },
+      "System.Numerics.Tensors/9.0.0": {
+        "runtime": {
+          "lib/net9.0/System.Numerics.Tensors.dll": {
+            "assemblyVersion": "9.0.0.0",
+            "fileVersion": "9.0.24.52809"
+          }
+        }
+      },
+      "System.Security.Cryptography.ProtectedData/9.0.0": {}
+    }
+  },
+  "libraries": {
+    "RelatoAI.DesktopAgent/1.0.0": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "runtimepack.Microsoft.Windows.SDK.NET.Ref/10.0.19041.57": {
+      "type": "runtimepack",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Microsoft.NET.ILLink.Tasks/9.0.20": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-oPFydtjCgow3DXnL8z5gPbq3R1zGvBpcypgRhW172Hn8asJcI8oy7isudAnAAALIWyK+uRWCDP+/+om3s0PZHA==",
+      "path": "microsoft.net.illink.tasks/9.0.20",
+      "hashPath": "microsoft.net.illink.tasks.9.0.20.nupkg.sha512"
+    },
+    "NAudio/3.1.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-wD5UttLb5Eu/caAYPy/siDg7xf3KVkdJfMLXr+cJfAvxgh6wDnWOBxXfhYNMUiIaQRr2VPDjgPH2QIzBSP6gqw==",
+      "path": "naudio/3.1.0",
+      "hashPath": "naudio.3.1.0.nupkg.sha512"
+    },
+    "NAudio.Asio/3.1.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-v+ZgbdCaE/XyhByYNC+xgNdRNWy43GHWYJ+fLrXwjOLXYUToq45G5EGzdqlY//3KsX1zuVn+mU+SBBZ744zK6g==",
+      "path": "naudio.asio/3.1.0",
+      "hashPath": "naudio.asio.3.1.0.nupkg.sha512"
+    },
+    "NAudio.Core/3.1.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-8Hrd3Uqb2wEB64eZYF+0vl9xBadeSn6JnFDsHuGrw87ucJ+pB7u5NzVpHl8OlCNvIvH+sD9b2h4JOqXBuZGYwg==",
+      "path": "naudio.core/3.1.0",
+      "hashPath": "naudio.core.3.1.0.nupkg.sha512"
+    },
+    "NAudio.Dmo/3.1.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-XhVjBgIyj6qnZRfeGS2CkL6mffRLnT4WK/hAoNGZsqJK1p+XpWe0nFbUA+6Cmgj18oLoHYk2KouPw/Q94mTCnA==",
+      "path": "naudio.dmo/3.1.0",
+      "hashPath": "naudio.dmo.3.1.0.nupkg.sha512"
+    },
+    "NAudio.Midi/3.1.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-McIiQyY5o0Q3QlF5oRm+b0A8IE0SorA/9HvNi88bH3MdSnGp7cM/9sze/zqbS/9PFdKYVRZPtoLwqoAF4BgjeA==",
+      "path": "naudio.midi/3.1.0",
+      "hashPath": "naudio.midi.3.1.0.nupkg.sha512"
+    },
+    "NAudio.Wasapi/3.1.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-iTG+oBJaiID344yz84PrTiVF98av5SsuOUu7ICskcUd6f5ShHDMskG9sE4XUM05Vdlwy88bMQDDC3e+85Mv8yw==",
+      "path": "naudio.wasapi/3.1.0",
+      "hashPath": "naudio.wasapi.3.1.0.nupkg.sha512"
+    },
+    "NAudio.WinForms/3.1.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-oIjQu3bp9QtAB6wAf04pgeDUce+dIrSDcvNp689e/xYStyktG33nY2GwW7d1mS2zDAeA/YhUjY5DkakDWs9+1w==",
+      "path": "naudio.winforms/3.1.0",
+      "hashPath": "naudio.winforms.3.1.0.nupkg.sha512"
+    },
+    "NAudio.WinMM/3.1.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-2LXIZwBQKxDZP+GvTvC9zrHiF0LQ3lvTi5dqgS175hY/bOtqFlDRRhzEnVv/lLFlQ+a1I/ZQ3m6CclTvztkf6A==",
+      "path": "naudio.winmm/3.1.0",
+      "hashPath": "naudio.winmm.3.1.0.nupkg.sha512"
+    },
+    "System.Numerics.Tensors/9.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-hyJB4UlpAi19Xr9AXzu2NuagKC4lPfHObNMEAA0HmqFz2rX7wKgzeYzO/jM/eBHDhnUGFFEjk5cOoJaxqg5J4A==",
+      "path": "system.numerics.tensors/9.0.0",
+      "hashPath": "system.numerics.tensors.9.0.0.nupkg.sha512"
+    },
+    "System.Security.Cryptography.ProtectedData/9.0.0": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-CJW+x/F6fmRQ7N6K8paasTw9PDZp4t7G76UjGNlSDgoHPF0h08vTzLYbLZpOLEJSg35d5wy2jCXGo84EN05DpQ==",
+      "path": "system.security.cryptography.protecteddata/9.0.0",
+      "hashPath": "system.security.cryptography.protecteddata.9.0.0.nupkg.sha512"
+    }
+  }
+}
