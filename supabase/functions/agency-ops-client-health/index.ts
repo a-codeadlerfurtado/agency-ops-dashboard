@@ -127,8 +127,24 @@ Deno.serve(async (req: Request) => {
     carteiraDe = carteira?.carteira ?? null;
   }
 
-  if (carteiraDe) {
-    rows = rows.filter((row: any) => row.gt_owner === identity.person);
+  // Ver a base inteira e' decisao explicita, nao consequencia de nao ter carteira.
+  //
+  // A versao anterior tratava "sem carteira" como "ve' tudo". Isso funciona para
+  // CS, que nao divide carteira - mas abriria a base para um GT recem-contratado
+  // no intervalo entre entrar no quadro e a carteira dele ser cadastrada. Acesso
+  // concedido por esquecimento e' pior que acesso negado por engano: ninguem
+  // reclama, entao ninguem descobre.
+  const VE_BASE_INTEIRA = ["MGMT", "AI", "CS"];
+  const veTudo = identity.elevated || (identity.role !== null && VE_BASE_INTEIRA.includes(identity.role));
+
+  if (!veTudo) {
+    rows = carteiraDe
+      ? rows.filter((row: any) => row.gt_owner === identity.person)
+      // Sem carteira e fora da lista: cai para os proprios clientes, que pode ser
+      // nenhum. Preferir vazio a completo enquanto o cadastro nao existe.
+      : rows.filter((row: any) =>
+          identity.person !== null &&
+          (row.gt_owner === identity.person || row.cs_owner === identity.person || row.designer_owner === identity.person));
   }
 
   const ativos = rows.filter((row: any) => row.lifecycle === "ACTIVE" || row.lifecycle === "ONBOARDING");
@@ -155,7 +171,7 @@ Deno.serve(async (req: Request) => {
       person: identity.person,
       role: identity.role,
       access_level: identity.accessLevel,
-      scoped: Boolean(carteiraDe),
+      scoped: !veTudo,
       carteira: carteiraDe,
     },
     generated_at: new Date().toISOString(),
