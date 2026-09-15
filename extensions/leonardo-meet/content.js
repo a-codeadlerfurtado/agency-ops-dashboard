@@ -1,4 +1,4 @@
-const VERSION = "0.4.9";
+const VERSION = "0.4.10";
 const MEETING_CODE_RE = /\/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})(?:[/?#]|$)/i;
 const LEAVE_RE = /(sair da chamada|encerrar chamada|sair da reunião|leave call|leave meeting|hang up|desligar)/i;
 const JOIN_RE = /(participar agora|pedir para participar|join now|ask to join)/i;
@@ -728,6 +728,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "REINJECT_RTC") requestRtcCapture(true);
   if (message?.type === "RELATO_FORCE_CAPTIONS") requestRtcCapture(true);
+  if (message?.type === "RELATO_LIVE_SEGMENT") {
+    if (session?.id === message.session_id && message.segment) pushLiveTranscript(message.segment);
+    try { sendResponse({ ok: true }); } catch {}
+    return true;
+  }
   if (message?.type === "RELATO_UPLOAD_CONFIRMED") {
     showSavedToast(message.transcript_id || null);
     try { sendResponse({ ok: true }); } catch {}
@@ -771,11 +776,13 @@ setInterval(async () => {
   }
 }, 1_000);
 
-setInterval(() => {
+setInterval(async () => {
   if (!session) return;
   if (Date.now() - lastRtcSignalAt > RTC_SILENCE_RECOVERY_MS) requestRtcCapture(true);
   requestRtcCapture(true);
-  reportHealth().catch(() => {});
+  const live = await runtime({ type: "GET_RTC_FRAMES", session_id: session.id });
+  for (const frame of live?.frames || []) pushLiveTranscript(frame);
+  await reportHealth().catch(() => {});
 }, CAPTION_WATCHDOG_MS);
 
 window.addEventListener("pageshow", () => requestRtcCapture(true));

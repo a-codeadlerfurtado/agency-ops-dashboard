@@ -549,12 +549,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const text = await transcribeMeetAudio(chunk.base64, chunk.mime_type);
         const segment = await storeMeetAudioFrame(message.session_id, role, chunk, text);
         await recordSttTelemetry(message.session_id, norm(text) ? "text" : "empty", { role, seq: chunk.seq, latency_ms: Date.now() - sttStartedAt });
+        if (segment && sender.tab?.id != null) chrome.tabs.sendMessage(sender.tab.id, { type: "RELATO_LIVE_SEGMENT", session_id: message.session_id, segment }).catch(() => {});
         return { ok: true, empty: !segment, segment };
       } catch (error) {
         const errorText = String(error?.message || error);
         await recordSttTelemetry(message.session_id, "error", { role, seq: chunk.seq, latency_ms: Date.now() - sttStartedAt, error: errorText }).catch(() => {});
         return { ok: false, stored: true, retry_on_finalize: true, error: errorText };
       }
+    }
+
+    if (message?.type === "GET_RTC_FRAMES") {
+      if (!message.session_id) return { ok: false, error: "session_id_required", frames: [] };
+      return { ok: true, frames: await getFrames(message.session_id) };
     }
 
     if (message?.type === "RTC_SPEAKER_MAP") {
