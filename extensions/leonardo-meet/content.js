@@ -1,4 +1,4 @@
-const VERSION = "0.4.6";
+const VERSION = "0.4.7";
 const MEETING_CODE_RE = /\/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})(?:[/?#]|$)/i;
 const LEAVE_RE = /(sair da chamada|encerrar chamada|sair da reunião|leave call|leave meeting|hang up|desligar)/i;
 const JOIN_RE = /(participar agora|pedir para participar|join now|ask to join)/i;
@@ -493,6 +493,7 @@ async function reportHealth(extra = {}) {
     local_audio_tracks: Number(lastRtcStatus?.local_audio_tracks || 0),
     remote_audio_tracks: Number(lastRtcStatus?.remote_audio_tracks || 0),
     known_local_tracks: Number(lastRtcStatus?.known_local_tracks || 0),
+    own_microphone_active: Boolean(lastRtcStatus?.own_microphone_active),
     local_rms: Number(lastRtcStatus?.local_rms || 0),
     remote_rms: Number(lastRtcStatus?.remote_rms || 0),
     last_audio_chunk_at: lastRtcStatus?.last_audio_chunk_at || null,

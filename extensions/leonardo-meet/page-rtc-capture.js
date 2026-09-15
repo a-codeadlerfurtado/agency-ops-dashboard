@@ -16,6 +16,8 @@
   const knownLocalTracks = new Set();
   const lastRmsByRole = { local: 0, remote: 0 };
   let lastAudioChunkAt = 0;
+  let ownedLocalStream = null;
+  let ownMicAttemptAt = 0;
   let audioCaptureEnabled = false;
   let audioSeq = 0;
   const boundChannels = new WeakSet();
@@ -358,12 +360,31 @@
     try { for (const sender of pc.getSenders?.() || []) if (sender?.track?.kind === "audio") { rememberLocalTrack(sender.track, "rtp_sender"); attachAudioTrack(sender.track, "local"); } } catch {}
     try { for (const receiver of pc.getReceivers?.() || []) if (receiver?.track?.kind === "audio") attachAudioTrack(receiver.track, "remote"); } catch {}
   }
+  async function ensureOwnMicrophone() {
+    if (!audioCaptureEnabled) return false;
+    if ([...knownLocalTracks].some((track) => track?.readyState !== "ended")) return true;
+    if (Date.now() - ownMicAttemptAt < 5000) return false;
+    ownMicAttemptAt = Date.now();
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }, video: false });
+      ownedLocalStream = stream;
+      for (const track of stream.getAudioTracks?.() || []) rememberLocalTrack(track, "relato_own_microphone");
+      emit("DIAGNOSTIC", { code: "own_microphone_acquired", tracks: stream.getAudioTracks?.().length || 0 });
+      emit("RTC_STATUS", currentStatus());
+      return true;
+    } catch (error) {
+      emit("DIAGNOSTIC", { code: "own_microphone_failed", message: String(error?.message || error) });
+      return false;
+    }
+  }
+
 
   function startAudioCapture() {
     if (!audioCaptureEnabled) audioSeq = 0;
     audioCaptureEnabled = true;
     for (const track of knownLocalTracks) attachAudioTrack(track, "local");
     for (const pc of peerConnections) scanAudioTracks(pc);
+    if (![...knownLocalTracks].some((track) => track?.readyState !== "ended")) void ensureOwnMicrophone();
     emit("RTC_STATUS", currentStatus());
   }
 
@@ -373,6 +394,8 @@
       entry.stopping = true; clearTimeout(entry.timer);
       try { if (entry.recorder?.state !== "inactive") entry.recorder.stop(); } catch {}
     }
+    try { for (const track of ownedLocalStream?.getTracks?.() || []) track.stop(); } catch {}
+    ownedLocalStream = null;
     emit("RTC_STATUS", currentStatus());
   }
 
@@ -422,6 +445,7 @@
       local_audio_tracks: [...audioRecorders.values()].filter((row) => row.role === "local").length,
       remote_audio_tracks: [...audioRecorders.values()].filter((row) => row.role === "remote").length,
       known_local_tracks: knownLocalTracks.size,
+      own_microphone_active: Boolean(ownedLocalStream && (ownedLocalStream.getAudioTracks?.() || []).some((track) => track.readyState !== "ended")),
       local_rms: lastRmsByRole.local,
       remote_rms: lastRmsByRole.remote,
       last_audio_chunk_at: lastAudioChunkAt || null,

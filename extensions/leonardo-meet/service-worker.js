@@ -499,6 +499,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "RTC_SESSION_START") {
       const row = message.session || {};
       if (!row.id) return { ok: false, error: "session_id_required" };
+      const sameTab = Number.isInteger(sender.tab?.id) ? (await listSessions()).filter((item) => item.tab_id === sender.tab.id && item.state === "CAPTURING" && item.id !== row.id) : [];
+      for (const previous of sameTab) {
+        await putSession({ ...previous, state: "FINISHING", ended_at: new Date().toISOString(), finish_reason: "same_tab_reloaded" });
+        await finalizeStoredSession(previous.id, { ended_at: new Date().toISOString(), reason: "same_tab_reloaded", meeting: { metadata: { finish_reason: "same_tab_reloaded" } } }).catch(() => {});
+      }
       const captureMode = row.capture_mode || "MEET_RTC_CAPTIONS";
       const storedRow = { ...row, capture_mode: captureMode, tab_id: sender.tab?.id ?? null, state: "CAPTURING", attempts: 0, created_at: new Date().toISOString() };
       await putSession(storedRow);
@@ -577,7 +582,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (row && Date.now() - last >= 8000) {
           liveHeartbeatAt.set(row.id, Date.now());
           const device = await getDevice();
-          const telemetry = { rtc_active: Boolean(state.rtc_active), rtc_channels: state.rtc_channels || [], audio_tracks: Number(state.audio_tracks || 0), local_audio_tracks: Number(state.local_audio_tracks || 0), remote_audio_tracks: Number(state.remote_audio_tracks || 0), known_local_tracks: Number(state.known_local_tracks || 0), local_rms: Number(state.local_rms || 0), remote_rms: Number(state.remote_rms || 0), last_audio_chunk_at: state.last_audio_chunk_at || null };
+          const telemetry = { rtc_active: Boolean(state.rtc_active), rtc_channels: state.rtc_channels || [], audio_tracks: Number(state.audio_tracks || 0), local_audio_tracks: Number(state.local_audio_tracks || 0), remote_audio_tracks: Number(state.remote_audio_tracks || 0), known_local_tracks: Number(state.known_local_tracks || 0), own_microphone_active: Boolean(state.own_microphone_active), local_rms: Number(state.local_rms || 0), remote_rms: Number(state.remote_rms || 0), last_audio_chunk_at: state.last_audio_chunk_at || null };
           if (device?.device_token) callApi("session_heartbeat", { session: { ...row, local_session_id: row.id, capture_mode: row.capture_mode || state.mode || "MEET_RTC_AUDIO", captions_available: false, extension_version: chrome.runtime.getManifest().version, metadata: { ...(row.metadata || {}), telemetry } } }, device.device_token).catch(() => {});
         }
       }
