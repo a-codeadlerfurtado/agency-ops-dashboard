@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "imobia-chatwoot-edge",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-14",
+  "routes": [
+    { "pattern": "app.leonardoimobi.com.br", "custom_domain": true }
+  ],
+  "ratelimits": [
+    {
+      "name": "AUTH_RATE_LIMITER",
+      "namespace_id": "2101",
+      "simple": { "limit": 30, "period": 60 }
+    }
+  ],
+  "observability": { "enabled": true }
+}
