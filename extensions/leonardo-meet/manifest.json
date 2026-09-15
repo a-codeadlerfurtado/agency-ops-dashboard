@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Relato AI â€” Transcriber",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "description": "Relato AI â€” Transcriber: captura e inteligÃªncia de reuniÃµes e chamadas para o Leonardo Imobi.",
   "permissions": [
     "storage",
@@ -16,7 +16,8 @@
   "host_permissions": [
     "https://meet.google.com/*",
     "https://web.whatsapp.com/*",
-    "https://bfzdetibfcwihfkltbkp.supabase.co/*"
+    "https://bfzdetibfcwihfkltbkp.supabase.co/*",
+    "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/*"
   ],
   "background": {
     "service_worker": "service-worker.js",
