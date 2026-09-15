@@ -10,9 +10,8 @@ const w={RTCPeerConnection:PC,MediaRecorder:MR,AudioContext:AC,postMessage(m){me
 const ctx=vm.createContext({window:w,MediaRecorder:MR,MediaStream:class{constructor(t){this.tracks=t;}},Object,Reflect,Set,Map,WeakSet,Uint8Array,Float32Array,ArrayBuffer,Blob,TextDecoder,TextEncoder,DecompressionStream,Response,Date,BigInt,Number,String,RegExp,console,crypto:{randomUUID:()=>"uuid"},setInterval(fn){timers.push(fn);return timers.length;},clearInterval(){},setTimeout(fn,ms){if(ms===0)fn();return 0;},clearTimeout(){}});
 vm.runInContext(fs.readFileSync(new URL("../page-rtc-capture.js",import.meta.url),"utf8"),ctx);
 const pc=new w.RTCPeerConnection(); const dispatch=d=>{for(const h of listeners.get("message")||[])h({source:w,data:d});}; dispatch({source:"leonardo-meet-content",type:"START_AUDIO_CAPTURE"});
-for(const fn of timers)fn(); recorders[0].emit();
-assert.equal(messages.filter(m=>m.type==="AUDIO_CHUNK").length,0,"silence must not emit audio chunk");
+for(const fn of timers)fn(); recorders[0].emit(); assert.equal(messages.filter(m=>m.type==="AUDIO_CHUNK").length,0,"silence must not emit audio chunk");
+recorders[0].stop(); signal=.0012; for(const fn of timers)fn(); recorders[1].emit(); assert.equal(messages.filter(m=>m.type==="AUDIO_CHUNK").length,0,"single short spike must not pass VAD");
+recorders[1].stop(); for(let i=0;i<3;i++) for(const fn of timers)fn(); recorders[2].emit(); assert.equal(messages.filter(m=>m.type==="AUDIO_CHUNK").length,1,"sustained low-volume Adler speech must emit audio chunk");
 assert.ok(messages.some(m=>m.type==="DIAGNOSTIC"&&m.payload.code==="audio_silence_skipped"));
-recorders[0].stop(); signal=.0012; for(const fn of timers)fn(); recorders[1].emit();
-assert.equal(messages.filter(m=>m.type==="AUDIO_CHUNK").length,1,"low-volume speech like Adler mic must emit audio chunk");
-console.log("rtc-vad synthetic test: ok");
+console.log("rtc-vad sustained-speech test: ok");

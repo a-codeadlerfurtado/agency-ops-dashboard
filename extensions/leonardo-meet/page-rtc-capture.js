@@ -14,6 +14,7 @@
   const peerConnections = new Set();
   const audioRecorders = new Map();
   const knownLocalTracks = new Set();
+  let preferredLocalTrack = null;
   const lastRmsByRole = { local: 0, remote: 0 };
   let lastAudioChunkAt = 0;
   let ownedLocalStream = null;
@@ -316,11 +317,12 @@
 
   function attachAudioTrack(track, role) {
     if (!audioCaptureEnabled || !track || track.kind !== "audio") return;
+    if (role === "local" && preferredLocalTrack && preferredLocalTrack.readyState !== "ended" && track !== preferredLocalTrack) return;
     const key = `${role}:${track.id || crypto.randomUUID()}`;
     if (audioRecorders.has(key)) return;
     let mime = "audio/webm";
     if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) mime = "audio/webm;codecs=opus";
-    const entry = { recorder: null, role, track, mime, timer: null, stopping: false, energyTimer: null, audioContext: null, segmentHasVoice: true, segmentPeakRms: 1, segmentStartedAt: 0 };
+    const entry = { recorder: null, role, track, mime, timer: null, stopping: false, energyTimer: null, audioContext: null, segmentHasVoice: true, segmentPeakRms: 1, segmentSamples: 0, segmentVoicedSamples: 0, segmentStartedAt: 0 };
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (AudioCtx) {
@@ -330,7 +332,7 @@
         const samples = new Float32Array(analyser.fftSize); entry.audioContext = ctx; entry.segmentHasVoice = false; entry.segmentPeakRms = 0;
         ctx.resume?.().catch(() => {});
         entry.energyTimer = setInterval(() => {
-          try { analyser.getFloatTimeDomainData(samples); let sum = 0; for (const value of samples) sum += value * value; const rms = Math.sqrt(sum / samples.length); lastRmsByRole[role] = rms; entry.segmentPeakRms = Math.max(entry.segmentPeakRms, rms); const voiceThreshold = role === "local" ? 0.00055 : 0.00075; if (rms >= voiceThreshold) entry.segmentHasVoice = true; } catch {}
+          try { analyser.getFloatTimeDomainData(samples); let sum = 0; for (const value of samples) sum += value * value; const rms = Math.sqrt(sum / samples.length); lastRmsByRole[role] = rms; entry.segmentPeakRms = Math.max(entry.segmentPeakRms, rms); const voiceThreshold = role === "local" ? 0.00055 : 0.00075; entry.segmentSamples += 1; if (rms >= voiceThreshold) entry.segmentVoicedSamples += 1; entry.segmentHasVoice = entry.segmentVoicedSamples >= 3; } catch {}
         }, 80);
       }
     } catch {}
@@ -339,8 +341,8 @@
     const startSegment = () => {
       if (!audioCaptureEnabled || entry.stopping || track.readyState === "ended") { cleanup(); audioRecorders.delete(key); return; }
       let recorder; try { recorder = new MediaRecorder(new MediaStream([track]), { mimeType: mime, audioBitsPerSecond: 64000 }); } catch { recorder = new MediaRecorder(new MediaStream([track])); mime = recorder.mimeType || mime; entry.mime = mime; }
-      entry.recorder = recorder; entry.segmentStartedAt = Date.now(); entry.segmentHasVoice = entry.audioContext ? false : true; entry.segmentPeakRms = entry.audioContext ? 0 : 1; let emitted = false;
-      recorder.ondataavailable = (event) => { if (!event.data?.size || emitted) return; emitted = true; const duration = Math.max(1, Date.now() - entry.segmentStartedAt); if (!entry.segmentHasVoice) { emit("DIAGNOSTIC", { code: "audio_silence_skipped", role, rms: entry.segmentPeakRms, duration_ms: duration }); return; } lastAudioChunkAt = Date.now(); emit("AUDIO_CHUNK", { role, track_key: key, seq: ++audioSeq, mime_type: event.data.type || mime, duration_ms: duration, rms: entry.segmentPeakRms, blob: event.data }); };
+      entry.recorder = recorder; entry.segmentStartedAt = Date.now(); entry.segmentHasVoice = entry.audioContext ? false : true; entry.segmentPeakRms = entry.audioContext ? 0 : 1; entry.segmentSamples = 0; entry.segmentVoicedSamples = 0; let emitted = false;
+      recorder.ondataavailable = (event) => { if (!event.data?.size || emitted) return; emitted = true; const duration = Math.max(1, Date.now() - entry.segmentStartedAt); const voicedMs = entry.audioContext ? entry.segmentVoicedSamples * 80 : duration; const voicedRatio = entry.audioContext ? (entry.segmentSamples ? entry.segmentVoicedSamples / entry.segmentSamples : 0) : 1; if (!entry.segmentHasVoice || (entry.audioContext && (voicedMs < 240 || voicedRatio < 0.08))) { emit("DIAGNOSTIC", { code: "audio_silence_skipped", role, rms: entry.segmentPeakRms, duration_ms: duration, voiced_ms: voicedMs, voiced_ratio: voicedRatio }); return; } lastAudioChunkAt = Date.now(); emit("AUDIO_CHUNK", { role, track_key: key, seq: ++audioSeq, mime_type: event.data.type || mime, duration_ms: duration, rms: entry.segmentPeakRms, voiced_ms: voicedMs, voiced_ratio: voicedRatio, blob: event.data }); };
       recorder.onstop = () => { clearTimeout(entry.timer); entry.timer = null; entry.recorder = null; if (audioCaptureEnabled && !entry.stopping && track.readyState !== "ended") setTimeout(startSegment, 0); else { cleanup(); audioRecorders.delete(key); emit("AUDIO_TRACK_END", { role, track_key: key }); } };
       try { recorder.start(); entry.timer = setTimeout(() => { try { if (recorder.state !== "inactive") recorder.stop(); } catch {} }, 2500); } catch (error) { cleanup(); audioRecorders.delete(key); emit("DIAGNOSTIC", { code: "audio_recorder_start_failed", role, message: String(error?.message || error) }); }
     };
@@ -350,9 +352,15 @@
   function rememberLocalTrack(track, source = "unknown") {
     if (!track || track.kind !== "audio") return;
     knownLocalTracks.add(track);
-    emit("LOCAL_TRACK_SEEN", { track_id: track.id || null, source, ready_state: track.readyState || null });
-    track.addEventListener?.("ended", () => knownLocalTracks.delete(track), { once: true });
-    if (audioCaptureEnabled) attachAudioTrack(track, "local");
+    const previousPreferred = preferredLocalTrack;
+    const shouldPrefer = source === "relato_own_microphone" || !preferredLocalTrack || preferredLocalTrack.readyState === "ended";
+    if (shouldPrefer) preferredLocalTrack = track;
+    if (source === "relato_own_microphone" && previousPreferred && previousPreferred !== track) {
+      for (const entry of [...audioRecorders.values()]) if (entry.role === "local" && entry.track !== track) { entry.stopping = true; clearTimeout(entry.timer); try { if (entry.recorder?.state !== "inactive") entry.recorder.stop(); } catch {} }
+    }
+    emit("LOCAL_TRACK_SEEN", { track_id: track.id || null, source, ready_state: track.readyState || null, preferred: track === preferredLocalTrack });
+    track.addEventListener?.("ended", () => { knownLocalTracks.delete(track); if (preferredLocalTrack === track) preferredLocalTrack = null; }, { once: true });
+    if (audioCaptureEnabled && track === preferredLocalTrack) attachAudioTrack(track, "local");
   }
 
   function scanAudioTracks(pc) {
@@ -382,9 +390,10 @@
   function startAudioCapture() {
     if (!audioCaptureEnabled) audioSeq = 0;
     audioCaptureEnabled = true;
-    for (const track of knownLocalTracks) attachAudioTrack(track, "local");
+    if (!preferredLocalTrack || preferredLocalTrack.readyState === "ended") preferredLocalTrack = [...knownLocalTracks].find((track) => track?.readyState !== "ended") || null;
+    if (preferredLocalTrack) attachAudioTrack(preferredLocalTrack, "local");
     for (const pc of peerConnections) scanAudioTracks(pc);
-    if (![...knownLocalTracks].some((track) => track?.readyState !== "ended")) void ensureOwnMicrophone();
+    if (!preferredLocalTrack || preferredLocalTrack.readyState === "ended") void ensureOwnMicrophone();
     emit("RTC_STATUS", currentStatus());
   }
 

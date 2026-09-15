@@ -53,11 +53,11 @@ const source=fs.readFileSync(new URL("../page-rtc-capture.js",import.meta.url),"
 vm.runInContext(source,context);
 
 const pc=new windowObject.RTCPeerConnection();
-pc.senders.push({track:new FakeTrack("local-1")});
+pc.senders.push({track:new FakeTrack("local-1")},{track:new FakeTrack("local-2")});
 pc.receivers.push({track:new FakeTrack("remote-1")});
 const dispatchWindow=(data)=>{ for(const h of listeners.get("message")||[]) h({source:windowObject,data}); };
 dispatchWindow({source:"leonardo-meet-content",type:"START_AUDIO_CAPTURE"});
-assert.equal(recorders.length,2,"local and remote audio tracks should be recorded");
+assert.equal(recorders.length,2,"only one preferred local track plus remote should be recorded");
 assert.equal(messages.filter(m=>m.type==="AUDIO_TRACK_START").length,2);
 assert.equal(pc.created.length,0,"audio architecture must not create caption data channels");
 
