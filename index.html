@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Apresentação Visual • Site Imobiliário</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap');
+
+    :root{
+      --bg:#090b10;
+      --bg2:#0f131a;
+      --card:rgba(255,255,255,.06);
+      --line:rgba(255,255,255,.10);
+      --text:#f5f7fb;
+      --muted:#98a2b3;
+      --green:#d7ff63;
+      --blue:#77e2ff;
+      --gold:#f4d7a1;
+      --danger:#ff8d7e;
+      --radius:28px;
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;
+      background:
+        radial-gradient(900px 500px at 15% 10%, rgba(119,226,255,.12), transparent 60%),
+        radial-gradient(900px 500px at 85% 90%, rgba(215,255,99,.10), transparent 60%),
+        var(--bg);
+      overflow-x:hidden;
+    }
+    .progress{position:fixed;top:0;left:0;height:4px;width:0;z-index:200;background:linear-gradient(90deg,var(--green),var(--blue))}
+    .topbar{
+      position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:120;
+      display:flex;align-items:center;justify-content:space-between;gap:16px;
+      width:min(1120px,calc(100% - 28px));
+      padding:12px 14px;border:1px solid var(--line);background:rgba(9,11,16,.68);backdrop-filter:blur(18px);
+      border-radius:999px;
+    }
+    .brand{font-size:12px;text-transform:uppercase;letter-spacing:.16em;color:#cad3dc}
+    .controls{display:flex;gap:8px;align-items:center}
+    .btn{
+      border:1px solid var(--line);background:transparent;color:var(--text);padding:10px 14px;border-radius:999px;
+      font-weight:700;cursor:pointer;font-size:12px
+    }
+    .btn.primary{background:var(--green);color:#0b1110;border-color:transparent}
+    .hint{font-size:11px;color:#a5afba}
+    section{
+      min-height:100vh;display:flex;align-items:center;justify-content:center;
+      padding:110px 24px 70px;position:relative;border-bottom:1px solid rgba(255,255,255,.05)
+    }
+    .wrap{width:min(1180px,100%)}
+    .center{text-align:center}
+    .eyebrow{
+      display:inline-block;font-size:12px;font-weight:800;letter-spacing:.18em;text-transform:uppercase;
+      color:#c7d0da;border:1px solid rgba(255,255,255,.12);padding:10px 14px;border-radius:999px;
+      background:rgba(255,255,255,.035)
+    }
+    h1,h2,h3,p{margin:0}
+    h1{
+      font-size:clamp(56px,8vw,126px);line-height:.92;letter-spacing:-.06em;margin-top:22px;font-weight:900
+    }
+    h2{
+      font-size:clamp(42px,6vw,90px);line-height:.96;letter-spacing:-.055em;font-weight:900
+    }
+    h3{
+      font-size:clamp(24px,2.8vw,38px);line-height:1.02;letter-spacing:-.04em;font-weight:800
+    }
+    .big{
+      font-size:clamp(22px,2.4vw,34px);line-height:1.25;color:#d9e0e7;max-width:840px;margin:22px auto 0
+    }
+    .mini{
+      font-size:15px;line-height:1.55;color:var(--muted)
+    }
+    .green{color:var(--green)}
+    .blue{color:var(--blue)}
+    .gold{color:var(--gold)}
+    .danger{color:var(--danger)}
+
+    .hero-grid{display:grid;grid-template-columns:1.05fr .95fr;gap:32px;align-items:center;margin-top:24px}
+    .hero-copy{text-align:left}
+    .hero-copy .big{margin-left:0}
+    .visual{
+      border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.03));
+      border-radius:36px;padding:18px;box-shadow:0 30px 90px rgba(0,0,0,.32)
+    }
+    .browser{
+      border-radius:26px;overflow:hidden;background:#f4f1e7;color:#091018
+    }
+    .browser-top{height:44px;background:#e7e2d7;display:flex;align-items:center;padding:0 14px;gap:7px}
+    .browser-top i{width:9px;height:9px;border-radius:50%;background:#b9b3aa}
+    .site-hero{
+      height:280px;padding:28px;display:flex;flex-direction:column;justify-content:flex-end;color:#fff;
+      background:
+        linear-gradient(180deg, transparent 0%, rgba(10,18,24,.2) 45%, rgba(10,18,24,.82) 100%),
+        linear-gradient(135deg,#607176,#334c56 50%,#132029 100%);
+    }
+    .site-hero h3{font-size:32px;color:#fff}
+    .site-hero p{font-size:12px;color:rgba(255,255,255,.75);margin-top:8px}
+    .search{
+      margin:-22px 24px 0;background:#fff;box-shadow:0 24px 50px rgba(18,22,24,.15);
+      border-radius:18px;padding:14px;display:grid;grid-template-columns:1fr 1fr auto;gap:10px
+    }
+    .chip{background:#f0eee7;border-radius:12px;padding:13px 14px;color:#6b7480;font-size:12px}
+    .go{background:#0f1620;color:#fff;border-radius:12px;padding:13px 18px;font-size:12px}
+    .cards{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:24px}
+    .prop{
+      border:1px solid #ddd7cd;border-radius:16px;overflow:hidden;background:#fff
+    }
+    .img{height:100px;background:linear-gradient(135deg,#b2beb5,#6c8281 55%,#364546)}
+    .prop:nth-child(2) .img{background:linear-gradient(135deg,#d0c2b5,#957b6a 55%,#41393a)}
+    .prop:nth-child(3) .img{background:linear-gradient(135deg,#b4c4c2,#748a85 55%,#314040)}
+    .prop:nth-child(4) .img{background:linear-gradient(135deg,#d4cbc1,#8f847a 55%,#4a4746)}
+    .body{padding:12px}
+    .body b{display:block;font-size:12px}
+    .body span{display:block;font-size:10px;color:#69737c;margin-top:3px}
+    .body strong{display:block;font-size:12px;margin-top:8px}
+
+    .stack{
+      display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:40px
+    }
+    .bubble{
+      padding:28px;border:1px solid var(--line);background:var(--card);border-radius:26px;min-height:230px;
+      display:flex;flex-direction:column;justify-content:space-between
+    }
+    .bubble .n{font-size:14px;font-weight:900;letter-spacing:.15em;color:#c4ccd5}
+    .bubble h3{margin-top:18px}
+    .bubble p{font-size:15px;color:#9fabb7;line-height:1.5;margin-top:12px}
+
+    .compare{
+      display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:42px
+    }
+    .compare-box{
+      padding:28px;border-radius:30px;border:1px solid var(--line);min-height:420px
+    }
+    .compare-box.bad{background:linear-gradient(180deg,rgba(255,141,126,.08),rgba(255,255,255,.03))}
+    .compare-box.good{background:linear-gradient(180deg,rgba(215,255,99,.10),rgba(255,255,255,.03))}
+    .label{display:inline-block;padding:10px 14px;border-radius:999px;font-size:12px;font-weight:900;letter-spacing:.14em;text-transform:uppercase}
+    .bad .label{background:rgba(255,141,126,.16);color:var(--danger)}
+    .good .label{background:rgba(215,255,99,.16);color:var(--green)}
+    .compare-box ul{list-style:none;padding:0;margin:28px 0 0;display:grid;gap:12px}
+    .compare-box li{
+      padding:14px 16px;border:1px solid rgba(255,255,255,.08);border-radius:16px;
+      font-size:15px;line-height:1.45;color:#cfd5db;background:rgba(255,255,255,.025)
+    }
+    .compare-box li::before{font-weight:900;margin-right:10px}
+    .bad li::before{content:"×";color:var(--danger)}
+    .good li::before{content:"✓";color:var(--green)}
+
+    .journey{
+      display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-top:42px
+    }
+    .step{
+      padding:24px 18px;border:1px solid var(--line);background:var(--card);border-radius:24px;text-align:left;min-height:225px
+    }
+    .step .num{font-size:42px;font-weight:900;letter-spacing:-.05em;color:var(--green)}
+    .step h4{font-size:18px;line-height:1.08;margin:10px 0 12px}
+    .step p{font-size:14px;color:var(--muted);line-height:1.5}
+
+    .plans{
+      display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:40px
+    }
+    .plan{
+      padding:24px;border-radius:28px;border:1px solid var(--line);background:var(--card);min-height:430px;position:relative;
+      display:flex;flex-direction:column
+    }
+    .plan.reco{
+      background:linear-gradient(180deg,rgba(215,255,99,.12),rgba(255,255,255,.045));
+      border-color:rgba(215,255,99,.4);
+      transform:translateY(-8px)
+    }
+    .badge{
+      position:absolute;top:14px;right:14px;background:var(--green);color:#0b1110;border-radius:999px;padding:8px 10px;
+      font-size:10px;font-weight:900;letter-spacing:.08em
+    }
+    .plan .name{font-size:11px;text-transform:uppercase;letter-spacing:.15em;color:#c7d0da;font-weight:800}
+    .price{font-size:44px;line-height:1;font-weight:900;letter-spacing:-.06em;margin-top:14px}
+    .sub{font-size:14px;color:#cad1d8;margin-top:10px}
+    .plan ul{list-style:none;padding:0;margin:22px 0 0;display:grid;gap:10px}
+    .plan li{font-size:14px;color:#a6b0bb;line-height:1.45}
+    .plan li::before{content:"•";color:var(--green);font-weight:900;margin-right:8px}
+    .month{margin-top:auto;padding-top:18px;font-size:15px;color:#dbe1e6}
+    .month strong{color:#fff}
+
+    .close-grid{display:grid;grid-template-columns:1fr .95fr;gap:30px;align-items:center}
+    .cta{
+      padding:36px;border-radius:34px;border:1px solid rgba(215,255,99,.25);
+      background:
+        radial-gradient(500px 260px at 100% 0%, rgba(119,226,255,.12), transparent 60%),
+        radial-gradient(500px 260px at 0% 100%, rgba(215,255,99,.10), transparent 60%),
+        rgba(255,255,255,.04)
+    }
+    .cta .actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:26px}
+    .action{
+      display:inline-flex;align-items:center;justify-content:center;padding:14px 18px;border-radius:999px;font-weight:800;font-size:14px;
+      border:1px solid var(--line);cursor:pointer
+    }
+    .action.primary{background:var(--green);color:#0d1115;border-color:transparent}
+    .action.secondary{background:transparent;color:#fff}
+    .little-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .mini-card{
+      padding:18px;border:1px solid var(--line);border-radius:22px;background:rgba(255,255,255,.04);min-height:140px
+    }
+    .mini-card b{display:block;font-size:16px;margin-bottom:8px}
+    .mini-card p{font-size:13px;line-height:1.5;color:#9eabb8}
+
+    .reveal{opacity:0;transform:translateY(24px);transition:opacity .8s ease, transform .8s cubic-bezier(.2,.8,.2,1)}
+    .reveal.in{opacity:1;transform:none}
+
+    .dots{position:fixed;right:18px;top:50%;transform:translateY(-50%);z-index:90;display:grid;gap:8px}
+    .dots a{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.18);display:block;transition:.25s}
+    .dots a.active{background:var(--green);transform:scale(1.45)}
+
+    .showcase{
+      margin-top:42px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px
+    }
+    .shot{
+      border-radius:26px;padding:22px;min-height:240px;border:1px solid var(--line);background:var(--card)
+    }
+    .shot .caption{font-size:12px;font-weight:900;letter-spacing:.13em;text-transform:uppercase;color:#c6d0d8}
+    .shot .shape{
+      margin-top:18px;height:140px;border-radius:18px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)),
+        linear-gradient(135deg, #25303b, #0d1116);
+      position:relative;overflow:hidden
+    }
+    .shape::before,.shape::after{content:"";position:absolute;border-radius:999px;background:rgba(215,255,99,.18)}
+    .shape::before{width:180px;height:180px;left:-40px;top:-50px}
+    .shape::after{width:140px;height:140px;right:-30px;bottom:-40px;background:rgba(119,226,255,.16)}
+    .shot p{font-size:14px;line-height:1.5;color:#a7b1bc;margin-top:14px}
+
+    @media (max-width:980px){
+      .hero-grid,.compare,.close-grid{grid-template-columns:1fr}
+      .stack{grid-template-columns:1fr}
+      .journey{grid-template-columns:1fr 1fr}
+      .plans{grid-template-columns:1fr 1fr}
+      .showcase{grid-template-columns:1fr}
+      .dots{display:none}
+    }
+    @media (max-width:640px){
+      .topbar{border-radius:22px}
+      .plans{grid-template-columns:1fr}
+      .journey{grid-template-columns:1fr}
+      .compare{grid-template-columns:1fr}
+      .little-grid{grid-template-columns:1fr}
+      .stack{grid-template-columns:1fr}
+      .hero-copy{text-align:center}
+      .hero-copy .big{margin-left:auto}
+      .plan.reco{transform:none}
+      .cards{grid-template-columns:1fr}
+      .search{grid-template-columns:1fr}
+    }
+    @media print{
+      .topbar,.dots,.progress{display:none!important}
+      section{min-height:auto;page-break-after:always;padding:42px 20px}
+      .reveal{opacity:1!important;transform:none!important}
+    }
+  </style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+
+<div class="topbar">
+  <div class="brand">Apresentação visual • <span data-client>Sua Imobiliária</span></div>
+  <div class="controls">
+    <span class="hint">mais visual, menos leitura</span>
+    <button class="btn" onclick="window.print()">PDF</button>
+    <button class="btn primary" onclick="toggleFullscreen()">Apresentar</button>
+  </div>
+</div>
+
+<nav class="dots" id="dots"></nav>
+
+<section>
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <div class="eyebrow reveal">proposta comercial</div>
+      <h1 class="reveal">Um site que <span class="green">vende melhor</span> o imóvel.</h1>
+      <p class="big reveal">Mais do que “mostrar imóveis”, a ideia é criar uma experiência que valoriza a marca, organiza o catálogo e facilita o contato.</p>
+    </div>
+    <div class="visual reveal">
+      <div class="browser">
+        <div class="browser-top"><i></i><i></i><i></i></div>
+        <div class="site-hero">
+          <h3>Encontre o imóvel ideal com mais clareza.</h3>
+          <p>Imagem • posicionamento • confiança • experiência</p>
+        </div>
+        <div class="search">
+          <div class="chip">Cidade / Bairro</div>
+          <div class="chip">Tipo / Faixa</div>
+          <div class="go">Buscar</div>
+        </div>
+        <div class="cards">
+          <div class="prop"><div class="img"></div><div class="body"><b>Casa em condomínio</b><span>4 suítes • 380 m²</span><strong>R$ 2.980.000</strong></div></div>
+          <div class="prop"><div class="img"></div><div class="body"><b>Apartamento premium</b><span>3 suítes • 190 m²</span><strong>R$ 1.790.000</strong></div></div>
+          <div class="prop"><div class="img"></div><div class="body"><b>Casa moderna</b><span>5 suítes • 520 m²</span><strong>R$ 4.350.000</strong></div></div>
+          <div class="prop"><div class="img"></div><div class="body"><b>Cobertura exclusiva</b><span>4 suítes • 310 m²</span><strong>R$ 3.420.000</strong></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap center">
+    <div class="eyebrow reveal">o problema</div>
+    <h2 class="reveal">Hoje, muita imobiliária tem <span class="danger">site</span>.<br>Mas poucas têm <span class="gold">presença digital.</span></h2>
+    <div class="compare">
+      <div class="compare-box bad reveal">
+        <span class="label">site comum</span>
+        <ul>
+          <li>Visual genérico e sem personalidade</li>
+          <li>Busca confusa e navegação cansativa</li>
+          <li>Imóvel perde valor na apresentação</li>
+          <li>Leads chegam sem contexto</li>
+          <li>Dependência de plataforma de terceiros</li>
+        </ul>
+      </div>
+      <div class="compare-box good reveal">
+        <span class="label">site estratégico</span>
+        <ul>
+          <li>Marca valorizada logo no primeiro acesso</li>
+          <li>Imóveis fáceis de encontrar e comparar</li>
+          <li>Páginas de imóvel mais atrativas</li>
+          <li>Contato mais direto via WhatsApp e formulário</li>
+          <li>Estrutura própria, organizada e escalável</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap center">
+    <div class="eyebrow reveal">o que entregamos</div>
+    <h2 class="reveal">Visual bonito por fora.<br><span class="blue">Sistema útil por dentro.</span></h2>
+    <div class="stack">
+      <div class="bubble reveal">
+        <div class="n">01</div>
+        <div>
+          <h3>Experiência</h3>
+          <p>Home impactante, design premium, versão mobile impecável e páginas de imóvel com muito mais percepção de valor.</p>
+        </div>
+      </div>
+      <div class="bubble reveal">
+        <div class="n">02</div>
+        <div>
+          <h3>Conversão</h3>
+          <p>Busca, filtros, destaques, WhatsApp, formulários e captação para transformar visita em oportunidade.</p>
+        </div>
+      </div>
+      <div class="bubble reveal">
+        <div class="n">03</div>
+        <div>
+          <h3>Gestão</h3>
+          <p>Painel para cadastrar, editar, desativar e organizar imóveis sem precisar depender de programação.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap center">
+    <div class="eyebrow reveal">como fica na prática</div>
+    <h2 class="reveal">Uma estrutura pensada para <span class="green">apresentar</span>,<br><span class="blue">organizar</span> e <span class="gold">crescer.</span></h2>
+    <div class="showcase">
+      <div class="shot reveal">
+        <div class="caption">Home premium</div>
+        <div class="shape"></div>
+        <p>Primeira impressão forte, posicionamento mais profissional e destaque para os imóveis certos.</p>
+      </div>
+      <div class="shot reveal">
+        <div class="caption">Listagem inteligente</div>
+        <div class="shape"></div>
+        <p>Busca mais clara com filtros por cidade, bairro, condomínio, faixa de preço e tipo de imóvel.</p>
+      </div>
+      <div class="shot reveal">
+        <div class="caption">Página do imóvel</div>
+        <div class="shape"></div>
+        <p>Galeria, características, descrição, diferenciais e CTA direto para WhatsApp e formulário.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap center">
+    <div class="eyebrow reveal">processo</div>
+    <h2 class="reveal">Simples de entender.<br>Simples de aprovar.</h2>
+    <div class="journey">
+      <div class="step reveal"><div class="num">01</div><h4>Imersão</h4><p>Entendemos marca, público, regiões e o perfil dos imóveis.</p></div>
+      <div class="step reveal"><div class="num">02</div><h4>Design</h4><p>Criamos a direção visual e a experiência do novo site.</p></div>
+      <div class="step reveal"><div class="num">03</div><h4>Desenvolvimento</h4><p>Construímos o site, o painel e toda a estrutura técnica.</p></div>
+      <div class="step reveal"><div class="num">04</div><h4>Cadastro</h4><p>Subimos o volume inicial de imóveis conforme o plano.</p></div>
+      <div class="step reveal"><div class="num">05</div><h4>Publicação</h4><p>Testes, SEO, performance e site no ar para operar.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap center">
+    <div class="eyebrow reveal">investimento</div>
+    <h2 class="reveal">Quatro formas de começar.</h2>
+    <p class="big reveal">A qualidade visual continua alta em todos os planos. O que muda é principalmente a profundidade da implantação e o volume inicial de cadastro.</p>
+    <div class="plans">
+      <div class="plan reveal">
+        <div class="name">Start</div>
+        <div class="price">R$ 2.500</div>
+        <div class="sub">até 15 imóveis no cadastro inicial</div>
+        <ul>
+          <li>Site premium responsivo</li>
+          <li>WhatsApp + formulário</li>
+          <li>Filtros essenciais</li>
+          <li>Galeria de imóveis</li>
+        </ul>
+        <div class="month"><strong>R$ 199/mês</strong> manutenção</div>
+      </div>
+
+      <div class="plan reveal">
+        <div class="name">Essencial</div>
+        <div class="price">R$ 3.900</div>
+        <div class="sub">até 40 imóveis no cadastro inicial</div>
+        <ul>
+          <li>Painel administrativo</li>
+          <li>Busca e categorias</li>
+          <li>Imóveis em destaque</li>
+          <li>SEO estruturado</li>
+        </ul>
+        <div class="month"><strong>R$ 249/mês</strong> manutenção</div>
+      </div>
+
+      <div class="plan reco reveal">
+        <div class="badge">RECOMENDADO</div>
+        <div class="name">Profissional</div>
+        <div class="price">R$ 5.900</div>
+        <div class="sub">até 80 imóveis no cadastro inicial</div>
+        <ul>
+          <li>Design mais trabalhado</li>
+          <li>Filtros avançados</li>
+          <li>Bairros e condomínios</li>
+          <li>SEO + performance</li>
+        </ul>
+        <div class="month"><strong>R$ 349/mês</strong> manutenção</div>
+      </div>
+
+      <div class="plan reveal">
+        <div class="name">Premium</div>
+        <div class="price">R$ 7.900</div>
+        <div class="sub">até 150 imóveis no cadastro inicial</div>
+        <ul>
+          <li>Páginas de SEO</li>
+          <li>Captação ampliada</li>
+          <li>Mais estrutura visual</li>
+          <li>Escalada futura</li>
+        </ul>
+        <div class="month"><strong>R$ 449/mês</strong> manutenção</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap close-grid">
+    <div class="cta reveal">
+      <div class="eyebrow">fechamento</div>
+      <h2 style="margin-top:20px">Mais do que um site.<br>Um <span class="green">ativo digital</span> da sua imobiliária.</h2>
+      <p class="big" style="margin-left:0">A proposta é construir uma presença mais forte, organizada e profissional para valorizar os imóveis e facilitar a operação comercial.</p>
+      <div class="actions">
+        <button class="action primary" onclick="goPlans()">Ver planos novamente</button>
+        <button class="action secondary" onclick="window.print()">Salvar em PDF</button>
+      </div>
+    </div>
+    <div class="little-grid reveal">
+      <div class="mini-card">
+        <b>Infraestrutura própria</b>
+        <p>Domínio, dados e estrutura organizados para a imobiliária, sem depender de uma operação compartilhada.</p>
+      </div>
+      <div class="mini-card">
+        <b>Manutenção contínua</b>
+        <p>Mensalidade para suporte, atualizações, monitoramento e continuidade do projeto.</p>
+      </div>
+      <div class="mini-card">
+        <b>Escalável</b>
+        <p>Começa simples, mas já preparado para crescer com mais imóveis e mais recursos no futuro.</p>
+      </div>
+      <div class="mini-card">
+        <b>Próximo passo</b>
+        <p>Definir o plano ideal, receber os materiais e iniciar a etapa de imersão e direção visual.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  const sections=[...document.querySelectorAll('section')];
+  const dots=document.getElementById('dots');
+  sections.forEach((s,i)=>{
+    s.id='s'+i;
+    const a=document.createElement('a');
+    a.href='#s'+i;
+    dots.appendChild(a);
+  });
+  const dotEls=[...dots.children];
+
+  const revealIO = new IntersectionObserver(entries=>{
+    entries.forEach(e=>{
+      if(e.isIntersecting){
+        e.target.classList.add('in');
+      }
+    })
+  },{threshold:.13});
+  document.querySelectorAll('.reveal').forEach(el=>revealIO.observe(el));
+
+  const sectionIO = new IntersectionObserver(entries=>{
+    entries.forEach(e=>{
+      if(e.isIntersecting){
+        const idx = sections.indexOf(e.target);
+        dotEls.forEach((d,i)=>d.classList.toggle('active',i===idx));
+      }
+    })
+  },{threshold:.28});
+  sections.forEach(s=>sectionIO.observe(s));
+
+  window.addEventListener('scroll',()=>{
+    const h=document.documentElement.scrollHeight-innerHeight;
+    document.getElementById('progress').style.width=(scrollY/h*100)+'%';
+  });
+
+  async function toggleFullscreen(){
+    if(!document.fullscreenElement){await document.documentElement.requestFullscreen?.();}
+    else{await document.exitFullscreen?.();}
+  }
+
+  function goPlans(){
+    document.getElementById('s5').scrollIntoView({behavior:'smooth'});
+  }
+
+  document.addEventListener('keydown',e=>{
+    if(e.key.toLowerCase()==='f') toggleFullscreen();
+    if(e.key==='ArrowDown' || e.key==='PageDown'){
+      const next=sections.find(s=>s.offsetTop > scrollY + innerHeight*.3);
+      if(next){e.preventDefault();next.scrollIntoView({behavior:'smooth'});}
+    }
+    if(e.key==='ArrowUp' || e.key==='PageUp'){
+      const prev=[...sections].reverse().find(s=>s.offsetTop < scrollY - innerHeight*.2);
+      if(prev){e.preventDefault();prev.scrollIntoView({behavior:'smooth'});}
+    }
+  });
+
+  const params=new URLSearchParams(location.search);
+  const client=params.get('cliente');
+  if(client){
+    document.querySelectorAll('[data-client]').forEach(el=>el.textContent=client);
+    document.title='Apresentação Visual • '+client;
+  }
+</script>
+</body>
+</html>
