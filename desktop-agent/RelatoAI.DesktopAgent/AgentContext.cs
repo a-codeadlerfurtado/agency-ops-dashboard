@@ -8,6 +8,8 @@ internal sealed class AgentContext : ApplicationContext
     private readonly ToolStripMenuItem autoItem;
     private readonly ToolStripMenuItem finishItem;
     private readonly WhatsAppDesktopCapture capture;
+    private readonly MeetDesktopCaptureV2 meetCapture;
+    private readonly MeetLocalBridgeV2 meetBridge;
     private readonly Control dispatcher = new();
     private RecordingIndicatorForm? recordingIndicator;
 
@@ -23,10 +25,27 @@ internal sealed class AgentContext : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.AddRange([statusItem, new ToolStripSeparator(), autoItem, finishItem, pairItem, new ToolStripSeparator(), exitItem]);
         tray = new NotifyIcon { Icon = SystemIcons.Information, Text = "Relato AI Desktop Agent", Visible = true, ContextMenuStrip = menu };
+
         capture = new WhatsAppDesktopCapture(() => config);
+        meetCapture = new MeetDesktopCaptureV2(() => config);
+        meetBridge = new MeetLocalBridgeV2(meetCapture);
         WireEvents();
+        try
+        {
+            meetBridge.Start();
+            UpdateStatus("Ponte Meet ativa · 127.0.0.1:17654");
+        }
+        catch (Exception ex)
+        {
+            UpdateStatus("Ponte Meet indisponível · " + ex.Message);
+        }
+
         autoItem.CheckedChanged += (_, _) => capture.Enabled = autoItem.Checked;
-        finishItem.Click += async (_, _) => await capture.FinishManualAsync();
+        finishItem.Click += async (_, _) =>
+        {
+            if (meetCapture.IsRecording) await meetCapture.FinishAsync("manual_stop");
+            else await capture.FinishManualAsync();
+        };
         pairItem.Click += async (_, _) => await PairAsync();
         exitItem.Click += (_, _) => ExitThread();
         UpdateStatus(config is null ? "Não pareado" : $"Conectado · {config.OwnerPerson}");
@@ -35,6 +54,25 @@ internal sealed class AgentContext : ApplicationContext
 
     private void WireEvents()
     {
+        meetCapture.StatusChanged += text => Post(() => UpdateStatus(text));
+        meetCapture.MeetingStarted += code => Post(() =>
+        {
+            finishItem.Enabled = true;
+            tray.Text = "Relato AI · REC Meet";
+            recordingIndicator ??= new RecordingIndicatorForm();
+            recordingIndicator.ShowIndicator("Google Meet");
+            tray.ShowBalloonTip(1500, "Relato AI", $"Gravando Google Meet · {code}", ToolTipIcon.Info);
+        });
+        meetCapture.MeetingFinished += (_, ok, error) => Post(() =>
+        {
+            finishItem.Enabled = false;
+            tray.Text = "Relato AI Desktop Agent";
+            recordingIndicator?.HideIndicator();
+            tray.ShowBalloonTip(ok ? 1800 : 3500, "Relato AI",
+                ok ? "Meet salvo e transcrito." : (error ?? "Falha ao finalizar Meet."),
+                ok ? ToolTipIcon.Info : ToolTipIcon.Error);
+        });
+
         capture.StatusChanged += text => Post(() => UpdateStatus(text));
         capture.CallStarted += (_, contact) => Post(() =>
         {
@@ -55,10 +93,8 @@ internal sealed class AgentContext : ApplicationContext
         });
         capture.CallFinished += (_, ok, error) => Post(() =>
         {
-            if (ok)
-                tray.ShowBalloonTip(2200, "Relato AI", "Ligação enviada para transcrição.", ToolTipIcon.Info);
-            else
-                tray.ShowBalloonTip(3500, "Relato AI", error ?? "Falha ao enviar ligação.", ToolTipIcon.Error);
+            if (ok) tray.ShowBalloonTip(2200, "Relato AI", "Ligação enviada para transcrição.", ToolTipIcon.Info);
+            else tray.ShowBalloonTip(3500, "Relato AI", error ?? "Falha ao enviar ligação.", ToolTipIcon.Error);
         });
     }
 
@@ -68,6 +104,7 @@ internal sealed class AgentContext : ApplicationContext
         timer.Tick += async (_, _) => { timer.Stop(); timer.Dispose(); await PairAsync(); };
         timer.Start();
     }
+
     private async Task PairAsync()
     {
         using var form = new PairingForm();
@@ -93,13 +130,9 @@ internal sealed class AgentContext : ApplicationContext
         statusItem.Text = display;
         try
         {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "RelatoAI");
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RelatoAI");
             Directory.CreateDirectory(dir);
-            File.AppendAllText(
-                Path.Combine(dir, "desktop-agent.log"),
-                $"{DateTimeOffset.Now:O}\t{text}{Environment.NewLine}");
+            File.AppendAllText(Path.Combine(dir, "desktop-agent.log"), $"{DateTimeOffset.Now:O}\t{text}{Environment.NewLine}");
         }
         catch { }
     }
@@ -113,6 +146,8 @@ internal sealed class AgentContext : ApplicationContext
     protected override void ExitThreadCore()
     {
         recordingIndicator?.Dispose();
+        meetBridge.Dispose();
+        meetCapture.Dispose();
         capture.Dispose();
         dispatcher.Dispose();
         tray.Visible = false;
