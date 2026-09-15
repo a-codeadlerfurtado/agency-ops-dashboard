@@ -1,0 +1,10 @@
+{
+  "inputs": [
+    "/mnt/data/IMG_7142.MP4",
+    "/mnt/data/IMG_7139.MP4",
+    "/mnt/data/IMG_7151.MP4"
+  ],
+  "strategy": {"target_duration_seconds": 19.2, "aspect_ratio": "9:16"},
+  "overlays": [],
+  "unsafe_fields_inserted": false
+}

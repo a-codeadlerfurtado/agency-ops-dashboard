@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  video-worker-v3:
+    image: leonardo-video-worker:3.0.3
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      VIDEO_EDIT_WORKER_TOKEN: ${VIDEO_EDIT_WORKER_TOKEN}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET}
+      GOOGLE_OAUTH_REFRESH_TOKEN: ${GOOGLE_OAUTH_REFRESH_TOKEN}
+      VIDEO_WORK_DIR: /data/work
+      VIDEO_WORKER_ID: leonardo-video-worker-v3
+      VIDEO_POLL_SECONDS: "10"
+      VIDEO_HEARTBEAT_SECONDS: "20"
+      VIDEO_IDLE_HEARTBEAT_SECONDS: "60"
+      VIDEO_ANALYSIS_ENABLED: "false"
+      VIDEO_ANALYSIS_BUDGET: "1"
+      VIDEO_ANALYSIS_COOLDOWN_SECONDS: "120"
+    volumes:
+      - leonardo_video_worker_v3_data:/data
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+        delay: 10s
+        max_attempts: 5
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4G
+        reservations:
+          cpus: "0.25"
+          memory: 512M
+      placement:
+        constraints:
+          - node.hostname == LeonardoImobi
+
+volumes:
+  leonardo_video_worker_v3_data:
+
