@@ -1,0 +1,9 @@
+const pages=await (await fetch('http://127.0.0.1:9333/json/list')).json();
+const pg=pages.find(x=>x.type==='page'); const ws=new WebSocket(pg.webSocketDebuggerUrl); await new Promise((r,j)=>{ws.onopen=r;ws.onerror=j});
+let id=0; const pending=new Map(); ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id&&pending.has(m.id)){const p=pending.get(m.id);pending.delete(m.id);m.error?p.j(m.error):p.r(m.result)}};
+const cmd=(method,params={})=>new Promise((r,j)=>{const n=++id;pending.set(n,{r,j});ws.send(JSON.stringify({id:n,method,params}))}); const sleep=ms=>new Promise(r=>setTimeout(r,ms)); const ev=async expression=>(await cmd('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true,userGesture:true})).result.value;
+await cmd('Runtime.enable'); await cmd('Page.enable'); await cmd('Page.navigate',{url:'https://readerpro.lakassessoriadigital.workers.dev/?v=libraryfix'}); await sleep(3500);
+console.log('LIB',await ev(`({cards:[...document.querySelectorAll('.bookCard .bookTitle')].map(x=>x.textContent),buttons:[...document.querySelectorAll('[data-book-id]')].map(x=>({id:x.dataset.bookId,disabled:x.disabled,text:x.textContent}))})`));
+console.log('CLICK',await ev(`(()=>{const b=document.querySelector('[data-book-id="kotler-keller-marketing-management-15e-global"]');if(!b)return 'missing';b.click();return 'clicked'})()`));
+for(let i=0;i<25;i++){await sleep(1000);const s=await ev(`({overlay:document.getElementById('libraryOverlay')?.classList.contains('show'),page:document.getElementById('pageNum')?.value,total:document.getElementById('pageTotal')?.textContent,status:document.getElementById('status')?.textContent,canvas:document.getElementById('canvas')?.getBoundingClientRect().width})`);if(i%3===0)console.log('STATE',i,s);if(!s.overlay&&Number(s.canvas)>100&&/pronta/i.test(s.status||'')){console.log('READY',s);break;}}
+ws.close();

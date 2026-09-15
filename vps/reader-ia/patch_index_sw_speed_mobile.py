@@ -1,0 +1,10 @@
+from pathlib import Path
+base=Path(r'C:\Users\Adler\agency-ops-hetzner-worktree\vps\reader-ia')
+p=base/'index.html'; s=p.read_text(encoding='utf-8-sig')
+s=s.replace('.libraryOverlay{position:fixed;inset:0;z-index:60;', '.libraryOverlay{position:fixed;inset:0;z-index:90;',1)
+s=s.replace('/reader/app-v2.mjs?v=crosspage-audio-buffer-20260910','/reader/app-v2.mjs?v=reader-speed-mobile-v16-20260910',1)
+p.write_text(s,encoding='utf-8')
+w=base/'sw.js'; t=w.read_text(encoding='utf-8-sig')
+t=t.replace("readerpro-shell-v15-crosspage-audio","readerpro-shell-v16-speed-mobile")
+w.write_text(t,encoding='utf-8')
+print('index_sw_patch_ok')

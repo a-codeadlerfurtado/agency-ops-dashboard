@@ -1,0 +1,15 @@
+from pathlib import Path
+p=Path(r'C:\Users\Adler\agency-ops-hetzner-worktree\vps\reader-ia\server.py')
+s=p.read_text(encoding='utf-8-sig')
+s=s.replace('import shutil\n', 'import shutil\nimport threading\nimport time\n',1)
+s=s.replace('TRANSLATION_CACHE_DIR.mkdir(parents=True, exist_ok=True)\n', 'TRANSLATION_CACHE_DIR.mkdir(parents=True, exist_ok=True)\nTTS_CACHE_DIR = CACHE_ROOT / "tts"\nTTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)\n',1)
+needle='''    with urllib.request.urlopen(req, timeout=180) as response:\n        return response.read(), response.headers.get("Content-Type", "audio/mpeg")\n\n\n'''
+insert='''    with urllib.request.urlopen(req, timeout=180) as response:\n        return response.read(), response.headers.get("Content-Type", "audio/mpeg")\n\ndef synthesize_cached(text: str, voice: str, speed: float):\n    key=hashlib.sha256(f"tts-v1|{voice}|{speed:.3f}|{text}".encode("utf-8")).hexdigest()\n    fp=TTS_CACHE_DIR/f"{key}.mp3"\n    if fp.exists() and fp.stat().st_size>256:\n        return fp.read_bytes(), "audio/mpeg", True\n    audio,content_type=synthesize(text,voice,speed)\n    try:\n        tmp=fp.with_suffix('.tmp'); tmp.write_bytes(audio); os.replace(tmp,fp)\n    except Exception as exc: print(f"tts_cache_write_failed:{exc}")\n    return audio,content_type,False\n\ndef keep_tts_hot():\n    time.sleep(2)\n    while True:\n        try: synthesize("Jarvis.","pm_jarvis",1.0); print("tts_keepwarm_ok")\n        except Exception as exc: print(f"tts_keepwarm_failed:{exc}")\n        time.sleep(120)\n\n\n'''
+if needle not in s: raise SystemExit('synthesize marker missing')
+s=s.replace(needle,insert,1)
+s=s.replace('def send_bytes(self, status, body, content_type):', 'def send_bytes(self, status, body, content_type, extra_headers=None):',1)
+s=s.replace('''        self.send_header("Cache-Control", "public, max-age=31536000, immutable")\n        self.end_headers()''','''        self.send_header("Cache-Control", "public, max-age=31536000, immutable")\n        for k,v in (extra_headers or {}).items(): self.send_header(k,str(v))\n        self.end_headers()''',1)
+s=s.replace('''                audio, content_type = synthesize(spoken_text, voice, speed)\n                return self.send_bytes(200, audio, content_type)''','''                audio, content_type, cache_hit = synthesize_cached(spoken_text, voice, speed)\n                return self.send_bytes(200, audio, content_type, {"X-ReaderPro-TTS-Cache":"HIT" if cache_hit else "MISS"})''',1)
+s=s.replace('''if __name__ == "__main__":\n    print(f"Reader IA listening on {HOST}:{PORT}; translator={TRANSLATE_URL}; tts={TTS_URL}")''','''if __name__ == "__main__":\n    threading.Thread(target=keep_tts_hot,daemon=True).start()\n    print(f"Reader IA listening on {HOST}:{PORT}; translator={TRANSLATE_URL}; tts={TTS_URL}")''',1)
+p.write_text(s,encoding='utf-8')
+print('server_tts_cache_patch_ok')

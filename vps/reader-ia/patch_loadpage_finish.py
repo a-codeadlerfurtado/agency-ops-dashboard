@@ -1,0 +1,7 @@
+from pathlib import Path
+p=Path('index.html')
+s=p.read_text(encoding='utf-8')
+old='''    saveProgress();\n    if(page<pdf.numPages){\n      setBuffer('pré-carregando próxima');\n      translatePage(page+1).then(()=>{\n        setBuffer('próxima pronta',true);\n      }).catch(()=>setBuffer('buffer pendente'));\n    }\n    if(autoplay && translated) startSpeech();\n  }catch(err){\n    $('translation').innerHTML='<div class="empty">Não consegui traduzir esta página.</div>';\n    setStatus(`Falha na tradução: ${String(err.message||err)}`);\n    setBuffer('erro de tradução');\n  }'''
+new='''    saveProgress();\n    if(loadToken===pageLoadToken) warmNextPages(page,10);\n    if(autoplay && translated && loadToken===pageLoadToken) startSpeech();\n  }catch(err){\n    if(loadToken!==pageLoadToken) return;\n    stopSpeech();currentSentences=[];sentenceIndex=0;updateSentenceHighlight();\n    $('translation').innerHTML='<div class="empty">Não consegui traduzir esta página.<br><br><button class="btn" id="retryTranslation">Tentar novamente</button></div>';\n    setStatus(`Falha na tradução: ${String(err.message||err)}`);\n    setBuffer('tradução indisponível');\n    $('retryTranslation')?.addEventListener('click',()=>{translationCache.delete(page);loadPage(page);});\n  }'''
+assert old in s;s=s.replace(old,new)
+p.write_text(s,encoding='utf-8');print('loadPage preload/retry fixed')

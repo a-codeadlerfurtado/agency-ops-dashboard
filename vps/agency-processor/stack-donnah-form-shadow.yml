@@ -1,0 +1,867 @@
+﻿version: "3.8"
+
+services:
+  agency-processor:
+    image: node:22-alpine
+    environment:
+      WORKER_API_URL: "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-heavy-worker-api"
+      AGENCY_WORKER_TOKEN: "${AGENCY_WORKER_TOKEN}"
+      WORKER_ID: "leonardoimobi-primary-1"
+      POLL_MIN_MS: "5000"
+      POLL_MAX_MS: "60000"
+      OVERDUE_DEFAULT_INTERVAL_MS: "120000"
+      API_TIMEOUT_MS: "90000"
+      WORKER_SCRIPT: |
+        const api = process.env.WORKER_API_URL;
+        const token = process.env.AGENCY_WORKER_TOKEN;
+        const worker = process.env.WORKER_ID || "leonardoimobi-primary-1";
+        const pollMinMs = Number(process.env.POLL_MIN_MS || 5000);
+        const pollMaxMs = Number(process.env.POLL_MAX_MS || 60000);
+        const overdueDefaultIntervalMs = Number(process.env.OVERDUE_DEFAULT_INTERVAL_MS || 120000);
+        const apiTimeoutMs = Number(process.env.API_TIMEOUT_MS || 90000);
+        
+        if (!api || !token) {
+          console.error("missing_worker_configuration");
+          process.exit(1);
+        }
+        
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        let stopping = false;
+        process.on("SIGTERM", () => { stopping = true; });
+        process.on("SIGINT", () => { stopping = true; });
+        
+        async function call(action, payload = {}, timeoutMs = apiTimeoutMs) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            const response = await fetch(api, {
+              method: "POST",
+              headers: { "content-type": "application/json", "x-agency-worker-token": token },
+              body: JSON.stringify({ action, worker, ...payload }),
+              signal: controller.signal,
+            });
+            const text = await response.text();    let body;
+            try { body = text ? JSON.parse(text) : {}; }
+            catch { body = { raw: text }; }
+            if (!response.ok) throw new Error(`worker_api_${response.status}:${JSON.stringify(body)}`);
+            return body;
+          } finally {
+            clearTimeout(timeout);
+          }
+        }
+        
+        function offsetMinutes(now, timezone) {
+          const dtf = new Intl.DateTimeFormat("en-US", {
+            timeZone: timezone, hour12: false,
+            year: "numeric", month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
+          });
+          const p = {};
+          for (const x of dtf.formatToParts(now)) p[x.type] = x.value;
+          const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+          return (asUtc - now.getTime()) / 60000;
+        }
+        
+        function startOfWindowToday(now, config) {
+          const dtf = new Intl.DateTimeFormat("en-US", {
+            timeZone: config.fuso, year: "numeric", month: "2-digit", day: "2-digit",
+          });
+          const p = {};
+          for (const x of dtf.formatToParts(now)) p[x.type] = x.value;  const [h, m] = String(config.janela_hora_inicio).split(":").map(Number);
+          const off = offsetMinutes(now, config.fuso);
+          return new Date(Date.UTC(+p.year, +p.month - 1, +p.day, h, m, 0) - off * 60000);
+        }
+        
+        function localParts(now, timezone) {
+          const fmt = new Intl.DateTimeFormat("en-US", {
+            timeZone: timezone, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+          });
+          const parts = fmt.formatToParts(now);
+          const wd = parts.find((p) => p.type === "weekday").value;
+          const hour = Number(parts.find((p) => p.type === "hour").value);
+          const minute = Number(parts.find((p) => p.type === "minute").value);
+          const map = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+          return { weekdayIso: map[wd], minutes: hour * 60 + minute };
+        }
+        
+        function hhmmToMinutes(value) {
+          const [h, m] = String(value).split(":").map(Number);
+          return h * 60 + m;
+        }
+        
+        function insideWindow(now, config) {
+          const { weekdayIso, minutes } = localParts(now, config.fuso);
+          if (!config.janela_dias.includes(weekdayIso)) return false;
+          return minutes >= hhmmToMinutes(config.janela_hora_inicio)
+            && minutes < hhmmToMinutes(config.janela_hora_fim);
+        }
+        function minutesBetween(iso, now) {
+          return (now.getTime() - new Date(iso).getTime()) / 60000;
+        }
+        
+        function dbConversation(c) {
+          return {
+            telefone: c.telefone,
+            status: c.status,
+            pendente_desde: c.pendente_desde,
+            ultimo_inbound_em: c.ultimo_inbound_em,
+            ultimo_reply_sdr_em: c.ultimo_reply_sdr_em,
+            nivel_alerta: c.nivel_alerta,
+            ultimo_alerta_em: c.ultimo_alerta_em,
+            resolvido_em: c.resolvido_em,
+            tempo_primeira_resposta_seg: c.tempo_primeira_resposta_seg,
+          };
+        }
+        
+        function beforeFingerprint(c) {
+          return {
+            telefone: c.telefone,
+            status: c.status,
+            pendente_desde: c.pendente_desde,
+            nivel_alerta: c.nivel_alerta,
+            ultimo_alerta_em: c.ultimo_alerta_em,
+          };
+        }
+        
+        function evaluateConversation(conversation, config, now) {
+          const c = { ...conversation };
+          const none = () => ({ alerts: [], conversation: c });
+          if (!insideWindow(now, config) || !c.pendente_desde) return none();  const opening = startOfWindowToday(now, config).getTime();
+          const effectiveStart = Math.max(new Date(c.pendente_desde).getTime(), opening);
+          const stopped = (now.getTime() - effectiveStart) / 60000;
+          const sinceLastAlert = c.ultimo_alerta_em ? minutesBetween(c.ultimo_alerta_em, now) : Infinity;
+        
+          if (c.status === "aguardando_sdr") {
+            const alerts = [];
+            const level0 = Number(c.nivel_alerta || 0);
+            if (stopped >= config.limite_1_min && level0 === 0) {
+              alerts.push({ telefone: c.telefone, tipo: "sla_resposta", nivel: 1,
+                canal: "whatsapp_sdr", minutos_parado: Math.floor(stopped) });
+              c.nivel_alerta = 1;
+              c.ultimo_alerta_em = now.toISOString();
+            } else if (stopped >= config.limite_1_min && level0 >= 1
+              && sinceLastAlert >= config.intervalo_repeticao_min) {
+              alerts.push({ telefone: c.telefone, tipo: "sla_resposta", nivel: 1,
+                canal: "whatsapp_sdr", minutos_parado: Math.floor(stopped) });
+              c.ultimo_alerta_em = now.toISOString();
+            }
+            if (stopped >= config.limite_escalada_min && level0 < 2) {
+              alerts.push({ telefone: c.telefone, tipo: "sla_resposta", nivel: 2,
+                canal: "whatsapp_gestor", minutos_parado: Math.floor(stopped) });
+              c.nivel_alerta = 2;
+              c.ultimo_alerta_em = now.toISOString();
+            }
+            return { alerts, conversation: c };
+          }
+          if (c.status === "aguardando_lead") {
+            const windowMinutes = Number(config.janela_follow_up_horas) * 60;
+            if (stopped < windowMinutes) return none();
+            if (Number(c.nivel_alerta || 0) >= Number(config.follow_up_max_repeticoes || 0)) {
+              c.status = "frio";
+              return { alerts: [], conversation: c };
+            }
+            if (sinceLastAlert >= windowMinutes) {
+              c.nivel_alerta = Number(c.nivel_alerta || 0) + 1;
+              c.ultimo_alerta_em = now.toISOString();
+              return {
+                alerts: [{ telefone: c.telefone, tipo: "follow_up", nivel: c.nivel_alerta,
+                  canal: "whatsapp_sdr", minutos_parado: Math.floor(stopped) }],
+                conversation: c,
+              };
+            }
+          }
+          return none();
+        }
+        
+        function buildProposals(snapshot) {
+          const config = snapshot.config;
+          const now = new Date(snapshot.snapshot_at);
+          const proposals = [];
+          const candidates = [];
+          for (const original of snapshot.conversations || []) {
+            const evaluated = evaluateConversation(original, config, now);
+            const next = evaluated.conversation;
+            const changed = next.status !== original.status
+              || Number(next.nivel_alerta || 0) !== Number(original.nivel_alerta || 0)
+              || String(next.ultimo_alerta_em || "") !== String(original.ultimo_alerta_em || "");    if (changed || evaluated.alerts.length) {
+              proposals.push({
+                before: beforeFingerprint(original),
+                after: dbConversation(next),
+                alerts: evaluated.alerts,
+              });
+            }
+            for (const a of evaluated.alerts) {
+              candidates.push({
+                telefone: a.telefone,
+                tipo: a.tipo,
+                nivel: a.nivel,
+                canal: a.canal,
+                minutos_parado: a.minutos_parado,
+              });
+            }
+          }
+          return { proposals, candidates, now };
+        }
+        
+        function summarize(snapshot, built) {
+          const alerts = built.candidates;
+          return {
+            snapshot_at: snapshot.snapshot_at,
+            pending_count: (snapshot.conversations || []).length,
+            proposals_count: built.proposals.length,
+            alerts_sdr: alerts.filter((a) => a.canal === "whatsapp_sdr").length,
+            alerts_gestor: alerts.filter((a) => a.canal === "whatsapp_gestor").length,
+            followups: alerts.filter((a) => a.tipo === "follow_up").length,
+            to_cold: built.proposals.filter((p) => p.after.status === "frio" && p.before.status !== "frio").length,
+            inside_window: insideWindow(built.now, snapshot.config),
+            candidates: alerts.slice(0, 50),
+          };
+        }
+        async function runOverdueCycle(forcedMode = null) {
+          const startedAt = new Date().toISOString();
+          const snapshot = await call("overdue_snapshot");
+          const mode = forcedMode || snapshot.control?.mode || "off";
+          const intervalMs = Number(snapshot.control?.interval_ms || overdueDefaultIntervalMs);
+          if (mode === "off") return { mode, intervalMs, skipped: true };
+        
+          if (!snapshot.config?.numero_sdr) {
+            const result = { configured: false, reason: "numero_sdr_missing" };
+            await call("overdue_report", { mode, status: "skipped", started_at: startedAt, result });
+            return { mode, intervalMs, ...result };
+          }
+        
+          const built = buildProposals(snapshot);
+          const summary = summarize(snapshot, built);
+          if (mode === "shadow") {
+            await call("overdue_report", { mode, status: "ok", started_at: startedAt, result: summary });
+            console.log(JSON.stringify({ event: "overdue_shadow", ...summary }));
+            return { mode, intervalMs, summary };
+          }
+        
+          if (mode === "execute") {
+            const applied = await call("overdue_apply", {
+              snapshot_at: snapshot.snapshot_at,
+              proposals: built.proposals,
+            });
+            const result = { ...summary, applied };
+            await call("overdue_report", { mode, status: "ok", started_at: startedAt, result });
+            console.log(JSON.stringify({ event: "overdue_execute", ...result }));
+            return { mode, intervalMs, result };
+          }
+        
+          throw new Error(`unsupported_overdue_mode:${mode}`);
+        }
+        async function handleQueueJob(job) {
+          const type = String(job.job_type || "").toUpperCase();
+          if (type === "SELF_TEST") {
+            await sleep(500);
+            return {
+              ok: true,
+              executed_by: worker,
+              runtime: process.version,
+              processed_at: new Date().toISOString(),
+            };
+          }
+          if (type === "CHECK_OVERDUE_SHADOW") {
+            return await runOverdueCycle("shadow");
+          }
+          if (type === "CHECK_OVERDUE_EXECUTE") {
+            return await runOverdueCycle("execute");
+          }
+          throw new Error(`unsupported_job_type:${type}`);
+        }
+        
+        async function queueLoop() {
+          let idleMs = Math.max(1000, pollMinMs);
+          while (!stopping) {
+            try {
+              const claimed = await call("claim", { limit: 1, visibility_timeout: 900 });
+              const jobs = Array.isArray(claimed.jobs) ? claimed.jobs : [];
+              if (!jobs.length) {
+                await sleep(idleMs);
+                idleMs = Math.min(Math.round(idleMs * 1.6), pollMaxMs);
+                continue;
+              }
+              idleMs = Math.max(1000, pollMinMs);
+              for (const job of jobs) {
+                try {
+                  console.log(JSON.stringify({ event: "job_claimed", job_id: job.job_id, job_type: job.job_type, attempt: job.attempt }));          await call("heartbeat", {
+                    job_id: job.job_id,
+                    message_id: job.message_id,
+                    progress: 10,
+                    visibility_timeout: 900,
+                  });
+                  const result = await handleQueueJob(job);
+                  await call("complete", {
+                    job_id: job.job_id,
+                    message_id: job.message_id,
+                    result,
+                  });
+                  console.log(JSON.stringify({ event: "job_completed", job_id: job.job_id }));
+                } catch (error) {
+                  console.error(JSON.stringify({ event: "job_failed", job_id: job.job_id, error: String(error?.message || error) }));
+                  await call("fail", {
+                    job_id: job.job_id,
+                    message_id: job.message_id,
+                    error: String(error?.message || error),
+                    retry_delay_seconds: 300,
+                  }).catch(() => {});
+                }
+              }
+            } catch (error) {
+              console.error(JSON.stringify({ event: "worker_loop_error", error: String(error?.message || error) }));
+              await sleep(Math.min(idleMs, pollMaxMs));
+              idleMs = Math.min(Math.round(idleMs * 1.6), pollMaxMs);
+            }
+          }
+        }
+        
+        async function overdueLoop() {
+          let intervalMs = overdueDefaultIntervalMs;  while (!stopping) {
+            const started = Date.now();
+            try {
+              const result = await runOverdueCycle();
+              intervalMs = Number(result.intervalMs || overdueDefaultIntervalMs);
+            } catch (error) {
+              const message = String(error?.message || error);
+              console.error(JSON.stringify({ event: "overdue_loop_error", error: message }));
+              await call("overdue_report", {
+                mode: "unknown",
+                status: "error",
+                started_at: new Date(started).toISOString(),
+                result: {},
+                error: message,
+              }).catch(() => {});
+            }
+            const elapsed = Date.now() - started;
+            await sleep(Math.max(5000, intervalMs - elapsed));
+          }
+        }
+        
+        async function main() {
+          console.log(JSON.stringify({
+            event: "worker_started",
+            worker,
+            poll_min_ms: pollMinMs,
+            poll_max_ms: pollMaxMs,
+            overdue_interval_ms: overdueDefaultIntervalMs,
+          }));
+          await Promise.all([queueLoop(), overdueLoop()]);
+          console.log(JSON.stringify({ event: "worker_stopped", worker }));
+        }
+        
+        main().catch((error) => {
+          console.error(error);
+          process.exit(1);
+        });
+    command:
+      - sh
+      - -lc
+      - 'node -e "$$WORKER_SCRIPT"'
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  onboarding-processor:
+    image: node:22-alpine
+    environment:
+      ONBOARDING_API_URL: "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-onboarding-worker-api"
+      AGENCY_WORKER_TOKEN: "${AGENCY_WORKER_TOKEN}"
+      WORKER_ID: "leonardoimobi-onboarding-1"
+      ONBOARDING_DEFAULT_INTERVAL_MS: "900000"
+      API_TIMEOUT_MS: "90000"
+      WORKER_SCRIPT: |
+        const api = process.env.ONBOARDING_API_URL;
+        const token = process.env.AGENCY_WORKER_TOKEN;
+        const worker = process.env.WORKER_ID || "leonardoimobi-onboarding-1";
+        const defaultIntervalMs = Number(process.env.ONBOARDING_DEFAULT_INTERVAL_MS || 900000);
+        const apiTimeoutMs = Number(process.env.API_TIMEOUT_MS || 90000);
+        
+        if (!api || !token) {
+          console.error("missing_onboarding_worker_configuration");
+          process.exit(1);
+        }
+        
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        let stopping = false;
+        process.on("SIGTERM", () => { stopping = true; });
+        process.on("SIGINT", () => { stopping = true; });
+        
+        async function call(action, payload = {}, timeoutMs = apiTimeoutMs) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            const response = await fetch(api, {
+              method: "POST",
+              headers: { "content-type": "application/json", "x-agency-worker-token": token },
+              body: JSON.stringify({ action, worker, ...payload }),
+              signal: controller.signal,
+            });
+            const text = await response.text();
+            let body;
+            try { body = text ? JSON.parse(text) : {}; }
+            catch { body = { raw: text }; }
+            if (!response.ok) throw new Error(`onboarding_api_${response.status}:${JSON.stringify(body).slice(0, 1200)}`);
+            return body;
+          } finally {
+            clearTimeout(timeout);
+          }
+        }
+        
+        function fold(value) {
+          return String(value ?? "")
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase().replace(/\s+/g, " ").trim();
+        }
+        
+        function bodyOf(message) {
+          return `${message?.text_body ?? ""} ${message?.caption ?? ""}`.trim();
+        }
+        
+        function eventDate(message) {
+          const raw = message?.event_at || message?.received_at;
+          const d = raw ? new Date(raw) : new Date(0);
+          return Number.isNaN(d.getTime()) ? new Date(0) : d;
+        }
+        
+        function earliest(messages, predicate) {
+          return messages.filter(predicate).sort((a, b) => eventDate(a) - eventDate(b) || Number(a.id) - Number(b.id))[0] || null;
+        }
+        
+        function latest(messages, predicate) {
+          return messages.filter(predicate).sort((a, b) => eventDate(b) - eventDate(a) || Number(b.id) - Number(a.id))[0] || null;
+        }
+        
+        function normalizePhone(value) { return String(value ?? "").replace(/\D/g, ""); }
+        function normalizeIdentity(value) { return fold(value).replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim(); }
+        
+        function buildTeamMatcher(snapshot) {
+          const phones = new Set();
+          const names = new Set();
+          for (const row of snapshot.team_identities || []) {
+            if (row.identity_type === "PHONE") phones.add(normalizePhone(row.identity_value));
+            if (row.identity_type === "NAME") names.add(normalizeIdentity(row.identity_value));
+          }
+          return (m) => Boolean(m?.from_me) || phones.has(normalizePhone(m?.sender_phone)) || names.has(normalizeIdentity(m?.sender_name));
+        }
+        
+        function indicatesFormsNotUsed(text) {
+          const t = fold(text);
+          return /((nao vamos|nao iremos|nao utilizaremos|nao usaremos).{0,45}(formulario|formularios)|(formulario|formularios).{0,45}(nao sera usado|nao serao usados|nao sera utilizado|nao serao utilizados|nao vamos usar|nao iremos usar)|((dispensamos|dispensado|dispensada|sem necessidade de|vamos seguir sem).{0,45}(formulario|formularios)))/.test(t)
+            && !/(nao vamos deixar de|nao iremos deixar de)/.test(t);
+        }
+        
+        function indicatesFormsUsed(text) {
+          const t = fold(text);
+          return !indicatesFormsNotUsed(t)
+            && /((vamos|iremos|vou|vai|vao).{0,35}(usar|utilizar|preencher|responder).{0,45}(formulario|formularios)|(formulario|formularios).{0,55}(vamos|iremos|vou|vai|vao).{0,30}(usar|utilizar|preencher|responder)|(utilizaremos|usaremos|preencheremos|responderemos).{0,40}(formulario|formularios))/.test(t);
+        }
+        
+        function indicatesCampaignLive(text) {
+          const t = fold(text);
+          const positive = /(^|[^a-z])(ativamos|ativei|publicamos|publiquei)([^a-z]|$).{0,50}(campanha|campanhas)/.test(t)
+            || /(campanha|campanhas).{0,50}(^|[^a-z])(ativamos|ativei|publicamos|publiquei)([^a-z]|$)/.test(t)
+            || /(colocamos|coloquei).{0,30}(a |as )?(campanha|campanhas).{0,20}(no ar|para rodar)/.test(t)
+            || /(campanha|campanhas).{0,20}(esta|estao|ficou|ficaram|foi|foram).{0,18}(no ar|rodando|ativada|ativadas|publicada|publicadas)/.test(t)
+            || /(campanha|campanhas).{0,15}(no ar|rodando)/.test(t);
+          if (!positive) return false;
+          if (/(^|[^a-z])nao([^a-z]|$).{0,35}(ativ|public|no ar|rodando)/.test(t)) return false;
+          if (/(aguard|assim que|depois que|quando|poderemos|para poder|para podermos|falta|pagamento|pix|abastecer).{0,80}(ativ|public|no ar|rodar)/.test(t)
+              && !/(^|[^a-z])(ativamos|ativei|publicamos|publiquei)([^a-z]|$)/.test(t)) return false;
+          return true;
+        }
+        
+        function indicatesCampaignPrepared(text) {
+          const t = fold(text);
+          return !indicatesCampaignLive(t) && (
+            /(campanha|campanhas).{0,70}(configurad|subindo|subida|pronta|prontas|preparad|montad|criad)/.test(t)
+            || /(subindo|configurando|preparando|montando).{0,50}(campanha|campanhas)/.test(t)
+            || /(campanha|campanhas).{0,100}(aguard|pagamento|pix|abastecer|ativar|ativacao)/.test(t)
+          );
+        }
+        
+        function onboardingEvidence(messages) {
+          const pattern = /(meet\.google\.com|onboarding|reuniao de onboarding|reuniao de integracao|integracao|apresentar o projeto|apresentacao do projeto|formularios?|novo projeto)/;
+          const hits = messages.filter((m) => m.origin !== "xlsx_historical_backfill" && pattern.test(fold(bodyOf(m))));
+          if (!hits.length) return null;
+          const types = new Set();
+          for (const m of hits) {
+            const t = fold(bodyOf(m));
+            if (/meet\.google\.com/.test(t)) types.add("MEET_LINK");
+            if (/onboarding/.test(t)) types.add("ONBOARDING_EXPLICITO");
+            if (/integracao/.test(t)) types.add("INTEGRACAO");
+            if (/formularios?/.test(t)) types.add("FORMULARIO");
+            if (/(apresentar o projeto|apresentacao do projeto|novo projeto)/.test(t)) types.add("INICIO_PROJETO");
+          }
+          const first = hits.sort((a, b) => eventDate(a) - eventDate(b))[0];
+          return { evidence_at: eventDate(first).toISOString(), evidence_types: [...types] };
+        }
+        
+        function buildSyncCandidates(snapshot) {
+          const messagesByChat = new Map();
+          for (const m of snapshot.unassigned_messages || []) {
+            const key = String(m.chat_id || "");
+            if (!messagesByChat.has(key)) messagesByChat.set(key, []);
+            messagesByChat.get(key).push(m);
+          }
+          const items = [];
+          for (const chat of snapshot.unassigned_chats || []) {
+            const name = String(chat.chat_name || "").trim();
+            if (!name || /^\d+-group$/.test(name) || /duplicado/i.test(String(chat.reason || ""))) continue;
+            const ev = onboardingEvidence(messagesByChat.get(String(chat.chat_id)) || []);
+            if (ev) items.push({ chat_id: chat.chat_id, ...ev });
+          }
+          return items;
+        }
+        
+        function buildEvidence(snapshot) {
+          const teamSender = buildTeamMatcher(snapshot);
+          const integrationsByClient = new Map();
+          for (const i of snapshot.integrations || []) {
+            const key = String(i.client_id);
+            if (!integrationsByClient.has(key)) integrationsByClient.set(key, []);
+            integrationsByClient.get(key).push(i);
+          }
+          const messagesByChat = new Map();
+          for (const m of snapshot.case_messages || []) {
+            const key = String(m.chat_id || "");
+            if (!messagesByChat.has(key)) messagesByChat.set(key, []);
+            messagesByChat.get(key).push(m);
+          }
+          const meetExisting = new Set((snapshot.meet_links || []).filter((x) => x.source === "whatsapp" && x.source_id).map((x) => String(x.source_id)));
+          const notionByClient = new Map();
+          for (const n of snapshot.notion_pages || []) {
+            const key = String(n.client_id);
+            if (!notionByClient.has(key)) notionByClient.set(key, []);
+            notionByClient.get(key).push(n);
+          }
+        
+          const actionMap = new Map();
+          const forms = [];
+          const meetLinks = [];
+          const caseIds = [];
+          let messagesScanned = 0;
+        
+          const addEarliest = (type, caseId, message, fallbackAt = null) => {
+            const at = message ? eventDate(message) : new Date(fallbackAt || 0);
+            const key = `${caseId}:${type}`;
+            const existing = actionMap.get(key);
+            if (!existing || new Date(existing.occurred_at) > at) {
+              actionMap.set(key, {
+                type, case_id: caseId, occurred_at: at.toISOString(),
+                message_id: message?.id ?? null, body: message ? bodyOf(message) : "",
+              });
+            }
+          };
+        
+          for (const c of snapshot.open_cases || []) {
+            const caseId = Number(c.id);
+            caseIds.push(caseId);
+            const opened = new Date(c.opened_at).getTime();
+            const integrations = integrationsByClient.get(String(c.client_id)) || [];
+            const chatIds = new Set(integrations.map((i) => String(i.external_id)).filter(Boolean));
+            const all = [...chatIds].flatMap((id) => messagesByChat.get(id) || []);
+            const msgs = all.filter((m) => eventDate(m).getTime() >= opened);
+            const replayMsgs = all.filter((m) => eventDate(m).getTime() >= opened - 15 * 60 * 1000);
+            messagesScanned += msgs.length;
+        
+            if (integrations.length) addEarliest("OPERATIONAL_ACTIVATION_DONE", caseId, null, c.opened_at);
+        
+            const intro = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /(onboarding|apresentacao do projeto|reuniao de apresentacao)/.test(t) && /(reuniao|meet\.google\.com|horario|\b\d{1,2}:\d{2}\b)/.test(t);
+            });
+            if (intro) addEarliest("INTRO_MEETING_SCHEDULED", caseId, intro);
+        
+            const pp = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /reuniao/.test(t) && /(formulario|produto.{0,30}persona|persona.{0,30}produto)/.test(t)
+                && /(meet\.google\.com|\b\d{1,2}:\d{2}\b|\b\d{1,2}h\b|horario|disponivel|marcar)/.test(t);
+            });
+            if (pp) addEarliest("PRODUCT_PERSONA_MEETING_SCHEDULED", caseId, pp);
+        
+            const integration = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /integracao/.test(t) && /(meet\.google\.com|\b\d{1,2}:\d{2}\b|\b\d{1,2}h\b|segunda-feira|terca-feira|quarta-feira|quinta-feira|sexta-feira)/.test(t);
+            });
+            if (integration) addEarliest("INTEGRATION_MEETING_SCHEDULED", caseId, integration);
+        
+            const productForm = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /(formulario de produto|produto.*formulario|formulario.*produto)/.test(t) && /(preenchido|respondido|concluido|finalizado|enviei|enviado)/.test(t);
+            });
+            if (productForm) addEarliest("PRODUCT_FORM_DONE", caseId, productForm);
+        
+            const personaForm = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /(formulario de persona|persona.*formulario|formulario.*persona)/.test(t) && /(preenchido|respondido|concluido|finalizado|enviei|enviado)/.test(t);
+            });
+            if (personaForm) addEarliest("PERSONA_FORM_DONE", caseId, personaForm);
+        
+            const formEvidence = [];
+            for (const m of msgs) {
+              const text = bodyOf(m);
+              if (indicatesFormsNotUsed(text) || indicatesFormsUsed(text)) {
+                formEvidence.push({
+                  applicability: indicatesFormsNotUsed(text) ? "NOT_APPLICABLE" : "REQUIRED",
+                  source: "WHATSAPP", source_ref: String(m.id), evidence_text: text.slice(0, 2000),
+                  occurred_at: eventDate(m).toISOString(), priority: 2,
+                });
+              }
+            }
+            for (const n of notionByClient.get(String(c.client_id)) || []) {
+              const text = `${n.content_markdown || ""} ${JSON.stringify(n.extracted_profile || {})}`;
+              if (indicatesFormsNotUsed(text) || indicatesFormsUsed(text)) {
+                formEvidence.push({
+                  applicability: indicatesFormsNotUsed(text) ? "NOT_APPLICABLE" : "REQUIRED",
+                  source: "NOTION", source_ref: String(n.notion_page_id), evidence_text: text.slice(0, 2000),
+                  occurred_at: new Date(n.notion_last_edited_at || n.updated_at).toISOString(), priority: 1,
+                });
+              }
+            }
+            formEvidence.sort((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at) || b.priority - a.priority);
+            if (formEvidence[0]) forms.push({ case_id: caseId, ...formEvidence[0], confidence: formEvidence[0].source === "WHATSAPP" ? 0.95 : 0.90 });
+        
+            const rawAssets = earliest(msgs, (m) => /((materiais|arquivos|fotos|videos).*(enviei|enviamos|mandei|mandamos|coloquei|colocamos|adicionei|adicionamos)|(drive|pasta).*(materiais|arquivos|fotos|videos).*(enviados|adicionados|disponiveis))/.test(fold(bodyOf(m))));
+            if (rawAssets) addEarliest("RAW_ASSETS_DONE", caseId, rawAssets);
+        
+            const access = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /(acesso|acessos|bm|gerenciador|crm|conta de anuncio)/.test(t) && /(liberado|concedido|validado|configurado|conectado|funcionando|com os acessos|acessos aqui|consigo realizar)/.test(t);
+            });
+            if (access) addEarliest("ACCESS_VALIDATION_DONE", caseId, access);
+        
+            const creativeStart = earliest(msgs, (m) => /((criativo|criativos|arte|artes).*(producao|produzindo|iniciamos|fazendo))/.test(fold(bodyOf(m))));
+            if (creativeStart) addEarliest("CREATIVE_PRODUCTION_STARTED", caseId, creativeStart);
+        
+            const creativeDone = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /(criativo|criativos|arte|artes)/.test(t) && /(para aprovacao|segue|seguem|drive\.google|pronto|prontos|finalizad|concluid|entregue)/.test(t)
+                && !/(assim que|quando.*pront|vou pedir|iremos produzir)/.test(t);
+            });
+            if (creativeDone) addEarliest("CREATIVE_PRODUCTION_DONE", caseId, creativeDone);
+        
+            const creativeApproval = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              if (/((criativo|criativos|arte|artes).*(aprovado|aprovados|aprovada)|aprovado.*(criativo|arte))/.test(t)) return true;
+              if (!/^(todos )?aprovad[oa]s?(\W|$)/.test(t) || teamSender(m)) return false;
+              const mt = eventDate(m).getTime();
+              return msgs.some((prev) => String(prev.chat_id) === String(m.chat_id)
+                && eventDate(prev).getTime() <= mt && eventDate(prev).getTime() >= mt - 24 * 3600 * 1000
+                && /(criativo|criativos|arte|artes).*(aprovacao|aprovar)/.test(fold(bodyOf(prev))));
+            });
+            if (creativeApproval) addEarliest("CREATIVE_APPROVAL_DONE", caseId, creativeApproval);
+        
+            const live = latest(msgs, (m) => indicatesCampaignLive(bodyOf(m)));
+            const prepared = latest(msgs, (m) => indicatesCampaignPrepared(bodyOf(m)));
+            if (live) {
+              actionMap.set(`${caseId}:CAMPAIGN_LIVE`, { type: "CAMPAIGN_LIVE", case_id: caseId, occurred_at: eventDate(live).toISOString(), message_id: live.id, body: bodyOf(live) });
+            } else if (prepared) {
+              const blocked = /(aguard|pagamento|pix|abastecer|assim que.*ativ|poderemos ativ)/.test(fold(bodyOf(prepared)));
+              const type = blocked ? "CAMPAIGN_PREPARED_BLOCKED" : "CAMPAIGN_PREPARED";
+              actionMap.set(`${caseId}:${type}`, { type, case_id: caseId, occurred_at: eventDate(prepared).toISOString(), message_id: prepared.id, body: bodyOf(prepared) });
+            }
+        
+            const stageLatest = new Map();
+            for (const m of replayMsgs) {
+              const t = fold(bodyOf(m));
+              if (!/meet\.google\.com/.test(t)) continue;
+              let stage = null;
+              if (/(integracao|reuniao de integracao|reuniao com gt)/.test(t)) stage = "INTEGRATION_MEETING";
+              else if (/(produto.{0,30}persona|persona.{0,30}produto|reuniao.{0,40}(produto|persona)|formulario.{0,30}(produto|persona))/.test(t)) stage = "PRODUCT_PERSONA_MEETING";
+              else if (/(onboarding|apresentacao do projeto|reuniao de apresentacao)/.test(t)) stage = "INTRO_MEETING";
+              if (!stage || meetExisting.has(String(m.id))) continue;
+              const prev = stageLatest.get(stage);
+              if (!prev || eventDate(m) > eventDate(prev)) stageLatest.set(stage, m);
+            }
+            for (const [stage, m] of stageLatest.entries()) {
+              meetLinks.push({
+                case_id: caseId, stage_code: stage, message_row_id: String(m.id), message_id: m.message_id,
+                chat_id: m.chat_id, msg_at: eventDate(m).toISOString(), body: bodyOf(m),
+              });
+            }
+          }
+        
+          const actions = [...actionMap.values()];
+          const actionCounts = {};
+          for (const a of actions) actionCounts[a.type] = (actionCounts[a.type] || 0) + 1;
+          return {
+            actions, forms, meetLinks, caseIds,
+            stats: { open_cases: caseIds.length, messages_scanned: messagesScanned, actions: actions.length, forms: forms.length, meet_links: meetLinks.length, action_counts: actionCounts },
+          };
+        }
+        
+        async function runCycle(forcedMode = null) {
+          const startedAt = new Date().toISOString();
+          let snapshot = await call("snapshot");
+          const mode = forcedMode || snapshot.control?.mode || "off";
+          const intervalMs = Number(snapshot.control?.interval_ms || defaultIntervalMs);
+          if (mode === "off") return { mode, intervalMs, skipped: true };
+        
+          let syncItems = buildSyncCandidates(snapshot);
+          let evidence = buildEvidence(snapshot);
+        
+          if (mode === "shadow") {
+            const result = {
+              snapshot_at: snapshot.snapshot_at,
+              sync_candidates: syncItems.length,
+              unassigned_chats: (snapshot.unassigned_chats || []).length,
+              unassigned_messages: (snapshot.unassigned_messages || []).length,
+              ...evidence.stats,
+            };
+            await call("report", { mode, status: "ok", started_at: startedAt, result });
+            console.log(JSON.stringify({ event: "onboarding_shadow", ...result }));
+            return { mode, intervalMs, result };
+          }
+        
+          if (mode === "execute") {
+            let syncResult = null;
+            if (syncItems.length) {
+              syncResult = await call("apply_sync", { items: syncItems });
+              snapshot = await call("snapshot");
+              syncItems = buildSyncCandidates(snapshot);
+              evidence = buildEvidence(snapshot);
+            }
+            const applyResult = await call("apply_evidence", {
+              snapshot_at: snapshot.snapshot_at,
+              actions: evidence.actions,
+              meet_links: evidence.meetLinks,
+              forms: evidence.forms,
+              case_ids: evidence.caseIds,
+            });
+            const result = {
+              snapshot_at: snapshot.snapshot_at,
+              remaining_sync_candidates: syncItems.length,
+              ...evidence.stats,
+              sync_result: syncResult?.result ?? null,
+              apply_result: applyResult?.result ?? null,
+            };
+            await call("report", { mode, status: "ok", started_at: startedAt, result });
+            console.log(JSON.stringify({ event: "onboarding_execute", ...result }));
+            return { mode, intervalMs, result };
+          }
+        
+          throw new Error(`unsupported_onboarding_mode:${mode}`);
+        }
+        
+        async function main() {
+          console.log(JSON.stringify({ event: "onboarding_worker_started", worker, default_interval_ms: defaultIntervalMs }));
+          let intervalMs = defaultIntervalMs;
+          while (!stopping) {
+            const started = Date.now();
+            try {
+              const result = await runCycle();
+              intervalMs = Number(result.intervalMs || defaultIntervalMs);
+            } catch (error) {
+              const message = String(error?.message || error);
+              console.error(JSON.stringify({ event: "onboarding_loop_error", error: message }));
+              await call("report", { mode: "unknown", status: "error", started_at: new Date(started).toISOString(), result: {}, error: message }).catch(() => {});
+            }
+            const elapsed = Date.now() - started;
+            await sleep(Math.max(15000, intervalMs - elapsed));
+          }
+          console.log(JSON.stringify({ event: "onboarding_worker_stopped", worker }));
+        }
+        
+        main().catch((error) => {
+          console.error(error);
+          process.exit(1);
+        });
+    command:
+      - sh
+      - -lc
+      - 'node -e "$$WORKER_SCRIPT"'
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  video-script-processor:
+    image: node:22-alpine
+    environment:
+      VIDEO_WORKER_API_URL: "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-video-worker-api"
+      AGENCY_WORKER_TOKEN: "${AGENCY_WORKER_TOKEN}"
+      WORKER_ID: "leonardoimobi-video-script-1"
+      API_TIMEOUT_MS: "180000"
+    volumes:
+      - video-worker-deps:/opt/video-worker
+    command:
+      - sh
+      - -lc
+      - >
+        set -eu; mkdir -p /opt/video-worker; cd /opt/video-worker; if [ ! -d node_modules/pdf-lib ]; then [ -f package.json ] || npm init -y >/dev/null 2>&1; npm install --omit=dev pdf-lib@1.17.1 >/dev/null 2>&1; fi; wget -qO /tmp/video-worker.cjs --header="x-agency-worker-token: $$AGENCY_WORKER_TOKEN" "$$VIDEO_WORKER_API_URL?script=1"; NODE_PATH=/opt/video-worker/node_modules node /tmp/video-worker.cjs
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  donnah-processor:
+    image: node:22-alpine
+    environment:
+      DONNAH_WORKER_API_URL: "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-donnah-worker-api"
+      AGENCY_WORKER_TOKEN: "${AGENCY_WORKER_TOKEN}"
+      WORKER_ID: "leonardoimobi-donnah-1"
+      WORKER_SCRIPT_B64: "Y29uc3QgYXBpPXByb2Nlc3MuZW52LkRPTk5BSF9XT1JLRVJfQVBJX1VSTCx0b2tlbj1wcm9jZXNzLmVudi5BR0VOQ1lfV09SS0VSX1RPS0VOLHdvcmtlcj1wcm9jZXNzLmVudi5XT1JLRVJfSUR8fCdsZW9uYXJkb2ltb2JpLWRvbm5haC0xJztpZighYXBpfHwhdG9rZW4pe2NvbnNvbGUuZXJyb3IoJ21pc3NpbmdfZG9ubmFoX3dvcmtlcl9jb25maWd1cmF0aW9uJyk7cHJvY2Vzcy5leGl0KDEpfQpjb25zdCBzbGVlcD1tcz0+bmV3IFByb21pc2Uocj0+c2V0VGltZW91dChyLG1zKSk7bGV0IHN0b3BwaW5nPWZhbHNlO3Byb2Nlc3Mub24oJ1NJR1RFUk0nLCgpPT5zdG9wcGluZz10cnVlKTtwcm9jZXNzLm9uKCdTSUdJTlQnLCgpPT5zdG9wcGluZz10cnVlKTsKYXN5bmMgZnVuY3Rpb24gY2FsbChhY3Rpb24scGF5bG9hZD17fSx0aW1lb3V0TXM9MTgwMDAwKXtjb25zdCBjPW5ldyBBYm9ydENvbnRyb2xsZXIoKSx0PXNldFRpbWVvdXQoKCk9PmMuYWJvcnQoKSx0aW1lb3V0TXMpO3RyeXtjb25zdCByPWF3YWl0IGZldGNoKGFwaSx7bWV0aG9kOidQT1NUJyxoZWFkZXJzOnsnY29udGVudC10eXBlJzonYXBwbGljYXRpb24vanNvbicsJ3gtYWdlbmN5LXdvcmtlci10b2tlbic6dG9rZW59LGJvZHk6SlNPTi5zdHJpbmdpZnkoe2FjdGlvbix3b3JrZXIsLi4ucGF5bG9hZH0pLHNpZ25hbDpjLnNpZ25hbH0pO2NvbnN0IHg9YXdhaXQgci50ZXh0KCk7bGV0IGI9e307dHJ5e2I9eD9KU09OLnBhcnNlKHgpOnt9fWNhdGNoe2I9e3Jhdzp4fX1pZighci5vayl0aHJvdyBuZXcgRXJyb3IoYGRvbm5haF9hcGlfJHtyLnN0YXR1c306JHtKU09OLnN0cmluZ2lmeShiKS5zbGljZSgwLDkwMCl9YCk7cmV0dXJuIGJ9ZmluYWxseXtjbGVhclRpbWVvdXQodCl9fQpmdW5jdGlvbiBwYXJzZVdpcmUodGV4dCl7Y29uc3QgdD1TdHJpbmcodGV4dHx8JycpLnRyaW0oKTtpZighdClyZXR1cm4gbnVsbDt0cnl7cmV0dXJuIEpTT04ucGFyc2UodCl9Y2F0Y2h7fWNvbnN0IGE9W107Zm9yKGNvbnN0IGwgb2YgdC5zcGxpdCgvXHI/XG4vKSl7aWYoIWwuc3RhcnRzV2l0aCgnZGF0YTonKSljb250aW51ZTtjb25zdCBwPWwuc2xpY2UoNSkudHJpbSgpO2lmKCFwfHxwPT09J1tET05FXScpY29udGludWU7dHJ5e2EucHVzaChKU09OLnBhcnNlKHApKX1jYXRjaHt9fXJldHVybiBhLmxlbmd0aD09PTE/YVswXTphfQpmdW5jdGlvbiB1bndyYXAoZGF0YSl7Y29uc3Qgcj1kYXRhPy5yZXN1bHQ/P2RhdGE7aWYocj8uc3RydWN0dXJlZENvbnRlbnQhPW51bGwpcmV0dXJuIHIuc3RydWN0dXJlZENvbnRlbnQ7aWYoQXJyYXkuaXNBcnJheShyPy5jb250ZW50KSl7Y29uc3Qgcz1yLmNvbnRlbnQuZmlsdGVyKHg9Png/LnR5cGU9PT0ndGV4dCcmJnR5cGVvZiB4LnRleHQ9PT0nc3RyaW5nJykubWFwKHg9PngudGV4dCkuam9pbignXG4nKTtpZihzKXt0cnl7cmV0dXJuIEpTT04ucGFyc2Uocyl9Y2F0Y2h7cmV0dXJuIHN9fX1yZXR1cm4gcn0KZnVuY3Rpb24gZGF0YU9mKHYpe3JldHVybiB2Py5zdWNjZXNzPT09dHJ1ZSYmdj8uZGF0YSE9bnVsbD92LmRhdGE6dn0gZnVuY3Rpb24gdGV4dE9mKHYpe2NvbnN0IHg9ZGF0YU9mKHYpO2lmKHR5cGVvZiB4PT09J3N0cmluZycpcmV0dXJuIHg7aWYodHlwZW9mIHg/LnRleHQ9PT0nc3RyaW5nJylyZXR1cm4geC50ZXh0O2lmKHR5cGVvZiB4Py50cmFuc2NyaXB0PT09J3N0cmluZycpcmV0dXJuIHgudHJhbnNjcmlwdDtpZih0eXBlb2YgeD8udHJhbnNjcmlwdGlvbj09PSdzdHJpbmcnKXJldHVybiB4LnRyYW5zY3JpcHRpb247aWYoQXJyYXkuaXNBcnJheSh4Py5jaHVua3MpKXJldHVybiB4LmNodW5rcy5tYXAoYz0+YFske2MudGltZXN0YW1wfHxjLnRpbWV8fCcnfV0gKioke2Muc3BlYWtlcnx8Yy5uYW1lfHwnU3BlYWtlcid9Kio6ICR7Yy50ZXh0fHxjLmNvbnRlbnR8fCcnfWApLmpvaW4oJ1xuXG4nKTtyZXR1cm4gJyd9CmFzeW5jIGZ1bmN0aW9uIHBvc3RNY3AobWNwVG9rZW4sYm9keSxzZXNzaW9uPW51bGwscHJvdG9jb2w9JzIwMjUtMDMtMjYnKXtjb25zdCBoPXtBdXRob3JpemF0aW9uOmBCZWFyZXIgJHttY3BUb2tlbn1gLCdDb250ZW50LVR5cGUnOidhcHBsaWNhdGlvbi9qc29uJyxBY2NlcHQ6J2FwcGxpY2F0aW9uL2pzb24sIHRleHQvZXZlbnQtc3RyZWFtJywnTUNQLVByb3RvY29sLVZlcnNpb24nOnByb3RvY29sfTtpZihzZXNzaW9uKWhbJ01jcC1TZXNzaW9uLUlkJ109c2Vzc2lvbjtjb25zdCByPWF3YWl0IGZldGNoKCdodHRwczovL21jcC5kb25uYWguYWkvbWNwJyx7bWV0aG9kOidQT1NUJyxoZWFkZXJzOmgsYm9keTpKU09OLnN0cmluZ2lmeShib2R5KX0pO2NvbnN0IHJhdz1hd2FpdCByLnRleHQoKTtyZXR1cm57b2s6ci5vayxzZXNzaW9uOnIuaGVhZGVycy5nZXQoJ21jcC1zZXNzaW9uLWlkJyl8fHNlc3Npb258fG51bGwsZGF0YTpwYXJzZVdpcmUocmF3KSxyYXc6cmF3LnNsaWNlKDAsOTAwKX19CmFzeW5jIGZ1bmN0aW9uIHNlc3Npb25Gb3IobWNwVG9rZW4pe2xldCBpbml0LHByb3RvY29sPScyMDI1LTAzLTI2Jztmb3IoY29uc3QgdiBvZiBbJzIwMjUtMDMtMjYnLCcyMDI0LTExLTA1J10pe2luaXQ9YXdhaXQgcG9zdE1jcChtY3BUb2tlbix7anNvbnJwYzonMi4wJyxpZDoxLG1ldGhvZDonaW5pdGlhbGl6ZScscGFyYW1zOntwcm90b2NvbFZlcnNpb246dixjYXBhYmlsaXRpZXM6e30sY2xpZW50SW5mbzp7bmFtZTonYWdlbmN5LW9wcy1kYXNoYm9hcmQtcG9ydGFpbmVyJyx2ZXJzaW9uOicxLjAuMCd9fX0sbnVsbCx2KTtwcm90b2NvbD12O2lmKGluaXQub2smJiFpbml0LmRhdGE/LmVycm9yKWJyZWFrfWlmKCFpbml0Py5va3x8aW5pdC5kYXRhPy5lcnJvcil0aHJvdyBuZXcgRXJyb3IoaW5pdD8uZGF0YT8uZXJyb3I/Lm1lc3NhZ2V8fGluaXQ/LnJhd3x8J2luaXRpYWxpemVfZmFpbGVkJyk7YXdhaXQgcG9zdE1jcChtY3BUb2tlbix7anNvbnJwYzonMi4wJyxtZXRob2Q6J25vdGlmaWNhdGlvbnMvaW5pdGlhbGl6ZWQnLHBhcmFtczp7fX0saW5pdC5zZXNzaW9uLHByb3RvY29sKS5jYXRjaCgoKT0+bnVsbCk7cmV0dXJue3Nlc3Npb246aW5pdC5zZXNzaW9uLHByb3RvY29sfX0KYXN5bmMgZnVuY3Rpb24gdG9vbChtY3BUb2tlbixzLG5hbWUsYXJncyl7Y29uc3Qgcj1hd2FpdCBwb3N0TWNwKG1jcFRva2VuLHtqc29ucnBjOicyLjAnLGlkOkRhdGUubm93KCkrTWF0aC5mbG9vcihNYXRoLnJhbmRvbSgpKjEwMDAwKSxtZXRob2Q6J3Rvb2xzL2NhbGwnLHBhcmFtczp7bmFtZSxhcmd1bWVudHM6YXJnc319LHMuc2Vzc2lvbixzLnByb3RvY29sKTtpZighci5va3x8ci5kYXRhPy5lcnJvcil0aHJvdyBuZXcgRXJyb3Ioci5kYXRhPy5lcnJvcj8ubWVzc2FnZXx8ci5yYXd8fGAke25hbWV9X2ZhaWxlZGApO3JldHVybiB1bndyYXAoci5kYXRhKX0KYXN5bmMgZnVuY3Rpb24gcHJvY2Vzc0ZlZWQoYWNjb3VudCxzLGl0ZW0pe2NvbnN0IHBlcnNvbj1hY2NvdW50LnBlcnNvbixmZWVkSWQ9U3RyaW5nKGl0ZW0uZmVlZElkfHxpdGVtLmZlZWRfaWR8fGl0ZW0uaWR8fCcnKSxkb2N1bWVudElkPVN0cmluZyhpdGVtLmRvY3VtZW50SWR8fGl0ZW0uZG9jdW1lbnRfaWR8fCcnKSxmZWVkRGF0ZT1pdGVtLmZlZWREYXRlfHxpdGVtLmZlZWRfZGF0ZXx8bnVsbCx0aXRsZT1pdGVtLnRpdGxlfHxudWxsLG1ldGE9aXRlbS5tZXRhZGF0YXx8e3NvdXJjZTppdGVtLnNvdXJjZXx8bnVsbCxlbWFpbDppdGVtLmVtYWlsfHxudWxsLHBlcnNvbkxpc3Q6aXRlbS5wZXJzb25MaXN0fHxbXSxzdW1tYXJ5Oml0ZW0uc3VtbWFyeXx8bnVsbCxlc3RpbWF0ZWREdXJhdGlvbjppdGVtLmVzdGltYXRlZER1cmF0aW9ufHxudWxsLHNraXBSZWFzb246aXRlbS5za2lwUmVhc29ufHxudWxsfTt0cnl7Y29uc3QgdHI9YXdhaXQgdG9vbChhY2NvdW50Lm1jcF90b2tlbixzLCdmZWVkX2dldF90cmFuc2NyaXB0aW9uJyx7ZmVlZElkfSksdGV4dD10ZXh0T2YodHIpO2lmKHRleHQudHJpbSgpLmxlbmd0aDwyMClyZXR1cm4gYXdhaXQgY2FsbCgnbWFya19kZWZlcnJlZCcse3BlcnNvbixmZWVkX2lkOmZlZWRJZCxzdGF0dXM6J05PX1RSQU5TQ1JJUFQnLG1lc3NhZ2U6YG5vX3RleHQ7IGZlZWRfc3RhdHVzPSR7aXRlbS5zdGF0dXN8fGl0ZW0uZmVlZF9zdGF0dXN8fCcnfWB9KTtyZXR1cm4gYXdhaXQgY2FsbCgnaW5nZXN0Jyx7cGVyc29uLGZlZWRfaWQ6ZmVlZElkLGRvY3VtZW50X2lkOmRvY3VtZW50SWQsZmVlZF9kYXRlOmZlZWREYXRlLHRpdGxlLG1ldGFkYXRhOm1ldGEsdHJhbnNjcmlwdF90ZXh0OnRleHR9LDI0MDAwMCl9Y2F0Y2goZSl7cmV0dXJuIGF3YWl0IGNhbGwoJ21hcmtfZGVmZXJyZWQnLHtwZXJzb24sZmVlZF9pZDpmZWVkSWQsc3RhdHVzOidFUlJPUicsbWVzc2FnZTpTdHJpbmcoZT8ubWVzc2FnZXx8ZSl9KS5jYXRjaCgoKT0+KHtzdGF0dXM6J0VSUk9SJ30pKX19CmFzeW5jIGZ1bmN0aW9uIHN5bmNPbmUoYWNjb3VudCxtb2RlLGxpbWl0KXtjb25zdCBzPWF3YWl0IHNlc3Npb25Gb3IoYWNjb3VudC5tY3BfdG9rZW4pLGFyZ3M9e2xpbWl0fTtpZihtb2RlPT09J2JhY2tmaWxsJyYmYWNjb3VudC5sYXN0X2N1cnNvcj8uYmFja2ZpbGxfY3Vyc29yKWFyZ3MuY3Vyc29yPWFjY291bnQubGFzdF9jdXJzb3IuYmFja2ZpbGxfY3Vyc29yO2NvbnN0IHBhZ2U9ZGF0YU9mKGF3YWl0IHRvb2woYWNjb3VudC5tY3BfdG9rZW4scywnZmVlZF9saXN0JyxhcmdzKSl8fHt9LGl0ZW1zPUFycmF5LmlzQXJyYXkocGFnZS5pdGVtcyk/cGFnZS5pdGVtczpbXSxuZXh0PXBhZ2UubmV4dEN1cnNvcnx8bnVsbCx1cD1hd2FpdCBjYWxsKCd1cHNlcnRfZmVlZHMnLHtwZXJzb246YWNjb3VudC5wZXJzb24saXRlbXN9KSxtYXA9bmV3IE1hcCgodXAuc3RhdGVzfHxbXSkubWFwKHg9PltTdHJpbmcoeC5mZWVkX2lkKSx4XSkpO2xldCBmZXRjaGVkPTAsc3luY2VkPTAsc2tpcHBlZD0wLHdhaXRpbmc9MCxlcnJvcnM9MCxkZWFkPTA7Zm9yKGNvbnN0IGl0ZW0gb2YgaXRlbXMpe2NvbnN0IGlkPVN0cmluZyhpdGVtLmZlZWRJZHx8aXRlbS5pZHx8JycpLGV4PW1hcC5nZXQoaWQpO2lmKCFpZCljb250aW51ZTtpZihleD8uc3luY19zdGF0dXM9PT0nU1lOQ0VEJ3x8ZXg/LnN5bmNfc3RhdHVzPT09J0RFQURfTEVUVEVSJyl7c2tpcHBlZCsrO2NvbnRpbnVlfWlmKGV4Py5uZXh0X3JldHJ5X2F0JiZuZXcgRGF0ZShleC5uZXh0X3JldHJ5X2F0KS5nZXRUaW1lKCk+RGF0ZS5ub3coKSl7c2tpcHBlZCsrO2NvbnRpbnVlfWZldGNoZWQrKztjb25zdCByPWF3YWl0IHByb2Nlc3NGZWVkKGFjY291bnQscyxpdGVtKTtpZihyLnN0YXR1cz09PSdTWU5DRUQnKXN5bmNlZCsrO2Vsc2UgaWYoci5zdGF0dXM9PT0nTk9fVFJBTlNDUklQVCcpd2FpdGluZysrO2Vsc2UgaWYoci5zdGF0dXM9PT0nREVBRF9MRVRURVInKXtkZWFkKys7ZXJyb3JzKyt9ZWxzZSBlcnJvcnMrK31jb25zdCBkZXRhaWw9YCR7bW9kZX06IHNlZW49JHtpdGVtcy5sZW5ndGh9LCBmZXRjaGVkPSR7ZmV0Y2hlZH0sIHN5bmNlZD0ke3N5bmNlZH0sIHNraXBwZWQ9JHtza2lwcGVkfSwgd2FpdGluZz0ke3dhaXRpbmd9LCBlcnJvcnM9JHtlcnJvcnN9LCBkZWFkPSR7ZGVhZH1gO2F3YWl0IGNhbGwoJ3VwZGF0ZV9hY2NvdW50Jyx7cGVyc29uOmFjY291bnQucGVyc29uLHN5bmNfbW9kZTptb2RlLHNlZW5fZGVsdGE6aXRlbXMubGVuZ3RoLGluZ2VzdGVkX2RlbHRhOnN5bmNlZCxlcnJvcnMsZGV0YWlsLG5leHRfY3Vyc29yOm1vZGU9PT0nYmFja2ZpbGwnP25leHQ6dW5kZWZpbmVkfSk7cmV0dXJue3BlcnNvbjphY2NvdW50LnBlcnNvbixzZWVuOml0ZW1zLmxlbmd0aCxzeW5jZWQsZXJyb3JzLHdhaXRpbmcsZGVhZH19CmFzeW5jIGZ1bmN0aW9uIHJ1blNoYWRvdyhwcmVwKXtsZXQgb2s9MCx2aXNpYmxlPTA7Zm9yKGNvbnN0IGEgb2YgcHJlcC5hY2NvdW50c3x8W10pe3RyeXtjb25zdCBzPWF3YWl0IHNlc3Npb25Gb3IoYS5tY3BfdG9rZW4pLHA9ZGF0YU9mKGF3YWl0IHRvb2woYS5tY3BfdG9rZW4scywnZmVlZF9saXN0Jyx7bGltaXQ6MX0pKXx8e307b2srKztpZihBcnJheS5pc0FycmF5KHAuaXRlbXMpJiZwLml0ZW1zLmxlbmd0aCl2aXNpYmxlKyt9Y2F0Y2h7fX1yZXR1cm57YWNjb3VudHNfdG90YWw6KHByZXAuYWNjb3VudHN8fFtdKS5sZW5ndGgsYWNjb3VudHNfb2s6b2ssZmVlZHNfdmlzaWJsZTp2aXNpYmxlfX0KbGV0IGxhc3RMaXZlPTAsbGFzdEJhY2tmaWxsPTAsbGFzdFJldHJ5PTA7YXN5bmMgZnVuY3Rpb24gcnVuRXhlY3V0ZShwcmVwKXtjb25zdCBjPXByZXAuY29udHJvbHx8e30sbm93PURhdGUubm93KCksYWNjb3VudHM9cHJlcC5hY2NvdW50c3x8W10sYnlQZXJzb249bmV3IE1hcChhY2NvdW50cy5tYXAoYT0+W1N0cmluZyhhLnBlcnNvbiksYV0pKSx0YXNrcz1bXSxvdXQ9e2xpdmU6W10sYmFja2ZpbGw6bnVsbCxyZXRyeTpudWxsfTtpZihub3ctbGFzdExpdmU+PU51bWJlcihjLmxpdmVfaW50ZXJ2YWxfbXN8fDM2MDAwMDApKXtmb3IoY29uc3QgYSBvZiBhY2NvdW50cyl7dHJ5e291dC5saXZlLnB1c2goYXdhaXQgc3luY09uZShhLCdzeW5jJywxMCkpfWNhdGNoKGUpe291dC5saXZlLnB1c2goe3BlcnNvbjphLnBlcnNvbixlcnJvcnM6MSxmYXRhbDpTdHJpbmcoZT8ubWVzc2FnZXx8ZSkuc2xpY2UoMCwyNTApfSl9fWxhc3RMaXZlPW5vdzt0YXNrcy5wdXNoKCdsaXZlJyl9aWYobm93LWxhc3RCYWNrZmlsbD49TnVtYmVyKGMuYmFja2ZpbGxfaW50ZXJ2YWxfbXN8fDM2MDAwMDApKXtjb25zdCBhPWFjY291bnRzLmZpbmQoeD0+IXgubGFzdF9jdXJzb3I/LmJhY2tmaWxsX2NvbXBsZXRlKTtpZihhKXRyeXtvdXQuYmFja2ZpbGw9YXdhaXQgc3luY09uZShhLCdiYWNrZmlsbCcsMTApfWNhdGNoKGUpe291dC5iYWNrZmlsbD17cGVyc29uOmEucGVyc29uLGVycm9yczoxLGZhdGFsOlN0cmluZyhlPy5tZXNzYWdlfHxlKS5zbGljZSgwLDI1MCl9fWxhc3RCYWNrZmlsbD1ub3c7dGFza3MucHVzaCgnYmFja2ZpbGwnKX1pZihub3ctbGFzdFJldHJ5Pj1OdW1iZXIoYy5yZXRyeV9pbnRlcnZhbF9tc3x8MzYwMDAwMCkpe2NvbnN0IGR1ZT1hd2FpdCBjYWxsKCdyZXRyeV9kdWUnLHtsaW1pdDoyMH0pO2xldCBzeW5jZWQ9MCx3YWl0aW5nPTAsZXJyb3JzPTAsZGVhZD0wLHNraXBwZWQ9MDtjb25zdCBzZXNzaW9ucz1uZXcgTWFwKCk7Zm9yKGNvbnN0IHJvdyBvZiBkdWUucm93c3x8W10pe2NvbnN0IGE9YnlQZXJzb24uZ2V0KFN0cmluZyhyb3cucGVyc29uKSk7aWYoIWEpe3NraXBwZWQrKztjb250aW51ZX1sZXQgcz1zZXNzaW9ucy5nZXQoYS5wZXJzb24pO2lmKCFzKXtzPWF3YWl0IHNlc3Npb25Gb3IoYS5tY3BfdG9rZW4pO3Nlc3Npb25zLnNldChhLnBlcnNvbixzKX1jb25zdCByPWF3YWl0IHByb2Nlc3NGZWVkKGEscyxyb3cpO2lmKHIuc3RhdHVzPT09J1NZTkNFRCcpc3luY2VkKys7ZWxzZSBpZihyLnN0YXR1cz09PSdOT19UUkFOU0NSSVBUJyl3YWl0aW5nKys7ZWxzZSBpZihyLnN0YXR1cz09PSdERUFEX0xFVFRFUicpZGVhZCsrO2Vsc2UgZXJyb3JzKyt9b3V0LnJldHJ5PXtzZWVuOihkdWUucm93c3x8W10pLmxlbmd0aCxzeW5jZWQsd2FpdGluZyxlcnJvcnMsZGVhZCxza2lwcGVkfTtsYXN0UmV0cnk9bm93O3Rhc2tzLnB1c2goJ3JldHJ5Jyl9cmV0dXJue3Rhc2tzLC4uLm91dH19CmFzeW5jIGZ1bmN0aW9uIGN5Y2xlKCl7Y29uc3Qgc3RhcnRlZD1uZXcgRGF0ZSgpLnRvSVNPU3RyaW5nKCkscHJlcD1hd2FpdCBjYWxsKCdwcmVwYXJlJyksbW9kZT1wcmVwLmNvbnRyb2w/Lm1vZGV8fCdvZmYnLHBvbGxNcz1OdW1iZXIocHJlcC5jb250cm9sPy5wb2xsX21zfHwzMDAwMDApO2lmKG1vZGU9PT0nb2ZmJylyZXR1cm57cG9sbE1zfTtpZihtb2RlPT09J3NoYWRvdycpe2NvbnN0IHJlc3VsdD1hd2FpdCBydW5TaGFkb3cocHJlcCksc3RhdHVzPXJlc3VsdC5hY2NvdW50c190b3RhbD4wJiZyZXN1bHQuYWNjb3VudHNfb2s9PT1yZXN1bHQuYWNjb3VudHNfdG90YWw/J29rJzonZXJyb3InO2F3YWl0IGNhbGwoJ3JlcG9ydCcse21vZGUsc3RhdHVzLHN0YXJ0ZWRfYXQ6c3RhcnRlZCxyZXN1bHQsZXJyb3I6c3RhdHVzPT09J29rJz9udWxsOidzaGFkb3dfYWNjb3VudF9mYWlsdXJlJ30pO3JldHVybntwb2xsTXN9fWlmKG1vZGU9PT0nZXhlY3V0ZScpe2NvbnN0IHJlc3VsdD1hd2FpdCBydW5FeGVjdXRlKHByZXApO2F3YWl0IGNhbGwoJ3JlcG9ydCcse21vZGUsc3RhdHVzOidvaycsc3RhcnRlZF9hdDpzdGFydGVkLHJlc3VsdH0pO3JldHVybntwb2xsTXN9fXRocm93IG5ldyBFcnJvcihgdW5zdXBwb3J0ZWRfbW9kZToke21vZGV9YCl9Cihhc3luYygpPT57Y29uc29sZS5sb2coSlNPTi5zdHJpbmdpZnkoe2V2ZW50Oidkb25uYWhfd29ya2VyX3N0YXJ0ZWQnLHdvcmtlcn0pKTtsZXQgcG9sbE1zPTMwMDAwMDt3aGlsZSghc3RvcHBpbmcpe2NvbnN0IHN0YXJ0PURhdGUubm93KCk7dHJ5e2NvbnN0IHI9YXdhaXQgY3ljbGUoKTtwb2xsTXM9TnVtYmVyKHI/LnBvbGxNc3x8cG9sbE1zKX1jYXRjaChlKXtjb25zdCBtc2c9U3RyaW5nKGU/Lm1lc3NhZ2V8fGUpO2NvbnNvbGUuZXJyb3IoSlNPTi5zdHJpbmdpZnkoe2V2ZW50Oidkb25uYWhfd29ya2VyX2Vycm9yJyxlcnJvcjptc2d9KSk7YXdhaXQgY2FsbCgncmVwb3J0Jyx7bW9kZTondW5rbm93bicsc3RhdHVzOidlcnJvcicsc3RhcnRlZF9hdDpuZXcgRGF0ZShzdGFydCkudG9JU09TdHJpbmcoKSxyZXN1bHQ6e30sZXJyb3I6bXNnfSkuY2F0Y2goKCk9Pnt9KX1hd2FpdCBzbGVlcChNYXRoLm1heCgxNTAwMCxwb2xsTXMtKERhdGUubm93KCktc3RhcnQpKSl9IH0pKCkuY2F0Y2goZT0+e2NvbnNvbGUuZXJyb3IoZSk7cHJvY2Vzcy5leGl0KDEpfSk7Cg=="
+    command:
+      - sh
+      - -lc
+      - 'echo "$$WORKER_SCRIPT_B64" | base64 -d > /tmp/donnah-worker.cjs && node /tmp/donnah-worker.cjs'
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          memory: 64M
+  form-sheets-processor:
+    image: node:22-alpine
+    environment:
+      FORM_SHEETS_WORKER_API_URL: "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-form-sheets-worker-api"
+      AGENCY_WORKER_TOKEN: "${AGENCY_WORKER_TOKEN}"
+      WORKER_ID: "leonardoimobi-form-sheets-1"
+      WORKER_SCRIPT_B64: "Y29uc3QgYXBpPXByb2Nlc3MuZW52LkZPUk1fU0hFRVRTX1dPUktFUl9BUElfVVJMLHRva2VuPXByb2Nlc3MuZW52LkFHRU5DWV9XT1JLRVJfVE9LRU4sd29ya2VyPXByb2Nlc3MuZW52LldPUktFUl9JRHx8J2xlb25hcmRvaW1vYmktZm9ybS1zaGVldHMtMSc7aWYoIWFwaXx8IXRva2VuKXtjb25zb2xlLmVycm9yKCdtaXNzaW5nX2Zvcm1fc2hlZXRzX3dvcmtlcl9jb25maWd1cmF0aW9uJyk7cHJvY2Vzcy5leGl0KDEpfQpjb25zdCBGT1JNUz1be3R5cGU6J1BST0RVVE8nLHNoZWV0SWQ6JzF5SjZPWW9EQ0J6YTRZUjNhQVRQMWRVTUtzYzFDV25sN1MtaW9Ta1MzN193JyxnaWQ6JzE0NjU1ODg4NDgnLGtleXM6Wydub21lX3Byb2R1dG8nLCd0aXBvJywnbG9jYWxpemFjYW8nLCdwb250b3NfcmVmZXJlbmNpYScsJ3BvbnRvc19wb3NpdGl2b3MnLCdwb250b3NfbmVnYXRpdm9zJywnY29uc3RydXRvcmEnLCdtZXRyYWdlbScsJ2Rpc3RyaWJ1aWNhb19wbGFudGFzJywnbG90ZXNfdW5pZGFkZXNfbWV0cmFnZW0nLCdsYXplcmVzJywnbWV0cmFnZW5zX2FyZWFzX2NvbXVucycsJ2RpZmVyZW5jaWFpc19jb25kb21pbmlvJywnZm9ybWFzX3BhZ2FtZW50bycsJ3ZhbG9yX2VudHJhZGEnLCd2YWxvcl90b3RhbCcsJ3ZhbG9yX20yJywnZmluYW5jaWFtZW50b19tZXNlcycsJ2ZhY2lsaWRhZGVfZW50cmFkYScsJ2ZhY2lsaWRhZGVfcGFnYW1lbnRvJywnbW90aXZvX2NvbXByYXJpYScsJ21vdGl2b19uYW9fY29tcHJhcmlhJywnY29tZW50YXJpb3MnLCdvcG9ydHVuaWRhZGVfZGVzdGFxdWUnLCdwcmVmZXJlbmNpYV9lc3RldGljYSddLGhlYWRlck5lZWRsZTonbm9tZSBkbyBzZXUgcHJvZHV0byd9LHt0eXBlOidQRVJTT05BJyxzaGVldElkOicxWTE1blJONEVyZ3dPVmU2NDNrVnBJbFlCMmI0eVh5VU1SUTg1UndMUWtTbycsZ2lkOicxMzkxNzE2Nzg2JyxrZXlzOlsnbm9tZV9jbGllbnRlX2lkZWFsJywnaWRhZGUnLCdwcm9maXNzYW8nLCdyZW5kYV9tZW5zYWwnLCdmYW1pbGlhX2ZpbGhvcycsJ2VzY29sYXJpZGFkZScsJ3Jlc2lkZW5jaWFfYXR1YWwnLCdmYWNpbGlkYWRlc19yZWdpYW8nLCdwYWRyYW9fYmFpcnJvJywnZ2F0aWxob3NfdXJnZW5jaWEnLCdtZWRvcycsJ2Rlc2Vqb3MnLCd1bmljaWRhZGVfcHJvZHV0bycsJ21vdGl2b19uYW9fY29tcHJhcmlhJywnY29tZW50YXJpb3MnLCdjb25jb3JyZW50ZXNfaW5zdGFncmFtJ10saGVhZGVyTmVlZGxlOidjbGllbnRlIGlkZWFsJ31dOwpjb25zdCBzbGVlcD1tcz0+bmV3IFByb21pc2Uocj0+c2V0VGltZW91dChyLG1zKSk7bGV0IHN0b3BwaW5nPWZhbHNlO3Byb2Nlc3Mub24oJ1NJR1RFUk0nLCgpPT5zdG9wcGluZz10cnVlKTtwcm9jZXNzLm9uKCdTSUdJTlQnLCgpPT5zdG9wcGluZz10cnVlKTthc3luYyBmdW5jdGlvbiBjYWxsKGFjdGlvbixwYXlsb2FkPXt9LHRpbWVvdXRNcz0xODAwMDApe2NvbnN0IGM9bmV3IEFib3J0Q29udHJvbGxlcigpLHQ9c2V0VGltZW91dCgoKT0+Yy5hYm9ydCgpLHRpbWVvdXRNcyk7dHJ5e2NvbnN0IHI9YXdhaXQgZmV0Y2goYXBpLHttZXRob2Q6J1BPU1QnLGhlYWRlcnM6eydjb250ZW50LXR5cGUnOidhcHBsaWNhdGlvbi9qc29uJywneC1hZ2VuY3ktd29ya2VyLXRva2VuJzp0b2tlbn0sYm9keTpKU09OLnN0cmluZ2lmeSh7YWN0aW9uLHdvcmtlciwuLi5wYXlsb2FkfSksc2lnbmFsOmMuc2lnbmFsfSk7Y29uc3QgeD1hd2FpdCByLnRleHQoKTtsZXQgYj17fTt0cnl7Yj14P0pTT04ucGFyc2UoeCk6e319Y2F0Y2h7Yj17cmF3Onh9fWlmKCFyLm9rKXRocm93IG5ldyBFcnJvcihgZm9ybV9hcGlfJHtyLnN0YXR1c306JHtKU09OLnN0cmluZ2lmeShiKS5zbGljZSgwLDkwMCl9YCk7cmV0dXJuIGJ9ZmluYWxseXtjbGVhclRpbWVvdXQodCl9fQpmdW5jdGlvbiBwYXJzZUNTVih0ZXh0KXtpZih0ZXh0LmNoYXJDb2RlQXQoMCk9PT0weGZlZmYpdGV4dD10ZXh0LnNsaWNlKDEpO2NvbnN0IHJvd3M9W107bGV0IHJvdz1bXSxmaWVsZD0nJyxxdW90ZWQ9ZmFsc2U7Zm9yKGxldCBpPTA7aTx0ZXh0Lmxlbmd0aDtpKyspe2NvbnN0IGM9dGV4dFtpXTtpZihxdW90ZWQpe2lmKGM9PT0nIicpe2lmKHRleHRbaSsxXT09PSciJyl7ZmllbGQrPSciJztpKyt9ZWxzZSBxdW90ZWQ9ZmFsc2V9ZWxzZSBmaWVsZCs9Y31lbHNle2lmKGM9PT0nIicpcXVvdGVkPXRydWU7ZWxzZSBpZihjPT09JywnKXtyb3cucHVzaChmaWVsZCk7ZmllbGQ9Jyd9ZWxzZSBpZihjPT09J1xuJyl7cm93LnB1c2goZmllbGQpO3Jvd3MucHVzaChyb3cpO3Jvdz1bXTtmaWVsZD0nJ31lbHNlIGlmKGMhPT0nXHInKWZpZWxkKz1jfX1pZihmaWVsZC5sZW5ndGh8fHJvdy5sZW5ndGgpe3Jvdy5wdXNoKGZpZWxkKTtyb3dzLnB1c2gocm93KX1yZXR1cm4gcm93c30KZnVuY3Rpb24gdG9Jc28odil7Y29uc3Qgcz1TdHJpbmcodj8/JycpLnRyaW0oKTtpZighcylyZXR1cm4gbnVsbDtjb25zdCBtPXMubWF0Y2goL14oXGR7MSwyfSlcLyhcZHsxLDJ9KVwvKFxkezR9KVsgVF0oXGR7MSwyfSk6KFxkezJ9KSg/OjooXGR7Mn0pKT8vKTtpZihtKXtjb25zdFssZCxtbyx5LGgsbWksc2VdPW07cmV0dXJuIGAke3l9LSR7bW8ucGFkU3RhcnQoMiwnMCcpfS0ke2QucGFkU3RhcnQoMiwnMCcpfVQke2gucGFkU3RhcnQoMiwnMCcpfToke21pfToke3NlPz8nMDAnfS0wMzowMGB9Y29uc3QgZHQ9bmV3IERhdGUocyk7cmV0dXJuIE51bWJlci5pc05hTihkdC5nZXRUaW1lKCkpP251bGw6ZHQudG9JU09TdHJpbmcoKX0KYXN5bmMgZnVuY3Rpb24gbG9hZChmKXtjb25zdCByPWF3YWl0IGZldGNoKGBodHRwczovL2RvY3MuZ29vZ2xlLmNvbS9zcHJlYWRzaGVldHMvZC8ke2Yuc2hlZXRJZH0vZXhwb3J0P2Zvcm1hdD1jc3YmZ2lkPSR7Zi5naWR9YCx7cmVkaXJlY3Q6J2ZvbGxvdyd9KTtpZighci5vayl0aHJvdyBuZXcgRXJyb3IoYCR7Zi50eXBlfV9jc3ZfaHR0cF8ke3Iuc3RhdHVzfWApO2NvbnN0IHRleHQ9YXdhaXQgci50ZXh0KCksY3N2PXBhcnNlQ1NWKHRleHQpO2lmKGNzdi5sZW5ndGg8Mil0aHJvdyBuZXcgRXJyb3IoYCR7Zi50eXBlfV9jc3ZfZW1wdHlgKTtjb25zdCBoPWNzdlswXS5tYXAodj0+U3RyaW5nKHYpLnRyaW0oKS50b0xvd2VyQ2FzZSgpKTtpZighaFswXT8uaW5jbHVkZXMoJ2NhcmltYm8nKXx8IWhbMV0/LmluY2x1ZGVzKCdlLW1haWwnKXx8IWhbMl0/LmluY2x1ZGVzKGYuaGVhZGVyTmVlZGxlKSl0aHJvdyBuZXcgRXJyb3IoYCR7Zi50eXBlfV91bmV4cGVjdGVkX2hlYWRlcmApO2NvbnN0IHJvd3M9W107Zm9yKGxldCBpPTE7aTxjc3YubGVuZ3RoO2krKyl7Y29uc3QgcnI9Y3N2W2ldO2lmKCFTdHJpbmcocnJbMF0/PycnKS50cmltKCkpY29udGludWU7Y29uc3QgYT17fTtmb3IobGV0IGs9MDtrPGYua2V5cy5sZW5ndGg7aysrKWFbZi5rZXlzW2tdXT1ycltrKzJdPz8nJztyb3dzLnB1c2goe3I6U3RyaW5nKGkrMSksZTpTdHJpbmcocnJbMV0/PycnKS50cmltKCl8fG51bGwsdDp0b0lzbyhyclswXT8/JycpLHA6Zi50eXBlPT09J1BST0RVVE8nPyhTdHJpbmcocnJbMl0/PycnKS50cmltKCl8fG51bGwpOm51bGwsYX0pfXJldHVybnt0eXBlOmYudHlwZSxzaGVldF9pZDpmLnNoZWV0SWQscm93cyxjc3ZfYnl0ZXM6dGV4dC5sZW5ndGh9fQphc3luYyBmdW5jdGlvbiBjeWNsZSgpe2NvbnN0IHN0YXJ0ZWQ9bmV3IERhdGUoKS50b0lTT1N0cmluZygpLHByZXA9YXdhaXQgY2FsbCgncHJlcGFyZScpLG1vZGU9cHJlcC5jb250cm9sPy5tb2RlfHwnb2ZmJyxpbnRlcnZhbE1zPU51bWJlcihwcmVwLmNvbnRyb2w/LmludGVydmFsX21zfHw5MDAwMDApO2lmKG1vZGU9PT0nb2ZmJylyZXR1cm57aW50ZXJ2YWxNc307Y29uc3QgZm9ybXM9W107Zm9yKGNvbnN0IGYgb2YgRk9STVMpZm9ybXMucHVzaChhd2FpdCBsb2FkKGYpKTtjb25zdCByZXN1bHQ9e2hlYWRlcnNfb2s6dHJ1ZSxyb3dzX3Byb2R1Y3Q6Zm9ybXMuZmluZCh4PT54LnR5cGU9PT0nUFJPRFVUTycpPy5yb3dzLmxlbmd0aHx8MCxyb3dzX3BlcnNvbmE6Zm9ybXMuZmluZCh4PT54LnR5cGU9PT0nUEVSU09OQScpPy5yb3dzLmxlbmd0aHx8MCxieXRlc19wcm9kdWN0OmZvcm1zLmZpbmQoeD0+eC50eXBlPT09J1BST0RVVE8nKT8uY3N2X2J5dGVzfHwwLGJ5dGVzX3BlcnNvbmE6Zm9ybXMuZmluZCh4PT54LnR5cGU9PT0nUEVSU09OQScpPy5jc3ZfYnl0ZXN8fDB9O2lmKG1vZGU9PT0nc2hhZG93Jyl7YXdhaXQgY2FsbCgncmVwb3J0Jyx7bW9kZSxzdGF0dXM6J29rJyxzdGFydGVkX2F0OnN0YXJ0ZWQscmVzdWx0fSk7cmV0dXJue2ludGVydmFsTXN9fWlmKG1vZGU9PT0nZXhlY3V0ZScpe3Jlc3VsdC5hcHBsaWVkPWF3YWl0IGNhbGwoJ2FwcGx5Jyx7Zm9ybXN9LDI0MDAwMCk7YXdhaXQgY2FsbCgncmVwb3J0Jyx7bW9kZSxzdGF0dXM6J29rJyxzdGFydGVkX2F0OnN0YXJ0ZWQscmVzdWx0fSk7cmV0dXJue2ludGVydmFsTXN9fXRocm93IG5ldyBFcnJvcihgdW5zdXBwb3J0ZWRfbW9kZToke21vZGV9YCl9Cihhc3luYygpPT57Y29uc29sZS5sb2coSlNPTi5zdHJpbmdpZnkoe2V2ZW50Oidmb3JtX3NoZWV0c193b3JrZXJfc3RhcnRlZCcsd29ya2VyfSkpO2xldCBpbnRlcnZhbE1zPTkwMDAwMDt3aGlsZSghc3RvcHBpbmcpe2NvbnN0IHN0YXJ0PURhdGUubm93KCk7dHJ5e2NvbnN0IHI9YXdhaXQgY3ljbGUoKTtpbnRlcnZhbE1zPU51bWJlcihyPy5pbnRlcnZhbE1zfHxpbnRlcnZhbE1zKX1jYXRjaChlKXtjb25zdCBtc2c9U3RyaW5nKGU/Lm1lc3NhZ2V8fGUpO2NvbnNvbGUuZXJyb3IoSlNPTi5zdHJpbmdpZnkoe2V2ZW50Oidmb3JtX3NoZWV0c193b3JrZXJfZXJyb3InLGVycm9yOm1zZ30pKTthd2FpdCBjYWxsKCdyZXBvcnQnLHttb2RlOid1bmtub3duJyxzdGF0dXM6J2Vycm9yJyxzdGFydGVkX2F0Om5ldyBEYXRlKHN0YXJ0KS50b0lTT1N0cmluZygpLHJlc3VsdDp7fSxlcnJvcjptc2d9KS5jYXRjaCgoKT0+e30pfWF3YWl0IHNsZWVwKE1hdGgubWF4KDE1MDAwLGludGVydmFsTXMtKERhdGUubm93KCktc3RhcnQpKSl9IH0pKCkuY2F0Y2goZT0+e2NvbnNvbGUuZXJyb3IoZSk7cHJvY2Vzcy5leGl0KDEpfSk7Cg=="
+    command:
+      - sh
+      - -lc
+      - 'echo "$$WORKER_SCRIPT_B64" | base64 -d > /tmp/form-sheets-worker.cjs && node /tmp/form-sheets-worker.cjs'
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 192M
+        reservations:
+          memory: 64M
+volumes:
+  video-worker-deps:
+
+

@@ -1,0 +1,5 @@
+from pathlib import Path
+p=Path('app-v2.mjs'); s=p.read_text(encoding='utf-8')
+s=s.replace("function voiceNeedsPriority(){if(!speaking||$('voice').value==='system:browser')return false;const tail=audioTimeline[audioTimeline.length-1],ahead=tail?tail.idx-sentenceIndex:0;return audioFillRunning||ahead<3;}","function desiredAudioReserve(){return Math.min(3,Math.max(0,currentSegments.length-1-sentenceIndex));}\nfunction voiceNeedsPriority(){if(!speaking||$('voice').value==='system:browser')return false;const tail=audioTimeline[audioTimeline.length-1],ahead=tail?tail.idx-sentenceIndex:0;return audioFillRunning||ahead<desiredAudioReserve();}")
+s=s.replace("async function waitForAudioIdle(){while((speaking&&!paused&&(audioFillRunning||audioAheadCount()<3))||(!speaking&&(audioPending.size>0||decodedAudioPending.size>0)))await new Promise(r=>setTimeout(r,120));}","async function waitForAudioIdle(){while((speaking&&!paused&&(audioFillRunning||audioAheadCount()<desiredAudioReserve()))||(!speaking&&(audioPending.size>0||decodedAudioPending.size>0)))await new Promise(r=>setTimeout(r,120));}")
+p.write_text(s,encoding='utf-8'); print('reserve_patch_ok')

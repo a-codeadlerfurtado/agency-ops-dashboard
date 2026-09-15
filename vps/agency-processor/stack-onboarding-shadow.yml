@@ -1,0 +1,793 @@
+version: "3.8"
+
+services:
+  agency-processor:
+    image: node:22-alpine
+    environment:
+      WORKER_API_URL: "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-heavy-worker-api"
+      AGENCY_WORKER_TOKEN: "${AGENCY_WORKER_TOKEN}"
+      WORKER_ID: "leonardoimobi-primary-1"
+      POLL_MIN_MS: "5000"
+      POLL_MAX_MS: "60000"
+      OVERDUE_DEFAULT_INTERVAL_MS: "120000"
+      API_TIMEOUT_MS: "90000"
+      WORKER_SCRIPT: |
+        const api = process.env.WORKER_API_URL;
+        const token = process.env.AGENCY_WORKER_TOKEN;
+        const worker = process.env.WORKER_ID || "leonardoimobi-primary-1";
+        const pollMinMs = Number(process.env.POLL_MIN_MS || 5000);
+        const pollMaxMs = Number(process.env.POLL_MAX_MS || 60000);
+        const overdueDefaultIntervalMs = Number(process.env.OVERDUE_DEFAULT_INTERVAL_MS || 120000);
+        const apiTimeoutMs = Number(process.env.API_TIMEOUT_MS || 90000);
+        
+        if (!api || !token) {
+          console.error("missing_worker_configuration");
+          process.exit(1);
+        }
+        
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        let stopping = false;
+        process.on("SIGTERM", () => { stopping = true; });
+        process.on("SIGINT", () => { stopping = true; });
+        
+        async function call(action, payload = {}, timeoutMs = apiTimeoutMs) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            const response = await fetch(api, {
+              method: "POST",
+              headers: { "content-type": "application/json", "x-agency-worker-token": token },
+              body: JSON.stringify({ action, worker, ...payload }),
+              signal: controller.signal,
+            });
+            const text = await response.text();    let body;
+            try { body = text ? JSON.parse(text) : {}; }
+            catch { body = { raw: text }; }
+            if (!response.ok) throw new Error(`worker_api_${response.status}:${JSON.stringify(body)}`);
+            return body;
+          } finally {
+            clearTimeout(timeout);
+          }
+        }
+        
+        function offsetMinutes(now, timezone) {
+          const dtf = new Intl.DateTimeFormat("en-US", {
+            timeZone: timezone, hour12: false,
+            year: "numeric", month: "2-digit", day: "2-digit",
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
+          });
+          const p = {};
+          for (const x of dtf.formatToParts(now)) p[x.type] = x.value;
+          const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second);
+          return (asUtc - now.getTime()) / 60000;
+        }
+        
+        function startOfWindowToday(now, config) {
+          const dtf = new Intl.DateTimeFormat("en-US", {
+            timeZone: config.fuso, year: "numeric", month: "2-digit", day: "2-digit",
+          });
+          const p = {};
+          for (const x of dtf.formatToParts(now)) p[x.type] = x.value;  const [h, m] = String(config.janela_hora_inicio).split(":").map(Number);
+          const off = offsetMinutes(now, config.fuso);
+          return new Date(Date.UTC(+p.year, +p.month - 1, +p.day, h, m, 0) - off * 60000);
+        }
+        
+        function localParts(now, timezone) {
+          const fmt = new Intl.DateTimeFormat("en-US", {
+            timeZone: timezone, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+          });
+          const parts = fmt.formatToParts(now);
+          const wd = parts.find((p) => p.type === "weekday").value;
+          const hour = Number(parts.find((p) => p.type === "hour").value);
+          const minute = Number(parts.find((p) => p.type === "minute").value);
+          const map = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+          return { weekdayIso: map[wd], minutes: hour * 60 + minute };
+        }
+        
+        function hhmmToMinutes(value) {
+          const [h, m] = String(value).split(":").map(Number);
+          return h * 60 + m;
+        }
+        
+        function insideWindow(now, config) {
+          const { weekdayIso, minutes } = localParts(now, config.fuso);
+          if (!config.janela_dias.includes(weekdayIso)) return false;
+          return minutes >= hhmmToMinutes(config.janela_hora_inicio)
+            && minutes < hhmmToMinutes(config.janela_hora_fim);
+        }
+        function minutesBetween(iso, now) {
+          return (now.getTime() - new Date(iso).getTime()) / 60000;
+        }
+        
+        function dbConversation(c) {
+          return {
+            telefone: c.telefone,
+            status: c.status,
+            pendente_desde: c.pendente_desde,
+            ultimo_inbound_em: c.ultimo_inbound_em,
+            ultimo_reply_sdr_em: c.ultimo_reply_sdr_em,
+            nivel_alerta: c.nivel_alerta,
+            ultimo_alerta_em: c.ultimo_alerta_em,
+            resolvido_em: c.resolvido_em,
+            tempo_primeira_resposta_seg: c.tempo_primeira_resposta_seg,
+          };
+        }
+        
+        function beforeFingerprint(c) {
+          return {
+            telefone: c.telefone,
+            status: c.status,
+            pendente_desde: c.pendente_desde,
+            nivel_alerta: c.nivel_alerta,
+            ultimo_alerta_em: c.ultimo_alerta_em,
+          };
+        }
+        
+        function evaluateConversation(conversation, config, now) {
+          const c = { ...conversation };
+          const none = () => ({ alerts: [], conversation: c });
+          if (!insideWindow(now, config) || !c.pendente_desde) return none();  const opening = startOfWindowToday(now, config).getTime();
+          const effectiveStart = Math.max(new Date(c.pendente_desde).getTime(), opening);
+          const stopped = (now.getTime() - effectiveStart) / 60000;
+          const sinceLastAlert = c.ultimo_alerta_em ? minutesBetween(c.ultimo_alerta_em, now) : Infinity;
+        
+          if (c.status === "aguardando_sdr") {
+            const alerts = [];
+            const level0 = Number(c.nivel_alerta || 0);
+            if (stopped >= config.limite_1_min && level0 === 0) {
+              alerts.push({ telefone: c.telefone, tipo: "sla_resposta", nivel: 1,
+                canal: "whatsapp_sdr", minutos_parado: Math.floor(stopped) });
+              c.nivel_alerta = 1;
+              c.ultimo_alerta_em = now.toISOString();
+            } else if (stopped >= config.limite_1_min && level0 >= 1
+              && sinceLastAlert >= config.intervalo_repeticao_min) {
+              alerts.push({ telefone: c.telefone, tipo: "sla_resposta", nivel: 1,
+                canal: "whatsapp_sdr", minutos_parado: Math.floor(stopped) });
+              c.ultimo_alerta_em = now.toISOString();
+            }
+            if (stopped >= config.limite_escalada_min && level0 < 2) {
+              alerts.push({ telefone: c.telefone, tipo: "sla_resposta", nivel: 2,
+                canal: "whatsapp_gestor", minutos_parado: Math.floor(stopped) });
+              c.nivel_alerta = 2;
+              c.ultimo_alerta_em = now.toISOString();
+            }
+            return { alerts, conversation: c };
+          }
+          if (c.status === "aguardando_lead") {
+            const windowMinutes = Number(config.janela_follow_up_horas) * 60;
+            if (stopped < windowMinutes) return none();
+            if (Number(c.nivel_alerta || 0) >= Number(config.follow_up_max_repeticoes || 0)) {
+              c.status = "frio";
+              return { alerts: [], conversation: c };
+            }
+            if (sinceLastAlert >= windowMinutes) {
+              c.nivel_alerta = Number(c.nivel_alerta || 0) + 1;
+              c.ultimo_alerta_em = now.toISOString();
+              return {
+                alerts: [{ telefone: c.telefone, tipo: "follow_up", nivel: c.nivel_alerta,
+                  canal: "whatsapp_sdr", minutos_parado: Math.floor(stopped) }],
+                conversation: c,
+              };
+            }
+          }
+          return none();
+        }
+        
+        function buildProposals(snapshot) {
+          const config = snapshot.config;
+          const now = new Date(snapshot.snapshot_at);
+          const proposals = [];
+          const candidates = [];
+          for (const original of snapshot.conversations || []) {
+            const evaluated = evaluateConversation(original, config, now);
+            const next = evaluated.conversation;
+            const changed = next.status !== original.status
+              || Number(next.nivel_alerta || 0) !== Number(original.nivel_alerta || 0)
+              || String(next.ultimo_alerta_em || "") !== String(original.ultimo_alerta_em || "");    if (changed || evaluated.alerts.length) {
+              proposals.push({
+                before: beforeFingerprint(original),
+                after: dbConversation(next),
+                alerts: evaluated.alerts,
+              });
+            }
+            for (const a of evaluated.alerts) {
+              candidates.push({
+                telefone: a.telefone,
+                tipo: a.tipo,
+                nivel: a.nivel,
+                canal: a.canal,
+                minutos_parado: a.minutos_parado,
+              });
+            }
+          }
+          return { proposals, candidates, now };
+        }
+        
+        function summarize(snapshot, built) {
+          const alerts = built.candidates;
+          return {
+            snapshot_at: snapshot.snapshot_at,
+            pending_count: (snapshot.conversations || []).length,
+            proposals_count: built.proposals.length,
+            alerts_sdr: alerts.filter((a) => a.canal === "whatsapp_sdr").length,
+            alerts_gestor: alerts.filter((a) => a.canal === "whatsapp_gestor").length,
+            followups: alerts.filter((a) => a.tipo === "follow_up").length,
+            to_cold: built.proposals.filter((p) => p.after.status === "frio" && p.before.status !== "frio").length,
+            inside_window: insideWindow(built.now, snapshot.config),
+            candidates: alerts.slice(0, 50),
+          };
+        }
+        async function runOverdueCycle(forcedMode = null) {
+          const startedAt = new Date().toISOString();
+          const snapshot = await call("overdue_snapshot");
+          const mode = forcedMode || snapshot.control?.mode || "off";
+          const intervalMs = Number(snapshot.control?.interval_ms || overdueDefaultIntervalMs);
+          if (mode === "off") return { mode, intervalMs, skipped: true };
+        
+          if (!snapshot.config?.numero_sdr) {
+            const result = { configured: false, reason: "numero_sdr_missing" };
+            await call("overdue_report", { mode, status: "skipped", started_at: startedAt, result });
+            return { mode, intervalMs, ...result };
+          }
+        
+          const built = buildProposals(snapshot);
+          const summary = summarize(snapshot, built);
+          if (mode === "shadow") {
+            await call("overdue_report", { mode, status: "ok", started_at: startedAt, result: summary });
+            console.log(JSON.stringify({ event: "overdue_shadow", ...summary }));
+            return { mode, intervalMs, summary };
+          }
+        
+          if (mode === "execute") {
+            const applied = await call("overdue_apply", {
+              snapshot_at: snapshot.snapshot_at,
+              proposals: built.proposals,
+            });
+            const result = { ...summary, applied };
+            await call("overdue_report", { mode, status: "ok", started_at: startedAt, result });
+            console.log(JSON.stringify({ event: "overdue_execute", ...result }));
+            return { mode, intervalMs, result };
+          }
+        
+          throw new Error(`unsupported_overdue_mode:${mode}`);
+        }
+        async function handleQueueJob(job) {
+          const type = String(job.job_type || "").toUpperCase();
+          if (type === "SELF_TEST") {
+            await sleep(500);
+            return {
+              ok: true,
+              executed_by: worker,
+              runtime: process.version,
+              processed_at: new Date().toISOString(),
+            };
+          }
+          if (type === "CHECK_OVERDUE_SHADOW") {
+            return await runOverdueCycle("shadow");
+          }
+          if (type === "CHECK_OVERDUE_EXECUTE") {
+            return await runOverdueCycle("execute");
+          }
+          throw new Error(`unsupported_job_type:${type}`);
+        }
+        
+        async function queueLoop() {
+          let idleMs = Math.max(1000, pollMinMs);
+          while (!stopping) {
+            try {
+              const claimed = await call("claim", { limit: 1, visibility_timeout: 900 });
+              const jobs = Array.isArray(claimed.jobs) ? claimed.jobs : [];
+              if (!jobs.length) {
+                await sleep(idleMs);
+                idleMs = Math.min(Math.round(idleMs * 1.6), pollMaxMs);
+                continue;
+              }
+              idleMs = Math.max(1000, pollMinMs);
+              for (const job of jobs) {
+                try {
+                  console.log(JSON.stringify({ event: "job_claimed", job_id: job.job_id, job_type: job.job_type, attempt: job.attempt }));          await call("heartbeat", {
+                    job_id: job.job_id,
+                    message_id: job.message_id,
+                    progress: 10,
+                    visibility_timeout: 900,
+                  });
+                  const result = await handleQueueJob(job);
+                  await call("complete", {
+                    job_id: job.job_id,
+                    message_id: job.message_id,
+                    result,
+                  });
+                  console.log(JSON.stringify({ event: "job_completed", job_id: job.job_id }));
+                } catch (error) {
+                  console.error(JSON.stringify({ event: "job_failed", job_id: job.job_id, error: String(error?.message || error) }));
+                  await call("fail", {
+                    job_id: job.job_id,
+                    message_id: job.message_id,
+                    error: String(error?.message || error),
+                    retry_delay_seconds: 300,
+                  }).catch(() => {});
+                }
+              }
+            } catch (error) {
+              console.error(JSON.stringify({ event: "worker_loop_error", error: String(error?.message || error) }));
+              await sleep(Math.min(idleMs, pollMaxMs));
+              idleMs = Math.min(Math.round(idleMs * 1.6), pollMaxMs);
+            }
+          }
+        }
+        
+        async function overdueLoop() {
+          let intervalMs = overdueDefaultIntervalMs;  while (!stopping) {
+            const started = Date.now();
+            try {
+              const result = await runOverdueCycle();
+              intervalMs = Number(result.intervalMs || overdueDefaultIntervalMs);
+            } catch (error) {
+              const message = String(error?.message || error);
+              console.error(JSON.stringify({ event: "overdue_loop_error", error: message }));
+              await call("overdue_report", {
+                mode: "unknown",
+                status: "error",
+                started_at: new Date(started).toISOString(),
+                result: {},
+                error: message,
+              }).catch(() => {});
+            }
+            const elapsed = Date.now() - started;
+            await sleep(Math.max(5000, intervalMs - elapsed));
+          }
+        }
+        
+        async function main() {
+          console.log(JSON.stringify({
+            event: "worker_started",
+            worker,
+            poll_min_ms: pollMinMs,
+            poll_max_ms: pollMaxMs,
+            overdue_interval_ms: overdueDefaultIntervalMs,
+          }));
+          await Promise.all([queueLoop(), overdueLoop()]);
+          console.log(JSON.stringify({ event: "worker_stopped", worker }));
+        }
+        
+        main().catch((error) => {
+          console.error(error);
+          process.exit(1);
+        });
+    command:
+      - sh
+      - -lc
+      - 'node -e "$$WORKER_SCRIPT"'
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          memory: 64M
+
+  onboarding-processor:
+    image: node:22-alpine
+    environment:
+      ONBOARDING_API_URL: "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-onboarding-worker-api"
+      AGENCY_WORKER_TOKEN: "${AGENCY_WORKER_TOKEN}"
+      WORKER_ID: "leonardoimobi-onboarding-1"
+      ONBOARDING_DEFAULT_INTERVAL_MS: "900000"
+      API_TIMEOUT_MS: "90000"
+      WORKER_SCRIPT: |
+        const api = process.env.ONBOARDING_API_URL;
+        const token = process.env.AGENCY_WORKER_TOKEN;
+        const worker = process.env.WORKER_ID || "leonardoimobi-onboarding-1";
+        const defaultIntervalMs = Number(process.env.ONBOARDING_DEFAULT_INTERVAL_MS || 900000);
+        const apiTimeoutMs = Number(process.env.API_TIMEOUT_MS || 90000);
+        
+        if (!api || !token) {
+          console.error("missing_onboarding_worker_configuration");
+          process.exit(1);
+        }
+        
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+        let stopping = false;
+        process.on("SIGTERM", () => { stopping = true; });
+        process.on("SIGINT", () => { stopping = true; });
+        
+        async function call(action, payload = {}, timeoutMs = apiTimeoutMs) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), timeoutMs);
+          try {
+            const response = await fetch(api, {
+              method: "POST",
+              headers: { "content-type": "application/json", "x-agency-worker-token": token },
+              body: JSON.stringify({ action, worker, ...payload }),
+              signal: controller.signal,
+            });
+            const text = await response.text();
+            let body;
+            try { body = text ? JSON.parse(text) : {}; }
+            catch { body = { raw: text }; }
+            if (!response.ok) throw new Error(`onboarding_api_${response.status}:${JSON.stringify(body).slice(0, 1200)}`);
+            return body;
+          } finally {
+            clearTimeout(timeout);
+          }
+        }
+        
+        function fold(value) {
+          return String(value ?? "")
+            .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase().replace(/\s+/g, " ").trim();
+        }
+        
+        function bodyOf(message) {
+          return `${message?.text_body ?? ""} ${message?.caption ?? ""}`.trim();
+        }
+        
+        function eventDate(message) {
+          const raw = message?.event_at || message?.received_at;
+          const d = raw ? new Date(raw) : new Date(0);
+          return Number.isNaN(d.getTime()) ? new Date(0) : d;
+        }
+        
+        function earliest(messages, predicate) {
+          return messages.filter(predicate).sort((a, b) => eventDate(a) - eventDate(b) || Number(a.id) - Number(b.id))[0] || null;
+        }
+        
+        function latest(messages, predicate) {
+          return messages.filter(predicate).sort((a, b) => eventDate(b) - eventDate(a) || Number(b.id) - Number(a.id))[0] || null;
+        }
+        
+        function normalizePhone(value) { return String(value ?? "").replace(/\D/g, ""); }
+        function normalizeIdentity(value) { return fold(value).replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim(); }
+        
+        function buildTeamMatcher(snapshot) {
+          const phones = new Set();
+          const names = new Set();
+          for (const row of snapshot.team_identities || []) {
+            if (row.identity_type === "PHONE") phones.add(normalizePhone(row.identity_value));
+            if (row.identity_type === "NAME") names.add(normalizeIdentity(row.identity_value));
+          }
+          return (m) => Boolean(m?.from_me) || phones.has(normalizePhone(m?.sender_phone)) || names.has(normalizeIdentity(m?.sender_name));
+        }
+        
+        function indicatesFormsNotUsed(text) {
+          const t = fold(text);
+          return /((nao vamos|nao iremos|nao utilizaremos|nao usaremos).{0,45}(formulario|formularios)|(formulario|formularios).{0,45}(nao sera usado|nao serao usados|nao sera utilizado|nao serao utilizados|nao vamos usar|nao iremos usar)|((dispensamos|dispensado|dispensada|sem necessidade de|vamos seguir sem).{0,45}(formulario|formularios)))/.test(t)
+            && !/(nao vamos deixar de|nao iremos deixar de)/.test(t);
+        }
+        
+        function indicatesFormsUsed(text) {
+          const t = fold(text);
+          return !indicatesFormsNotUsed(t)
+            && /((vamos|iremos|vou|vai|vao).{0,35}(usar|utilizar|preencher|responder).{0,45}(formulario|formularios)|(formulario|formularios).{0,55}(vamos|iremos|vou|vai|vao).{0,30}(usar|utilizar|preencher|responder)|(utilizaremos|usaremos|preencheremos|responderemos).{0,40}(formulario|formularios))/.test(t);
+        }
+        
+        function indicatesCampaignLive(text) {
+          const t = fold(text);
+          const positive = /(^|[^a-z])(ativamos|ativei|publicamos|publiquei)([^a-z]|$).{0,50}(campanha|campanhas)/.test(t)
+            || /(campanha|campanhas).{0,50}(^|[^a-z])(ativamos|ativei|publicamos|publiquei)([^a-z]|$)/.test(t)
+            || /(colocamos|coloquei).{0,30}(a |as )?(campanha|campanhas).{0,20}(no ar|para rodar)/.test(t)
+            || /(campanha|campanhas).{0,20}(esta|estao|ficou|ficaram|foi|foram).{0,18}(no ar|rodando|ativada|ativadas|publicada|publicadas)/.test(t)
+            || /(campanha|campanhas).{0,15}(no ar|rodando)/.test(t);
+          if (!positive) return false;
+          if (/(^|[^a-z])nao([^a-z]|$).{0,35}(ativ|public|no ar|rodando)/.test(t)) return false;
+          if (/(aguard|assim que|depois que|quando|poderemos|para poder|para podermos|falta|pagamento|pix|abastecer).{0,80}(ativ|public|no ar|rodar)/.test(t)
+              && !/(^|[^a-z])(ativamos|ativei|publicamos|publiquei)([^a-z]|$)/.test(t)) return false;
+          return true;
+        }
+        
+        function indicatesCampaignPrepared(text) {
+          const t = fold(text);
+          return !indicatesCampaignLive(t) && (
+            /(campanha|campanhas).{0,70}(configurad|subindo|subida|pronta|prontas|preparad|montad|criad)/.test(t)
+            || /(subindo|configurando|preparando|montando).{0,50}(campanha|campanhas)/.test(t)
+            || /(campanha|campanhas).{0,100}(aguard|pagamento|pix|abastecer|ativar|ativacao)/.test(t)
+          );
+        }
+        
+        function onboardingEvidence(messages) {
+          const pattern = /(meet\.google\.com|onboarding|reuniao de onboarding|reuniao de integracao|integracao|apresentar o projeto|apresentacao do projeto|formularios?|novo projeto)/;
+          const hits = messages.filter((m) => m.origin !== "xlsx_historical_backfill" && pattern.test(fold(bodyOf(m))));
+          if (!hits.length) return null;
+          const types = new Set();
+          for (const m of hits) {
+            const t = fold(bodyOf(m));
+            if (/meet\.google\.com/.test(t)) types.add("MEET_LINK");
+            if (/onboarding/.test(t)) types.add("ONBOARDING_EXPLICITO");
+            if (/integracao/.test(t)) types.add("INTEGRACAO");
+            if (/formularios?/.test(t)) types.add("FORMULARIO");
+            if (/(apresentar o projeto|apresentacao do projeto|novo projeto)/.test(t)) types.add("INICIO_PROJETO");
+          }
+          const first = hits.sort((a, b) => eventDate(a) - eventDate(b))[0];
+          return { evidence_at: eventDate(first).toISOString(), evidence_types: [...types] };
+        }
+        
+        function buildSyncCandidates(snapshot) {
+          const messagesByChat = new Map();
+          for (const m of snapshot.unassigned_messages || []) {
+            const key = String(m.chat_id || "");
+            if (!messagesByChat.has(key)) messagesByChat.set(key, []);
+            messagesByChat.get(key).push(m);
+          }
+          const items = [];
+          for (const chat of snapshot.unassigned_chats || []) {
+            const name = String(chat.chat_name || "").trim();
+            if (!name || /^\d+-group$/.test(name) || /duplicado/i.test(String(chat.reason || ""))) continue;
+            const ev = onboardingEvidence(messagesByChat.get(String(chat.chat_id)) || []);
+            if (ev) items.push({ chat_id: chat.chat_id, ...ev });
+          }
+          return items;
+        }
+        
+        function buildEvidence(snapshot) {
+          const teamSender = buildTeamMatcher(snapshot);
+          const integrationsByClient = new Map();
+          for (const i of snapshot.integrations || []) {
+            const key = String(i.client_id);
+            if (!integrationsByClient.has(key)) integrationsByClient.set(key, []);
+            integrationsByClient.get(key).push(i);
+          }
+          const messagesByChat = new Map();
+          for (const m of snapshot.case_messages || []) {
+            const key = String(m.chat_id || "");
+            if (!messagesByChat.has(key)) messagesByChat.set(key, []);
+            messagesByChat.get(key).push(m);
+          }
+          const meetExisting = new Set((snapshot.meet_links || []).filter((x) => x.source === "whatsapp" && x.source_id).map((x) => String(x.source_id)));
+          const notionByClient = new Map();
+          for (const n of snapshot.notion_pages || []) {
+            const key = String(n.client_id);
+            if (!notionByClient.has(key)) notionByClient.set(key, []);
+            notionByClient.get(key).push(n);
+          }
+        
+          const actionMap = new Map();
+          const forms = [];
+          const meetLinks = [];
+          const caseIds = [];
+          let messagesScanned = 0;
+        
+          const addEarliest = (type, caseId, message, fallbackAt = null) => {
+            const at = message ? eventDate(message) : new Date(fallbackAt || 0);
+            const key = `${caseId}:${type}`;
+            const existing = actionMap.get(key);
+            if (!existing || new Date(existing.occurred_at) > at) {
+              actionMap.set(key, {
+                type, case_id: caseId, occurred_at: at.toISOString(),
+                message_id: message?.id ?? null, body: message ? bodyOf(message) : "",
+              });
+            }
+          };
+        
+          for (const c of snapshot.open_cases || []) {
+            const caseId = Number(c.id);
+            caseIds.push(caseId);
+            const opened = new Date(c.opened_at).getTime();
+            const integrations = integrationsByClient.get(String(c.client_id)) || [];
+            const chatIds = new Set(integrations.map((i) => String(i.external_id)).filter(Boolean));
+            const all = [...chatIds].flatMap((id) => messagesByChat.get(id) || []);
+            const msgs = all.filter((m) => eventDate(m).getTime() >= opened);
+            const replayMsgs = all.filter((m) => eventDate(m).getTime() >= opened - 15 * 60 * 1000);
+            messagesScanned += msgs.length;
+        
+            if (integrations.length) addEarliest("OPERATIONAL_ACTIVATION_DONE", caseId, null, c.opened_at);
+        
+            const intro = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /(onboarding|apresentacao do projeto|reuniao de apresentacao)/.test(t) && /(reuniao|meet\.google\.com|horario|\b\d{1,2}:\d{2}\b)/.test(t);
+            });
+            if (intro) addEarliest("INTRO_MEETING_SCHEDULED", caseId, intro);
+        
+            const pp = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /reuniao/.test(t) && /(formulario|produto.{0,30}persona|persona.{0,30}produto)/.test(t)
+                && /(meet\.google\.com|\b\d{1,2}:\d{2}\b|\b\d{1,2}h\b|horario|disponivel|marcar)/.test(t);
+            });
+            if (pp) addEarliest("PRODUCT_PERSONA_MEETING_SCHEDULED", caseId, pp);
+        
+            const integration = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /integracao/.test(t) && /(meet\.google\.com|\b\d{1,2}:\d{2}\b|\b\d{1,2}h\b|segunda-feira|terca-feira|quarta-feira|quinta-feira|sexta-feira)/.test(t);
+            });
+            if (integration) addEarliest("INTEGRATION_MEETING_SCHEDULED", caseId, integration);
+        
+            const productForm = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /(formulario de produto|produto.*formulario|formulario.*produto)/.test(t) && /(preenchido|respondido|concluido|finalizado|enviei|enviado)/.test(t);
+            });
+            if (productForm) addEarliest("PRODUCT_FORM_DONE", caseId, productForm);
+        
+            const personaForm = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /(formulario de persona|persona.*formulario|formulario.*persona)/.test(t) && /(preenchido|respondido|concluido|finalizado|enviei|enviado)/.test(t);
+            });
+            if (personaForm) addEarliest("PERSONA_FORM_DONE", caseId, personaForm);
+        
+            const formEvidence = [];
+            for (const m of msgs) {
+              const text = bodyOf(m);
+              if (indicatesFormsNotUsed(text) || indicatesFormsUsed(text)) {
+                formEvidence.push({
+                  applicability: indicatesFormsNotUsed(text) ? "NOT_APPLICABLE" : "REQUIRED",
+                  source: "WHATSAPP", source_ref: String(m.id), evidence_text: text.slice(0, 2000),
+                  occurred_at: eventDate(m).toISOString(), priority: 2,
+                });
+              }
+            }
+            for (const n of notionByClient.get(String(c.client_id)) || []) {
+              const text = `${n.content_markdown || ""} ${JSON.stringify(n.extracted_profile || {})}`;
+              if (indicatesFormsNotUsed(text) || indicatesFormsUsed(text)) {
+                formEvidence.push({
+                  applicability: indicatesFormsNotUsed(text) ? "NOT_APPLICABLE" : "REQUIRED",
+                  source: "NOTION", source_ref: String(n.notion_page_id), evidence_text: text.slice(0, 2000),
+                  occurred_at: new Date(n.notion_last_edited_at || n.updated_at).toISOString(), priority: 1,
+                });
+              }
+            }
+            formEvidence.sort((a, b) => new Date(b.occurred_at) - new Date(a.occurred_at) || b.priority - a.priority);
+            if (formEvidence[0]) forms.push({ case_id: caseId, ...formEvidence[0], confidence: formEvidence[0].source === "WHATSAPP" ? 0.95 : 0.90 });
+        
+            const rawAssets = earliest(msgs, (m) => /((materiais|arquivos|fotos|videos).*(enviei|enviamos|mandei|mandamos|coloquei|colocamos|adicionei|adicionamos)|(drive|pasta).*(materiais|arquivos|fotos|videos).*(enviados|adicionados|disponiveis))/.test(fold(bodyOf(m))));
+            if (rawAssets) addEarliest("RAW_ASSETS_DONE", caseId, rawAssets);
+        
+            const access = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /(acesso|acessos|bm|gerenciador|crm|conta de anuncio)/.test(t) && /(liberado|concedido|validado|configurado|conectado|funcionando|com os acessos|acessos aqui|consigo realizar)/.test(t);
+            });
+            if (access) addEarliest("ACCESS_VALIDATION_DONE", caseId, access);
+        
+            const creativeStart = earliest(msgs, (m) => /((criativo|criativos|arte|artes).*(producao|produzindo|iniciamos|fazendo))/.test(fold(bodyOf(m))));
+            if (creativeStart) addEarliest("CREATIVE_PRODUCTION_STARTED", caseId, creativeStart);
+        
+            const creativeDone = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              return /(criativo|criativos|arte|artes)/.test(t) && /(para aprovacao|segue|seguem|drive\.google|pronto|prontos|finalizad|concluid|entregue)/.test(t)
+                && !/(assim que|quando.*pront|vou pedir|iremos produzir)/.test(t);
+            });
+            if (creativeDone) addEarliest("CREATIVE_PRODUCTION_DONE", caseId, creativeDone);
+        
+            const creativeApproval = earliest(msgs, (m) => {
+              const t = fold(bodyOf(m));
+              if (/((criativo|criativos|arte|artes).*(aprovado|aprovados|aprovada)|aprovado.*(criativo|arte))/.test(t)) return true;
+              if (!/^(todos )?aprovad[oa]s?(\W|$)/.test(t) || teamSender(m)) return false;
+              const mt = eventDate(m).getTime();
+              return msgs.some((prev) => String(prev.chat_id) === String(m.chat_id)
+                && eventDate(prev).getTime() <= mt && eventDate(prev).getTime() >= mt - 24 * 3600 * 1000
+                && /(criativo|criativos|arte|artes).*(aprovacao|aprovar)/.test(fold(bodyOf(prev))));
+            });
+            if (creativeApproval) addEarliest("CREATIVE_APPROVAL_DONE", caseId, creativeApproval);
+        
+            const live = latest(msgs, (m) => indicatesCampaignLive(bodyOf(m)));
+            const prepared = latest(msgs, (m) => indicatesCampaignPrepared(bodyOf(m)));
+            if (live) {
+              actionMap.set(`${caseId}:CAMPAIGN_LIVE`, { type: "CAMPAIGN_LIVE", case_id: caseId, occurred_at: eventDate(live).toISOString(), message_id: live.id, body: bodyOf(live) });
+            } else if (prepared) {
+              const blocked = /(aguard|pagamento|pix|abastecer|assim que.*ativ|poderemos ativ)/.test(fold(bodyOf(prepared)));
+              const type = blocked ? "CAMPAIGN_PREPARED_BLOCKED" : "CAMPAIGN_PREPARED";
+              actionMap.set(`${caseId}:${type}`, { type, case_id: caseId, occurred_at: eventDate(prepared).toISOString(), message_id: prepared.id, body: bodyOf(prepared) });
+            }
+        
+            const stageLatest = new Map();
+            for (const m of replayMsgs) {
+              const t = fold(bodyOf(m));
+              if (!/meet\.google\.com/.test(t)) continue;
+              let stage = null;
+              if (/(integracao|reuniao de integracao|reuniao com gt)/.test(t)) stage = "INTEGRATION_MEETING";
+              else if (/(produto.{0,30}persona|persona.{0,30}produto|reuniao.{0,40}(produto|persona)|formulario.{0,30}(produto|persona))/.test(t)) stage = "PRODUCT_PERSONA_MEETING";
+              else if (/(onboarding|apresentacao do projeto|reuniao de apresentacao)/.test(t)) stage = "INTRO_MEETING";
+              if (!stage || meetExisting.has(String(m.id))) continue;
+              const prev = stageLatest.get(stage);
+              if (!prev || eventDate(m) > eventDate(prev)) stageLatest.set(stage, m);
+            }
+            for (const [stage, m] of stageLatest.entries()) {
+              meetLinks.push({
+                case_id: caseId, stage_code: stage, message_row_id: String(m.id), message_id: m.message_id,
+                chat_id: m.chat_id, msg_at: eventDate(m).toISOString(), body: bodyOf(m),
+              });
+            }
+          }
+        
+          const actions = [...actionMap.values()];
+          const actionCounts = {};
+          for (const a of actions) actionCounts[a.type] = (actionCounts[a.type] || 0) + 1;
+          return {
+            actions, forms, meetLinks, caseIds,
+            stats: { open_cases: caseIds.length, messages_scanned: messagesScanned, actions: actions.length, forms: forms.length, meet_links: meetLinks.length, action_counts: actionCounts },
+          };
+        }
+        
+        async function runCycle(forcedMode = null) {
+          const startedAt = new Date().toISOString();
+          let snapshot = await call("snapshot");
+          const mode = forcedMode || snapshot.control?.mode || "off";
+          const intervalMs = Number(snapshot.control?.interval_ms || defaultIntervalMs);
+          if (mode === "off") return { mode, intervalMs, skipped: true };
+        
+          let syncItems = buildSyncCandidates(snapshot);
+          let evidence = buildEvidence(snapshot);
+        
+          if (mode === "shadow") {
+            const result = {
+              snapshot_at: snapshot.snapshot_at,
+              sync_candidates: syncItems.length,
+              unassigned_chats: (snapshot.unassigned_chats || []).length,
+              unassigned_messages: (snapshot.unassigned_messages || []).length,
+              ...evidence.stats,
+            };
+            await call("report", { mode, status: "ok", started_at: startedAt, result });
+            console.log(JSON.stringify({ event: "onboarding_shadow", ...result }));
+            return { mode, intervalMs, result };
+          }
+        
+          if (mode === "execute") {
+            let syncResult = null;
+            if (syncItems.length) {
+              syncResult = await call("apply_sync", { items: syncItems });
+              snapshot = await call("snapshot");
+              syncItems = buildSyncCandidates(snapshot);
+              evidence = buildEvidence(snapshot);
+            }
+            const applyResult = await call("apply_evidence", {
+              snapshot_at: snapshot.snapshot_at,
+              actions: evidence.actions,
+              meet_links: evidence.meetLinks,
+              forms: evidence.forms,
+              case_ids: evidence.caseIds,
+            });
+            const result = {
+              snapshot_at: snapshot.snapshot_at,
+              remaining_sync_candidates: syncItems.length,
+              ...evidence.stats,
+              sync_result: syncResult?.result ?? null,
+              apply_result: applyResult?.result ?? null,
+            };
+            await call("report", { mode, status: "ok", started_at: startedAt, result });
+            console.log(JSON.stringify({ event: "onboarding_execute", ...result }));
+            return { mode, intervalMs, result };
+          }
+        
+          throw new Error(`unsupported_onboarding_mode:${mode}`);
+        }
+        
+        async function main() {
+          console.log(JSON.stringify({ event: "onboarding_worker_started", worker, default_interval_ms: defaultIntervalMs }));
+          let intervalMs = defaultIntervalMs;
+          while (!stopping) {
+            const started = Date.now();
+            try {
+              const result = await runCycle();
+              intervalMs = Number(result.intervalMs || defaultIntervalMs);
+            } catch (error) {
+              const message = String(error?.message || error);
+              console.error(JSON.stringify({ event: "onboarding_loop_error", error: message }));
+              await call("report", { mode: "unknown", status: "error", started_at: new Date(started).toISOString(), result: {}, error: message }).catch(() => {});
+            }
+            const elapsed = Date.now() - started;
+            await sleep(Math.max(15000, intervalMs - elapsed));
+          }
+          console.log(JSON.stringify({ event: "onboarding_worker_stopped", worker }));
+        }
+        
+        main().catch((error) => {
+          console.error(error);
+          process.exit(1);
+        });
+    command:
+      - sh
+      - -lc
+      - 'node -e "$$WORKER_SCRIPT"'
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 5s
+      resources:
+        limits:
+          cpus: "0.50"
+          memory: 256M
+        reservations:
+          memory: 64M
+

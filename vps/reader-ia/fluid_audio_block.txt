@@ -1,0 +1,95 @@
+async function getDecodedAudio(text){
+  const voice=$('voice').value;
+  const key=`${voice}|${text}`;
+  if(decodedAudioCache.has(key)) return decodedAudioCache.get(key);
+  const blob=await getLocalAudio(text);
+  await ensureAudioContext();
+  const bytes=await blob.arrayBuffer();
+  const buffer=await audioContext.decodeAudioData(bytes.slice(0));
+  decodedAudioCache.set(key,buffer);
+  if(decodedAudioCache.size>60) decodedAudioCache.delete(decodedAudioCache.keys().next().value);
+  return buffer;
+}
+function clearScheduledAudio(){
+  audioScheduleGeneration++;
+  audioFillRunning=false;
+  if(highlightRaf){cancelAnimationFrame(highlightRaf);highlightRaf=0;}
+  for(const e of audioTimeline){
+    try{e.source.onended=null;e.source.stop();e.source.disconnect();}catch{}
+  }
+  audioTimeline=[];currentSource=null;currentBuffer=null;
+}
+function scheduleHighlightLoop(generation){
+  if(highlightRaf) cancelAnimationFrame(highlightRaf);
+  const tick=()=>{
+    if(generation!==audioScheduleGeneration||!speaking)return;
+    if(!paused&&audioContext){
+      const now=audioContext.currentTime;
+      const active=audioTimeline.find(e=>now>=e.start-0.015&&now<e.end-0.01);
+      if(active&&active.idx!==sentenceIndex){sentenceIndex=active.idx;saveProgress();updateSentenceHighlight();}
+      const tail=audioTimeline[audioTimeline.length-1];
+      if(tail&&tail.idx-sentenceIndex<=2) fillAudioSchedule(generation);
+    }
+    highlightRaf=requestAnimationFrame(tick);
+  };
+  highlightRaf=requestAnimationFrame(tick);
+}async function fillAudioSchedule(generation=audioScheduleGeneration){
+  if(audioFillRunning||generation!==audioScheduleGeneration||!speaking||paused)return;
+  audioFillRunning=true;
+  try{
+    while(generation===audioScheduleGeneration&&speaking&&!paused){
+      const last=audioTimeline[audioTimeline.length-1];
+      const nextIdx=last?last.idx+1:sentenceIndex;
+      if(nextIdx>=currentSentences.length)break;
+      if(last&&last.idx-sentenceIndex>=4)break;
+      const buffer=await getDecodedAudio(currentSentences[nextIdx]);
+      if(generation!==audioScheduleGeneration||!speaking||paused)return;
+      const rate=Number($('rate').value)||1;
+      let startAt=last?last.end:audioContext.currentTime+0.06;
+      if(startAt<audioContext.currentTime+0.02)startAt=audioContext.currentTime+0.02;
+      const source=audioContext.createBufferSource();
+      source.buffer=buffer;source.playbackRate.value=rate;source.connect(audioContext.destination);
+      const entry={idx:nextIdx,source,start:startAt,end:startAt+(buffer.duration/rate),rate};
+      source.onended=()=>{
+        if(generation!==audioScheduleGeneration||!speaking)return;
+        if(nextIdx===currentSentences.length-1){
+          if(page<pdf.numPages)loadPage(page+1,{autoplay:true});
+          else{stopSpeech();$('progressBar').style.width='100%';$('progressText').textContent='Fim do documento';}
+        }else if(!paused)fillAudioSchedule(generation);
+      };
+      source.start(startAt);audioTimeline.push(entry);
+      if(nextIdx===sentenceIndex){currentSource=source;currentBuffer=buffer;}
+      setBuffer(`voz local • fluxo contínuo ${Math.min(5,audioTimeline.length)} frases`,true);
+    }
+  }catch(err){
+    if(generation===audioScheduleGeneration){setStatus(`Voz local: ${err.message||err}`);stopSpeech();}
+  }finally{if(generation===audioScheduleGeneration)audioFillRunning=false;}
+}function advanceSentence(){
+  if(!speaking)return;
+  sentenceIndex++;saveProgress();updateSentenceHighlight();speakCurrentSentence();
+}
+function speakBrowserSentence(){
+  const utter=new SpeechSynthesisUtterance(currentSentences[sentenceIndex]);
+  utter.lang='pt-BR';utter.rate=Number($('rate').value)||1;
+  const voices=speechSynthesis.getVoices();utter.voice=voices.find(v=>/^pt-BR/i.test(v.lang))||voices.find(v=>/^pt/i.test(v.lang))||voices[0];
+  utter.onstart=updateSentenceHighlight;utter.onend=advanceSentence;
+  utter.onerror=e=>{if(!['canceled','interrupted'].includes(e.error)){setStatus(`Voz interrompida: ${e.error}`);stopSpeech();}};
+  speechSynthesis.speak(utter);
+}
+async function startLocalContinuous(){
+  if(!speaking||paused)return;
+  await ensureAudioContext();
+  const generation=audioScheduleGeneration;
+  setBuffer('preparando fluxo contínuo');
+  fillAudioSchedule(generation);
+  scheduleHighlightLoop(generation);
+}
+async function speakCurrentSentence(){
+  if(!speaking)return;
+  if(sentenceIndex>=currentSentences.length){
+    if(page<pdf.numPages)return loadPage(page+1,{autoplay:true});
+    stopSpeech();$('progressBar').style.width='100%';$('progressText').textContent='Fim do documento';return;
+  }
+  if($('voice').value==='system:browser')return speakBrowserSentence();
+  return startLocalContinuous();
+}

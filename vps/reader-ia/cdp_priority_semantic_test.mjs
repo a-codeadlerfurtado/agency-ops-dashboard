@@ -1,0 +1,12 @@
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const pages=await (await fetch('http://127.0.0.1:9333/json/list')).json();
+const pg=pages.find(x=>x.type==='page'&&x.url.includes('readerpro'))||pages.find(x=>x.type==='page');
+if(!pg) throw new Error('reader page not found');
+const ws=new WebSocket(pg.webSocketDebuggerUrl);await new Promise((r,j)=>{ws.onopen=r;ws.onerror=j});
+let id=0;const pending=new Map();ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.id&&pending.has(m.id)){const x=pending.get(m.id);pending.delete(m.id);m.error?x.j(m.error):x.r(m.result)}};
+const cmd=(method,params={})=>new Promise((r,j)=>{const n=++id;pending.set(n,{r,j});ws.send(JSON.stringify({id:n,method,params}))});
+await cmd('Runtime.enable');await cmd('DOM.enable');await cmd('Page.enable');await cmd('Page.reload',{ignoreCache:true});await sleep(3000);
+const doc=await cmd('DOM.getDocument',{depth:-1,pierce:true});const q=await cmd('DOM.querySelector',{nodeId:doc.root.nodeId,selector:'#file'});
+await cmd('DOM.setFileInputFiles',{nodeId:q.nodeId,files:['C:\\Users\\Adler\\agency-ops-hetzner-worktree\\vps\\reader-ia\\buffer-test.pdf']});
+const snap=async label=>{const r=await cmd('Runtime.evaluate',{returnByValue:true,expression:`({status:document.getElementById('status')?.textContent,buffer:document.getElementById('bufferBadge')?.textContent,chunks:[...document.querySelectorAll('.sentence')].map(x=>x.textContent.trim()).slice(0,6)})`});console.log(label,JSON.stringify(r.result.value));};
+await sleep(700);await snap('T+0.7');await sleep(4000);await snap('T+4.7');await sleep(6000);await snap('T+10.7');await sleep(8000);await snap('T+18.7');ws.close();

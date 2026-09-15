@@ -1,0 +1,13 @@
+from pathlib import Path
+p=Path(r'C:\Users\Adler\agency-ops-hetzner-worktree\vps\reader-ia\server.py')
+s=p.read_text(encoding='utf-8')
+s=s.replace('(r"\\bse for caso disso\\b","quando apropriado"))','(r"\\bse for caso disso\\b","quando apropriado"),(r"\\breflectir\\b","refletir"),(r"\\breflecte\\b","reflete"),(r"\\breflectem\\b","refletem"),(r"\\breflectido\\b","refletido"),(r"\\breflectida\\b","refletida"),(r"\\breflectindo\\b","refletindo"))',1)
+marker='def suspicious_ptbr(text: str):\n'
+insert='''def apply_fidelity_fixes(source: str, target: str):\n    out=target or ""\n    m=re.search(r"\\b(?:almost|nearly)\\s+(\\d+(?:[.,]\\d+)?)",source or "",re.I)\n    if m and not re.search(r"\\bquase\\b",out,re.I):\n        n=re.escape(m.group(1)); out=re.sub(rf"(?<![\\d])({n})(?![\\d])",r"quase \\1",out,count=1)\n    if re.search(r"\\bthen[.!?]?\\s*$",source or "",re.I) and not re.search(r"\\b(então|época|momento|naquele tempo|naquele período)\\b",out,re.I):\n        out=re.sub(r"([.!?]?)$",lambda m:(" na época"+m.group(1)),out.rstrip(),count=1)\n    return out\n\ndef fidelity_risk(source: str, target: str):\n    s=(source or "").lower(); t=(target or "").lower()\n    if re.search(r"\\b(almost|nearly)\\b",s) and "quase" not in t:return True\n    if re.search(r"\\bthen[.!?]?\\s*$",s) and not re.search(r"\\b(então|época|momento|naquele tempo|naquele período)\\b",t):return True\n    return False\n\n'''
+if insert not in s:s=s.replace(marker,insert+marker,1)
+s=s.replace('seg["target"]=ptbr_surface_polish(apply_grammar_suggestions(seg["target"],issues))','seg["target"]=apply_fidelity_fixes(seg.get("source",""),ptbr_surface_polish(apply_grammar_suggestions(seg["target"],issues)))',1)
+s=s.replace('if suspicious_ptbr(seg["target"]) or unsafe: flagged.append((i,seg))','if suspicious_ptbr(seg["target"]) or fidelity_risk(seg.get("source",""),seg["target"]) or unsafe: flagged.append((i,seg))',1)
+s=s.replace('Revise apenas gramatica, concordancia, regencia, modo/tempo verbal e naturalidade em portugues brasileiro. Preserve exatamente o sentido do ingles, numeros, nomes e pontuacao final.','Revise gramatica, concordancia, regencia, modo/tempo verbal, naturalidade e fidelidade em portugues brasileiro. Preserve exatamente o sentido do ingles, incluindo quantificadores como almost/nearly, negacoes, marcadores temporais como then, numeros, nomes e pontuacao final.',1)
+s=s.replace('v11-ptbr-review|','v12-source-punct-fidelity|',1)
+p.write_text(s,encoding='utf-8')
+print('fidelity review patched')
