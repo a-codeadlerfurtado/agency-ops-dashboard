@@ -209,8 +209,9 @@ export default function IntegrationHealthBar() {
         if (active) setLoading(false);
       }
     }
-    const timer = window.setTimeout(load, 45_000);
-    return () => { active = false; window.clearTimeout(timer); };
+    void load();
+    const timer = window.setInterval(load, 45_000);
+    return () => { active = false; window.clearInterval(timer); };
   }, [session?.access_token]);
 
   const integrations = data?.integrations || [];
@@ -275,8 +276,20 @@ export default function IntegrationHealthBar() {
                     <b style={{ color:"#f8fafc", fontSize:12.5, flex:1 }}>{item.source_label}</b>
                     <em style={{ fontStyle:"normal", color:s.color, fontSize:11, fontWeight:700 }}>{s.label}</em>
                   </div>
-                  <p style={{ color:"#cbd5e1", fontSize:11.5, lineHeight:1.35, margin:"7px 0 4px" }}>{item.detail}</p>
-                  <small style={{ color:"#64748b", fontSize:10.5 }}>Último sinal: {clock(item.last_event_at)}</small>
+                  {item.source_key==="WHATSAPP_ZAPI" ? (()=>{
+                    const md=item.metadata||{};
+                    const raw=String(md.raw_last_received_at||md.last_received_at||item.last_event_at||"")||null;
+                    const processor=String(md.processor_last_success_at||md.pipeline_last_success_at||"")||null;
+                    const pending=Number(md.pending_count??0);
+                    const errors=Number(md.error_count??0);
+                    const rawOk=md.raw_receiving===true || (!!raw && Date.now()-new Date(raw).getTime()<5*60_000);
+                    const processorOk=md.processor_active===true || (!!processor && Date.now()-new Date(processor).getTime()<5*60_000);
+                    return <div style={{display:"grid",gap:6,margin:"8px 0 3px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",padding:"6px 7px",borderRadius:8,background:"rgba(255,255,255,.035)"}}><span style={{color:"#cbd5e1",fontSize:11}}>Recepção Z-API</span><b style={{color:rawOk?"#22c55e":"#ef4444",fontSize:10.5}}>{rawOk?"🟢 funcionando":"🔴 sem sinal"} · {clock(raw)}</b></div>
+                      <div style={{display:"flex",justifyContent:"space-between",gap:8,alignItems:"center",padding:"6px 7px",borderRadius:8,background:"rgba(255,255,255,.035)"}}><span style={{color:"#cbd5e1",fontSize:11}}>Processamento interno</span><b style={{color:processorOk?"#22c55e":"#ef4444",fontSize:10.5,textAlign:"right"}}>{processorOk?"🟢 ativo":"🔴 parado"} · {clock(processor)}{pending>0?` · ${pending.toLocaleString("pt-BR")} pendentes`:""}{errors>0?` · ${errors} erro(s)`:""}</b></div>
+                      <p style={{ color:"#94a3b8", fontSize:10.5, lineHeight:1.35, margin:"1px 0 0" }}>{item.detail}</p>
+                    </div>;
+                  })() : <><p style={{ color:"#cbd5e1", fontSize:11.5, lineHeight:1.35, margin:"7px 0 4px" }}>{item.detail}</p><small style={{ color:"#64748b", fontSize:10.5 }}>Último sinal: {clock(item.last_event_at)}</small></>}
                 </article>
               );
             })}

@@ -1,17 +1,17 @@
 /**
- * Voz da Jarvis via servidor proprio.
- *
- * O Worker nao sintetiza voz e nao paga TTS por caractere. Ele apenas autentica
- * o usuario, encaminha o texto para a VPS e devolve o audio. O frontend mantem
- * speechSynthesis como fallback se a VPS estiver indisponivel.
+ * Voz da Jarvis: pm_jarvis local primeiro, Cedar como fallback.
+ * O cerebro e as ferramentas da Jarvis nao dependem deste modulo.
  */
 
 import type { EnvJarvis } from "./tools";
 
 const LIMITE_CHARS = 1200;
-const TIMEOUT_MS = 55_000;
+const LOCAL_TIMEOUTS_MS = [12_000, 8_000] as const;
+const LOCAL_RETRY_DELAY_MS = 350;
+const OPENAI_TIMEOUT_MS = 55_000;
 const OPENAI_TTS_MODEL = "gpt-4o-mini-tts";
 const OPENAI_TTS_VOICE = "cedar";
+const LOCAL_TTS_VOICE = "pm_jarvis";
 
 const INSTRUCOES_VOZ = [
   "Fale em português brasileiro natural.",
@@ -24,14 +24,10 @@ const INSTRUCOES_VOZ = [
 ].join(" ");
 
 export type EntradaTts = { text: string };
-
 function json(corpo: unknown, status: number): Response {
   return new Response(JSON.stringify(corpo), {
     status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-    },
+    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
   });
 }
 
@@ -47,15 +43,45 @@ function prepararTexto(bruto: string): string {
     .trim()
     .slice(0, LIMITE_CHARS);
 }
-function endpointTts(env: EnvJarvis): { url: string; token: string } | null {
+
+function endpointLocal(env: EnvJarvis): string | null {
   const base = String(env.JARVIS_TTS_URL ?? env.KOKORO_URL ?? "").trim();
-  const token = String(env.JARVIS_TTS_TOKEN ?? env.KOKORO_TOKEN ?? "").trim();
-  if (!base || !token) return null;
+  if (!base) return null;
   const limpo = base.replace(/\/+$/, "");
-  return {
-    url: limpo.endsWith("/tts") ? limpo : `${limpo}/tts`,
-    token,
-  };
+  if (limpo.endsWith("/api/tts") || limpo.endsWith("/tts")) return limpo;
+  return `${limpo}/api/tts`;
+}
+async function localTts(text: string, env: EnvJarvis): Promise<Response | null> {
+  const url = endpointLocal(env);
+  if (!url) return null;
+  const token = String(env.JARVIS_TTS_TOKEN ?? env.KOKORO_TOKEN ?? "").trim();
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  if (token) headers["x-jarvis-token"] = token;
+
+  for (let tentativa = 0; tentativa < LOCAL_TIMEOUTS_MS.length; tentativa++) {
+    const timeout = LOCAL_TIMEOUTS_MS[tentativa];
+    try {
+      const resposta = await fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ text, voice: LOCAL_TTS_VOICE, speed: 1.0, docId: "jarvis-dashboard" }),
+        signal: AbortSignal.timeout(timeout),
+      });
+      const tipo = (resposta.headers.get("content-type") ?? "").toLowerCase();
+      if (resposta.ok && resposta.body && (tipo.includes("audio") || tipo.includes("octet-stream"))) return resposta;
+
+      const detalhe = await resposta.text().catch(() => "");
+      console.error({ event: "jarvis_tts_falhou", etapa: "local", tentativa: tentativa + 1, status: resposta.status, tipo, detalhe: detalhe.slice(0, 240) });
+      if (resposta.status >= 400 && resposta.status < 500) return null;
+    } catch (erro) {
+      console.error({ event: "jarvis_tts_falhou", etapa: "local", tentativa: tentativa + 1, timeout_ms: timeout, detalhe: erro instanceof Error ? erro.message : String(erro) });
+    }
+
+    if (tentativa + 1 < LOCAL_TIMEOUTS_MS.length) {
+      await new Promise((resolve) => setTimeout(resolve, LOCAL_RETRY_DELAY_MS));
+    }
+  }
+  return null;
 }
 
 async function openAiTts(text: string, env: EnvJarvis): Promise<Response | null> {
@@ -70,12 +96,14 @@ async function openAiTts(text: string, env: EnvJarvis): Promise<Response | null>
         voice: OPENAI_TTS_VOICE,
         input: text,
         instructions: INSTRUCOES_VOZ,
-        response_format: "wav",
+        response_format: "pcm",
+        stream_format: "audio",
       }),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
+      signal: AbortSignal.timeout(OPENAI_TIMEOUT_MS),
     });
     if (!resposta.ok || !resposta.body) {
-      console.error({ event: "jarvis_tts_falhou", etapa: "openai", status: resposta.status });
+      const detalhe = await resposta.text().catch(() => "");
+      console.error({ event: "jarvis_tts_falhou", etapa: "openai", status: resposta.status, detalhe: detalhe.slice(0, 600) });
       return null;
     }
     return resposta;
@@ -89,48 +117,39 @@ export async function sintetizar(request: Request, env: EnvJarvis): Promise<Resp
   const corpo = (await request.json().catch(() => null)) as EntradaTts | null;
   const text = prepararTexto(String(corpo?.text ?? ""));
   if (!text) return json({ erro: "texto_vazio" }, 400);
-
-  let resposta = await openAiTts(text, env);
-  let engine = "openai";
-
-  if (!resposta) {
-    const destino = endpointTts(env);
-    if (!destino) return json({ erro: "tts_indisponivel" }, 502);
-    engine = "vps";
-    try {
-      resposta = await fetch(destino.url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-jarvis-token": destino.token,
-        },
-        body: JSON.stringify({ text }),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-    } catch (erro) {
-      console.error({ event: "jarvis_tts_falhou", etapa: "vps", detalhe: erro instanceof Error ? erro.message : String(erro) });
-      return json({ erro: "tts_vps_indisponivel" }, 502);
-    }
-    if (!resposta.ok || !resposta.body) {
-      console.error({ event: "jarvis_tts_falhou", etapa: "vps", status: resposta.status });
-      return json({ erro: "tts_vps_falhou" }, 502);
-    }
+  const local = await localTts(text, env);
+  if (local) {
+    console.info({ event: "jarvis_tts_ok", engine: "local", voice: LOCAL_TTS_VOICE });
+    return new Response(local.body, {
+      status: 200,
+      headers: {
+        "content-type": local.headers.get("content-type") || "audio/mpeg",
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+        "x-jarvis-tts-engine": "local",
+        "x-jarvis-tts-voice": LOCAL_TTS_VOICE,
+        "x-jarvis-tts-build": "hybrid-local-first-v1",
+        "x-jarvis-tts-format": "mp3",
+        "x-jarvis-tts-cache": local.headers.get("x-readerpro-tts-cache") || "UNKNOWN",
+      },
+    });
   }
 
-  const contentType = resposta.headers.get("content-type") ?? "audio/wav";
-  if (!contentType.toLowerCase().startsWith("audio/")) {
-    console.error({ event: "jarvis_tts_falhou", etapa: "tipo_audio", contentType, engine });
-    return json({ erro: "tts_audio_invalido" }, 502);
-  }
-
-  return new Response(resposta.body, {
+  const cedar = await openAiTts(text, env);
+  if (!cedar) return json({ erro: "tts_indisponivel" }, 502);
+  console.warn({ event: "jarvis_tts_fallback", engine: "openai", voice: OPENAI_TTS_VOICE });
+  return new Response(cedar.body, {
     status: 200,
     headers: {
-      "content-type": contentType,
+      "content-type": "application/octet-stream",
       "cache-control": "private, no-store",
       "x-content-type-options": "nosniff",
-      "x-jarvis-tts-engine": engine,
-      ...(engine === "openai" ? { "x-jarvis-tts-voice": OPENAI_TTS_VOICE } : {}),
+      "x-jarvis-tts-engine": "openai",
+      "x-jarvis-tts-voice": OPENAI_TTS_VOICE,
+      "x-jarvis-tts-build": "hybrid-local-first-v1",
+      "x-jarvis-tts-format": "pcm_s16le_24000",
+      "x-jarvis-tts-sample-rate": "24000",
+      "x-jarvis-tts-stream": "1",
     },
   });
 }

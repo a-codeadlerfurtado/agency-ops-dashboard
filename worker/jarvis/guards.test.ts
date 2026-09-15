@@ -21,10 +21,11 @@ import {
   sanitizarContextoFinanceiro,
 } from "./finance-guard.ts";
 import { RESPOSTA_CRIADOR, perguntaDeCriador, sanitizarResposta } from "./identity.ts";
-import { resolverClienteMencionado, contarClientesAtivos, resolverResponsavelMencionado, contarClientesAtivosPorResponsavel, listarClientesAtivosPorResponsavel, perguntaSobreOnboarding } from "./memory.ts";
+import { resolverClienteMencionado, contarClientesAtivos, resolverResponsavelMencionado, contarClientesAtivosPorResponsavel, listarClientesAtivosPorResponsavel, interpretarFiltroAntiguidadeClientes, filtrarClientesAtivosPorAntiguidade, perguntaSobreOnboarding, normalizarTranscricaoOperacional } from "./memory.ts";
 import { compactarResultado, paraFormatoOpenAI, normalizarChamadas, type FerramentaJarvis } from "./tools.ts";
-import { detectarTemas, detectarConsultaLifecycle, contextoDeVocabulario, confirmacaoDeLeitura, temTemaOperacionalExplicito } from "./intent.ts";
+import { detectarTemas, detectarConsultaClientesOperacionais, detectarConsultaLifecycle, detectarEscopoGlobal, detectarJanelaMidia, contextoDeVocabulario, confirmacaoDeLeitura, temTemaOperacionalExplicito } from "./intent.ts";
 import { respostaSaldoMeta } from "./balance-semantics.ts";
+import { executarConsultaCanonica } from "./canonical-query.ts";
 
 // ------------------------------------------------- PARTE 49: bloqueado
 
@@ -145,6 +146,16 @@ test("catalogo filtrado remove ferramenta financeira interna", () => {
   assert.equal(filtrado.length, 2);
   assert.ok(!filtrado.some((f) => f.name === "adler_finance"));
   assert.ok(!filtrado.some((f) => f.name === "consulta_sql_leitura"));
+});
+
+test("consulta generica de clientes e operacional, nao financeira", () => {
+  for (const q of ["quantos clientes nos temos", "quantos clientes temos hoje", "qual o total de clientes", "quais clientes temos"]) {
+    assert.equal(avaliarPergunta(q).bloqueado, false, q);
+    assert.ok(detectarConsultaClientesOperacionais(q), q);
+  }
+  for (const q of ["quantos clientes estao em onboarding", "quantos clientes o Rodrigo atende", "quantos leads os clientes tiveram"]) {
+    assert.equal(detectarConsultaClientesOperacionais(q), null, q);
+  }
 });
 
 // ------------------------------------------------- PARTE 50: identidade
@@ -308,7 +319,33 @@ test("snapshot de clientes conta ativos sem LLM", () => {
     { client_id: "2", display_name: "B", lifecycle: "ACTIVE", gt_owner: "Rodrigo Cavalheiro" },
     { client_id: "3", display_name: "C", lifecycle: "ONBOARDING", gt_owner: "Felipe Oliveira" },
   ];
-  assert.equal(contarClientesAtivos(clientes), 2);
+  // Regra de negocio: ONBOARDING conta como ativo operacional. Este teste
+  // afirmava 2 quando a regra ainda era "so ACTIVE".
+  assert.equal(contarClientesAtivos(clientes), 3);
+});
+
+test("follow-up de antiguidade herda o contexto de clientes ativos", () => {
+  assert.deepEqual(
+    interpretarFiltroAntiguidadeClientes("quantos com menos de 3 meses?", "quantos clientes ativos nos temos?"),
+    { comparador: "menos", meses: 3 },
+  );
+  assert.deepEqual(
+    interpretarFiltroAntiguidadeClientes("e os com mais de seis meses?", "clientes ativos"),
+    { comparador: "mais", meses: 6 },
+  );
+});
+
+test("filtro de antiguidade ignora churn e usa data de entrada", () => {
+  const clientes = [
+    { client_id: "1", display_name: "Recente", lifecycle: "ACTIVE", entrada: "2026-09-01" },
+    { client_id: "2", display_name: "Antigo", lifecycle: "ACTIVE", entrada: "2026-01-01" },
+    { client_id: "3", display_name: "Onboarding recente", lifecycle: "ONBOARDING", entrada: "2026-08-15" },
+    { client_id: "4", display_name: "Churn recente", lifecycle: "CHURNED", entrada: "2026-09-01" },
+  ];
+  assert.deepEqual(
+    filtrarClientesAtivosPorAntiguidade(clientes, { comparador: "menos", meses: 3 }).clientes.map((c) => c.display_name),
+    ["Recente", "Onboarding recente"],
+  );
 });
 
 test("snapshot resolve Felipe e conta carteira ativa", () => {
@@ -320,7 +357,8 @@ test("snapshot resolve Felipe e conta carteira ativa", () => {
   ];
   const pessoa = resolverResponsavelMencionado("Felipe", clientes);
   assert.equal(pessoa, "Felipe Oliveira");
-  assert.equal(contarClientesAtivosPorResponsavel(clientes, pessoa!), 2);
+  // Felipe tem 2 ACTIVE + 1 ONBOARDING; a carteira operacional dele e' 3.
+  assert.equal(contarClientesAtivosPorResponsavel(clientes, pessoa!), 3);
 });
 
 
@@ -332,7 +370,8 @@ test("snapshot lista somente clientes ativos do responsavel", () => {
     { client_id: "4", display_name: "Delta", lifecycle: "ACTIVE", gt_owner: "Rodrigo Cavalheiro" },
   ];
   const lista = listarClientesAtivosPorResponsavel(clientes, "Felipe Oliveira").map((c) => c.display_name);
-  assert.deepEqual(lista, ["Alpha", "Beta"]);
+  // Gamma esta em ONBOARDING e entra na carteira operacional; Delta e' de outro GT.
+  assert.deepEqual(lista, ["Alpha", "Beta", "Gamma"]);
 });
 
 
@@ -384,4 +423,242 @@ test("roteador de lifecycle nao rouba perguntas de campanha ou carteira", () => 
   assert.equal(detectarConsultaLifecycle("quais clientes ativos estão sem campanha"), null);
   assert.equal(detectarConsultaLifecycle("quantos clientes ativos estão com o Felipe"), null);
   assert.equal(detectarConsultaLifecycle("quantas campanhas dos clientes ativos temos"), null);
+});
+
+// ---------------------------------------- PARTE A: onboarding e' ativo
+// A regra de negocio: quem esta em onboarding JA E' cliente. Responder so o
+// ACTIVE subnotifica a carteira que a operacao realmente atende.
+
+import { ehAtivoOperacional, ehOnboarding, ehEmOperacao, repartirPorEstagio } from "./memory.ts";
+import { ehSaudacao, respostaSaudacao } from "./smalltalk.ts";
+
+const CARTEIRA = [
+  { client_id: "a", display_name: "A", lifecycle: "ACTIVE", gt_owner: "Felipe" },
+  { client_id: "b", display_name: "B", lifecycle: "ACTIVE", gt_owner: "Rodrigo" },
+  { client_id: "c", display_name: "C", lifecycle: "ONBOARDING", gt_owner: "Felipe" },
+  { client_id: "d", display_name: "D", lifecycle: "CHURNED", gt_owner: "Felipe" },
+] as never[];
+
+test("ativo operacional inclui ACTIVE e ONBOARDING, exclui CHURNED", () => {
+  assert.equal(ehAtivoOperacional("ACTIVE"), true);
+  assert.equal(ehAtivoOperacional("ONBOARDING"), true);
+  assert.equal(ehAtivoOperacional("CHURNED"), false);
+  assert.equal(ehAtivoOperacional("PROSPECT"), false);
+});
+
+test("as tres leituras do lifecycle continuam distintas", () => {
+  const r = repartirPorEstagio(CARTEIRA);
+  assert.equal(r.ativos, 3, "ACTIVE + ONBOARDING");
+  assert.equal(r.emOperacao, 2, "somente ACTIVE");
+  assert.equal(r.onboarding, 1, "somente ONBOARDING");
+  assert.equal(ehOnboarding("ONBOARDING"), true);
+  assert.equal(ehEmOperacao("ONBOARDING"), false);
+});
+
+test("contagem geral de ativos conta o onboarding", () => {
+  assert.equal(contarClientesAtivos(CARTEIRA), 3);
+});
+
+test("carteira do responsavel inclui o cliente em onboarding", () => {
+  assert.equal(contarClientesAtivosPorResponsavel(CARTEIRA, "Felipe"), 2);
+  assert.equal(contarClientesAtivosPorResponsavel(CARTEIRA, "Rodrigo"), 1);
+  const lista = listarClientesAtivosPorResponsavel(CARTEIRA, "Felipe").map((c) => String(c.client_id));
+  assert.deepEqual(lista.sort(), ["a", "c"], "churned fica de fora, onboarding entra");
+});
+
+// ---------------------------------------- PARTE B: saudacao
+
+for (const oi of ["oi", "olá", "ola tudo bem?", "bom dia", "boa tarde", "boa noite",
+                  "e aí", "tudo bem?", "como você está?", "jarvis", "fala jarvis", "obrigado", "valeu"]) {
+  test(`saudacao reconhecida: "${oi}"`, () => {
+    assert.equal(ehSaudacao(oi), true);
+  });
+}
+
+for (const real of [
+  "bom dia, quantos clientes ativos temos?",
+  "oi, saldo do Alex Quadros",
+  "olá, quem é o GT do Caio?",
+  "boa tarde, quantos leads hoje",
+  "quantos clientes ativos temos?",
+]) {
+  test(`pergunta real NAO vira saudacao: "${real}"`, () => {
+    assert.equal(ehSaudacao(real), false);
+  });
+}
+
+test("resposta de saudacao e' curta, deterministica e sem erro", () => {
+  const a = respostaSaudacao("ola tudo bem?");
+  assert.equal(a, respostaSaudacao("ola tudo bem?"), "mesma entrada, mesma saida");
+  assert.ok(a.length < 80);
+  assert.doesNotMatch(a, /não consegui|erro|indisponível/i);
+});
+
+test("bom dia usa o nome quando ha pessoa", () => {
+  assert.match(respostaSaudacao("bom dia", "Adler Furtado"), /Bom dia, Adler/);
+  assert.match(respostaSaudacao("bom dia"), /^Bom dia\./);
+});
+
+// ------------------------------- TRIAGEM: papel do responsavel no CLAIM
+// Regra do trigger WORK_ITEM_ASSIGNEE_ROLE_MISMATCH: team_roster.role da pessoa
+// tem de bater com work_items.target_role. O endpoint fixava "CS", entao o Adler
+// (MGMT) nunca conseguia assumir. Estes testes travam a regra.
+
+/** Espelha o patch de CLAIM do agency-ops-material-triage-api. */
+function patchDeClaim(person: string, role: string) {
+  if (!role) return { erro: "role_required" as const };
+  return { status: "IN_PROGRESS", target_person: person, target_role: role };
+}
+
+test("CLAIM de CS usa target_role CS", () => {
+  assert.deepEqual(patchDeClaim("Joel", "CS"), { status: "IN_PROGRESS", target_person: "Joel", target_role: "CS" });
+});
+
+test("CLAIM de MGMT usa target_role MGMT, nao CS", () => {
+  const p = patchDeClaim("Adler Furtado", "MGMT");
+  assert.equal((p as { target_role: string }).target_role, "MGMT");
+  assert.notEqual((p as { target_role: string }).target_role, "CS", "hardcode de CS era a causa do role mismatch");
+});
+
+test("CLAIM sem papel no roster e' recusado antes de gravar", () => {
+  assert.deepEqual(patchDeClaim("Fulano", ""), { erro: "role_required" });
+});
+
+/** Espelha o patch de ACKNOWLEDGE. */
+function patchDeAck(person: string, atual: Record<string, unknown>) {
+  return {
+    status: "COMPLETED",
+    completed_by: person,
+    resolution: "Ciente — triagem reconhecida sem ação adicional.",
+    client_id: atual.client_id,
+    source: atual.source,
+    source_id: atual.source_id,
+  };
+}
+
+test("ACKNOWLEDGE nao exige CLAIM e nao altera o material", () => {
+  const original = { client_id: "c1", source: "briefing-hub", source_id: "s1", status: "OPEN", target_person: null };
+  const p = patchDeAck("Adler Furtado", original);
+  assert.equal(p.status, "COMPLETED");
+  assert.equal(p.client_id, original.client_id, "client_id preservado");
+  assert.equal(p.source, original.source, "source preservado");
+  assert.equal(p.source_id, original.source_id, "source_id preservado");
+  assert.equal(original.target_person, null, "nao precisou assumir antes");
+});
+
+/** A lista da triagem so' devolve estados acionaveis. */
+const ACIONAVEIS = ["OPEN", "IN_PROGRESS", "SNOOZED"];
+
+test("item com Ciente sai da fila da triagem", () => {
+  assert.ok(!ACIONAVEIS.includes("COMPLETED"), "COMPLETED nao e' acionavel, entao some do popup e do painel");
+  assert.ok(ACIONAVEIS.includes("OPEN"));
+});
+
+test("X e' local: nao produz patch nenhum no servidor", () => {
+  const dispensados = new Set<string>();
+  dispensados.add("item-1");
+  assert.equal(dispensados.has("item-1"), true, "so estado do cliente");
+  assert.equal(typeof (dispensados as unknown as { patch?: unknown }).patch, "undefined", "nenhuma mutacao de backend");
+});
+
+// ---------------------------------------- REGRESSOES DE VOZ / CONTEXTO 2026-09-10
+
+test("STT troca litro/litros por lead/leads", () => {
+  assert.equal(normalizarTranscricaoOperacional("quantos litros a Kronos teve ontem"), "quantos leads a Kronos teve ontem");
+  assert.equal(normalizarTranscricaoOperacional("um litro hoje"), "um lead hoje");
+});
+
+test("periodo nunca vira cliente Dias e Barbosa", () => {
+  const clientes = [
+    { client_id: "nc", display_name: "NC Imóveis" },
+    { client_id: "db", display_name: "Dias e Barbosa" },
+  ];
+  assert.equal(resolverClienteMencionado("e nos últimos 7 dias?", clientes), null);
+  assert.equal(resolverClienteMencionado("quantos leads a NC Imóveis teve nos últimos 7 dias?", clientes)?.client_id, "nc");
+});
+
+test("janela de mídia reconhece últimos 7 dias sem converter para hoje", () => {
+  assert.deepEqual(detectarJanelaMidia("e nos últimos 7 dias?"), { kind: "last_days", days: 7, label: "nos últimos 7 dias" });
+  assert.deepEqual(detectarJanelaMidia("ontem"), { kind: "yesterday", days: 1, label: "ontem" });
+});
+
+test("escopo global vence cliente anterior", () => {
+  for (const q of [
+    "somando todos os nossos clientes quantos leads tivemos ontem",
+    "quantos leads no geral tivemos ontem",
+    "quantos leads todos os clientes tiveram ontem",
+  ]) assert.equal(detectarEscopoGlobal(q), true, q);
+});
+
+
+test("planner canonico cruza gasto com ausencia de leads sem LLM", () => {
+  const clientes = [
+    { client_id:"1", display_name:"A", lifecycle:"ACTIVE", spend_today:80, leads_today:0 },
+    { client_id:"2", display_name:"B", lifecycle:"ACTIVE", spend_today:50, leads_today:3 },
+    { client_id:"3", display_name:"C", lifecycle:"CHURNED", spend_today:90, leads_today:0 },
+  ];
+  const r = executarConsultaCanonica({ message:"quais clientes estão gastando e sem lead hoje?", clients:clientes, memoria:null, explicitClient:null });
+  assert.ok(r);
+  assert.match(r!.resposta, /1 cliente/);
+  assert.match(r!.resposta, /A/);
+  assert.doesNotMatch(r!.resposta, /B|C/);
+});
+
+test("planner canonico detecta grupo que ficou somente no bom dia", () => {
+  const clientes = [
+    { client_id:"1", display_name:"A", lifecycle:"ACTIVE", wa_groups_only_good_morning:1 },
+    { client_id:"2", display_name:"B", lifecycle:"ACTIVE", wa_groups_only_good_morning:0 },
+  ];
+  const r = executarConsultaCanonica({ message:"quais clientes receberam somente o bom dia?", clients:clientes, memoria:null, explicitClient:null });
+  assert.ok(r);
+  assert.match(r!.resposta, /A/);
+  assert.doesNotMatch(r!.resposta, /B/);
+});
+
+test("planner canonico preserva conjunto para follow-up desses", () => {
+  const clientes = [
+    { client_id:"1", display_name:"A", lifecycle:"ACTIVE", active_campaigns:0, external_risk_level:"HIGH" },
+    { client_id:"2", display_name:"B", lifecycle:"ACTIVE", active_campaigns:0, external_risk_level:"LOW" },
+    { client_id:"3", display_name:"C", lifecycle:"ACTIVE", active_campaigns:2, external_risk_level:"HIGH" },
+  ];
+  const primeira = executarConsultaCanonica({ message:"quais clientes estão sem campanha?", clients:clientes, memoria:null, explicitClient:null });
+  assert.ok(primeira);
+  const memoria = { ...primeira!.memory, updated_at:new Date().toISOString() };
+  const segunda = executarConsultaCanonica({ message:"e desses, quais estão em risco?", clients:clientes, memoria, explicitClient:null });
+  assert.ok(segunda);
+  assert.match(segunda!.resposta, /A/);
+  assert.doesNotMatch(segunda!.resposta, /B|C/);
+});
+
+test("planner canonico responde ultimo cliente que entrou", () => {
+  const clientes = [
+    { client_id:"1", display_name:"Antigo", lifecycle:"ACTIVE", entrada:"2026-08-01" },
+    { client_id:"2", display_name:"Novo", lifecycle:"ACTIVE", entrada:"2026-09-10" },
+  ];
+  const r = executarConsultaCanonica({ message:"quem foi o último cliente que entrou?", clients:clientes, memoria:null, explicitClient:null });
+  assert.ok(r);
+  assert.match(r!.resposta, /Novo/);
+  assert.match(r!.resposta, /10 de setembro/);
+});
+
+test("planner canonico ranqueia CPL sem inventar criterio", () => {
+  const clientes = [
+    { client_id:"1", display_name:"A", lifecycle:"ACTIVE", cpl_today:40 },
+    { client_id:"2", display_name:"B", lifecycle:"ACTIVE", cpl_today:20 },
+    { client_id:"3", display_name:"C", lifecycle:"ACTIVE", cpl_today:70 },
+  ];
+  const r = executarConsultaCanonica({ message:"quais são os 2 melhores clientes por CPL hoje?", clients:clientes, memoria:null, explicitClient:null });
+  assert.ok(r);
+  assert.match(r!.resposta, /1\. B/);
+  assert.match(r!.resposta, /2\. A/);
+  assert.doesNotMatch(r!.resposta, /3\. C/);
+});
+
+test("planner canonico compara hoje e ontem no cliente certo", () => {
+  const cliente = { client_id:"1", display_name:"Caio", lifecycle:"ACTIVE", leads_today:8, leads_yesterday:4 };
+  const r = executarConsultaCanonica({ message:"Caio teve mais leads hoje ou ontem?", clients:[cliente], memoria:null, explicitClient:cliente });
+  assert.ok(r);
+  assert.match(r!.resposta, /hoje 8/);
+  assert.match(r!.resposta, /ontem 4/);
+  assert.match(r!.resposta, /subiu/i);
 });

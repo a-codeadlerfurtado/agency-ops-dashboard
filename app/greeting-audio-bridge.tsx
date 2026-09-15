@@ -240,7 +240,7 @@ export default function GreetingAudioBridge() {
 
     const syncOpening = () => {
       if (disposed) return;
-      const opening = Boolean(document.querySelector(".opsq-opening"));
+      const opening = Boolean(document.querySelector('.opsq-opening[data-needs-audio="1"]'));
 
       if (opening && !openingActive) {
         openingActive = true;

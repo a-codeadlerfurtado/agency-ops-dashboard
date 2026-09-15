@@ -1,0 +1,12 @@
+from pathlib import Path
+p=Path(r"C:\Users\Adler\agency-ops-dashboard\supabase\functions\agency-ops-client-provisioner\index.ts")
+s=p.read_text(encoding="utf-8")
+s=s.replace('return crypto.subtle.importKey("raw",raw,{name:"AES-GCM"},false,["encrypt"]);','return crypto.subtle.importKey("raw",raw,{name:"AES-GCM"},false,["encrypt","decrypt"]);')
+s=s.replace('encryptValue(key,"Conta criada automaticamente pelo onboarding. Senha temporária; orientar troca no primeiro acesso.")','encryptValue(key,"Conta criada automaticamente pelo onboarding. Senha inicial gerada e válida para acesso ao Briefing Hub.")')
+s=s.replace('user_metadata:{briefing_username:mapping.username,briefing_client_id:client.id,display_name:client.display_name,onboarding_provisioned:true,must_change_password:true}','user_metadata:{briefing_username:mapping.username,briefing_client_id:client.id,display_name:client.display_name,onboarding_provisioned:true,must_change_password:false}')
+old='if(!mapping){const username=await uniqueUsername(client.id,client.display_name),auth_email=`${username}@briefing.local`;const ins=await db.from("briefing_provisioning_map").insert({username,client_id:client.id,legacy_name:client.display_name,auth_email}).select("username,client_id,auth_email,legacy_name,linked_at").single();if(ins.error)throw new Error(`mapping_insert:${errText(ins.error)}`);mapping=ins.data;}else if(!mapping.auth_email){const auth_email=`${mapping.username}@briefing.local`;const fixed=await db.from("briefing_provisioning_map").update({auth_email}).eq("client_id",client.id).select("username,client_id,auth_email,legacy_name,linked_at").single();if(fixed.error)throw new Error(`mapping_email_backfill:${errText(fixed.error)}`);mapping=fixed.data;}'
+new='if(!mapping){const username=await uniqueUsername(client.id,client.display_name);const ins=await db.from("briefing_provisioning_map").insert({username,client_id:client.id,legacy_name:client.display_name}).select("username,client_id,auth_email,legacy_name,linked_at").single();if(ins.error)throw new Error(`mapping_insert:${errText(ins.error)}`);mapping=ins.data;}'
+if old not in s: raise SystemExit("mapping block not found")
+s=s.replace(old,new,1)
+p.write_text(s,encoding="utf-8")
+print("phase1 patched")

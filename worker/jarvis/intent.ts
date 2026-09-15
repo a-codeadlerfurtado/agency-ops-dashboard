@@ -43,6 +43,51 @@ export function temTemaOperacionalExplicito(mensagem: string): boolean {
   return detectarTemas(mensagem).length > 0;
 }
 
+export function detectarConsultaClientesOperacionais(mensagem: string): "count" | "list" | null {
+  const q = normalizarIntent(mensagem);
+  if (!q || !/\bclientes?\b/.test(q)) return null;
+  if (/\b(onboarding|onboard|churn|churned|cancelados?|prospects?|pre clientes?)\b/.test(q)) return null;
+  if (/\b(leads?|campanhas?|saldo|balance|cpl|gasto|spend|tasks?|tarefas?|alertas?|contratos?|reunioes?|gt|cs|designer|carteira|atende|responsavel)\b/.test(q)) return null;
+  if (/\bclientes?\s+(?:do|da|de|com)\b/.test(q)) return null;
+  const lista = /\b(quais|quem|lista|listar|nomes?|todos|todas|mostra|mostrar)\b/.test(q);
+  const conta = /\b(quantos?|numero|total|temos|tem|ha|existem)\b/.test(q);
+  if (!lista && !conta) return null;
+  return lista ? "list" : "count";
+}
+
+
+export type JanelaMidia =
+  | { kind: "today"; days: 1; label: "hoje" }
+  | { kind: "yesterday"; days: 1; label: "ontem" }
+  | { kind: "last_days"; days: number; label: string };
+
+export function detectarJanelaMidia(mensagem: string): JanelaMidia | null {
+  const q = normalizarIntent(mensagem);
+  if (/\bontem\b/.test(q)) return { kind: "yesterday", days: 1, label: "ontem" };
+  if (/\bhoje\b/.test(q)) return { kind: "today", days: 1, label: "hoje" };
+  if (/\b(ultima|ultimos?)\s+semana\b/.test(q)) return { kind: "last_days", days: 7, label: "nos últimos 7 dias" };
+  const semanas = q.match(/\b(?:nas?\s+)?ultim(?:a|as)\s+(\d{1,2}|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze)\s+semanas?\b/);
+  if (semanas) {
+    const mapa: Record<string, number> = { duas:2,tres:3,quatro:4,cinco:5,seis:6,sete:7,oito:8,nove:9,dez:10,onze:11,doze:12 };
+    const qtd = /^\d+$/.test(semanas[1]) ? Number(semanas[1]) : (mapa[semanas[1]] ?? 0);
+    const days = qtd * 7;
+    if (days >= 7 && days <= 84) return { kind: "last_days", days, label: `nas últimas ${qtd} semanas` };
+  }
+  const palavras: Record<string, number> = { tres: 3, sete: 7, quatorze: 14, vinte: 20, trinta: 30, noventa: 90 };
+  const m = q.match(/\b(?:nos?\s+)?ultim(?:o|os|a|as)\s+(\d{1,3}|tres|sete|quatorze|trinta|noventa)\s+dias?\b/);
+  if (!m) return null;
+  const days = /^\d+$/.test(m[1]) ? Number(m[1]) : (palavras[m[1]] ?? 0);
+  if (!Number.isFinite(days) || days < 2 || days > 90) return null;
+  return { kind: "last_days", days, label: `nos últimos ${days} dias` };
+}
+
+export function detectarEscopoGlobal(mensagem: string): boolean {
+  const q = normalizarIntent(mensagem);
+  if (!q) return false;
+  return /\b(todos?\s+(?:os\s+)?(?:nossos?\s+)?clientes?|somando\s+(?:todos?|os|as)|no\s+geral|total\s+geral|agencia\s+inteira|carteira\s+inteira)\b/.test(q)
+    || /\bquantos?\s+leads?\b[\s\S]{0,80}\b(?:todos?\s+os\s+clientes?|no\s+geral)\b/.test(q);
+}
+
 export function contextoDeVocabulario(mensagem: string): string {
   const q = normalizarIntent(mensagem);
   const hints = REGRAS.filter((r) => r.rx.test(q)).map((r) => r.hint);

@@ -12,8 +12,9 @@
 import { CanalSse } from "./sse";
 import { identidade, sanitizarResposta } from "./identity";
 import { avaliarChamada, filtrarCatalogo, sanitizarContextoFinanceiro } from "./finance-guard";
-import { resolverClienteMencionado, contarClientesAtivos, resolverResponsavelMencionado, contarClientesAtivosPorResponsavel, type ClientePermitido } from "./memory";
+import { resolverClienteMencionado, contarClientesAtivos, resolverResponsavelMencionado, contarClientesAtivosPorResponsavel, interpretarFiltroAntiguidadeClientes, filtrarClientesAtivosPorAntiguidade, normalizarTranscricaoOperacional, type ClientePermitido } from "./memory";
 import { tentarFastPath } from "./fast-path";
+import { carregarMidiaClienteDia } from "./state";
 import { contextoDeVocabulario } from "./intent";
 import {
   carregarCatalogo, paraFormatoOpenAI, normalizarChamadas,
@@ -81,12 +82,12 @@ function texto(resultado: any): string {
   return "";
 }
 
-async function chamarOpenAI(env: EnvJarvis, mensagens: any[], ferramentas: FerramentaJarvis[]): Promise<any> {
+async function chamarOpenAI(env: EnvJarvis, mensagens: any[], ferramentas: FerramentaJarvis[], modoVoz = false): Promise<any> {
   const key = String(env.OPENAI_API_KEY ?? "").trim();
   if (!key) throw new Error("openai_api_key_ausente");
   const executar = async (model: string) => fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
-    body: JSON.stringify({ model, messages: mensagens, ...(ferramentas.length ? { tools: paraFormatoOpenAI(ferramentas), parallel_tool_calls: false } : {}), max_completion_tokens: 900 }),
+    body: JSON.stringify({ model, messages: mensagens, ...(ferramentas.length ? { tools: paraFormatoOpenAI(ferramentas), parallel_tool_calls: false } : {}), max_completion_tokens: modoVoz ? 480 : 900 }),
     signal: AbortSignal.timeout(40_000),
   });
   let model = modeloOpenAIResolvido ?? MODELO_PREFERIDO;
@@ -122,6 +123,13 @@ export async function identificarUsuario(jwt: string, env: EnvJarvis): Promise<I
     userId = typeof carga?.sub === "string" ? carga.sub : null;
   } catch { /* token opaco; segue sem id */ }
 
+  const identityCacheKey = userId ? `jarvis:identity:v1:${userId}` : null;
+  if (identityCacheKey && env.JARVIS_CACHE) {
+    const hit = await env.JARVIS_CACHE.get(identityCacheKey, "json").catch(() => null) as any;
+    const role = String(hit?.papel ?? "").trim().toUpperCase();
+    if (role) return { pessoa: String(hit?.pessoa ?? "").trim(), papel: role, userId };
+  }
+
   // Papel NAO sai de consulta direta a user_preferences/team_roster com o JWT
   // do usuario. O papel `authenticated` nao tem GRANT nessas tabelas: o
   // PostgREST responde 403 42501 "permission denied for table", a leitura
@@ -144,6 +152,10 @@ export async function identificarUsuario(jwt: string, env: EnvJarvis): Promise<I
     const perfil = corpo?.profile;
     pessoa = String(perfil?.person ?? "").trim();
     papel = String(perfil?.role ?? "").trim().toUpperCase() || "UNASSIGNED";
+  }
+
+  if (identityCacheKey && env.JARVIS_CACHE && papel !== "UNASSIGNED") {
+    await env.JARVIS_CACHE.put(identityCacheKey, JSON.stringify({ pessoa, papel }), { expirationTtl: 120 }).catch(() => {});
   }
 
   // Diagnostico do gate sem vazar identidade: so o booleano, o papel e o
@@ -202,7 +214,7 @@ export function ehTimeout(erro: unknown): boolean {
 }
 
 async function carregarClientesPermitidos(eu: Identidade, jwt: string, env: EnvJarvis): Promise<ClientePermitido[]> {
-  const chave = eu.userId ? `jarvis:clientes:v2:${eu.userId}` : null;
+  const chave = eu.userId ? `jarvis:clientes:v4:${eu.userId}` : null;
   if (chave && env.JARVIS_CACHE) {
     const hit = await env.JARVIS_CACHE.get(chave, "json").catch(() => null);
     if (Array.isArray(hit)) return hit as ClientePermitido[];
@@ -213,15 +225,74 @@ async function carregarClientesPermitidos(eu: Identidade, jwt: string, env: EnvJ
       client_id: String(c?.client_id ?? ""),
       display_name: String(c?.display_name ?? ""),
       lifecycle: String(c?.lifecycle ?? ""),
+      entrada: c?.entrada ? String(c.entrada) : null,
+      saida: c?.saida ? String(c.saida) : null,
+      client_days: Number.isFinite(Number(c?.client_days)) ? Number(c.client_days) : null,
       gt_owner: c?.gt_owner ? String(c.gt_owner) : null,
       cs_owner: c?.cs_owner ? String(c.cs_owner) : null,
       designer_owner: c?.designer_owner ? String(c.designer_owner) : null,
+      priority: c?.priority ? String(c.priority) : null,
+      last_activity_at: c?.last_activity_at ? String(c.last_activity_at) : null,
+      open_commitments: Number.isFinite(Number(c?.open_commitments)) ? Number(c.open_commitments) : null,
+      overdue_commitments: Number.isFinite(Number(c?.overdue_commitments)) ? Number(c.overdue_commitments) : null,
+      open_complaints: Number.isFinite(Number(c?.open_complaints)) ? Number(c.open_complaints) : null,
+      pending_approvals: Number.isFinite(Number(c?.pending_approvals)) ? Number(c.pending_approvals) : null,
+      blockers: Number.isFinite(Number(c?.blockers)) ? Number(c.blockers) : null,
+      alerts_count: Number.isFinite(Number(c?.alerts_count)) ? Number(c.alerts_count) : null,
+      onboarding_status: c?.onboarding_status ? String(c.onboarding_status) : null,
+      onboarding_stage: c?.onboarding_stage ? String(c.onboarding_stage) : null,
+      onboarding_risk: c?.onboarding_risk ? String(c.onboarding_risk) : null,
+      onboarding_blocked_by: c?.onboarding_blocked_by ? String(c.onboarding_blocked_by) : null,
+      onboarding_next_action: c?.onboarding_next_action ? String(c.onboarding_next_action) : null,
+      briefing_page_id: c?.briefing_page_id ? String(c.briefing_page_id) : null,
+      briefing_sync_status: c?.briefing_sync_status ? String(c.briefing_sync_status) : null,
+      leads_today: Number.isFinite(Number(c?.leads_today)) ? Number(c.leads_today) : null,
+      spend_today: Number.isFinite(Number(c?.spend_today)) ? Number(c.spend_today) : null,
+      cpl_today: Number.isFinite(Number(c?.cpl_today)) ? Number(c.cpl_today) : null,
+      today_checked_at: c?.today_checked_at ? String(c.today_checked_at) : null,
+      leads_yesterday: Number.isFinite(Number(c?.leads_yesterday)) ? Number(c.leads_yesterday) : null,
+      spend_yesterday: Number.isFinite(Number(c?.spend_yesterday)) ? Number(c.spend_yesterday) : null,
+      cpl_yesterday: Number.isFinite(Number(c?.cpl_yesterday)) ? Number(c.cpl_yesterday) : null,
+      yesterday_checked_at: c?.yesterday_checked_at ? String(c.yesterday_checked_at) : null,
+      spend_7d: Number.isFinite(Number(c?.spend_7d)) ? Number(c.spend_7d) : null,
+      media_latest_date: c?.media_latest_date ? String(c.media_latest_date) : null,
+      media_checked_at: c?.media_checked_at ? String(c.media_checked_at) : null,
+      active_campaigns: Number.isFinite(Number(c?.active_campaigns)) ? Number(c.active_campaigns) : null,
+      campaign_count: Number.isFinite(Number(c?.campaign_count)) ? Number(c.campaign_count) : null,
+      balance_run_status: c?.balance_run_status ? String(c.balance_run_status) : null,
+      balance_checked_at: c?.balance_checked_at ? String(c.balance_checked_at) : null,
+      internal_score: Number.isFinite(Number(c?.internal_score)) ? Number(c.internal_score) : null,
+      internal_band: c?.internal_band ? String(c.internal_band) : null,
+      external_health_status: c?.external_health_status ? String(c.external_health_status) : null,
+      external_health_score: Number.isFinite(Number(c?.external_health_score)) ? Number(c.external_health_score) : null,
+      external_risk_level: c?.external_risk_level ? String(c.external_risk_level) : null,
+      sentimento: c?.sentimento ? String(c.sentimento) : null,
+      sinais_alerta: c?.sinais_alerta ? String(c.sinais_alerta) : null,
+      reclamacoes: c?.reclamacoes ? String(c.reclamacoes) : null,
+      wa_group_count: Number.isFinite(Number(c?.wa_group_count)) ? Number(c.wa_group_count) : null,
+      wa_msg_count_today: Number.isFinite(Number(c?.wa_msg_count_today)) ? Number(c.wa_msg_count_today) : null,
+      wa_last_msg_today: c?.wa_last_msg_today ? String(c.wa_last_msg_today) : null,
+      wa_groups_silent_today: Number.isFinite(Number(c?.wa_groups_silent_today)) ? Number(c.wa_groups_silent_today) : null,
+      wa_groups_only_good_morning: Number.isFinite(Number(c?.wa_groups_only_good_morning)) ? Number(c.wa_groups_only_good_morning) : null,
+      wa_groups_without_good_morning: Number.isFinite(Number(c?.wa_groups_without_good_morning)) ? Number(c.wa_groups_without_good_morning) : null,
     }))
     .filter((c: ClientePermitido) => c.client_id && c.display_name);
   if (chave && env.JARVIS_CACHE && clientes.length) {
-    await env.JARVIS_CACHE.put(chave, JSON.stringify(clientes), { expirationTtl: 180 }).catch(() => {});
+    await env.JARVIS_CACHE.put(chave, JSON.stringify(clientes), { expirationTtl: 300 }).catch(() => {});
   }
   return clientes;
+}
+
+
+/** Aquece apenas identidade, carteira e catalogo enquanto o usuario ainda esta falando. */
+export async function aquecerContextoLeve(jwt: string, env: EnvJarvis): Promise<{ ok: boolean; role: string }> {
+  const eu = await identificarUsuario(jwt, env);
+  if (eu.papel === "UNASSIGNED") return { ok: false, role: eu.papel };
+  await Promise.allSettled([
+    carregarClientesPermitidos(eu, jwt, env),
+    carregarCatalogo(eu.papel, jwt, env),
+  ]);
+  return { ok: true, role: eu.papel };
 }
 
 /** Pendencia aberta e recente do usuario, para resolver "sim" por voz. */
@@ -254,8 +325,10 @@ export async function rodarAgente(
 ): Promise<{ resposta: string; chamadas: Array<{ name: string; ok: boolean; ms: number }>; pendencia: string | null; conversation_id: string | null }> {
   const inicio = Date.now();
   const eu = identidadeForcada ?? (await estagio("identify_user", () => identificarUsuario(jwt, env)));
-  const mensagem = String(entrada.message ?? "").trim();
+  const mensagem = normalizarTranscricaoOperacional(entrada.message).trim();
   const chamadas: Array<{ name: string; ok: boolean; ms: number }> = [];
+  const catalogoPromise = estagio("catalog", () => carregarCatalogo(eu.papel, jwt, env))
+    .catch(() => [] as FerramentaJarvis[]);
 
   // Resolve um cliente citado ANTES do prepare-chat. Isso permite que "Caio",
   // "Caio Montenegro" e pequenos erros de transcricao mudem o foco da conversa.
@@ -276,19 +349,9 @@ export async function rodarAgente(
   // Agora a conversa e' criada depois da resposta, no trecho de persistencia,
   // ou logo antes do prepare-chat no caminho que realmente precisa de historico.
   let conversationId = entrada.conversation_id ?? null;
-  if (conversationId && mencionado?.client_id) {
-    const troca = await workspace("conversations/set-client", jwt, {
-      conversation_id: conversationId,
-      client_id: mencionado.client_id,
-    }).catch(() => null);
-    if (!troca?.ok) {
-      console.warn({ event: "jarvis_client_switch_failed", conversation: Boolean(conversationId) });
-    }
-  }
-
   // Catálogo antes do prepare-chat: o fast path consegue responder de cache/snapshot
   // sem montar o contexto grande do LLM. Só usa ferramenta ao vivo se o dado estiver velho.
-  const catalogo = filtrarCatalogo(await estagio("catalog", () => carregarCatalogo(eu.papel, jwt, env)))
+  const catalogo = filtrarCatalogo(await catalogoPromise)
     .filter((f) => !ferramentasPermitidas || ferramentasPermitidas.includes(f.name));
   const scopeKey = eu.userId ?? `${eu.papel}:${eu.pessoa}`;
   const fast = await estagio("fast_path", () => tentarFastPath({
@@ -322,6 +385,16 @@ export async function rodarAgente(
     })();
     if (defer) defer(persistir); else void persistir;
     return { resposta: direta, chamadas, pendencia: null, conversation_id: conversationId };
+  }
+
+  if (conversationId && mencionado?.client_id) {
+    const troca = await workspace("conversations/set-client", jwt, {
+      conversation_id: conversationId,
+      client_id: mencionado.client_id,
+    }).catch(() => null);
+    if (!troca?.ok) {
+      console.warn({ event: "jarvis_client_switch_failed", conversation: Boolean(conversationId) });
+    }
   }
 
   // Caminho que precisa de historico: aqui a conversa e' necessaria mesmo.
@@ -368,6 +441,29 @@ export async function rodarAgente(
   // Mantem escopo/JWT/fonte canonica e ainda persiste o turno na mesma conversa.
   const turnos = Array.isArray(preparado.turns) ? preparado.turns as Array<{ role?: string; content?: string }> : [];
   const ultimoUsuario = [...turnos].reverse().find((t) => t?.role === "user" && String(t?.content ?? "").trim() !== mensagem);
+
+  // Antiguidade da carteira e' dado estruturado da base, nao assunto para o modelo improvisar.
+  // Tambem entende follow-up curto: "quantos com menos de 3 meses?" depois de falar dos clientes ativos.
+  const filtroAntiguidade = interpretarFiltroAntiguidadeClientes(mensagem, String(ultimoUsuario?.content ?? ""));
+  if (filtroAntiguidade && clientesPermitidos.length) {
+    const faixa = filtrarClientesAtivosPorAntiguidade(clientesPermitidos, filtroAntiguidade);
+    const totalAtivos = contarClientesAtivos(clientesPermitidos);
+    const quantidade = faixa.clientes.length;
+    const relacao = filtroAntiguidade.comparador === "menos" ? "menos" : "mais";
+    const querLista = /\b(quais|lista|listar|liste|nomes|quem sao)\b/i.test(mensagem);
+    let direta = `${quantidade} dos ${totalAtivos} clientes ativos têm ${relacao} de ${filtroAntiguidade.meses} ${filtroAntiguidade.meses === 1 ? "mês" : "meses"}.`;
+    if (querLista) {
+      const nomes = faixa.clientes.map((c) => c.display_name).join(", ");
+      direta += nomes ? ` São: ${nomes}.` : " Não há clientes nessa faixa.";
+    }
+    if (faixa.semData) direta += ` ${faixa.semData} ${faixa.semData === 1 ? "cliente ativo está" : "clientes ativos estão"} sem data de entrada cadastrada.`;
+    direta = sanitizarResposta(eu.papel === "MGMT" ? direta : `No seu escopo, ${direta.charAt(0).toLowerCase()}${direta.slice(1)}`);
+    canal?.emitir("token", { text: direta });
+    const persistir = workspace("complete-chat", jwt, { conversation_id: preparado.conversation_id ?? conversationId, request_id: preparado.request_id, answer: direta, original_message: mensagem, model: "deterministic:workspace_clients_tenure", latency_ms: Date.now() - inicio, context_sources: ["dashboard_client_overview"], context_client: null, intents: preparado.intents ?? [], metadata: { tool_calls: chamadas, agent: "jarvis", fast_path: "client_tenure" } }).catch(() => null);
+    if (defer) defer(persistir); else await persistir;
+    return { resposta: direta, chamadas, pendencia: null, conversation_id: conversationId };
+  }
+
   const perguntaTotalAtivos = /\bquantos?\b[\s\S]{0,80}\bclientes?\b[\s\S]{0,40}\bativos?\b/i.test(mensagem) && !/\bcom\s+(?:o|a)?\s*[\p{L}-]+/iu.test(mensagem);
   if (perguntaTotalAtivos && clientesPermitidos.length) {
     const total = contarClientesAtivos(clientesPermitidos);
@@ -375,7 +471,8 @@ export async function rodarAgente(
       ? `Temos ${total} ${total === 1 ? "cliente ativo" : "clientes ativos"} hoje.`
       : `No seu escopo, há ${total} ${total === 1 ? "cliente ativo" : "clientes ativos"} hoje.`);
     canal?.emitir("token", { text: direta });
-    await workspace("complete-chat", jwt, { conversation_id: preparado.conversation_id ?? conversationId, request_id: preparado.request_id, answer: direta, original_message: mensagem, model: "deterministic:workspace_clients", latency_ms: Date.now() - inicio, context_sources: ["dashboard_client_overview"], context_client: null, intents: preparado.intents ?? [], metadata: { tool_calls: chamadas, agent: "jarvis", fast_path: "active_clients_total" } }).catch(() => null);
+    const persistir = workspace("complete-chat", jwt, { conversation_id: preparado.conversation_id ?? conversationId, request_id: preparado.request_id, answer: direta, original_message: mensagem, model: "deterministic:workspace_clients", latency_ms: Date.now() - inicio, context_sources: ["dashboard_client_overview"], context_client: null, intents: preparado.intents ?? [], metadata: { tool_calls: chamadas, agent: "jarvis", fast_path: "active_clients_total" } }).catch(() => null);
+    if (defer) defer(persistir); else await persistir;
     return { resposta: direta, chamadas, pendencia: null, conversation_id: conversationId };
   }
 
@@ -388,7 +485,8 @@ export async function rodarAgente(
     const total = contarClientesAtivosPorResponsavel(clientesPermitidos, responsavel);
     const direta = sanitizarResposta(`${responsavel} está com ${total} ${total === 1 ? "cliente ativo" : "clientes ativos"}.`);
     canal?.emitir("token", { text: direta });
-    await workspace("complete-chat", jwt, { conversation_id: preparado.conversation_id ?? conversationId, request_id: preparado.request_id, answer: direta, original_message: mensagem, model: "deterministic:workspace_clients", latency_ms: Date.now() - inicio, context_sources: ["dashboard_client_overview"], context_client: null, intents: preparado.intents ?? [], metadata: { tool_calls: chamadas, agent: "jarvis", fast_path: "portfolio_owner_cached" } }).catch(() => null);
+    const persistir = workspace("complete-chat", jwt, { conversation_id: preparado.conversation_id ?? conversationId, request_id: preparado.request_id, answer: direta, original_message: mensagem, model: "deterministic:workspace_clients", latency_ms: Date.now() - inicio, context_sources: ["dashboard_client_overview"], context_client: null, intents: preparado.intents ?? [], metadata: { tool_calls: chamadas, agent: "jarvis", fast_path: "portfolio_owner_cached" } }).catch(() => null);
+    if (defer) defer(persistir); else await persistir;
     return { resposta: direta, chamadas, pendencia: null, conversation_id: conversationId };
   }
   const followupPeriodo = /^(?:e\s+)?(?:hoje|ontem)[?!. ]*$/i.test(mensagem);
@@ -396,10 +494,23 @@ export async function rodarAgente(
   const offsetPeriodo = /\bontem\b/i.test(mensagem) ? -1 : /\bhoje\b/i.test(mensagem) ? 0 : null;
   const clienteContexto = String(mencionado?.display_name ?? preparado?.context_client?.display_name ?? preparado?.context_client?.name ?? "").trim();
   if (querLeads && offsetPeriodo !== null && clienteContexto) {
+    const dia = dataOperacional(offsetPeriodo);
+    const clientIdLeads = String(mencionado?.client_id ?? preparado?.context_client?.client_id ?? preparado?.context_client?.id ?? "").trim();
+    if (clientIdLeads) {
+      const snap = await carregarMidiaClienteDia(clientIdLeads, dia, jwt, env).catch(() => null);
+      const leadsSnap = snap?.ok ? Number(snap?.leads) : Number.NaN;
+      if (Number.isFinite(leadsSnap)) {
+        const direta = sanitizarResposta(`${String(snap?.display_name ?? clienteContexto)} teve ${leadsSnap} ${leadsSnap === 1 ? "lead" : "leads"} ${offsetPeriodo === 0 ? "hoje" : "ontem"}.`);
+        canal?.emitir("token", { text: direta });
+        const persistir = workspace("complete-chat", jwt, { conversation_id: preparado.conversation_id ?? conversationId, request_id: preparado.request_id, answer: direta, original_message: mensagem, model: "deterministic:media_snapshot", latency_ms: Date.now() - inicio, context_sources: ["META_CAMPAIGN_INSIGHTS"], context_client: preparado.context_client ?? null, intents: preparado.intents ?? [], metadata: { tool_calls: chamadas, agent: "jarvis", fast_path: "leads_period_snapshot" } }).catch(() => null);
+        if (defer) defer(persistir); else void persistir;
+        return { resposta: direta, chamadas, pendencia: null, conversation_id: conversationId };
+      }
+    }
     const ferramenta = porNome.get("campanhas_cliente");
     if (ferramenta) {
       const dia = dataOperacional(offsetPeriodo);
-      const args = { client_name: clienteContexto, since: dia, until: dia, lifecycle: "ACTIVE" };
+      const args = { client_name: clienteContexto, since: dia, until: dia, lifecycle: "ACTIVE", details: "0" };
       const t0 = Date.now();
       canal?.emitir("tool_start", { name: ferramenta.name, summary: ferramenta.description });
       const r = await executarFerramenta(ferramenta, args, jwt, env);
@@ -415,7 +526,8 @@ export async function rodarAgente(
       if (!direta) direta = r.ok ? "Consultei a fonte ao vivo, mas não consegui interpretar a contagem de leads com segurança." : "Não consegui consultar os leads ao vivo agora.";
       direta = sanitizarResposta(direta);
       if (canal) canal.emitir("token", { text: direta });
-      await workspace("complete-chat", jwt, { conversation_id: preparado.conversation_id ?? conversationId, request_id: preparado.request_id, answer: direta, original_message: mensagem, model: "deterministic:campanhas_cliente", latency_ms: Date.now() - inicio, context_sources: preparado.context_sources ?? [], context_client: preparado.context_client ?? null, intents: preparado.intents ?? [], metadata: { tool_calls: chamadas, agent: "jarvis", fast_path: "leads_period" } }).catch(() => null);
+      const persistir = workspace("complete-chat", jwt, { conversation_id: preparado.conversation_id ?? conversationId, request_id: preparado.request_id, answer: direta, original_message: mensagem, model: "deterministic:campanhas_cliente", latency_ms: Date.now() - inicio, context_sources: preparado.context_sources ?? [], context_client: preparado.context_client ?? null, intents: preparado.intents ?? [], metadata: { tool_calls: chamadas, agent: "jarvis", fast_path: "leads_period" } }).catch(() => null);
+      if (defer) defer(persistir); else void persistir;
       return { resposta: direta, chamadas, pendencia: null, conversation_id: conversationId };
     }
   }
@@ -440,7 +552,8 @@ export async function rodarAgente(
         if (r.ok && membro && total !== null && total !== undefined && Number.isFinite(Number(total))) {
           let direta = sanitizarResposta(`${membro.person} está com ${Number(total)} ${Number(total) === 1 ? "cliente ativo" : "clientes ativos"}.`);
           canal?.emitir("token", { text: direta });
-          await workspace("complete-chat", jwt, { conversation_id: preparado.conversation_id ?? conversationId, request_id: preparado.request_id, answer: direta, original_message: mensagem, model: "deterministic:equipe_atual", latency_ms: Date.now() - inicio, context_sources: preparado.context_sources ?? [], context_client: preparado.context_client ?? null, intents: preparado.intents ?? [], metadata: { tool_calls: chamadas, agent: "jarvis", fast_path: "portfolio_owner" } }).catch(() => null);
+          const persistir = workspace("complete-chat", jwt, { conversation_id: preparado.conversation_id ?? conversationId, request_id: preparado.request_id, answer: direta, original_message: mensagem, model: "deterministic:equipe_atual", latency_ms: Date.now() - inicio, context_sources: preparado.context_sources ?? [], context_client: preparado.context_client ?? null, intents: preparado.intents ?? [], metadata: { tool_calls: chamadas, agent: "jarvis", fast_path: "portfolio_owner" } }).catch(() => null);
+          if (defer) defer(persistir); else await persistir;
           return { resposta: direta, chamadas, pendencia: null, conversation_id: conversationId };
         }
       } catch { /* segue para o modelo se a fonte não retornar carteira */ }
@@ -460,6 +573,7 @@ export async function rodarAgente(
   let contexto = sanitizarContextoFinanceiro(String(preparado.system ?? ""));
   contexto += contextoDeVocabulario(mensagem);
   contexto += "\n\nREGRA DE CONTINUIDADE: uma palavra/tema operacional explícito na mensagem atual vence assunto antigo incompatível. Use memória apenas para completar pronomes, entidade, período ou ação claramente continuada; nunca para substituir o tema que o usuário acabou de pedir.";
+  if (entrada.voice) contexto += "\n\nMODO VOZ: responda de forma oral e direta. Prefira 1 ou 2 frases e no máximo cerca de 350 caracteres, salvo quando o usuário pedir detalhes, lista extensa ou explicação longa. Não repita a pergunta.";
   const montarMensagens = (limite: number) => [
     { role: "system", content: `${identidade(eu.pessoa, eu.papel)}\n\n${contexto.slice(0, limite)}` },
     ...((preparado.turns ?? []) as Array<{ role: string; content: string }>).map((t) => ({
@@ -484,7 +598,7 @@ export async function rodarAgente(
 
     let saida: any;
     try {
-      saida = await chamarOpenAI(env, mensagens, comFerramentas ? catalogo : []);
+      saida = await chamarOpenAI(env, mensagens, comFerramentas ? catalogo : [], entrada.voice === true);
     } catch (erro) {
       const detalhe = erro instanceof Error ? erro.message : String(erro);
       // So corta contexto se o erro for de tamanho. Antes cortava para qualquer
@@ -601,7 +715,7 @@ export async function rodarAgente(
     if (parte.trim()) canal.emitir("token", { text: `${parte} ` });
   }
 
-  await workspace("complete-chat", jwt, {
+  const persistir = workspace("complete-chat", jwt, {
     conversation_id: preparado.conversation_id ?? conversationId,
     request_id: preparado.request_id,
     answer: resposta,
@@ -613,6 +727,7 @@ export async function rodarAgente(
     intents: preparado.intents ?? [],
     metadata: { tool_calls: chamadas, agent: "jarvis" },
   }).catch(() => null);
+  if (defer) defer(persistir); else await persistir;
 
   return { resposta, chamadas, pendencia, conversation_id: conversationId };
 }

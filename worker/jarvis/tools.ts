@@ -120,7 +120,7 @@ export async function carregarCatalogo(papel: string, jwt: string, env: EnvJarvi
   const linhas = (await resposta.json().catch(() => [])) as FerramentaJarvis[];
 
   if (env.JARVIS_CACHE && linhas.length) {
-    await env.JARVIS_CACHE.put(chave, JSON.stringify(linhas), { expirationTtl: 60 }).catch(() => {});
+    await env.JARVIS_CACHE.put(chave, JSON.stringify(linhas), { expirationTtl: 600 }).catch(() => {});
   }
   return combinarCatalogo(linhas, papel);
 }
@@ -264,8 +264,12 @@ export function compactarResultado(ferramenta: FerramentaJarvis, args: Record<st
   if (ferramenta.name === "campanhas_cliente") {
     const alvo = norm(args.client_name);
     const clientes = Array.isArray(corpo?.clients) ? corpo.clients : [];
-    const matches = clientes.filter((r: any) => norm(r?.display_name) === alvo || (alvo && norm(r?.display_name).includes(alvo)));
-    if (matches.length !== 1) return JSON.stringify({ ok: false, error: matches.length ? "ambiguous_client" : "client_not_found" });
+    // API ja filtra por client_name antes da Meta. Se voltou um unico cliente,
+    // ele e o alvo canonico; nao rejeitar por pequena diferenca de grafia/voz.
+    const matches = clientes.length === 1
+      ? clientes
+      : clientes.filter((r: any) => norm(r?.display_name) === alvo || (alvo && norm(r?.display_name).includes(alvo)) || (alvo && alvo.includes(norm(r?.display_name))));
+    if (matches.length !== 1) return JSON.stringify({ ok: false, error: matches.length ? "ambiguous_client" : "client_not_found", client_name: args.client_name ?? null, returned_clients: clientes.length });
     const c = matches[0];
     const campanhas = (Array.isArray(corpo?.campaigns) ? corpo.campaigns : []).filter((x: any) => String(x?.client_id ?? "") === String(c.client_id ?? ""));
     return JSON.stringify({
