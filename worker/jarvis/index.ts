@@ -123,6 +123,25 @@ export async function rotearJarvis(request: Request, env: EnvJarvis & { JARVIS_S
     return rodarRondas(env as never);
   }
 
+  // Relato Desktop Agent: permite STT com o token proprio do dispositivo,
+  // validado no backend do Relato antes de gastar Workers AI. Nenhum segredo
+  // de infraestrutura e distribuido no executavel.
+  if (acao === "stt" && request.method === "POST") {
+    const authHeader = request.headers.get("authorization") ?? "";
+    const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    const deviceToken = (request.headers.get("x-meeting-device-token") ?? bearerToken).trim();
+    if (deviceToken) {
+      const probe = await fetch("https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-meeting-capture-api", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-meeting-device-token": deviceToken },
+        body: JSON.stringify({ action: "device_probe" }),
+        signal: AbortSignal.timeout(5_000),
+      }).catch(() => null);
+      if (!probe?.ok) return json({ ok: false, error: "invalid_relato_device" }, 401);
+      return transcrever(request, env);
+    }
+  }
+
   const jwt = jwtDe(request);
   if (!jwt) return json({ ok: false, error: "unauthorized" }, 401);
 

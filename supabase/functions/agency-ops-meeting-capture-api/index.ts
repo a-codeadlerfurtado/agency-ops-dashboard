@@ -268,6 +268,12 @@ Deno.serve(async (req: Request) => {
     return respond({ ok: true, device_token: rawToken, device_id: device.id, owner_person: device.owner_person, version: VERSION });
   }
 
+  if (action === "device_probe") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    return respond({ ok: true, device_id: device.id, owner_person: device.owner_person, version: VERSION });
+  }
+
   if (action === "integrations_status") {
     const device = await resolveDevice(req, ops);
     if (!device) return respond({ error: "invalid_device" }, 401);
@@ -515,6 +521,7 @@ Deno.serve(async (req: Request) => {
     const title = clean(meeting?.title, 500) || "Reunião";
     const startedAt = clean(meeting?.started_at, 80);
     const endedAt = clean(meeting?.ended_at, 80);
+    const captureMode = clean(meeting?.capture_mode, 40) || "MEET_CAPTIONS";
     const segments = normalizeSegments(body?.segments);
     if (!localSessionId || !startedAt || !endedAt || segments.length === 0) return respond({ error: "missing_capture_data" }, 400);
     if (!Number.isFinite(Date.parse(startedAt)) || !Number.isFinite(Date.parse(endedAt))) return respond({ error: "invalid_timestamps" }, 400);
@@ -533,9 +540,9 @@ Deno.serve(async (req: Request) => {
       started_at: startedAt,
       ended_at: endedAt,
       state: "CAPTURED",
-      capture_mode: clean(meeting?.capture_mode, 40) || "MEET_CAPTIONS",
+      capture_mode: captureMode,
       native_transcript_available: Boolean(meeting?.native_transcript_available),
-      captions_available: true,
+      captions_available: Boolean(meeting?.captions_available) || captureMode === "MEET_RTC_CAPTIONS" || captureMode === "MEET_CAPTIONS",
       metadata: { ...(meeting?.metadata || {}), extension_version: clean(meeting?.extension_version, 40) || null, captured_at: new Date().toISOString() },
       updated_at: new Date().toISOString(),
     };
@@ -571,14 +578,13 @@ Deno.serve(async (req: Request) => {
       meeting_ended_at: endedAt,
       duration_seconds: durationSeconds,
       transcript_text: transcriptText,
-      transcript_chars: transcriptText.length,
       content_sha256: contentHash,
       source_file_ids: [localSessionId],
       copies_seen: 1,
       participants: participantNames,
       owner_person: device.owner_person,
       processing_status: "CAPTURED",
-      transcript_source: sessionPayload.capture_mode === "MEET_RTC_CAPTIONS" ? "MEET_RTC_CAPTIONS" : "MEET_CAPTIONS",
+      transcript_source: captureMode === "MEET_RTC_AUDIO" ? "MEET_RTC_WHISPER" : captureMode === "MEET_RTC_CAPTIONS" ? "MEET_RTC_CAPTIONS" : "MEET_CAPTIONS",
       capture_session_id: session.id,
       metadata: { capture_mode: sessionPayload.capture_mode, local_session_id: localSessionId, captured_by: VERSION },
       updated_at: new Date().toISOString(),

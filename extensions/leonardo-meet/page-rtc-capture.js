@@ -11,6 +11,10 @@
 
   const nativeCreateDataChannel = NativePC.prototype.createDataChannel;
   const seenPeerConnections = new WeakSet();
+  const peerConnections = new Set();
+  const audioRecorders = new Map();
+  let audioCaptureEnabled = false;
+  let audioSeq = 0;
   const boundChannels = new WeakSet();
   const channelLabels = new Set();
   const speakerMap = new Map();
@@ -305,11 +309,76 @@
     if (channel.readyState === "open") onOpen();
   }
 
+  function attachAudioTrack(track, role) {
+    if (!audioCaptureEnabled || !track || track.kind !== "audio") return;
+    const key = `${role}:${track.id || crypto.randomUUID()}`;
+    if (audioRecorders.has(key)) return;
+    let mime = "audio/webm";
+    if (MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) mime = "audio/webm;codecs=opus";
+    const entry = { recorder: null, role, track, mime, timer: null, stopping: false, energyTimer: null, audioContext: null, segmentHasVoice: true, segmentPeakRms: 1, segmentStartedAt: 0 };
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const ctx = new AudioCtx({ latencyHint: "interactive" });
+        const source = ctx.createMediaStreamSource(new MediaStream([track]));
+        const analyser = ctx.createAnalyser(); analyser.fftSize = 1024; source.connect(analyser);
+        const samples = new Float32Array(analyser.fftSize); entry.audioContext = ctx; entry.segmentHasVoice = false; entry.segmentPeakRms = 0;
+        ctx.resume?.().catch(() => {});
+        entry.energyTimer = setInterval(() => {
+          try { analyser.getFloatTimeDomainData(samples); let sum = 0; for (const value of samples) sum += value * value; const rms = Math.sqrt(sum / samples.length); entry.segmentPeakRms = Math.max(entry.segmentPeakRms, rms); if (rms >= 0.0035) entry.segmentHasVoice = true; } catch {}
+        }, 80);
+      }
+    } catch {}
+    const cleanup = () => { clearInterval(entry.energyTimer); entry.energyTimer = null; try { entry.audioContext?.close?.(); } catch {} entry.audioContext = null; };
+    audioRecorders.set(key, entry); emit("AUDIO_TRACK_START", { role, track_key: key, mime_type: mime });
+    const startSegment = () => {
+      if (!audioCaptureEnabled || entry.stopping || track.readyState === "ended") { cleanup(); audioRecorders.delete(key); return; }
+      let recorder; try { recorder = new MediaRecorder(new MediaStream([track]), { mimeType: mime, audioBitsPerSecond: 64000 }); } catch { recorder = new MediaRecorder(new MediaStream([track])); mime = recorder.mimeType || mime; entry.mime = mime; }
+      entry.recorder = recorder; entry.segmentStartedAt = Date.now(); entry.segmentHasVoice = entry.audioContext ? false : true; entry.segmentPeakRms = entry.audioContext ? 0 : 1; let emitted = false;
+      recorder.ondataavailable = (event) => { if (!event.data?.size || emitted) return; emitted = true; const duration = Math.max(1, Date.now() - entry.segmentStartedAt); if (!entry.segmentHasVoice) { emit("DIAGNOSTIC", { code: "audio_silence_skipped", role, rms: entry.segmentPeakRms, duration_ms: duration }); return; } emit("AUDIO_CHUNK", { role, track_key: key, seq: ++audioSeq, mime_type: event.data.type || mime, duration_ms: duration, rms: entry.segmentPeakRms, blob: event.data }); };
+      recorder.onstop = () => { clearTimeout(entry.timer); entry.timer = null; entry.recorder = null; if (audioCaptureEnabled && !entry.stopping && track.readyState !== "ended") setTimeout(startSegment, 0); else { cleanup(); audioRecorders.delete(key); emit("AUDIO_TRACK_END", { role, track_key: key }); } };
+      try { recorder.start(); entry.timer = setTimeout(() => { try { if (recorder.state !== "inactive") recorder.stop(); } catch {} }, 2500); } catch (error) { cleanup(); audioRecorders.delete(key); emit("DIAGNOSTIC", { code: "audio_recorder_start_failed", role, message: String(error?.message || error) }); }
+    };
+    track.addEventListener("ended", () => { entry.stopping = true; clearTimeout(entry.timer); try { if (entry.recorder?.state !== "inactive") entry.recorder.stop(); } catch {} }, { once: true }); startSegment();
+  }
+
+  function scanAudioTracks(pc) {
+    if (!audioCaptureEnabled || !pc) return;
+    try { for (const sender of pc.getSenders?.() || []) if (sender?.track?.kind === "audio") attachAudioTrack(sender.track, "local"); } catch {}
+    try { for (const receiver of pc.getReceivers?.() || []) if (receiver?.track?.kind === "audio") attachAudioTrack(receiver.track, "remote"); } catch {}
+  }
+
+  function startAudioCapture() {
+    if (!audioCaptureEnabled) audioSeq = 0;
+    audioCaptureEnabled = true;
+    for (const pc of peerConnections) scanAudioTracks(pc);
+    emit("RTC_STATUS", currentStatus());
+  }
+
+  function stopAudioCapture() {
+    audioCaptureEnabled = false;
+    for (const entry of [...audioRecorders.values()]) {
+      entry.stopping = true; clearTimeout(entry.timer);
+      try { if (entry.recorder?.state !== "inactive") entry.recorder.stop(); } catch {}
+    }
+    emit("RTC_STATUS", currentStatus());
+  }
+
   function observePeerConnection(pc) {
     if (!pc || seenPeerConnections.has(pc)) return pc;
     seenPeerConnections.add(pc);
+    peerConnections.add(pc);
+    activePc = pc;
     pc.addEventListener("datachannel", (event) => bindChannel(pc, event.channel));
-    pc.addEventListener("connectionstatechange", () => emit("RTC_STATUS", currentStatus()));
+    pc.addEventListener("track", (event) => { activePc = pc; attachAudioTrack(event.track, "remote"); });
+    pc.addEventListener("negotiationneeded", () => scanAudioTracks(pc));
+    pc.addEventListener("signalingstatechange", () => scanAudioTracks(pc));
+    pc.addEventListener("connectionstatechange", () => {
+      if (pc.connectionState === "closed") peerConnections.delete(pc);
+      else { activePc = pc; scanAudioTracks(pc); }
+      emit("RTC_STATUS", currentStatus());
+    });
+    scanAudioTracks(pc);
     return pc;
   }
 
@@ -324,11 +393,8 @@
   }
 
   function ensureTextChannels() {
-    if (!activePc || Date.now() - channelPrimeAt < 2500) return;
-    channelPrimeAt = Date.now();
-    createTextChannel("captions");
-    createTextChannel("captions_v2");
-    createTextChannel("meet_messages");
+    // Intentionally disabled: Relato Meet 0.4.4 transcribes direct WebRTC audio and never enables/requests captions.
+    return;
   }
 
   function currentStatus() {
@@ -339,6 +405,8 @@
       last_caption_at: lastCaptionAt || null,
       last_collections_at: lastCollectionsAt || null,
       speakers: new Set([...speakerMap.values()].map((row) => row.deviceKey)).size,
+      audio_capture: audioCaptureEnabled,
+      audio_tracks: audioRecorders.size,
     };
   }
 
@@ -371,12 +439,21 @@
     emit("DIAGNOSTIC", { code: "create_data_channel_patch_failed", message: String(error?.message || error) });
   }
 
+
+  try {
+    const nativeAddTrack = NativePC.prototype.addTrack;
+    if (nativeAddTrack) NativePC.prototype.addTrack = function(track, ...streams) { const sender = nativeAddTrack.call(this, track, ...streams); observePeerConnection(this); attachAudioTrack(track, "local"); return sender; };
+    const nativeAddTransceiver = NativePC.prototype.addTransceiver;
+    if (nativeAddTransceiver) NativePC.prototype.addTransceiver = function(trackOrKind, init) { const tx = nativeAddTransceiver.call(this, trackOrKind, init); observePeerConnection(this); if (trackOrKind?.kind === "audio") attachAudioTrack(trackOrKind, "local"); return tx; };
+    const nativeReplaceTrack = window.RTCRtpSender?.prototype?.replaceTrack;
+    if (nativeReplaceTrack) window.RTCRtpSender.prototype.replaceTrack = function(track) { if (track?.kind === "audio") attachAudioTrack(track, "local"); return nativeReplaceTrack.call(this, track); };
+  } catch (error) { emit("DIAGNOSTIC", { code: "audio_track_patch_failed", message: String(error?.message || error) }); }
+
   window.addEventListener("message", (event) => {
     if (event.source !== window || event.data?.source !== CONTROL_SOURCE) return;
-    if (event.data.type === "REQUEST_CAPTIONS") {
-      ensureTextChannels();
-      emit("RTC_STATUS", currentStatus());
-    }
+    if (event.data.type === "START_AUDIO_CAPTURE") startAudioCapture();
+    else if (event.data.type === "STOP_AUDIO_CAPTURE") stopAudioCapture();
+    else if (event.data.type === "REQUEST_CAPTIONS") emit("RTC_STATUS", currentStatus());
   });
 
   setInterval(() => {

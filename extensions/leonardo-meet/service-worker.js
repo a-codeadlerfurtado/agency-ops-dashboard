@@ -1,6 +1,7 @@
 import { clearSession, getAudioChunks, getFrames, getSession, getSpeakers, listSessions, putAudioChunk, putFrame, putSession, putSpeaker } from "./rtc-store.js";
 
 const API = "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-meeting-capture-api";
+const STT_API = "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/api/jarvis/stt";
 const OUTBOX_KEY = "meeting_capture_outbox";
 const DEVICE_KEY = "meeting_capture_device";
 const STATE_KEY = "meeting_capture_state";
@@ -30,6 +31,32 @@ async function callApi(action, payload = {}, token = null) {
   return body;
 }
 
+
+async function nativeSavedNotification(transcriptId = null) {
+  try {
+    await chrome.notifications.create(`relato-saved-${Date.now()}`, {
+      type: "basic", iconUrl: "icon128.png", title: "Relato AI",
+      message: `Transcrição enviada para o banco de dados${transcriptId ? ` · #${transcriptId}` : ""}`,
+      priority: 1,
+    });
+  } catch {}
+}
+
+async function confirmSavedToUser(tabId, transcriptId = null) {
+  let inlineShown = false;
+  if (Number.isInteger(tabId)) {
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (String(tab?.url || "").startsWith("https://meet.google.com/")) {
+        await chrome.tabs.sendMessage(tabId, { type: "RELATO_UPLOAD_CONFIRMED", transcript_id: transcriptId });
+        inlineShown = true;
+      }
+    } catch {}
+  }
+  await nativeSavedNotification(transcriptId);
+  return inlineShown;
+}
+
 async function getDevice() {
   const data = await chrome.storage.local.get(DEVICE_KEY);
   return data[DEVICE_KEY] || null;
@@ -48,15 +75,16 @@ async function setLegacyOutbox(items) {
   await chrome.storage.local.set({ [OUTBOX_KEY]: items.slice(-50) });
 }
 
-async function enqueueLegacyOutbox(payload, reason = "upload_failed") {
+async function enqueueLegacyOutbox(payload, reason = "upload_failed", tabId = null) {
   const items = await getLegacyOutbox();
   const existing = items.find((item) => item?.payload?.meeting?.local_session_id === payload?.meeting?.local_session_id);
   if (existing) {
     existing.payload = payload;
     existing.last_error = reason;
     existing.updated_at = new Date().toISOString();
+    if (Number.isInteger(tabId)) existing.tab_id = tabId;
   } else {
-    items.push({ id: crypto.randomUUID(), payload, attempts: 0, last_error: reason, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+    items.push({ id: crypto.randomUUID(), payload, tab_id: Number.isInteger(tabId) ? tabId : null, attempts: 0, last_error: reason, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
   }
   await setLegacyOutbox(items);
 }
@@ -65,6 +93,54 @@ async function deliver(payload) {
   const device = await getDevice();
   if (!device?.device_token) throw new Error("extension_not_paired");
   return callApi("finalize", payload, device.device_token);
+}
+
+async function transcribeMeetAudio(base64, mimeType = "audio/webm") {
+  const device = await getDevice();
+  if (!device?.device_token) throw new Error("extension_not_paired");
+  const bytes = decodeBase64(base64);
+  const response = await fetch(STT_API, {
+    method: "POST",
+    headers: { "content-type": mimeType || "audio/webm", "x-meeting-device-token": device.device_token, "authorization": `Bearer ${device.device_token}` },
+    body: bytes,
+  });
+  let body = {}; try { body = await response.json(); } catch {}
+  if (!response.ok) throw new Error(body?.error || `meet_stt_${response.status}`);
+  return norm(body?.text || "");
+}
+
+async function storeMeetAudioFrame(sessionId, role, chunk, text) {
+  const body = norm(text);
+  if (!body) return null;
+  const device = await getDevice();
+  const duration = Math.max(0, Number(chunk.duration_ms || 2500));
+  const ended = Math.max(0, Number(chunk.offset_ms || 0));
+  const started = Math.max(0, ended - duration);
+  const frame = {
+    message_id: `audio:${role}:${Number(chunk.seq || 0)}`, message_version: 0,
+    device_key: `rtc-audio:${role}`, speaker_name: role === "local" ? (norm(device?.owner_person) || "Colaborador") : "Participantes",
+    text: body, offset_ms: started, ended_ms: ended, source: "MEET_RTC_WHISPER",
+    role, track_key: norm(chunk.track_key), received_at: new Date().toISOString(),
+  };
+  const existing = await getFrames(sessionId);
+  const duplicate = existing.some((row) => String(row.message_id || "") === frame.message_id);
+  if (duplicate) return null;
+  await putFrame(sessionId, frame);
+  return frame;
+}
+
+async function transcribeStoredMeetAudio(sessionId) {
+  const chunks = await getAudioChunks(sessionId);
+  const existing = new Set((await getFrames(sessionId)).map((f) => String(f.message_id || "")));
+  for (const chunk of chunks) {
+    const messageId = `audio:${chunk.role}:${Number(chunk.seq || 0)}`;
+    if (existing.has(messageId) || !chunk.base64) continue;
+    try {
+      const text = await transcribeMeetAudio(chunk.base64, chunk.mime_type);
+      const frame = await storeMeetAudioFrame(sessionId, chunk.role, chunk, text);
+      if (frame) existing.add(messageId);
+    } catch {}
+  }
 }
 
 async function setCaptureState(state) {
@@ -153,6 +229,8 @@ function buildParticipants(frames, speakers) {
 async function finalizeStoredSession(sessionId, finishOverride = null) {
   const stored = await getSession(sessionId);
   if (!stored) return { ok: false, error: "session_not_found" };
+  const captureMode = stored.capture_mode || "MEET_RTC_CAPTIONS";
+  if (captureMode === "MEET_RTC_AUDIO") await transcribeStoredMeetAudio(sessionId).catch(() => {});
   const [frames, speakers] = await Promise.all([getFrames(sessionId), getSpeakers(sessionId)]);
   if (!frames.length) {
     const endedAt = finishOverride?.ended_at || stored.ended_at || new Date().toISOString();
@@ -162,7 +240,7 @@ async function finalizeStoredSession(sessionId, finishOverride = null) {
     const device = await getDevice();
     if (device?.device_token) {
       await callApi("session_heartbeat", { session: {
-        ...failed, local_session_id: stored.id, capture_mode: "MEET_RTC_CAPTIONS",
+        ...failed, local_session_id: stored.id, capture_mode: captureMode,
         captions_available: false, extension_version: chrome.runtime.getManifest().version,
         metadata: { ...(stored.metadata || {}), diagnostics: stored.diagnostics || [] },
       } }, device.device_token).catch(() => null);
@@ -177,13 +255,15 @@ async function finalizeStoredSession(sessionId, finishOverride = null) {
     title: finishOverride?.meeting?.title || stored.title || "Reunião Google Meet",
     started_at: stored.started_at,
     ended_at: finishOverride?.ended_at || stored.ended_at || new Date().toISOString(),
-    capture_mode: "MEET_RTC_CAPTIONS",
+    capture_mode: captureMode,
     native_transcript_available: false,
     extension_version: stored.extension_version || chrome.runtime.getManifest().version,
     metadata: {
       ...(stored.metadata || {}),
       ...(finishOverride?.meeting?.metadata || {}),
       rtc_capture: true,
+      direct_rtc_audio: captureMode === "MEET_RTC_AUDIO",
+      captions_required: captureMode !== "MEET_RTC_AUDIO",
       rtc_frames: frames.length,
       speaker_mappings: speakers.length,
       backend_upload_mode: "FINAL_ONLY",
@@ -197,7 +277,7 @@ async function finalizeStoredSession(sessionId, finishOverride = null) {
     await setCaptureState({ active: false, saved: true, error: null, meeting_code: meeting.meeting_code, ended_at: meeting.ended_at, transcript_id: result?.transcript_id || null });
     const feedback = { local_session_id: stored.id, transcript_id: result?.transcript_id || null, capture_session_id: result?.session_id || null, channel: "MEET", title: meeting.title || "ReuniÃ£o Google Meet" };
     if (stored.tab_id != null) {
-      chrome.tabs.sendMessage(stored.tab_id, { type: "RELATO_UPLOAD_CONFIRMED", transcript_id: result?.transcript_id || null, capture_session_id: result?.session_id || null }).catch(() => {});
+      await confirmSavedToUser(stored.tab_id, result?.transcript_id || null);
       chrome.tabs.sendMessage(stored.tab_id, { type: "RELATO_SHOW_FEEDBACK", feedback }).catch(() => {});
     }
     await clearSession(sessionId);
@@ -260,6 +340,7 @@ async function finalizeCallSession(sessionId, finish = null) {
     const result = await callApi("call_finalize", { local_session_id: stored.id, uploaded }, device.device_token);
     await setCaptureState({ active: false, saved: true, call: true, error: null, title: stored.contact_name || "LigaÃ§Ã£o WhatsApp", ended_at: endedAt, session_id: prepared.session_id });
     const feedback = { local_session_id: stored.id, capture_session_id: prepared.session_id, channel: "WHATSAPP_WEB_CALL", title: `LigaÃ§Ã£o WhatsApp â€” ${stored.contact_name || "Contato"}` };
+    await confirmSavedToUser(stored.tab_id ?? null, result?.transcript_id || null);
     if (stored.tab_id != null) chrome.tabs.sendMessage(stored.tab_id, { type: "RELATO_SHOW_FEEDBACK", feedback }).catch(() => {});
     await clearSession(sessionId);
     return { ok: true, result, capture_session_id: prepared.session_id };
@@ -277,7 +358,10 @@ async function flushLegacyOutbox() {
   if (!items.length) return;
   const remaining = [];
   for (const item of items) {
-    try { await deliver(item.payload); }
+    try {
+      const result = await deliver(item.payload);
+      await confirmSavedToUser(item.tab_id ?? null, result?.transcript_id || null);
+    }
     catch (error) { remaining.push({ ...item, attempts: Number(item.attempts || 0) + 1, last_error: String(error?.message || error), updated_at: new Date().toISOString() }); }
   }
   await setLegacyOutbox(remaining);
@@ -414,11 +498,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "RTC_SESSION_START") {
       const row = message.session || {};
       if (!row.id) return { ok: false, error: "session_id_required" };
-      const storedRow = { ...row, tab_id: sender.tab?.id ?? null, state: "CAPTURING", attempts: 0, created_at: new Date().toISOString() };
+      const captureMode = row.capture_mode || "MEET_RTC_CAPTIONS";
+      const storedRow = { ...row, capture_mode: captureMode, tab_id: sender.tab?.id ?? null, state: "CAPTURING", attempts: 0, created_at: new Date().toISOString() };
       await putSession(storedRow);
-      await setCaptureState({ active: true, meeting_code: row.meeting_code, title: row.title, started_at: row.started_at, mode: "MEET_RTC_CAPTIONS" });
+      await setCaptureState({ active: true, meeting_code: row.meeting_code, title: row.title, started_at: row.started_at, mode: captureMode });
       const device = await getDevice();
-      if (device?.device_token) callApi("session_heartbeat", { session: { ...storedRow, local_session_id: row.id, capture_mode: "MEET_RTC_CAPTIONS", captions_available: false, extension_version: chrome.runtime.getManifest().version } }, device.device_token).catch(() => {});
+      if (device?.device_token) callApi("session_heartbeat", { session: { ...storedRow, local_session_id: row.id, capture_mode: captureMode, captions_available: false, extension_version: chrome.runtime.getManifest().version } }, device.device_token).catch(() => {});
       return { ok: true };
     }
 
@@ -426,6 +511,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!message.session_id || !message.frame?.text) return { ok: false, error: "invalid_rtc_frame" };
       await putFrame(message.session_id, message.frame);
       return { ok: true };
+    }
+
+    if (message?.type === "RTC_AUDIO_CHUNK") {
+      const chunk = message.chunk || {};
+      const role = String(message.role || "");
+      if (!message.session_id || !["local", "remote"].includes(role) || !chunk.base64) return { ok: false, error: "invalid_rtc_audio_chunk" };
+      await putAudioChunk(message.session_id, role, { seq: Number(chunk.seq || 0), base64: String(chunk.base64), mime_type: String(chunk.mime_type || "audio/webm"), offset_ms: Number(chunk.offset_ms || 0), duration_ms: Number(chunk.duration_ms || 2500), track_key: String(chunk.track_key || ""), captured_at: chunk.captured_at || new Date().toISOString() });
+      try {
+        const text = await transcribeMeetAudio(chunk.base64, chunk.mime_type);
+        const segment = await storeMeetAudioFrame(message.session_id, role, chunk, text);
+        return { ok: true, empty: !segment, segment };
+      } catch (error) {
+        return { ok: false, stored: true, retry_on_finalize: true, error: String(error?.message || error) };
+      }
     }
 
     if (message?.type === "RTC_SPEAKER_MAP") {
@@ -455,9 +554,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message?.type === "FINALIZE") {
-      try { return { ok: true, result: await deliver(message.payload) }; }
+      try {
+        const result = await deliver(message.payload);
+        await confirmSavedToUser(sender.tab?.id ?? null, result?.transcript_id || null);
+        return { ok: true, result };
+      }
       catch (error) {
-        await enqueueLegacyOutbox(message.payload, String(error?.message || error));
+        await enqueueLegacyOutbox(message.payload, String(error?.message || error), sender.tab?.id ?? null);
         return { ok: false, queued: true, error: String(error?.message || error) };
       }
     }

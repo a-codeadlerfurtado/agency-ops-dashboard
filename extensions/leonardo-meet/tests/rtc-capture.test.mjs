@@ -1,122 +1,86 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import vm from "node:vm";
-import { gzipSync } from "node:zlib";
 
-function varint(value) {
-  let n = BigInt(value);
-  const out = [];
-  do {
-    let b = Number(n & 0x7fn);
-    n >>= 7n;
-    if (n) b |= 0x80;
-    out.push(b);
-  } while (n);
-  return Uint8Array.from(out);
+class FakeTrack {
+  constructor(id) { this.id=id; this.kind="audio"; this.listeners=new Map(); }
+  addEventListener(type, handler) { this.listeners.set(type, handler); }
+  end() { this.listeners.get("ended")?.(); }
 }
-
-function concat(...parts) {
-  const size = parts.reduce((sum, part) => sum + part.length, 0);
-  const out = new Uint8Array(size);
-  let offset = 0;
-  for (const part of parts) { out.set(part, offset); offset += part.length; }
-  return out;
-}
-
-function lenField(field, bytes) {
-  return concat(varint((field << 3) | 2), varint(bytes.length), bytes);
-}
-function strField(field, value) { return lenField(field, new TextEncoder().encode(value)); }
-function intField(field, value) { return concat(varint(field << 3), varint(value)); }
-function exactArrayBuffer(view) { return view.buffer.slice(view.byteOffset, view.byteOffset + view.byteLength); }
-
-function nested(path, leaf) {
-  let current = leaf;
-  for (const field of [...path].reverse()) current = lenField(field, current);
-  return current;
-}
-
-
-async function waitFor(predicate, timeoutMs = 1000) {
-  const started = Date.now();
-  while (!predicate()) {
-    if (Date.now() - started > timeoutMs) throw new Error("wait_for_timeout");
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-}
-
 class FakeChannel {
-  constructor(label) { this.label = label; this.readyState = "open"; this.listeners = new Map(); }
-  addEventListener(type, handler) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(handler); }
-  emit(type, value = {}) { for (const handler of this.listeners.get(type) || []) handler(value); }
+  constructor(label) { this.label=label; this.readyState="open"; this.listeners=new Map(); }
+  addEventListener(type, handler) { this.listeners.set(type, handler); }
 }
-
 class FakePC {
-  constructor() { this.listeners = new Map(); this.connectionState = "connected"; this.created = []; }
-  addEventListener(type, handler) { if (!this.listeners.has(type)) this.listeners.set(type, []); this.listeners.get(type).push(handler); }
-  dispatch(type, event) { for (const handler of this.listeners.get(type) || []) handler(event); }
-  createDataChannel(label) { const channel = new FakeChannel(label); this.created.push(channel); return channel; }
+  constructor() { this.listeners=new Map(); this.connectionState="connected"; this.created=[]; this.senders=[]; this.receivers=[]; }
+  addEventListener(type, handler) { if(!this.listeners.has(type)) this.listeners.set(type,[]); this.listeners.get(type).push(handler); }
+  dispatch(type, event={}) { for(const h of this.listeners.get(type)||[]) h(event); }
+  createDataChannel(label) { const ch=new FakeChannel(label); this.created.push(ch); return ch; }
+  getSenders() { return this.senders; }
+  getReceivers() { return this.receivers; }
 }
 
-const messages = [];
-const windowObject = {
-  RTCPeerConnection: FakePC,
-  postMessage(message) { messages.push(message); },
-  addEventListener() {},
+const recorders=[];
+class FakeMediaRecorder {
+  static isTypeSupported() { return true; }
+  constructor(stream, options={}) { this.stream=stream; this.mimeType=options.mimeType||"audio/webm"; this.state="inactive"; recorders.push(this); }
+  start() { this.state="recording"; }
+  requestData() { this.ondataavailable?.({data:new Blob(["final"],{type:this.mimeType})}); }
+  stop() { if(this.state==="inactive") return; this.ondataavailable?.({data:new Blob(["final"],{type:this.mimeType})}); this.state="inactive"; this.onstop?.(); }
+  emit(body="chunk") { this.ondataavailable?.({data:new Blob([body],{type:this.mimeType})}); }
+}
+const messages=[];
+const listeners=new Map();
+const windowObject={
+  RTCPeerConnection:FakePC,
+  MediaRecorder:FakeMediaRecorder,
+  postMessage(message){ messages.push(message); },
+  addEventListener(type,handler){ if(!listeners.has(type)) listeners.set(type,[]); listeners.get(type).push(handler); },
 };
-windowObject.window = windowObject;
+windowObject.window=windowObject;
 
-const context = vm.createContext({
-  window: windowObject,
-  Object,
-  Reflect,
-  Set,
-  Map,
-  WeakSet,
-  Uint8Array,
-  ArrayBuffer,
-  Blob,
-  TextDecoder,
-  TextEncoder,
-  DecompressionStream,
-  Response,
-  Date,
-  BigInt,
-  Number,
-  String,
-  RegExp,
-  console,
-  setInterval: () => 0,
+const context=vm.createContext({
+  window:windowObject,
+  MediaRecorder:FakeMediaRecorder,
+  MediaStream:class { constructor(tracks){ this.tracks=tracks; } },
+  Object,Reflect,Set,Map,WeakSet,Uint8Array,ArrayBuffer,Blob,
+  TextDecoder,TextEncoder,DecompressionStream,Response,Date,BigInt,Number,String,RegExp,console,
+  crypto:{randomUUID:()=>"uuid"},
+  setInterval:()=>0, clearInterval:()=>{}, setTimeout:(fn,ms)=>{ if(ms===0) fn(); return 0; }, clearTimeout:()=>{}, Float32Array,
 });
 
-const source = fs.readFileSync(new URL("../page-rtc-capture.js", import.meta.url), "utf8");
-vm.runInContext(source, context);
+const source=fs.readFileSync(new URL("../page-rtc-capture.js",import.meta.url),"utf8");
+vm.runInContext(source,context);
 
-const pc = new windowObject.RTCPeerConnection();
-const collections = new FakeChannel("collections");
-pc.dispatch("datachannel", { channel: collections });
+const pc=new windowObject.RTCPeerConnection();
+pc.senders.push({track:new FakeTrack("local-1")});
+pc.receivers.push({track:new FakeTrack("remote-1")});
+const dispatchWindow=(data)=>{ for(const h of listeners.get("message")||[]) h({source:windowObject,data}); };
+dispatchWindow({source:"leonardo-meet-content",type:"START_AUDIO_CAPTURE"});
+assert.equal(recorders.length,2,"local and remote audio tracks should be recorded");
+assert.equal(messages.filter(m=>m.type==="AUDIO_TRACK_START").length,2);
+assert.equal(pc.created.length,0,"audio architecture must not create caption data channels");
 
-const leaf = concat(strField(1, "spaces/abc/devices/145"), strField(2, "Adler Furtado"));
-collections.emit("message", { data: exactArrayBuffer(nested([1, 2, 13, 1, 2], leaf)) });
-await waitFor(() => messages.some((message) => message.type === "SPEAKER_MAP"));
+recorders[0].emit("local-audio");
+recorders[1].emit("remote-audio");
+const chunks=messages.filter(m=>m.type==="AUDIO_CHUNK");
+assert.equal(chunks.length,2);
+assert.deepEqual(new Set(chunks.map(m=>m.payload.role)),new Set(["local","remote"]));
+assert.ok(chunks.every(m=>m.payload.blob instanceof Blob));
 
-const innerV1 = concat(strField(1, "@145"), intField(2, 7), intField(3, 1), strField(6, "Olá"), intField(8, 1));
-const innerV2 = concat(strField(1, "@145"), intField(2, 7), intField(3, 2), strField(6, "Olá mundo"), intField(8, 1));
-const captions = pc.created.find((channel) => channel.label === "captions");
-assert.ok(captions, "captions channel should be created after collections opens");
+dispatchWindow({source:"leonardo-meet-content",type:"START_AUDIO_CAPTURE"});
+recorders[0].stop();
+recorders[2].emit("local-b");
+const seqs=messages.filter(m=>m.type==="AUDIO_CHUNK").map(m=>m.payload.seq);
+assert.deepEqual(seqs,[1,2,3],"repeated START_AUDIO_CAPTURE must not reset chunk sequence");
+recorders[2].stop();
+recorders[1].stop();
 
-captions.emit("message", { data: exactArrayBuffer(gzipSync(lenField(1, innerV1))) });
-captions.emit("message", { data: exactArrayBuffer(gzipSync(lenField(1, innerV2))) });
-await waitFor(() => messages.some((message) => message.type === "CAPTION" && message.payload?.message_version === 2));
+const beforeStop=messages.filter(m=>m.type==="AUDIO_CHUNK").length;
+dispatchWindow({source:"leonardo-meet-content",type:"STOP_AUDIO_CAPTURE"});
+assert.equal(recorders.filter(r=>r.state!=="inactive").length,0);
+assert.equal(messages.filter(m=>m.type==="AUDIO_CHUNK").length,beforeStop+2,"stop must flush final chunk for both tracks");
 
-const speaker = messages.find((message) => message.type === "SPEAKER_MAP")?.payload;
-assert.equal(speaker?.deviceKey, "@145");
-assert.equal(speaker?.displayName, "Adler Furtado");
-
-const captionEvents = messages.filter((message) => message.type === "CAPTION");
-assert.equal(captionEvents.at(-1)?.payload?.speaker_name, "Adler Furtado");
-assert.equal(captionEvents.at(-1)?.payload?.text, "Olá mundo");
-assert.equal(captionEvents.at(-1)?.payload?.message_version, 2);
-assert.equal(captionEvents.at(-1)?.payload?.device_key, "@145");
-
-console.log("rtc-capture synthetic test: ok");
+dispatchWindow({source:"leonardo-meet-content",type:"REQUEST_CAPTIONS"});
+assert.equal(pc.created.length,0,"REQUEST_CAPTIONS must not re-enable captions");
+console.log("rtc-audio synthetic test: ok");

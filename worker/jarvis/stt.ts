@@ -38,8 +38,17 @@ export async function transcrever(request: Request, env: EnvJarvis): Promise<Res
     const resultado: any = await env.AI.run(MODELO, {
       audio: bytesParaBase64(new Uint8Array(buffer)),
       language: "pt",
+      task: "transcribe",
+      vad_filter: true,
+      condition_on_previous_text: false,
+      no_speech_threshold: 0.48,
+      compression_ratio_threshold: 2.2,
+      log_prob_threshold: -0.8,
+      hallucination_silence_threshold: 0.6,
     });
-    const texto = normalizarTranscricaoOperacional(resultado?.text ?? resultado?.result?.text).trim();
+    let texto = normalizarTranscricaoOperacional(resultado?.text ?? resultado?.result?.text).trim();
+    if (/^(?:transcri[cç][aã]o e )?legendas?(?: por)?\s+[\p{L} .'-]{2,}$/iu.test(texto)) texto = "";
+    if (/^(?:legenda|subt[ií]tulos?)\s+[\p{L} .'-]{2,}$/iu.test(texto)) texto = "";
     return Response.json({ ok: true, text: texto });
   } catch (erro) {
     return Response.json(

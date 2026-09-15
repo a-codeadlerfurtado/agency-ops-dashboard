@@ -1,4 +1,4 @@
-const VERSION = "0.3.8";
+const VERSION = "0.4.4";
 const MEETING_CODE_RE = /\/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})(?:[/?#]|$)/i;
 const LEAVE_RE = /(sair da chamada|encerrar chamada|sair da reunião|leave call|leave meeting|hang up|desligar)/i;
 const JOIN_RE = /(participar agora|pedir para participar|join now|ask to join)/i;
@@ -49,6 +49,7 @@ const domCaptionState = new Map();
 const liveTranscriptRows = new Map();
 const prebuffer = [];
 const speakerPrebuffer = new Map();
+const meetAudioPending = new Set();
 
 function nowIso() { return new Date().toISOString(); }
 function norm(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
@@ -112,7 +113,7 @@ function renderLiveTranscript() {
   const body = liveTranscriptPanel.querySelector("[data-relato-live-body]");
   if (!body) return;
   body.replaceChildren();
-  const rows = [...liveTranscriptRows.values()].slice(-120);
+  const rows = [...liveTranscriptRows.values()].sort((a,b) => Number(a.offset_ms || a.started_ms || 0) - Number(b.offset_ms || b.started_ms || 0)).slice(-120);
   if (!rows.length) {
     const empty = document.createElement("div");
     empty.textContent = "Aguardando a primeira fala…";
@@ -172,6 +173,7 @@ function toggleLiveTranscriptPanel() {
 function pushLiveTranscript(frame) {
   const text = norm(frame?.text);
   if (!text) return;
+  if (/^(?:(?:transcri[cç][aã]o e )?legendas?|subt[ií]tulos?)(?: por)?\s+[\p{L} .'-]{2,}$/iu.test(text)) return;
   const rawKey = norm(frame?.message_id || frame?.messageId);
   const fallbackKey = `${norm(frame?.device_key || frame?.device_id || frame?.deviceId)}:${Math.floor(Number(frame?.offset_ms || Date.now()) / 1000)}`;
   const key = rawKey || fallbackKey;
@@ -484,7 +486,7 @@ async function reportHealth(extra = {}) {
     paused: manualPaused,
     meeting_code: getMeetingCode(),
     title: session?.title || getMeetingTitle(),
-    mode: "MEET_RTC_CAPTIONS",
+    mode: "MEET_RTC_AUDIO",
     rtc_active: Boolean(lastRtcStatus?.active || transportFresh()),
     rtc_channels: Array.isArray(lastRtcStatus?.channels) ? lastRtcStatus.channels : [],
     captions_state: captionsState,
@@ -565,18 +567,47 @@ function detectState() {
 function requestRtcCapture(force = false) {
   if (!force && Date.now() - lastRequestAt < 8_000) return;
   lastRequestAt = Date.now();
-  window.postMessage({
-    source: "leonardo-meet-content",
-    type: "REQUEST_CAPTIONS",
-    language: navigator.language || "pt-BR",
-    meeting_code: getMeetingCode(),
-  }, "*");
+  window.postMessage({ source: "leonardo-meet-content", type: "START_AUDIO_CAPTURE", meeting_code: getMeetingCode() }, "*");
 }
 
 async function runtime(message) {
   try { return await chrome.runtime.sendMessage(message); }
   catch { return null; }
 }
+
+async function blobToBase64(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+function queueRtcAudioChunk(payload) {
+  if (!session || !payload?.blob || !["local", "remote"].includes(payload.role)) return;
+  const current = { id: session.id, started_epoch: session.started_epoch };
+  const job = (async () => {
+    const base64 = await blobToBase64(payload.blob);
+    const offsetMs = Math.max(0, Date.now() - current.started_epoch);
+    const response = await runtime({
+      type: "RTC_AUDIO_CHUNK", session_id: current.id, role: payload.role,
+      chunk: { seq: Number(payload.seq || 0), base64, mime_type: payload.mime_type || "audio/webm", offset_ms: offsetMs, duration_ms: Number(payload.duration_ms || 2500), track_key: payload.track_key || "", captured_at: nowIso() },
+    });
+    if (response?.segment && session?.id === current.id) pushLiveTranscript(response.segment);
+  })();
+  meetAudioPending.add(job);
+  job.finally(() => meetAudioPending.delete(job));
+}
+
+async function drainRtcAudioJobs() {
+  for (let round = 0; round < 5; round++) {
+    await new Promise((resolve) => setTimeout(resolve, round === 0 ? 450 : 120));
+    const jobs = [...meetAudioPending];
+    if (!jobs.length) return;
+    await Promise.allSettled(jobs);
+  }
+}
+
+
 
 async function beginSession() {
   if (session || manualPaused) return;
@@ -587,58 +618,37 @@ async function beginSession() {
   const started = Date.now();
   session = {
     id: `${meetingCode}-${started}-${crypto.randomUUID()}`,
-    meeting_code: meetingCode,
-    meeting_url: location.href,
-    title: getMeetingTitle(),
-    started_at: new Date(started).toISOString(),
-    started_epoch: started,
-    path: location.pathname,
+    meeting_code: meetingCode, meeting_url: location.href, title: getMeetingTitle(),
+    started_at: new Date(started).toISOString(), started_epoch: started, path: location.pathname,
+    capture_mode: "MEET_RTC_AUDIO",
   };
   warningSent = false;
-  domCaptionState.clear();
-  lastRtcDataCaptionAt = 0;
-  liveTranscriptRows.clear();
-  for (const frame of prebuffer) pushLiveTranscript(frame);
-  renderLiveTranscript();
+  liveTranscriptRows.clear(); prebuffer.length = 0; speakerPrebuffer.clear(); renderLiveTranscript();
+  const startedResult = await runtime({ type: "RTC_SESSION_START", session: { ...session, extension_version: VERSION, capture_mode: "MEET_RTC_AUDIO" } });
+  if (!startedResult?.ok) {
+    const error = norm(startedResult?.error) || "MEET_AUDIO_SESSION_START_FAILED";
+    await runtime({ type: "CAPTURE_STATE", state: { active: false, error, meeting_code: meetingCode, title: session.title, mode: "MEET_RTC_AUDIO" } });
+    session = null;
+    return;
+  }
   showRecordingOverlay("Google Meet");
-  startDomCaptionObserver();
-  scheduleDomCaptionScan();
-  await runtime({ type: "RTC_SESSION_START", session: { ...session, extension_version: VERSION } });
-  for (const speaker of speakerPrebuffer.values()) await runtime({ type: "RTC_SPEAKER_MAP", session_id: session.id, speaker });
-  speakerPrebuffer.clear();
-  for (const frame of prebuffer.splice(0)) await runtime({ type: "RTC_CAPTION", session_id: session.id, frame: { ...frame, offset_ms: Math.max(0, Number(frame.observed_at || Date.now()) - started) } });
-  await runtime({ type: "CAPTURE_STATE", state: { active: true, meeting_code: meetingCode, title: session.title, started_at: session.started_at, mode: "MEET_RTC_CAPTIONS" } });
   requestRtcCapture(true);
-  ensureNativeCaptions("session_start", true).catch(() => {});
+  await runtime({ type: "CAPTURE_STATE", state: { active: true, meeting_code: meetingCode, title: session.title, started_at: session.started_at, mode: "MEET_RTC_AUDIO" } });
 }
 
 async function endSession(reason = "left_call") {
   if (!session) return;
   const closing = session;
+  window.postMessage({ source: "leonardo-meet-content", type: "STOP_AUDIO_CAPTURE", meeting_code: closing.meeting_code }, "*");
+  await drainRtcAudioJobs();
   session = null;
   hideRecordingOverlay();
   const endedAt = nowIso();
-  await runtime({
-    type: "RTC_SESSION_FINISH",
-    session_id: closing.id,
-    ended_at: endedAt,
-    reason,
-    meeting: {
-      local_session_id: closing.id,
-      meeting_code: closing.meeting_code,
-      meeting_url: closing.meeting_url,
-      title: getMeetingTitle() || closing.title,
-      started_at: closing.started_at,
-      ended_at: endedAt,
-      capture_mode: "MEET_RTC_CAPTIONS",
-      native_transcript_available: false,
-      extension_version: VERSION,
-      metadata: { rtc_capture: true, finish_reason: reason },
-    },
-  });
-  await runtime({ type: "CAPTURE_STATE", state: { active: false, meeting_code: closing.meeting_code, ended_at: endedAt, saving: true } });
-  outOfCallSince = 0;
-  inCallSince = 0;
+  const finished = await runtime({ type: "RTC_SESSION_FINISH", session_id: closing.id, ended_at: endedAt, reason, meeting: { title: getMeetingTitle() || closing.title, metadata: { finish_reason: reason, captions_required: false, direct_rtc_audio: true } } });
+  if (!finished?.ok && !finished?.queued) {
+    await runtime({ type: "CAPTURE_STATE", state: { active: false, error: finished?.error || "MEET_AUDIO_FINALIZE_FAILED", meeting_code: closing.meeting_code, ended_at: endedAt, mode: "MEET_RTC_AUDIO" } });
+  }
+  outOfCallSince = 0; inCallSince = 0;
 }
 
 function handleRtcCaption(payload) {
@@ -690,8 +700,10 @@ window.addEventListener("message", (event) => {
     lastRtcStatus = payload;
     if (payload.active || (Array.isArray(payload.channels) && payload.channels.length)) lastRtcSignalAt = Date.now();
     reportHealth().catch(() => {});
+  } else if (type === "AUDIO_CHUNK") {
+    queueRtcAudioChunk(payload);
   } else if (type === "CAPTION") {
-    handleRtcCaption(payload);
+    // Audio-only Meet architecture: never depend on or activate native captions.
   } else if (type === "SPEAKER_MAP") {
     handleSpeaker(payload);
   } else if (type === "DIAGNOSTIC") {
@@ -701,14 +713,18 @@ window.addEventListener("message", (event) => {
   }
 });
 
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "MEET_RPC_SIGNAL") {
     lastRtcSignalAt = Date.now();
     requestRtcCapture();
   }
   if (message?.type === "REINJECT_RTC") requestRtcCapture(true);
-  if (message?.type === "RELATO_FORCE_CAPTIONS") ensureNativeCaptions("manual_retry", true).catch(() => {});
-  if (message?.type === "RELATO_UPLOAD_CONFIRMED") showSavedToast(message.transcript_id || null);
+  if (message?.type === "RELATO_FORCE_CAPTIONS") requestRtcCapture(true);
+  if (message?.type === "RELATO_UPLOAD_CONFIRMED") {
+    showSavedToast(message.transcript_id || null);
+    try { sendResponse({ ok: true }); } catch {}
+    return true;
+  }
   if (message?.type === "RELATO_CAPTURE_CONTROL") {
     const paused = Boolean(message.paused);
     manualPaused = paused;
@@ -717,7 +733,7 @@ chrome.runtime.onMessage.addListener((message) => {
       inCallSince = Date.now() - JOIN_STABLE_MS;
       requestRtcCapture(true);
     }
-    runtime({ type: "CAPTURE_STATE", state: { active: !paused && Boolean(session), paused, meeting_code: getMeetingCode(), title: getMeetingTitle(), mode: "MEET_RTC_CAPTIONS" } });
+    runtime({ type: "CAPTURE_STATE", state: { active: !paused && Boolean(session), paused, meeting_code: getMeetingCode(), title: getMeetingTitle(), mode: "MEET_RTC_AUDIO" } });
   }
 });
 
@@ -734,15 +750,8 @@ setInterval(async () => {
     if (!inCallSince) inCallSince = Date.now();
     if (!session && Date.now() - inCallSince >= JOIN_STABLE_MS) await beginSession();
     if (session) {
-      dismissCaptionCustomization();
-      hideKnownCaptionRegions();
-      keepMeetCallControlsVisible();
       if (!pageReady || Date.now() - lastRtcSignalAt > RTC_SILENCE_RECOVERY_MS) requestRtcCapture(true);
-      if (!lastCaptionAt || Date.now() - lastCaptionAt > CAPTION_FRESH_MS) ensureNativeCaptions("no_recent_caption").catch(() => {});
-      if (!lastCaptionAt && Date.now() - session.started_epoch > NO_FIRST_CAPTION_WARN_MS && !warningSent) {
-        warningSent = true;
-        await runtime({ type: "RTC_DIAGNOSTIC", session_id: session.id, diagnostic: { code: "no_first_caption", message: "RTC ativo, mas nenhum frame de transcrição chegou nos primeiros 25s." } });
-      }
+      if (!lastCaptionAt || Date.now() - lastCaptionAt > CAPTION_FRESH_MS) requestRtcCapture(true);
     }
   } else {
     inCallSince = 0;
@@ -757,7 +766,7 @@ setInterval(async () => {
 setInterval(() => {
   if (!session) return;
   if (Date.now() - lastRtcSignalAt > RTC_SILENCE_RECOVERY_MS) requestRtcCapture(true);
-  ensureNativeCaptions("watchdog").catch(() => {});
+  requestRtcCapture(true);
   reportHealth().catch(() => {});
 }, CAPTION_WATCHDOG_MS);
 
