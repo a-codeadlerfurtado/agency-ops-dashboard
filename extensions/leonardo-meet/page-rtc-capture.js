@@ -325,7 +325,7 @@
         const samples = new Float32Array(analyser.fftSize); entry.audioContext = ctx; entry.segmentHasVoice = false; entry.segmentPeakRms = 0;
         ctx.resume?.().catch(() => {});
         entry.energyTimer = setInterval(() => {
-          try { analyser.getFloatTimeDomainData(samples); let sum = 0; for (const value of samples) sum += value * value; const rms = Math.sqrt(sum / samples.length); entry.segmentPeakRms = Math.max(entry.segmentPeakRms, rms); if (rms >= 0.0035) entry.segmentHasVoice = true; } catch {}
+          try { analyser.getFloatTimeDomainData(samples); let sum = 0; for (const value of samples) sum += value * value; const rms = Math.sqrt(sum / samples.length); entry.segmentPeakRms = Math.max(entry.segmentPeakRms, rms); const voiceThreshold = role === "local" ? 0.00055 : 0.00075; if (rms >= voiceThreshold) entry.segmentHasVoice = true; } catch {}
         }, 80);
       }
     } catch {}

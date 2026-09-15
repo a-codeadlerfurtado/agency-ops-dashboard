@@ -1,92 +1,92 @@
-{
-  "manifest_version": 3,
-  "name": "Relato AI — Transcriber",
-  "version": "0.4.4",
-  "description": "Relato AI — Transcriber: captura e inteligência de reuniões e chamadas para o Leonardo Imobi.",
-  "permissions": [
-    "storage",
-    "unlimitedStorage",
-    "alarms",
-    "tabs",
-    "scripting",
-    "webRequest",
-    "sidePanel",
-    "notifications"
-  ],
-  "host_permissions": [
-    "https://meet.google.com/*",
-    "https://web.whatsapp.com/*",
-    "https://bfzdetibfcwihfkltbkp.supabase.co/*"
-  ],
-  "background": {
-    "service_worker": "service-worker.js",
-    "type": "module"
-  },
-  "side_panel": {
-    "default_path": "sidepanel.html"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "https://meet.google.com/*"
-      ],
-      "js": [
-        "page-rtc-capture.js"
-      ],
-      "run_at": "document_start",
-      "world": "MAIN"
-    },
-    {
-      "matches": [
-        "https://meet.google.com/*"
-      ],
-      "js": [
-        "feedback-ui.js",
-        "content.js"
-      ],
-      "run_at": "document_idle"
-    },
-    {
-      "matches": [
-        "https://web.whatsapp.com/*"
-      ],
-      "js": [
-        "wa-injector.js"
-      ],
-      "run_at": "document_start"
-    },
-    {
-      "matches": [
-        "https://web.whatsapp.com/*"
-      ],
-      "js": [
-        "feedback-ui.js",
-        "wa-content.js"
-      ],
-      "run_at": "document_idle"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "page-rtc-capture.js"
-      ],
-      "matches": [
-        "https://meet.google.com/*"
-      ]
-    },
-    {
-      "resources": [
-        "wa-call-capture.js"
-      ],
-      "matches": [
-        "https://web.whatsapp.com/*"
-      ]
-    }
-  ],
-  "action": {
-    "default_title": "Relato AI",
-    "default_popup": "popup.html"
-  },
-  "options_page": "options.html"
+﻿{
+    "manifest_version":  3,
+    "name":  "Relato AI â€” Transcriber",
+    "version":  "0.4.5",
+    "description":  "Relato AI â€” Transcriber: captura e inteligÃªncia de reuniÃµes e chamadas para o Leonardo Imobi.",
+    "permissions":  [
+                        "storage",
+                        "unlimitedStorage",
+                        "alarms",
+                        "tabs",
+                        "scripting",
+                        "webRequest",
+                        "sidePanel",
+                        "notifications"
+                    ],
+    "host_permissions":  [
+                             "https://meet.google.com/*",
+                             "https://web.whatsapp.com/*",
+                             "https://bfzdetibfcwihfkltbkp.supabase.co/*"
+                         ],
+    "background":  {
+                       "service_worker":  "service-worker.js",
+                       "type":  "module"
+                   },
+    "side_panel":  {
+                       "default_path":  "sidepanel.html"
+                   },
+    "content_scripts":  [
+                            {
+                                "matches":  [
+                                                "https://meet.google.com/*"
+                                            ],
+                                "js":  [
+                                           "page-rtc-capture.js"
+                                       ],
+                                "run_at":  "document_start",
+                                "world":  "MAIN"
+                            },
+                            {
+                                "matches":  [
+                                                "https://meet.google.com/*"
+                                            ],
+                                "js":  [
+                                           "feedback-ui.js",
+                                           "content.js"
+                                       ],
+                                "run_at":  "document_idle"
+                            },
+                            {
+                                "matches":  [
+                                                "https://web.whatsapp.com/*"
+                                            ],
+                                "js":  [
+                                           "wa-injector.js"
+                                       ],
+                                "run_at":  "document_start"
+                            },
+                            {
+                                "matches":  [
+                                                "https://web.whatsapp.com/*"
+                                            ],
+                                "js":  [
+                                           "feedback-ui.js",
+                                           "wa-content.js"
+                                       ],
+                                "run_at":  "document_idle"
+                            }
+                        ],
+    "web_accessible_resources":  [
+                                     {
+                                         "resources":  [
+                                                           "page-rtc-capture.js"
+                                                       ],
+                                         "matches":  [
+                                                         "https://meet.google.com/*"
+                                                     ]
+                                     },
+                                     {
+                                         "resources":  [
+                                                           "wa-call-capture.js"
+                                                       ],
+                                         "matches":  [
+                                                         "https://web.whatsapp.com/*"
+                                                     ]
+                                     }
+                                 ],
+    "action":  {
+                   "default_title":  "Relato AI",
+                   "default_popup":  "popup.html"
+               },
+    "options_page":  "options.html"
 }

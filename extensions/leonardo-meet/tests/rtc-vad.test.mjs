@@ -13,6 +13,6 @@ const pc=new w.RTCPeerConnection(); const dispatch=d=>{for(const h of listeners.
 for(const fn of timers)fn(); recorders[0].emit();
 assert.equal(messages.filter(m=>m.type==="AUDIO_CHUNK").length,0,"silence must not emit audio chunk");
 assert.ok(messages.some(m=>m.type==="DIAGNOSTIC"&&m.payload.code==="audio_silence_skipped"));
-recorders[0].stop(); signal=.02; for(const fn of timers)fn(); recorders[1].emit();
-assert.equal(messages.filter(m=>m.type==="AUDIO_CHUNK").length,1,"speech-level energy must emit audio chunk");
+recorders[0].stop(); signal=.0012; for(const fn of timers)fn(); recorders[1].emit();
+assert.equal(messages.filter(m=>m.type==="AUDIO_CHUNK").length,1,"low-volume speech like Adler mic must emit audio chunk");
 console.log("rtc-vad synthetic test: ok");
