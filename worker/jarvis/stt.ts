@@ -2,24 +2,15 @@
  * Transcricao de fallback.
  *
  * O caminho normal e a Web Speech API no navegador -- de graca, sem round-trip.
- * Isto aqui existe para Safari e iOS, que nao a implementam. So e chamado
- * quando o navegador avisa que nao tem reconhecimento nativo.
+ * Isto aqui existe para Safari/iOS e para o Relato quando ele precisa de Whisper.
  */
 
+import { Buffer } from "node:buffer";
 import type { EnvJarvis } from "./tools";
 import { normalizarTranscricaoOperacional } from "./memory";
 
 const MODELO = "@cf/openai/whisper-large-v3-turbo";
 const AUDIO_MAX_BYTES = 8 * 1024 * 1024;
-
-function bytesParaBase64(bytes: Uint8Array): string {
-  let binario = "";
-  const bloco = 0x8000;
-  for (let i = 0; i < bytes.length; i += bloco) {
-    binario += String.fromCharCode(...bytes.subarray(i, i + bloco));
-  }
-  return btoa(binario);
-}
 
 export async function transcrever(request: Request, env: EnvJarvis): Promise<Response> {
   if (!env.AI) {
@@ -35,8 +26,14 @@ export async function transcrever(request: Request, env: EnvJarvis): Promise<Res
   }
 
   try {
+    // IMPORTANTE: nao converter byte a byte em JavaScript. Em blocos de audio do
+    // Relato (~500-600 KB), o loop antigo podia consumir sozinho o limite de CPU
+    // do Worker e derrubar o Dashboard com Cloudflare 1102. Buffer usa a
+    // implementacao otimizada do runtime (nodejs_compat), conforme o caminho
+    // recomendado pela Cloudflare para Whisper.
+    const audio = Buffer.from(buffer).toString("base64");
     const resultado: any = await env.AI.run(MODELO, {
-      audio: bytesParaBase64(new Uint8Array(buffer)),
+      audio,
       language: "pt",
       task: "transcribe",
       vad_filter: true,
