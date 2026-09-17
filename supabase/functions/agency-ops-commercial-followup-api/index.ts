@@ -51,6 +51,89 @@ async function zapiSend(db:any, target:string, message:string, mentioned:string[
   return {message_id:body.messageId||body.id||body.zaapId||null,instance_id:instance};
 }
 
+const MONTH_NAMES = ["","JANEIRO","FEVEREIRO","MARCO","ABRIL","MAIO","JUNHO","JULHO","AGOSTO","SETEMBRO","OUTUBRO","NOVEMBRO","DEZEMBRO"];
+const isSheetMode = (client:Row) => String(client?.collection_mode||"").toUpperCase()==="PLANILHA";
+const brokerKey = (value:unknown) => norm(value).replace(/^sdr\s+/,"").trim();
+const cleanBrokerFileName = (value:unknown) => String(value||"").replace(/\.xlsx?$/i,"").replace(/[-_ ]+patrocinado.*$/i,"").replace(/[-_ ]+trafego.*$/i,"").trim();
+function decodeHtml(value:string){
+  return value.replace(/&quot;/g,'"').replace(/&#39;|&#x27;/g,"'").replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n)));
+}
+async function fetchText(url:string, timeout=10000){
+  const r=await fetch(url,{signal:AbortSignal.timeout(timeout),headers:{"user-agent":"Mozilla/5.0","accept-language":"pt-BR,pt;q=0.9,en;q=0.8"}});
+  if(!r.ok) throw new Error(`fetch_${r.status}:${url}`);
+  return await r.text();
+}
+function parseDriveModifiedLabel(label:string){
+  const clean=String(label||"").trim(); const today=localDate();
+  if(!clean)return null;
+  if(/^\d{1,2}:\d{2}$/.test(clean)) return today;
+  const raw=norm(clean);
+  if(raw==="hoje"||raw==="today") return today;
+  if(raw==="ontem"||raw==="yesterday") return shiftDate(today,-1);
+  const slash=clean.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if(slash)return `${slash[3]}-${slash[2].padStart(2,"0")}-${slash[1].padStart(2,"0")}`;
+  const en=clean.match(/^(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2}),\s+(\d{4})$/i);
+  if(en){const months:Record<string,number>={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};const mo=months[en[1].slice(0,3).toLowerCase()];return `${en[3]}-${String(mo).padStart(2,"0")}-${en[2].padStart(2,"0")}`;}
+  const months:Record<string,number>={jan:1,fev:2,mar:3,abr:4,mai:5,jun:6,jul:7,ago:8,set:9,out:10,nov:11,dez:12};
+  const m=raw.match(/^(\d{1,2}) de ([a-z]{3})/); if(!m||!months[m[2]])return null;
+  let y=Number(today.slice(0,4)); const mo=months[m[2]], d=Number(m[1]);
+  const candidate=`${y}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+  if(candidate>today)y--; return `${y}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+}
+function extractDriveModifiedLabel(text:string){
+  const tail=(String(text||"").match(/(?:Compartilhado|Shared)\s+(.+)/i)?.[1]||String(text||"")).trim();
+  const patterns=[/\b(?:Hoje|Ontem|Today|Yesterday)\b/i,/\b\d{1,2}:\d{2}\b/,/\b\d{1,2}\/\d{1,2}\/\d{4}\b/,/\b\d{1,2}\s+de\s+[^\s]+(?:\s+de\s+\d{4})?\b/i,/\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4}\b/i];
+  for(const rx of patterns){const m=tail.match(rx);if(m)return m[0].trim().replace(/\.$/,"");}
+  return null;
+}
+async function publicDriveItems(folderId:string){
+  const page=await fetchText(`https://drive.google.com/drive/folders/${folderId}`);
+  const out:Row[]=[]; const seen=new Set<string>();
+  const rowRx=/<tr[^>]*data-id="([A-Za-z0-9_-]{20,})"[\s\S]*?<\/tr>/g;
+  for(const rm of page.matchAll(rowRx)){
+    const id=rm[1]; if(seen.has(id))continue; const row=rm[0];
+    const label=row.match(/aria-label="([^"]+?) (Shared folder|Google Sheets Shared|Microsoft Excel Shared)"/); if(!label)continue;
+    seen.add(id); const text=decodeHtml(row.replace(/<[^>]+>/g," ")).replace(/\s+/g," ").trim();
+    const modified=extractDriveModifiedLabel(text);
+    const format=label[2]==="Microsoft Excel Shared"?"excel":label[2]==="Google Sheets Shared"?"google_sheet":"folder";
+    out.push({id,name:decodeHtml(label[1]),kind:format==="folder"?"folder":"sheet",format,modified_label:modified,modified_date:modified?parseDriveModifiedLabel(modified):null});
+  }
+  return out;
+}
+function parseCsv(text:string){
+  const rows:string[][]=[]; let row:string[]=[], cell="", quoted=false;
+  for(let i=0;i<text.length;i++){ const ch=text[i]; if(quoted){ if(ch==='"'&&text[i+1]==='"'){cell+='"';i++;} else if(ch==='"')quoted=false; else cell+=ch; }
+    else if(ch==='"')quoted=true; else if(ch===','){row.push(cell);cell="";} else if(ch==='\n'){row.push(cell.replace(/\r$/,''));rows.push(row);row=[];cell="";} else cell+=ch; }
+  if(cell||row.length){row.push(cell.replace(/\r$/,''));rows.push(row);} return rows;
+}
+
+
+function parsePtDate(value:string){
+  const m=String(value||"").trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/); if(!m)return null;
+  const y=Number(m[3]),mo=Number(m[2]),d=Number(m[1]); const dt=new Date(Date.UTC(y,mo-1,d));
+  if(dt.getUTCFullYear()!==y||dt.getUTCMonth()!==mo-1||dt.getUTCDate()!==d)return null;
+  return `${y}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;
+}
+function metricKey(header:unknown){
+  const h=norm(header); if(h.includes("leads novos"))return "leads_received"; if(h.includes("leads acionados"))return "leads_contacted";
+  if(h.includes("leads em conversa"))return "leads_in_conversation"; if(h.includes("ligacoes feitas")||h.includes("ligacao feita"))return "calls_made";
+  if(h.includes("ligacoes atend")||h.includes("ligacao atend"))return "calls_answered"; if(h.includes("visitas agend")||h.includes("visita agend"))return "visits_scheduled";
+  if(h.includes("visitas feitas")||h.includes("visitas realiz"))return "visits_completed"; if(h.includes("propostas emit")||h==="propostas")return "proposals";
+  if(h.includes("vendas fech")||h==="vendas")return "sales"; return null;
+}
+async function readSheetSnapshot(sheetId:string){
+  const csv=await fetchText(`https://docs.google.com/spreadsheets/d/${sheetId}/export?format=csv`);
+  const rows=parseCsv(csv); const headerIndex=rows.findIndex(r=>norm(r[0])==="data"); const headers=headerIndex>=0?rows[headerIndex]:[];
+  let lastDate:string|null=null,lastRow:string[]|null=null;
+  for(const row of rows.slice(Math.max(0,headerIndex+1))){ const d=parsePtDate(row[0]); if(!d||!row.slice(2).some(v=>String(v??"").trim()!==""))continue; if(!lastDate||d>lastDate){lastDate=d;lastRow=row;} }
+  const metrics:Row={}; if(lastRow) headers.forEach((h,i)=>{const k=metricKey(h);if(!k)return;const raw=String(lastRow![i]??"").trim().replace(',','.');if(raw!==""&&!Number.isNaN(Number(raw)))metrics[k]=Number(raw);});
+  return {sheet_id:sheetId,last_date:lastDate,metrics};
+}
+async function sheetItemsUnder(folderId:string){
+  const items=await publicDriveItems(folderId); const sheets=items.filter(x=>x.kind==="sheet");
+  if(sheets.length)return sheets; const month=MONTH_NAMES[Number(localDate().slice(5,7))]||"";
+  const child=items.find(x=>x.kind==="folder"&&norm(x.name)===norm(month)); if(!child)return [];
+  return (await publicDriveItems(String(child.id))).filter(x=>x.kind==="sheet");
+}
 function readNum(t:string, patterns:RegExp[], zero:RegExp[] = []) {
   for (const rx of zero) if (rx.test(t)) return 0;
   for (const rx of patterns) { const m=t.match(rx); if(m){ const n=Number(m[1]); if(Number.isFinite(n)&&n>=0) return n; } }
@@ -74,6 +157,83 @@ function parseMetrics(raw:string) {
   return {metrics:m,found:numeric.length,confidence:Math.min(1,numeric.length/6)};
 }
 
+
+async function resolveSheetReport(client:Row){
+  const root=String(client?.source_config?.drive_folder_id||"");
+  if(!root)throw new Error("drive_folder_missing");
+  const layout=String(client?.source_config?.drive_layout||"MONTH_SUBFOLDER").toUpperCase();
+  const month=MONTH_NAMES[Number(localDate().slice(5,7))]||"";
+  const rootItems=await publicDriveItems(root); const sources:Row[]=[];
+  if(layout==="BROKER_FOLDERS"){
+    for(const item of rootItems.filter(x=>x.kind==="folder")){
+      const sheet_items=await sheetItemsUnder(String(item.id));
+      const folderName=String(item.name).replace(/^SDR\s+/i,"");
+      const only=sheet_items.length===1?sheet_items[0]:null;
+      const fileName=only?cleanBrokerFileName(only.name):"";
+      const name=only&&fileName&&brokerKey(fileName)!==brokerKey(folderName)?fileName:folderName;
+      sources.push({name,folder_id:item.id,folder_modified_date:item.modified_date||null,folder_modified_label:item.modified_label||null,sheet_items,sheet_ids:sheet_items.map((x:Row)=>String(x.id))});
+    }
+  }else{
+    const monthFolder=rootItems.find(x=>x.kind==="folder"&&norm(x.name)===norm(month));
+    const folderId=monthFolder?String(monthFolder.id):root;
+    const items=monthFolder?await publicDriveItems(folderId):rootItems;
+    for(const item of items.filter(x=>x.kind==="sheet")) sources.push({name:String(item.name),sheet_items:[item],sheet_ids:[String(item.id)]});
+  }
+
+  const firstDay=localDate().slice(0,8)+"01";
+  return await Promise.all(sources.map(async(src)=>{
+    const itemById=new Map((src.sheet_items||[]).map((x:Row)=>[String(x.id),x]));
+    const snaps=await Promise.all((src.sheet_ids||[]).map(async(id:string)=>{
+      const item:any=itemById.get(id)||{};
+      const snap:any=item.format==="excel"?{sheet_id:id,last_date:null,metrics:{}}:await readSheetSnapshot(id).catch(()=>({sheet_id:id,last_date:null,metrics:{}}));
+      const modified=String(item.modified_date||"")||null;
+      const modifiedUsable=modified&&!(modified===firstDay&&!snap.last_date)?modified:null;
+      const activity=[snap.last_date,modifiedUsable].filter(Boolean).sort().at(-1)||null;
+      const date_source=!activity?null:(activity===modifiedUsable&&modifiedUsable!==snap.last_date?"DRIVE_MODIFIED":"SHEET_CONTENT");
+      return {...snap,modified_date:modified,modified_label:item.modified_label||null,activity_date:activity,date_source};
+    }));
+    const best:any=[...snaps].sort((a,b)=>String(b.activity_date||"").localeCompare(String(a.activity_date||"")))[0]||{sheet_id:null,activity_date:null,metrics:{}};
+    const folderDate=layout==="BROKER_FOLDERS"?String(src.folder_modified_date||"")||null:null;
+    const lastDate=folderDate||best.activity_date||null;
+    return {...src,last_date:lastDate,content_last_date:best.last_date||null,modified_date:folderDate||best.modified_date||null,date_source:folderDate?"BROKER_FOLDER_MODIFIED":(best.date_source||null),metrics:best.metrics||{},sheet_id:best.sheet_id||src.sheet_ids?.[0]||null};
+  }));
+}
+async function mergeKnownSheetDates(ops:any,client:Row,rows:Row[]){
+  const {data:existing}=await ops.from("commercial_followup_brokers").select("display_name,legacy_last_reported_on").eq("followup_client_id",client.id);
+  const byName=new Map((existing||[]).map((b:Row)=>[brokerKey(b.display_name),String(b.legacy_last_reported_on||"")||null]));
+  return rows.map((r:Row)=>{
+    const known=byName.get(brokerKey(r.name))||null;
+    const current=String(r.last_date||"")||null;
+    const last_date=[current,known].filter(Boolean).sort().at(-1)||null;
+    const date_source=last_date&&known&&last_date===known&&known!==current?"WHATSAPP_HISTORY":r.date_source;
+    return {...r,last_date,date_source,known_last_date:known};
+  });
+}
+function sheetStatusMessage(rows:Row[]){
+  const lines=[...rows].sort((a,b)=>norm(a.name).localeCompare(norm(b.name))).map(r=>
+    r.last_date?`\u2022 ${String(r.name).toUpperCase()} \u2014 \u00faltima atualiza\u00e7\u00e3o: ${periodLabel(r.last_date,r.last_date)}`:`\u2022 ${String(r.name).toUpperCase()} \u2014 atualiza\u00e7\u00e3o ainda n\u00e3o identificada`
+  );
+  return `Bom dia, time!\n\nSegue o acompanhamento das planilhas comerciais:\n\n${lines.join("\n")}\n\nSe alguma atualiza\u00e7\u00e3o feita hoje ainda n\u00e3o aparecer, me avise por aqui.`;
+}
+
+async function syncSheetBrokers(ops:any,client:Row,rows:Row[]){
+  const {data:existing}=await ops.from("commercial_followup_brokers").select("*").eq("followup_client_id",client.id);
+  const out:Row[]=[];
+  for(const row of rows){
+    const key=brokerKey(row.name); let broker=(existing||[]).find((b:Row)=>brokerKey(b.display_name)===key)||null;
+    const meta={...(broker?.metadata||{}),source:"google_sheet",drive_folder_id:row.folder_id||null,sheet_id:row.sheet_id||null,sheet_ids:row.sheet_ids||[],last_sheet_sync_at:new Date().toISOString()};
+    if(broker){
+      const preservedLast=row.last_date||broker.legacy_last_reported_on||null;
+      const u=await ops.from("commercial_followup_brokers").update({active:true,legacy_last_reported_on:preservedLast,metadata:meta,updated_at:new Date().toISOString()}).eq("id",broker.id).select("*").single();
+      broker=u.data||broker;
+    }else{
+      const i=await ops.from("commercial_followup_brokers").insert({followup_client_id:client.id,display_name:String(row.name).replace(/^SDR\s+/i,""),active:true,legacy_last_reported_on:row.last_date||null,metadata:meta}).select("*").single();
+      broker=i.data;
+    }
+    if(broker)out.push({...broker,sheet_row:row});
+  }
+  return out;
+}
 function anomalies(metrics:Row) {
   const out:Row[]=[];
   const flag=(code:string,msg:string)=>out.push({code,severity:"REVISAR",message:msg});
@@ -114,6 +274,7 @@ async function ensureDays(ops:any) {
   const {data:clients}=await ops.from("commercial_followup_clients").select("*").eq("automation_enabled",true).neq("collection_mode","PLANTAO");
   const created:Row[]=[];
   for(const c of clients||[]){
+    if(isSheetMode(c)) continue;
     const period=collectionPeriodForClient(c,today,dow); if(!period) continue;
     const reportDate=period.end;
     const goLive=String(c.source_config?.go_live||"");
@@ -121,7 +282,7 @@ async function ensureDays(ops:any) {
     const {data:existing}=await ops.from("commercial_followup_days").select("*").eq("followup_client_id",c.id).eq("report_date",reportDate).maybeSingle();
     let day=existing;
     if(!day){
-      const insert=await ops.from("commercial_followup_days").insert({followup_client_id:c.id,report_date:reportDate,period_start:period.start,period_end:period.end,scheduled_at:atLocal(today,String(c.checkin_time||"08:15")),source_payload:{generated_by:"daily_engine",generated_at:nowIso}}).select("*").single();
+      const insert=await ops.from("commercial_followup_days").insert({followup_client_id:c.id,report_date:reportDate,period_start:period.start,period_end:period.end,scheduled_at:atLocal(today,String(c.checkin_time||"08:00")),source_payload:{generated_by:"daily_engine",generated_at:nowIso}}).select("*").single();
       day=insert.data;
       if(insert.error||!day) continue;
       created.push(day);
@@ -144,7 +305,7 @@ async function ensureClientDay(ops:any, slug:string) {
   const goLive=String(c.source_config?.go_live||""); if(goLive&&today<goLive) return {skipped:"before_go_live"};
   const reportDate=period.end;
   let {data:day}=await ops.from("commercial_followup_days").select("*").eq("followup_client_id",c.id).eq("report_date",reportDate).maybeSingle();
-  if(!day){ const x=await ops.from("commercial_followup_days").insert({followup_client_id:c.id,report_date:reportDate,period_start:period.start,period_end:period.end,scheduled_at:atLocal(today,String(c.checkin_time||"08:15")),source_payload:{generated_by:"event_scheduler",generated_at:new Date().toISOString()}}).select("*").single(); day=x.data; if(x.error||!day) return {skipped:"day_create_failed",error:x.error?.message}; }
+  if(!day){ const x=await ops.from("commercial_followup_days").insert({followup_client_id:c.id,report_date:reportDate,period_start:period.start,period_end:period.end,scheduled_at:atLocal(today,String(c.checkin_time||"08:00")),source_payload:{generated_by:"event_scheduler",generated_at:new Date().toISOString()}}).select("*").single(); day=x.data; if(x.error||!day) return {skipped:"day_create_failed",error:x.error?.message}; }
   else if(!day.period_start||!day.period_end) await ops.from("commercial_followup_days").update({period_start:period.start,period_end:period.end,updated_at:new Date().toISOString()}).eq("id",day.id);
   const {data:brokers}=await ops.from("commercial_followup_brokers").select("*").eq("followup_client_id",c.id).eq("active",true);
   const active=(brokers||[]).filter((b:Row)=>!b.paused_until||new Date(b.paused_until).getTime()<=Date.now());
@@ -158,7 +319,7 @@ async function dispatchDue(db:any,ops:any) {
   const results:Row[]=[];
   for(const day of days||[]){
     const c=Array.isArray(day.commercial_followup_clients)?day.commercial_followup_clients[0]:day.commercial_followup_clients;
-    if(!c?.automation_enabled||c.collection_mode==="PLANTAO"||!c.group_chat_id){ results.push({day_id:day.id,skipped:"not_ready"}); continue; }
+    if(!c?.automation_enabled||c.collection_mode==="PLANTAO"||isSheetMode(c)||!c.group_chat_id){ results.push({day_id:day.id,skipped:"not_ready"}); continue; }
     const {data:brokers}=await ops.from("commercial_followup_brokers").select("*").eq("followup_client_id",c.id).eq("active",true);
     const active=(brokers||[]).filter((b:Row)=>!b.paused_until||new Date(b.paused_until).getTime()<=Date.now());
     if(!active.length){ results.push({day_id:day.id,skipped:"no_brokers"}); continue; }
@@ -175,7 +336,40 @@ async function dispatchDue(db:any,ops:any) {
   return results;
 }
 
+
+async function dispatchSheetClient(db:any,ops:any,client:Row,force=false){
+  if(!client?.automation_enabled)return {skipped:"inactive"};
+  if(!client.group_chat_id)return {skipped:"missing_group"};
+  const today=localDate(), dow=localWeekday();
+  if(![1,2,3,4,5].includes(dow))return {skipped:"outside_schedule"};
+  const start=atLocal(today,"00:00:00");
+  if(!force){
+    const {data:prior}=await ops.from("commercial_followup_events").select("id").eq("followup_client_id",client.id).eq("event_type","SHEET_STATUS_SENT").gte("created_at",start).limit(1);
+    if((prior||[]).length)return {skipped:"already_dispatched"};
+  }
+  let rows=await resolveSheetReport(client);
+  if(!rows.length)return {skipped:"no_sheet_sources"};
+  rows=await mergeKnownSheetDates(ops,client,rows);
+  const brokers=await syncSheetBrokers(ops,client,rows);
+  let {data:day}=await ops.from("commercial_followup_days").select("*").eq("followup_client_id",client.id).eq("report_date",today).maybeSingle();
+  if(!day){
+    const x=await ops.from("commercial_followup_days").insert({followup_client_id:client.id,report_date:today,period_start:today,period_end:today,scheduled_at:new Date().toISOString(),source_payload:{generated_by:"google_sheets_status",generated_at:new Date().toISOString()}}).select("*").single();
+    day=x.data;
+  }
+
+  for(const b of brokers){
+    if(!day)break;
+    const r=b.sheet_row||{}; const provenance:Row={}; for(const k of Object.keys(r.metrics||{}))provenance[k]={source:"PLANILHA_GOOGLE",sheet_id:r.sheet_id,reported_on:r.last_date};
+    await ops.from("commercial_followup_entries").upsert({followup_day_id:day.id,broker_id:b.id,status:r.last_date?"RESPONDIDO":"NAO_RESPONDEU",responded_at:r.last_date?`${r.last_date}T12:00:00-03:00`:null,metrics:r.metrics||{},provenance,notes:r.last_date?`Ãšltima atualizaÃ§Ã£o da planilha: ${periodLabel(r.last_date,r.last_date)}`:"Planilha sem preenchimento identificado",updated_at:new Date().toISOString()},{onConflict:"followup_day_id,broker_id"});
+  }
+  const message=sheetStatusMessage(rows); const sent=await zapiSend(db,client.group_chat_id,message); const now=new Date().toISOString();
+  if(day)await ops.from("commercial_followup_days").update({status:"CLOSED",asked_at:now,closed_at:now,outbound_message_id:sent.message_id,consolidated_message_id:sent.message_id,source_payload:{...(day.source_payload||{}),sheet_rows:rows,source:"GOOGLE_SHEETS"},updated_at:now}).eq("id",day.id);
+  await ops.from("commercial_followup_events").insert({followup_client_id:client.id,followup_day_id:day?.id||null,event_type:"SHEET_STATUS_SENT",actor:"AUTOMATION",message_id:sent.message_id,payload:{group_chat_id:client.group_chat_id,rows:rows.map(r=>({name:r.name,last_date:r.last_date,sheet_id:r.sheet_id}))}});
+  return {sent:true,message_id:sent.message_id,day_id:day?.id||null,rows,message};
+}
 async function dispatchClient(db:any,ops:any,slug:string) {
+  const {data:sheetClient}=await ops.from("commercial_followup_clients").select("*").eq("slug",slug).maybeSingle();
+  if(sheetClient&&isSheetMode(sheetClient)) return await dispatchSheetClient(db,ops,sheetClient);
   const prepared:any=await ensureClientDay(ops,slug); if(prepared.skipped) return prepared;
   const {client:c,day,brokers}=prepared; if(!c.group_chat_id) return {skipped:"missing_group"};
   if(["ASKED","CLOSED"].includes(String(day.status))) return {skipped:"already_dispatched",day_id:day.id};
@@ -200,7 +394,7 @@ async function ingestMessage(ops:any,messageId:string) {
   if(!messageId) return {skipped:"message_id_required"};
   const {data:rows}=await ops.from("whatsapp_messages").select("message_id,chat_id,event_at,sender_name,sender_phone,participant_phone,text_body,caption,from_me,is_group").eq("message_id",messageId).order("event_at",{ascending:false}).limit(1);
   const msg=rows?.[0]; if(!msg||msg.from_me||!msg.is_group) return {skipped:"irrelevant_message"};
-  const {data:c}=await ops.from("commercial_followup_clients").select("*").eq("group_chat_id",msg.chat_id).eq("automation_enabled",true).neq("collection_mode","PLANTAO").maybeSingle();
+  const {data:c}=await ops.from("commercial_followup_clients").select("*").eq("group_chat_id",msg.chat_id).eq("automation_enabled",true).neq("collection_mode","PLANTAO").neq("collection_mode","PLANILHA").maybeSingle();
   if(!c) return {skipped:"group_not_configured"};
   const {data:day}=await ops.from("commercial_followup_days").select("*").eq("followup_client_id",c.id).eq("status","ASKED").lte("asked_at",msg.event_at).order("asked_at",{ascending:false}).limit(1).maybeSingle();
   if(!day) return {skipped:"no_open_day"};
@@ -230,7 +424,7 @@ async function ingestReplies(ops:any) {
   const results:Row[]=[];
   for(const day of days||[]){
     const c=Array.isArray(day.commercial_followup_clients)?day.commercial_followup_clients[0]:day.commercial_followup_clients;
-    if(!c?.group_chat_id||!day.asked_at) continue;
+    if(isSheetMode(c)||!c?.group_chat_id||!day.asked_at) continue;
     const {data:brokers}=await ops.from("commercial_followup_brokers").select("*").eq("followup_client_id",c.id).eq("active",true);
     const {data:entries}=await ops.from("commercial_followup_entries").select("*").eq("followup_day_id",day.id);
     const byPhone=new Map<string,Row>();
@@ -271,6 +465,7 @@ async function sendReminders(db:any,ops:any,onlySlug?:string) {
   const out:Row[]=[];
   for(const day of days||[]){
     const c=Array.isArray(day.commercial_followup_clients)?day.commercial_followup_clients[0]:day.commercial_followup_clients;
+    if(isSheetMode(c)) continue;
     if(onlySlug&&c?.slug!==onlySlug) continue;
     const cutoff=new Date(day.asked_at).getTime()+Number(c?.reminder_after_minutes||120)*60000;
     if(Date.now()<cutoff||!c?.group_chat_id) continue;
@@ -296,6 +491,7 @@ async function closeDue(db:any,ops:any,onlySlug?:string) {
   const out:Row[]=[];
   for(const day of days||[]){
     const c=Array.isArray(day.commercial_followup_clients)?day.commercial_followup_clients[0]:day.commercial_followup_clients;
+    if(isSheetMode(c)) continue;
     if(onlySlug&&c?.slug!==onlySlug) continue;
     const cutoff=new Date(day.asked_at).getTime()+Number(c?.close_after_minutes||240)*60000;
     if(Date.now()<cutoff) continue;
@@ -338,6 +534,7 @@ async function sendWeekly(db:any,ops:any,onlySlug?:string) {
   const {data:clients}=await ops.from("commercial_followup_clients").select("*").eq("automation_enabled",true).neq("collection_mode","PLANTAO");
   const out:Row[]=[];
   for(const c of clients||[]){
+    if(isSheetMode(c)) continue;
     if(onlySlug&&c.slug!==onlySlug) continue;
     if(Number(c.weekly_report_dow)!==dow||!c.group_chat_id) continue;
     if(Date.now()<new Date(atLocal(today,String(c.weekly_report_time||"17:30"))).getTime()) continue;
@@ -400,6 +597,12 @@ Deno.serve(async(req)=>{
   if(req.method==="GET") return json({ok:true,actor,role,...await dashboardPayload(ops)},200,origin);
   if(req.method!=="POST") return json({error:"method_not_allowed"},405,origin);
   const body=await req.json().catch(()=>({})), action=String(body.action||"");
+  if(action==="preview_sheet_client"){
+    if(!automation&&role!=="MGMT") return json({error:"forbidden"},403,origin);
+    const {data:c}=await ops.from("commercial_followup_clients").select("*").eq("slug",String(body.slug||"")).maybeSingle();
+    if(!c||!isSheetMode(c)) return json({error:"sheet_client_not_found"},404,origin);
+    let rows=await resolveSheetReport(c); rows=await mergeKnownSheetDates(ops,c,rows); return json({ok:true,client:c.slug,rows,message:sheetStatusMessage(rows)},200,origin);
+  }
   if(action==="dispatch_client"){ if(!automation&&role!=="MGMT") return json({error:"forbidden"},403,origin); return json({ok:true,...await dispatchClient(db,ops,String(body.slug||""))},200,origin); }
   if(action==="remind_client"){ if(!automation&&role!=="MGMT") return json({error:"forbidden"},403,origin); return json({ok:true,results:await sendReminders(db,ops,String(body.slug||""))},200,origin); }
   if(action==="close_client"){ if(!automation&&role!=="MGMT") return json({error:"forbidden"},403,origin); return json({ok:true,results:await closeDue(db,ops,String(body.slug||""))},200,origin); }
@@ -412,7 +615,7 @@ Deno.serve(async(req)=>{
     const enabled=body.enabled===true;
     const {data:current,error:readError}=await ops.from("commercial_followup_clients").select("*").eq("id",id).maybeSingle();
     if(readError||!current) return json({error:readError?.message||"client_not_found"},404,origin);
-    if(enabled&&current.collection_mode==="GRUPO_MANUAL"&&!current.group_chat_id) return json({error:"commercial_group_required"},409,origin);
+    if(enabled&&["GRUPO_MANUAL","PLANILHA"].includes(current.collection_mode)&&!current.group_chat_id) return json({error:"commercial_group_required"},409,origin);
     const now=new Date().toISOString();
     const {data,error}=await ops.from("commercial_followup_clients").update({automation_enabled:enabled,updated_at:now}).eq("id",id).select("*").maybeSingle();
     if(error||!data) return json({error:error?.message||"automation_update_failed"},400,origin);
@@ -434,7 +637,7 @@ Deno.serve(async(req)=>{
     const id=String(body.id||""); if(!id) return json({error:"id_required"},400,origin);
     const allowed=["collection_mode","automation_enabled","group_chat_id","group_chat_name","checkin_time","reminder_after_minutes","close_after_minutes","weekly_report_dow","weekly_report_time","expose_individual_metrics","expose_ranking","questions","portal_enabled","portal_settings","portal_brand"];
     const patch:Row={updated_at:new Date().toISOString()}; for(const k of allowed) if(body[k]!==undefined) patch[k]=body[k];
-    if(patch.automation_enabled===true){ const {data:c}=await ops.from("commercial_followup_clients").select("*").eq("id",id).maybeSingle(); const mode=patch.collection_mode||c?.collection_mode, group=patch.group_chat_id??c?.group_chat_id; if(mode==="GRUPO_MANUAL"&&!group) return json({error:"commercial_group_required"},409,origin); }
+    if(patch.automation_enabled===true){ const {data:c}=await ops.from("commercial_followup_clients").select("*").eq("id",id).maybeSingle(); const mode=patch.collection_mode||c?.collection_mode, group=patch.group_chat_id??c?.group_chat_id; if(["GRUPO_MANUAL","PLANILHA"].includes(mode)&&!group) return json({error:"commercial_group_required"},409,origin); }
     const {data,error}=await ops.from("commercial_followup_clients").update(patch).eq("id",id).select("*").maybeSingle();
     if(!error&&data){ try{ await ops.rpc("sync_commercial_followup_schedule",{p_client_id:id}); }catch{} }
     return error?json({error:error.message},400,origin):json({ok:true,client:data},200,origin);
@@ -479,7 +682,7 @@ Deno.serve(async(req)=>{
     if(role!=="MGMT"&&!automation) return json({error:"forbidden"},403,origin);
     const display_name=String(body.display_name||"").trim(), slug=norm(body.slug||display_name).replace(/\s+/g,"-");
     if(!display_name||!slug) return json({error:"name_required"},400,origin);
-    const payload={client_id:body.client_id||null,slug,display_name,collection_mode:body.collection_mode||"GRUPO_MANUAL",automation_enabled:false,group_chat_id:body.group_chat_id||null,group_chat_name:body.group_chat_name||null,connected_phone:"5513988051839",checkin_time:body.checkin_time||"09:00",questions:Array.isArray(body.questions)?body.questions:Object.keys(METRIC_LABELS),source_config:{created_from_dashboard:true}};
+    const payload={client_id:body.client_id||null,slug,display_name,collection_mode:body.collection_mode||"GRUPO_MANUAL",automation_enabled:false,group_chat_id:body.group_chat_id||null,group_chat_name:body.group_chat_name||null,connected_phone:"5513988051839",checkin_time:body.checkin_time||"08:00",questions:Array.isArray(body.questions)?body.questions:Object.keys(METRIC_LABELS),source_config:{created_from_dashboard:true}};
     const {data,error}=await ops.from("commercial_followup_clients").insert(payload).select("*").single();
     return error?json({error:error.message},400,origin):json({ok:true,client:data},201,origin);
   }
@@ -488,6 +691,7 @@ Deno.serve(async(req)=>{
     if(role!=="MGMT"&&!automation) return json({error:"forbidden"},403,origin);
     const clientId=String(body.followup_client_id||""); const reportDate=String(body.report_date||shiftDate(localDate(),-1)); const periodStart=String(body.period_start||reportDate), periodEnd=String(body.period_end||reportDate);
     const {data:c}=await ops.from("commercial_followup_clients").select("*").eq("id",clientId).maybeSingle(); if(!c?.group_chat_id) return json({error:"commercial_group_required"},409,origin);
+    if(isSheetMode(c)) return json({ok:true,...await dispatchSheetClient(db,ops,c,true)},200,origin);
     const {data:brokers}=await ops.from("commercial_followup_brokers").select("*").eq("followup_client_id",clientId).eq("active",true);
     let {data:day}=await ops.from("commercial_followup_days").select("*").eq("followup_client_id",clientId).eq("report_date",reportDate).maybeSingle();
     if(!day){ const x=await ops.from("commercial_followup_days").insert({followup_client_id:clientId,report_date:reportDate,period_start:periodStart,period_end:periodEnd,scheduled_at:new Date().toISOString()}).select("*").single(); day=x.data; }
