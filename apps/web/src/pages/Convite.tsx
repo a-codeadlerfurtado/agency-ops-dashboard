@@ -58,7 +58,17 @@ export default function Convite({ token }: { token: string }) {
           password: senha,
           options: { data: { full_name: nome.trim() } },
         });
-        if (error) throw error;
+        if (error) {
+          if (error.message === "User already registered" || error.message.toLowerCase().includes("already registered")) {
+            setModo("entrar");
+            setEstado({
+              fase: "erro",
+              mensagem: "Este e-mail ja tem conta no Imobi-Board. Entre com a senha da conta para concluir o convite.",
+            });
+            return;
+          }
+          throw error;
+        }
         // projeto com confirmação de e-mail não devolve sessão na hora
         if (!data.session) {
           setEstado({
