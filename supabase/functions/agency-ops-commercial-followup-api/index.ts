@@ -53,7 +53,7 @@ async function zapiSend(db:any, target:string, message:string, mentioned:string[
 
 const MONTH_NAMES = ["","JANEIRO","FEVEREIRO","MARCO","ABRIL","MAIO","JUNHO","JULHO","AGOSTO","SETEMBRO","OUTUBRO","NOVEMBRO","DEZEMBRO"];
 const isSheetMode = (client:Row) => String(client?.collection_mode||"").toUpperCase()==="PLANILHA";
-const brokerKey = (value:unknown) => norm(value).replace(/^sdr\s+/,"").trim();
+const brokerKey = (value:unknown) => norm(value).replace(/^sdr\s+/,"").replace(/\bcomassetto\b/g,"comasseto").trim();
 const cleanBrokerFileName = (value:unknown) => String(value||"").replace(/\.xlsx?$/i,"").replace(/[-_ ]+patrocinado.*$/i,"").replace(/[-_ ]+trafego.*$/i,"").trim();
 function decodeHtml(value:string){
   return value.replace(/&quot;/g,'"').replace(/&#39;|&#x27;/g,"'").replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#(\d+);/g,(_,n)=>String.fromCharCode(Number(n)));
@@ -162,7 +162,6 @@ async function resolveSheetReport(client:Row){
   const root=String(client?.source_config?.drive_folder_id||"");
   if(!root)throw new Error("drive_folder_missing");
   const layout=String(client?.source_config?.drive_layout||"MONTH_SUBFOLDER").toUpperCase();
-  const month=MONTH_NAMES[Number(localDate().slice(5,7))]||"";
   const rootItems=await publicDriveItems(root); const sources:Row[]=[];
   if(layout==="BROKER_FOLDERS"){
     for(const item of rootItems.filter(x=>x.kind==="folder")){
@@ -174,40 +173,43 @@ async function resolveSheetReport(client:Row){
       sources.push({name,folder_id:item.id,folder_modified_date:item.modified_date||null,folder_modified_label:item.modified_label||null,sheet_items,sheet_ids:sheet_items.map((x:Row)=>String(x.id))});
     }
   }else{
-    const monthFolder=rootItems.find(x=>x.kind==="folder"&&norm(x.name)===norm(month));
-    const folderId=monthFolder?String(monthFolder.id):root;
-    const items=monthFolder?await publicDriveItems(folderId):rootItems;
-    for(const item of items.filter(x=>x.kind==="sheet")) sources.push({name:String(item.name),sheet_items:[item],sheet_ids:[String(item.id)]});
+    const monthFolders=rootItems.filter(x=>x.kind==="folder"&&MONTH_NAMES.some(m=>m&&norm(x.name)===norm(m)));
+    const grouped=new Map<string,Row>();    if(monthFolders.length){
+      for(const folder of monthFolders){
+        const items=await publicDriveItems(String(folder.id));
+        for(const item of items.filter(x=>x.kind==="sheet")){
+          const name=cleanBrokerFileName(String(item.name));
+          const key=brokerKey(name);
+          if(!key)continue;
+          const current=grouped.get(key)||{name,sheet_items:[],sheet_ids:[]};
+          current.sheet_items.push({...item,month_folder_id:folder.id,month_folder_name:folder.name});
+          current.sheet_ids.push(String(item.id));
+          grouped.set(key,current);
+        }
+      }
+      sources.push(...grouped.values());
+    }else{
+      for(const item of rootItems.filter(x=>x.kind==="sheet")){
+        const name=cleanBrokerFileName(String(item.name));
+        sources.push({name,sheet_items:[item],sheet_ids:[String(item.id)]});
+      }
+    }
   }
-
-  const firstDay=localDate().slice(0,8)+"01";
   return await Promise.all(sources.map(async(src)=>{
     const itemById=new Map((src.sheet_items||[]).map((x:Row)=>[String(x.id),x]));
     const snaps=await Promise.all((src.sheet_ids||[]).map(async(id:string)=>{
-      const item:any=itemById.get(id)||{};
-      const snap:any=item.format==="excel"?{sheet_id:id,last_date:null,metrics:{}}:await readSheetSnapshot(id).catch(()=>({sheet_id:id,last_date:null,metrics:{}}));
+      const item:any=itemById.get(id)||{};      const snap:any=await readSheetSnapshot(id).catch(()=>({sheet_id:id,last_date:null,metrics:{}}));
       const modified=String(item.modified_date||"")||null;
-      const modifiedUsable=modified&&!(modified===firstDay&&!snap.last_date)?modified:null;
-      const activity=[snap.last_date,modifiedUsable].filter(Boolean).sort().at(-1)||null;
-      const date_source=!activity?null:(activity===modifiedUsable&&modifiedUsable!==snap.last_date?"DRIVE_MODIFIED":"SHEET_CONTENT");
-      return {...snap,modified_date:modified,modified_label:item.modified_label||null,activity_date:activity,date_source};
+      const hasRealData=Boolean(snap.last_date);
+      const activity=hasRealData?[snap.last_date,modified].filter(Boolean).sort().at(-1)||snap.last_date:null;
+      const date_source=!activity?null:(modified&&activity===modified&&modified!==snap.last_date?"SHEET_MODIFIED":"SHEET_CONTENT");
+      return {...snap,modified_date:modified,modified_label:item.modified_label||null,activity_date:activity,date_source,month_folder_id:item.month_folder_id||null,month_folder_name:item.month_folder_name||null};
     }));
     const best:any=[...snaps].sort((a,b)=>String(b.activity_date||"").localeCompare(String(a.activity_date||"")))[0]||{sheet_id:null,activity_date:null,metrics:{}};
     const folderDate=layout==="BROKER_FOLDERS"?String(src.folder_modified_date||"")||null:null;
     const lastDate=folderDate||best.activity_date||null;
-    return {...src,last_date:lastDate,content_last_date:best.last_date||null,modified_date:folderDate||best.modified_date||null,date_source:folderDate?"BROKER_FOLDER_MODIFIED":(best.date_source||null),metrics:best.metrics||{},sheet_id:best.sheet_id||src.sheet_ids?.[0]||null};
+    return {...src,last_date:lastDate,content_last_date:best.last_date||null,modified_date:folderDate||best.modified_date||null,date_source:folderDate?"BROKER_FOLDER_MODIFIED":(best.date_source||null),metrics:best.metrics||{},sheet_id:best.sheet_id||src.sheet_ids?.[0]||null,month_folder_id:best.month_folder_id||null,month_folder_name:best.month_folder_name||null};
   }));
-}
-async function mergeKnownSheetDates(ops:any,client:Row,rows:Row[]){
-  const {data:existing}=await ops.from("commercial_followup_brokers").select("display_name,legacy_last_reported_on").eq("followup_client_id",client.id);
-  const byName=new Map((existing||[]).map((b:Row)=>[brokerKey(b.display_name),String(b.legacy_last_reported_on||"")||null]));
-  return rows.map((r:Row)=>{
-    const known=byName.get(brokerKey(r.name))||null;
-    const current=String(r.last_date||"")||null;
-    const last_date=[current,known].filter(Boolean).sort().at(-1)||null;
-    const date_source=last_date&&known&&last_date===known&&known!==current?"WHATSAPP_HISTORY":r.date_source;
-    return {...r,last_date,date_source,known_last_date:known};
-  });
 }
 function sheetStatusMessage(rows:Row[]){
   const lines=[...rows].sort((a,b)=>norm(a.name).localeCompare(norm(b.name))).map(r=>
@@ -223,8 +225,7 @@ async function syncSheetBrokers(ops:any,client:Row,rows:Row[]){
     const key=brokerKey(row.name); let broker=(existing||[]).find((b:Row)=>brokerKey(b.display_name)===key)||null;
     const meta={...(broker?.metadata||{}),source:"google_sheet",drive_folder_id:row.folder_id||null,sheet_id:row.sheet_id||null,sheet_ids:row.sheet_ids||[],last_sheet_sync_at:new Date().toISOString()};
     if(broker){
-      const preservedLast=row.last_date||broker.legacy_last_reported_on||null;
-      const u=await ops.from("commercial_followup_brokers").update({active:true,legacy_last_reported_on:preservedLast,metadata:meta,updated_at:new Date().toISOString()}).eq("id",broker.id).select("*").single();
+      const u=await ops.from("commercial_followup_brokers").update({active:true,legacy_last_reported_on:row.last_date||null,metadata:meta,updated_at:new Date().toISOString()}).eq("id",broker.id).select("*").single();
       broker=u.data||broker;
     }else{
       const i=await ops.from("commercial_followup_brokers").insert({followup_client_id:client.id,display_name:String(row.name).replace(/^SDR\s+/i,""),active:true,legacy_last_reported_on:row.last_date||null,metadata:meta}).select("*").single();
@@ -349,7 +350,6 @@ async function dispatchSheetClient(db:any,ops:any,client:Row,force=false){
   }
   let rows=await resolveSheetReport(client);
   if(!rows.length)return {skipped:"no_sheet_sources"};
-  rows=await mergeKnownSheetDates(ops,client,rows);
   const brokers=await syncSheetBrokers(ops,client,rows);
   let {data:day}=await ops.from("commercial_followup_days").select("*").eq("followup_client_id",client.id).eq("report_date",today).maybeSingle();
   if(!day){
@@ -601,7 +601,7 @@ Deno.serve(async(req)=>{
     if(!automation&&role!=="MGMT") return json({error:"forbidden"},403,origin);
     const {data:c}=await ops.from("commercial_followup_clients").select("*").eq("slug",String(body.slug||"")).maybeSingle();
     if(!c||!isSheetMode(c)) return json({error:"sheet_client_not_found"},404,origin);
-    let rows=await resolveSheetReport(c); rows=await mergeKnownSheetDates(ops,c,rows); return json({ok:true,client:c.slug,rows,message:sheetStatusMessage(rows)},200,origin);
+    const rows=await resolveSheetReport(c); return json({ok:true,client:c.slug,rows,message:sheetStatusMessage(rows)},200,origin);
   }
   if(action==="dispatch_client"){ if(!automation&&role!=="MGMT") return json({error:"forbidden"},403,origin); return json({ok:true,...await dispatchClient(db,ops,String(body.slug||""))},200,origin); }
   if(action==="remind_client"){ if(!automation&&role!=="MGMT") return json({error:"forbidden"},403,origin); return json({ok:true,results:await sendReminders(db,ops,String(body.slug||""))},200,origin); }
