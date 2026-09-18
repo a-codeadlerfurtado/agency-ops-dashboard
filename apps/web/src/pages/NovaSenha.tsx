@@ -35,7 +35,9 @@ export default function NovaSenha() {
       const { error } = await supabase.auth.updateUser({ password: senha });
       if (error) throw error;
       setPronto(true);
-      setTimeout(() => { location.hash = "/"; location.reload(); }, 1600);
+      // O recovery usa pathname real (/nova-senha). Alterar apenas o hash
+      // mantém o app preso nessa rota mesmo já autenticado.
+      setTimeout(() => { location.replace(location.origin + "/"); }, 900);
     } catch (err) {
       setErro(mensagemDeErro(err));
     } finally {
