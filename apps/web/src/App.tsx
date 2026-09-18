@@ -347,9 +347,12 @@ export default function App() {
   const convite = rota.startsWith("/convite/") ? rota.slice("/convite/".length) : null;
   if (convite) return <Convite token={convite} />;
 
-  // Recuperacao de senha: o link do e-mail traz a sessao, entao vem antes da
-  // checagem normal de login.
-  if (rota.startsWith("/nova-senha")) return <NovaSenha />;
+  // Recuperacao de senha: o link do Supabase volta pelo pathname real
+  // (/nova-senha) e carrega a sessao no hash/query. Precisa vir antes da
+  // checagem normal de login e antes do router por hash.
+  if (location.pathname.replace(/\/+$/, "") === "/nova-senha" || rota.startsWith("/nova-senha")) {
+    return <NovaSenha />;
+  }
 
   /* Demonstracao em endereco proprio. Os perfis de mentira sairam da tela de
      login -- o cliente real nao precisa ver conta ficticia toda vez que entra

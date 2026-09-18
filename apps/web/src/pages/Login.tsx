@@ -36,7 +36,7 @@ export default function Login({
     setRecuperando(true);
     try {
       await supabase.auth.resetPasswordForEmail(alvo, {
-        redirectTo: `${location.origin}${location.pathname}#/nova-senha`,
+        redirectTo: `${location.origin}/nova-senha`,
       });
     } catch {
       /* mesma resposta em qualquer caso */
