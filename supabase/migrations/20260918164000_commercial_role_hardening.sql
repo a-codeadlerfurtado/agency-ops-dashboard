@@ -1,6 +1,6 @@
 -- Consolida os papeis comerciais e remove privilegio global legado do closer.
 update agency_ops.team_roster
-set role='CLOSER', access_level='RESTRICTED', updated_at=now()
+set role='CLOSER', access_level='RESTRICTED', email='feitozaluizvitor@gmail.com', updated_at=now()
 where person='Vitor Feitoza' and is_former=false;
 
 update agency_ops.user_preferences
@@ -42,10 +42,11 @@ do update set allowed=excluded.allowed,note=excluded.note,updated_at=now();
 insert into agency_ops.team_roster
   (person,role,access_level,email,clickup_user,is_former,created_at,updated_at)
 values
-  ('Gustavo Royce','SDR','RESTRICTED',null,null,false,now(),now())
+  ('Gustavo Royce','SDR','RESTRICTED','luisgustavosdr@gmail.com',null,false,now(),now())
 on conflict (person) do update
 set role='SDR',
     access_level='RESTRICTED',
+    email='luisgustavosdr@gmail.com',
     is_former=false,
     updated_at=now();
 
