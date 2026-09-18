@@ -65,6 +65,13 @@ function priorityRank(item: Row) {
   return ({ CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as Record<string, number>)[String(item.priority || "")] ?? 9;
 }
 
+function popupDedupKey(item: Row) {
+  const meta = item?.metadata || {};
+  const kind = String(meta.triage_kind || item?.source || "");
+  const entity = String(meta.entity_id || meta.entity_name || meta.batch_id || item?.id || "");
+  return [String(item?.client_id || ""), kind, entity].join("|");
+}
+
 /** "signal is aborted without reason" nao ajuda ninguem na tela. */
 function mensagemDeFalha(caught: unknown, padrao: string): string {
   const nome = caught instanceof Error ? caught.name : "";
@@ -108,13 +115,18 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
   /** Ate quando o popup fica calado depois de um "Adiar". 0 = sem pausa. */
   const [popupCooldownUntil, setPopupCooldownUntil] = useState(0);
   /**
-   * Itens cujo POPUP o usuario fechou no X.
-   *
-   * Dispensa e' LOCAL e so' do popup: nao assume, nao adia, nao conclui e nao
-   * altera nada no servidor. O item continua na fila do painel permanente, e o
-   * poll seguinte nao o traz de volta para a tela.
+   * Chaves de popup que este usuario já viu. Persistimos por usuario para que
+   * o mesmo briefing/material não volte a disparar o aviso a cada poll/reload.
    */
-  const [dispensados, setDispensados] = useState<Set<string>>(new Set());
+  const [vistos, setVistos] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try {
+      return new Set(JSON.parse(window.localStorage.getItem(`material-triage-seen-v2:${session.user.id}`) || "[]"));
+    } catch {
+      return new Set();
+    }
+  });
+  const popupAtualRef = useRef<string | null>(null);
   const loadRef = useRef(false);
 
   const load = useCallback(async () => {
@@ -258,10 +270,31 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
   }, [popupCooldownUntil]);
 
   const emPausa = popupCooldownUntil > 0 && Date.now() < popupCooldownUntil;
-  const visiveis = actionable.filter((item: Row) => !dispensados.has(String(item.id)));
+  const visiveis = actionable.filter((item: Row) => !vistos.has(popupDedupKey(item)) || popupAtualRef.current === String(item.id));
   const alert = allowed && !emPausa ? visiveis[0] || null : null;
   const alertAge = alert ? age(alert, now) : null;
   const itemBusy = Boolean(alert && busy.startsWith(`${alert.id}:`));
+
+  useEffect(() => {
+    if (!alert) return;
+    const id = String(alert.id);
+    const key = popupDedupKey(alert);
+    if (popupAtualRef.current === id) return;
+    popupAtualRef.current = id;
+    setVistos((atual) => {
+      if (atual.has(key)) return atual;
+      const proximo = new Set(atual);
+      proximo.add(key);
+      try {
+        window.localStorage.setItem(
+          `material-triage-seen-v2:${session.user.id}`,
+          JSON.stringify(Array.from(proximo).slice(-500)),
+        );
+      } catch {}
+      return proximo;
+    });
+  }, [alert?.id, session.user.id]);
+
   if (typeof document === "undefined") return <style dangerouslySetInnerHTML={{ __html: STYLE }} />;
 
   return <>
@@ -274,7 +307,10 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
           className="material-triage-screen-close"
           aria-label="Fechar aviso deste material"
           title="Fecha só este aviso. O material continua na fila."
-          onClick={() => setDispensados((atual) => new Set(atual).add(String(alert.id)))}
+          onClick={() => {
+            popupAtualRef.current = null;
+            setVistos((atual) => new Set(atual));
+          }}
         >×</button>
       </div>
       <div className="material-triage-screen-title">{String(alert.client_display_name || "Cliente")}</div>
