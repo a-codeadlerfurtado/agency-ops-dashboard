@@ -521,23 +521,35 @@ Deno.serve(async (req: Request) => {
     const remotePhoneCandidate = normalizePhone(call.remote_phone);
     const identitySource = clean(call.identity_source, 80) || null;
     const source = clean(call.source, 40).toUpperCase() === "WHATSAPP_DESKTOP" ? "WHATSAPP_DESKTOP" : "WHATSAPP_WEB";
-    const trustedDesktopIdentity = ["WHATSAPP_LEVELDB_EXACT_CALL_WINDOW", "WHATSAPP_DESKTOP_UI", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
+    const trustedDesktopIdentity = ["WHATSAPP_LEVELDB_EXACT_CALL_WINDOW", "WHATSAPP_LEVELDB_CONTACT_WINDOW", "WHATSAPP_DESKTOP_UI", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
     const remotePhone = source === "WHATSAPP_DESKTOP" && !trustedDesktopIdentity ? null : remotePhoneCandidate;
     const identity = await resolveCallIdentity(ops, remotePhone);
     const resolvedContactName = clean(identity.name, 160) || contactName;
     if (!localSessionId || !startedAt || !endedAt) return respond({ error: "missing_call_data" }, 400);
     if (!Number.isFinite(Date.parse(startedAt)) || !Number.isFinite(Date.parse(endedAt))) return respond({ error: "invalid_timestamps" }, 400);
-    const roles = Array.isArray(body?.roles) ? body.roles.map((v: unknown) => clean(v, 20)).filter((v: string) => ["local", "remote"].includes(v)) : [];
+    const roles = Array.isArray(body?.roles) ? body.roles.map((v: unknown) => clean(v, 20)).filter((v: string) => ["local", "remote", "mixed"].includes(v)) : [];
     if (!roles.length) return respond({ error: "audio_roles_required" }, 400);
     const safeLocal = localSessionId.replace(/[^a-zA-Z0-9._-]/g, "_");
     const ext = clean(call.audio_ext, 12).toLowerCase() === "wav" ? "wav" : "webm";
+    const durationMs = Number.isFinite(Number(call.duration_ms)) ? Math.max(0, Math.round(Number(call.duration_ms))) : Math.max(0, Date.parse(endedAt) - Date.parse(startedAt));
     const audioPaths: Row = {};
-    for (const role of [...new Set(roles)]) audioPaths[role] = `calls/${device.id}/${safeLocal}/${role}.${ext}`;
+    for (const role of [...new Set(roles)]) {
+      const roleExt = role === "mixed" ? "mp3" : ext;
+      audioPaths[role] = `calls/${device.id}/${safeLocal}/${role}.${roleExt}`;
+    }
     const sessionPayload = {
       device_id: device.id, owner_person: device.owner_person, local_session_id: localSessionId,
       meeting_code: null, meeting_url: source === "WHATSAPP_WEB" ? "https://web.whatsapp.com/" : null, title: `Ligação WhatsApp — ${resolvedContactName}`,
       started_at: startedAt, ended_at: endedAt, state: "CAPTURING", capture_mode: source === "WHATSAPP_DESKTOP" ? "WHATSAPP_DESKTOP_AUDIO" : "WHATSAPP_WEB_AUDIO",
       native_transcript_available: false, captions_available: false,
+      audio_status: audioPaths.mixed ? "UPLOADING" : "STORED",
+      audio_source: "DESKTOP_AGENT",
+      audio_local_path: audioPaths.local || null,
+      audio_remote_path: audioPaths.remote || null,
+      audio_mixed_path: audioPaths.mixed || null,
+      audio_duration_ms: durationMs,
+      audio_mime_type: audioPaths.mixed ? "audio/mpeg" : "audio/wav",
+      audio_updated_at: new Date().toISOString(),
       metadata: { source, contact_name: resolvedContactName, local_phone: localPhone, remote_phone: remotePhone, identity_source: identitySource,
         identity_candidate_rejected: Boolean(remotePhoneCandidate && !remotePhone),
         remote_name: identity.name, remote_role: identity.role, resolved_client_id: identity.client_id, resolved_client_name: identity.client_name,
@@ -589,9 +601,37 @@ Deno.serve(async (req: Request) => {
     if (!device) return respond({ error: "invalid_device" }, 401);
     const localSessionId = clean(body?.local_session_id, 180);
     if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
-    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions").select("id,state,metadata").eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
+    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
+      .select("id,state,metadata,audio_local_path,audio_remote_path,audio_mixed_path,audio_duration_ms,audio_status")
+      .eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
     if (sessionError || !session) return respond({ error: "call_session_not_found" }, 404);
-    await ops.from("meeting_capture_sessions").update({ state: "PROCESSING", updated_at: new Date().toISOString() }).eq("id", session.id);
+    const uploaded = Array.isArray(body?.uploaded) ? body.uploaded : [];
+    let totalBytes = 0;
+    let mixedBytes = 0;
+    for (const raw of uploaded) {
+      const role = clean(raw?.role,20).toLowerCase();
+      if (!["local","remote","mixed"].includes(role)) continue;
+      const expected = role === "local" ? session.audio_local_path : role === "remote" ? session.audio_remote_path : session.audio_mixed_path;
+      const path = clean(raw?.path,1000);
+      if (!expected || path !== expected) return respond({ error: "call_audio_path_mismatch", role }, 400);
+      const bytes = Math.max(0, Math.round(Number(raw?.bytes || 0)));
+      if (!bytes) return respond({ error: "call_audio_empty_upload", role }, 400);
+      totalBytes += bytes;
+      if (role === "mixed") mixedBytes = bytes;
+    }
+    const durationMs = Number.isFinite(Number(body?.duration_ms))
+      ? Math.max(0, Math.round(Number(body.duration_ms)))
+      : Math.max(0, Math.round(Number(session.audio_duration_ms || 0)));
+    await ops.from("meeting_capture_sessions").update({
+      state: "PROCESSING",
+      audio_status: mixedBytes > 0 ? "READY" : "STORED",
+      audio_size_bytes: mixedBytes > 0 ? mixedBytes : totalBytes || null,
+      audio_duration_ms: durationMs || null,
+      audio_mime_type: mixedBytes > 0 ? "audio/mpeg" : "audio/wav",
+      audio_last_error: null,
+      audio_updated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }).eq("id", session.id);
     const { data: jobId, error: jobError } = await ops.rpc("enqueue_heavy_job", {
       p_job_type: "CALL_TRANSCRIBE", p_payload: { session_id: session.id }, p_dedupe_key: `call:${session.id}`, p_max_attempts: 5, p_available_at: new Date().toISOString(),
     });

@@ -95,7 +95,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         else if (micUsage.Available && callPrivacyObservedActive
             && callPrivacyStart > 0 && micUsage.Stop >= callPrivacyStart)
         {
-            await FinishCallAsync("windows_mic_released");
+            await FinishCallAsync("windows_mic_released", micUsage.Stop);
             return;
         }
 
@@ -253,7 +253,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         {
             var ring = role == "remote" ? remoteRing : localRing;
             ring.Enqueue((now, bytes));
-            while (ring.Count > 0 && now - ring.Peek().at > TimeSpan.FromSeconds(10)) ring.Dequeue();
+            while (ring.Count > 0 && now - ring.Peek().at > TimeSpan.FromSeconds(3)) ring.Dequeue();
             if (AudioLevel.IsActive(bytes, format, role == "remote" ? 0.0025 : 0.015))
             {
                 if (role == "remote") lastRemoteActive = now;
@@ -271,8 +271,9 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     {
         if (remoteRecorder is null || localRecorder is null || IsRecording) return;
         var now = DateTimeOffset.Now;
+        var detectedStart = ResolvePrivacyTime(privacyStart, now);
         sessionId = $"wa-desktop-{now:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
-        callStarted = now;
+        callStarted = detectedStart;
         callPrivacyObservedActive = privacyStart > 0;
         callPrivacyStart = privacyStart;
         var dir = Path.Combine(Path.GetTempPath(), "RelatoAI", sessionId);
@@ -281,10 +282,11 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         localPath = Path.Combine(dir, "local.wav");
         remoteWriter = new WaveFileWriter(remotePath, remoteRecorder.WaveFormat);
         localWriter = new WaveFileWriter(localPath, localRecorder.WaveFormat);
+        var keepFrom = privacyStart > 0 ? detectedStart - TimeSpan.FromMilliseconds(500) : now - TimeSpan.FromSeconds(2);
         lock (gate)
         {
-            foreach (var row in remoteRing) remoteWriter.Write(row.data, 0, row.data.Length);
-            foreach (var row in localRing) localWriter.Write(row.data, 0, row.data.Length);
+            foreach (var row in remoteRing.Where(row => row.at >= keepFrom)) remoteWriter.Write(row.data, 0, row.data.Length);
+            foreach (var row in localRing.Where(row => row.at >= keepFrom)) localWriter.Write(row.data, 0, row.data.Length);
         }
         candidateAt = null;
         var contact = ResolveContactName(process);
@@ -296,12 +298,14 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
 
     public Task FinishManualAsync() => FinishCallAsync("manual_stop");
 
-    private async Task FinishCallAsync(string reason)
+    private async Task FinishCallAsync(string reason, long privacyStop = 0)
     {
         if (!IsRecording || sessionId is null || callStarted is null) return;
         var id = sessionId;
         var started = callStarted.Value;
-        var ended = DateTimeOffset.Now;
+        var now = DateTimeOffset.Now;
+        var ended = ResolvePrivacyTime(privacyStop, now);
+        if (ended <= started || ended - started > TimeSpan.FromHours(12)) ended = now;
         var contact = ResolveContactName(target);
         lock (gate)
         {
@@ -319,32 +323,58 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         try
         {
             var cfg = AgentConfig.Load() ?? configProvider() ?? throw new InvalidOperationException("Desktop Agent não pareado");
-            var identity = await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone);
+            var visiblePhone = WhatsAppCallIdentityResolver.PhoneFromVisibleText(contact);
+            var identity = visiblePhone is not null
+                ? new WhatsAppCallIdentity(cfg.LocalPhone, visiblePhone, "WHATSAPP_DESKTOP_UI")
+                : await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone, contact);
             if (!string.IsNullOrWhiteSpace(identity.LocalPhone) && identity.LocalPhone != cfg.LocalPhone)
             {
                 cfg = cfg with { LocalPhone = identity.LocalPhone };
                 cfg.Save();
             }
             var api = new RelatoApi(cfg);
+            var durationMs = Math.Max(0L, (long)Math.Round((ended - started).TotalMilliseconds));
             var roles = new List<string>();
             if (remotePath is not null && File.Exists(remotePath) && new FileInfo(remotePath).Length > 1000) roles.Add("remote");
             if (localPath is not null && File.Exists(localPath) && new FileInfo(localPath).Length > 1000) roles.Add("local");
             if (roles.Count == 0) throw new InvalidOperationException("Nenhum áudio capturado");
+
+            string? mixedPath = null;
+            var dir = Path.GetDirectoryName(localPath ?? remotePath ?? "");
+            if (!string.IsNullOrWhiteSpace(dir))
+            {
+                mixedPath = Path.Combine(dir, "meeting.mp3");
+                var mixItem = new MeetingAudioOutboxItem(
+                    id, started, ended, localPath ?? "", remotePath ?? "", mixedPath,
+                    "RECORDED_LOCAL", 0, null, DateTimeOffset.Now);
+                if (MeetingAudioMixer.TryCreateMixedMp3(mixItem, out _)
+                    && File.Exists(mixedPath) && new FileInfo(mixedPath).Length > 1000)
+                    roles.Add("mixed");
+                else mixedPath = null;
+            }
+
             var prepared = await api.PrepareCallAsync(
-                id, started, ended, contact, roles,
+                id, started, ended, contact, roles, durationMs,
                 identity.LocalPhone, identity.RemotePhone, identity.Source);
             var uploaded = new List<object>();
             foreach (var targetUpload in prepared.Uploads)
             {
-                var file = targetUpload.Role == "local" ? localPath : remotePath;
+                string? file = targetUpload.Role switch
+                {
+                    "local" => localPath,
+                    "remote" => remotePath,
+                    "mixed" => mixedPath,
+                    _ => null
+                };
                 if (file is null || !File.Exists(file)) continue;
-                await api.UploadAsync(targetUpload.SignedUrl, file);
-                uploaded.Add(new { role = targetUpload.Role, path = targetUpload.Path, bytes = new FileInfo(file).Length, mime_type = "audio/wav" });
+                var mime = targetUpload.Role == "mixed" ? "audio/mpeg" : "audio/wav";
+                await api.UploadAsync(targetUpload.SignedUrl, file, mime);
+                uploaded.Add(new { role = targetUpload.Role, path = targetUpload.Path, bytes = new FileInfo(file).Length, mime_type = mime });
             }
-            await api.FinalizeCallAsync(id, uploaded);
+            await api.FinalizeCallAsync(id, uploaded, durationMs);
             success = true;
             CallFinished?.Invoke(id, true, null);
-            _ = Task.Run(() => CleanupFiles(remotePath, localPath));
+            _ = Task.Run(() => CleanupFiles(remotePath, localPath, Path.Combine(Path.GetDirectoryName(localPath ?? remotePath ?? "") ?? "", "meeting.mp3")));
         }
         catch (Exception ex)
         {
@@ -356,6 +386,17 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             StatusChanged?.Invoke(success ? "Ligação enviada ao Relato AI" : "Falha ao enviar ligação");
             remotePath = null; localPath = null;
         }
+    }
+
+    private static DateTimeOffset ResolvePrivacyTime(long rawFileTime, DateTimeOffset fallback)
+    {
+        if (rawFileTime <= 0) return fallback;
+        try
+        {
+            var value = new DateTimeOffset(DateTime.FromFileTimeUtc(rawFileTime)).ToLocalTime();
+            return Math.Abs((value - fallback).TotalHours) <= 12 ? value : fallback;
+        }
+        catch { return fallback; }
     }
 
     private static string ResolveContactName(Process? process)

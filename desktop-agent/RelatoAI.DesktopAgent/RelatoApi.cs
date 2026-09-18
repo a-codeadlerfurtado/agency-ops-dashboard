@@ -49,7 +49,7 @@ internal sealed partial class RelatoApi
             action = "pair_redeem",
             code = code.Trim().ToUpperInvariant(),
             device_name = Environment.MachineName + " · Relato AI Desktop Agent",
-            extension_version = "desktop-0.1.0"
+            extension_version = "desktop-0.3.1"
         }, withToken: false);
         var root = doc.RootElement;
         return new PairResult(
@@ -60,7 +60,7 @@ internal sealed partial class RelatoApi
 
     public async Task<PreparedCall> PrepareCallAsync(
         string localSessionId, DateTimeOffset started, DateTimeOffset ended,
-        string contactName, IReadOnlyList<string> roles,
+        string contactName, IReadOnlyList<string> roles, long durationMs,
         string? localPhone = null, string? remotePhone = null, string? identitySource = null)
     {
         using var doc = await SendAsync(new
@@ -75,8 +75,9 @@ internal sealed partial class RelatoApi
                 local_phone = localPhone,
                 remote_phone = remotePhone,
                 identity_source = identitySource,
+                duration_ms = durationMs,
                 finish_reason = "desktop_audio_session_ended",
-                extension_version = "desktop-0.1.0",
+                extension_version = "desktop-0.3.1",
                 source = "WHATSAPP_DESKTOP",
                 audio_ext = "wav"
             },
@@ -123,13 +124,14 @@ internal sealed partial class RelatoApi
             throw new InvalidOperationException($"Upload falhou: {(int)res.StatusCode} {await res.Content.ReadAsStringAsync()}");
     }
 
-    public async Task FinalizeCallAsync(string localSessionId, IEnumerable<object> uploaded)
+    public async Task FinalizeCallAsync(string localSessionId, IEnumerable<object> uploaded, long durationMs)
     {
         using var _ = await SendAsync(new
         {
             action = "call_finalize",
             local_session_id = localSessionId,
-            uploaded = uploaded.ToArray()
+            uploaded = uploaded.ToArray(),
+            duration_ms = durationMs
         });
     }
 

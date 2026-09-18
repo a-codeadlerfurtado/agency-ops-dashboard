@@ -17,13 +17,14 @@ internal static class WhatsAppCallIdentityResolver
     public static async Task<WhatsAppCallIdentity> ResolveAsync(
         DateTimeOffset started,
         DateTimeOffset ended,
-        string? knownLocalPhone)
+        string? knownLocalPhone,
+        string? contactName = null)
     {
         var knownLocal = NormalizePhone(knownLocalPhone);
         WhatsAppCallIdentity best = new(knownLocal, null, null);
         for (var attempt = 0; attempt < 8; attempt++)
         {
-            var current = ResolveOnce(started, ended, best.LocalPhone);
+            var current = ResolveOnce(started, ended, best.LocalPhone, contactName);
             if (!string.IsNullOrWhiteSpace(current.LocalPhone))
                 best = best with { LocalPhone = current.LocalPhone };
             if (!string.IsNullOrWhiteSpace(current.RemotePhone))
@@ -38,7 +39,8 @@ internal static class WhatsAppCallIdentityResolver
     private static WhatsAppCallIdentity ResolveOnce(
         DateTimeOffset started,
         DateTimeOffset ended,
-        string? knownLocalPhone)
+        string? knownLocalPhone,
+        string? contactName)
     {
         try
         {
@@ -60,17 +62,32 @@ internal static class WhatsAppCallIdentityResolver
             {
                 var text = ReadTailLatin1(file.FullName, 4 * 1024 * 1024);
                 if (string.IsNullOrEmpty(text)) continue;
-                ScoreText(text, started, ended, knownLocalPhone, candidates);
+                ScoreText(text, started, ended, knownLocalPhone, contactName, candidates);
             }
 
             var ordered = candidates
                 .Where(kv => kv.Key != knownLocalPhone)
                 .OrderByDescending(kv => kv.Value)
                 .ToArray();
-            var remote = ordered.Length == 1 ? ordered[0].Key : null;
+            string? remote = null;
+            string? source = null;
+            if (ordered.Length == 1)
+            {
+                remote = ordered[0].Key;
+                source = ordered[0].Value >= 90_000 ? "WHATSAPP_LEVELDB_EXACT_CALL_WINDOW" : "WHATSAPP_LEVELDB_CONTACT_WINDOW";
+            }
+            else if (ordered.Length > 1 && ordered[0].Value >= 90_000 && ordered[0].Value - ordered[1].Value >= 12_000)
+            {
+                remote = ordered[0].Key;
+                source = "WHATSAPP_LEVELDB_EXACT_CALL_WINDOW";
+            }
+            else if (ordered.Length > 1 && ordered[0].Value >= 45_000 && ordered[0].Value - ordered[1].Value >= 8_000)
+            {
+                remote = ordered[0].Key;
+                source = "WHATSAPP_LEVELDB_CONTACT_WINDOW";
+            }
 
-            return new(NormalizePhone(knownLocalPhone), NormalizePhone(remote),
-                string.IsNullOrWhiteSpace(remote) ? null : "WHATSAPP_LEVELDB_EXACT_CALL_WINDOW");
+            return new(NormalizePhone(knownLocalPhone), NormalizePhone(remote), source);
         }
         catch
         {
@@ -83,19 +100,31 @@ internal static class WhatsAppCallIdentityResolver
         DateTimeOffset started,
         DateTimeOffset ended,
         string? knownLocalPhone,
+        string? contactName,
         Dictionary<string, int> remoteScores)
     {
         var anchors = FindExactCallAnchors(text, started, ended);
-        if (anchors.Count == 0) return;
+        var contactAnchors = new List<int>();
+        var normalizedContact = String.IsNullOrWhiteSpace(contactName) ? "" : contactName.Trim();
+        if (normalizedContact.Length >= 3
+            && !normalizedContact.Equals("Contato WhatsApp Desktop", StringComparison.OrdinalIgnoreCase)
+            && !normalizedContact.Equals("WhatsApp", StringComparison.OrdinalIgnoreCase))
+            AddAllIndexes(text, normalizedContact, contactAnchors);
 
         foreach (Match match in ChatPhoneRegex.Matches(text))
         {
             var phone = NormalizePhone(match.Groups["phone"].Value);
             if (phone is null || phone == knownLocalPhone) continue;
-            var distance = anchors.Min(anchor => Math.Abs(anchor - match.Index));
-            if (distance > 12_000) continue;
-            var score = 100_000 - distance;
-            AddScore(remoteScores, phone, score);
+            if (anchors.Count > 0)
+            {
+                var distance = anchors.Min(anchor => Math.Abs(anchor - match.Index));
+                if (distance <= 12_000) AddScore(remoteScores, phone, 100_000 - distance);
+            }
+            if (contactAnchors.Count > 0)
+            {
+                var distance = contactAnchors.Min(anchor => Math.Abs(anchor - match.Index));
+                if (distance <= 8_000) AddScore(remoteScores, phone, 55_000 - distance);
+            }
         }
     }
 
@@ -165,6 +194,16 @@ internal static class WhatsAppCallIdentityResolver
     {
         if (score <= 0) return;
         scores[phone] = scores.TryGetValue(phone, out var current) ? Math.Max(current, score) : score;
+    }
+
+    public static string? PhoneFromVisibleText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        var trimmed = value.Trim();
+        var digits = new string(trimmed.Where(char.IsDigit).ToArray());
+        var hasPhoneShape = trimmed.Contains('+') || trimmed.Contains('(') || trimmed.Contains(')') || trimmed.Contains('-')
+            || trimmed.Count(char.IsDigit) >= 10;
+        return hasPhoneShape ? NormalizePhone(digits) : null;
     }
 
     private static string? NormalizePhone(string? value)
