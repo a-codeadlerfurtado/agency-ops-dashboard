@@ -27,6 +27,7 @@ export async function corretores(tenantId: string): Promise<Profile[]> {
     .select("role, profile:profiles(id, full_name, phone)")
     .eq("tenant_id", tenantId)
     .eq("status", "ACTIVE")
+    .eq("is_internal", false)
     .order("role");
   if (error) throw error;
   return (data ?? [])

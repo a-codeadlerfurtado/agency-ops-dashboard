@@ -118,7 +118,14 @@ function Nav({ sessao, rota, aoNavegar }: {
   );
 }
 
-function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) {
+function Shell({
+  sessao, sair, entrarComoMestre, voltarAoMestre,
+}: {
+  sessao: Sessao;
+  sair: () => Promise<void>;
+  entrarComoMestre: (tenant: Sessao["tenant"]) => Promise<void>;
+  voltarAoMestre: () => Promise<void>;
+}) {
   const rota = useRota();
   const [menuAberto, setMenuAberto] = useState(false);
 
@@ -172,8 +179,15 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
         pagina = sessao.isAdmin ? <Integracoes sessao={sessao} /> : <SemPermissao />;
         break;
       case "/operacao":
-        titulo = "Operacao";
-        pagina = sessao.ehOperador ? <Operacao /> : <SemPermissao />;
+        titulo = sessao.modoMestre ? "Imobiliarias" : "Operacao";
+        pagina = sessao.ehOperador ? (
+          <Operacao
+            aoAcessar={sessao.modoMestre ? async (t) => {
+              await entrarComoMestre({ id: t.id, name: t.nome, slug: t.slug });
+              irPara("/");
+            } : undefined}
+          />
+        ) : <SemPermissao />;
         break;
       case "/corretores":
         titulo = "Corretores";
@@ -211,7 +225,7 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
                 {sessao.nome}
               </div>
               <div className="truncate" style={{ fontSize: 11.5, color: "var(--text-subtle)" }}>
-                {sessao.tenant.name} · {sessao.isAdmin ? "Admin" : "Corretor"}
+                {sessao.tenant.name} · {sessao.modoMestre ? "Master" : sessao.isAdmin ? "Admin" : "Corretor"}
               </div>
             </div>
             <button className="btn ghost sm" onClick={sair} title="Sair" aria-label="Sair">
@@ -222,6 +236,24 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
       </aside>
 
       <div className="main">
+        {sessao.modoMestre && (
+          <div style={{
+            minHeight: 42, padding: "7px 16px", display: "flex", alignItems: "center",
+            gap: 10, borderBottom: "1px solid var(--border)", background: "var(--surface-raised)",
+          }}>
+            <strong style={{ fontSize: 12.5 }}>Modo Master</strong>
+            <span style={{ fontSize: 12.5, color: "var(--muted)" }}>
+              Administrando: {sessao.tenant.name}
+            </span>
+            <span className="spacer" />
+            <button
+              className="btn sm"
+              onClick={() => void voltarAoMestre()}
+            >
+              Voltar ao Master
+            </button>
+          </div>
+        )}
         <Topbar sessao={sessao} titulo={titulo} aoAbrirMenu={() => setMenuAberto(true)} />
         <main className="content">{pagina}</main>
       </div>
@@ -237,7 +269,14 @@ function Shell({ sessao, sair }: { sessao: Sessao; sair: () => Promise<void> }) 
  * Sem sidebar de propósito: aqui não existe pipeline, lead nem imóvel. Uma
  * barra e uma tela.
  */
-function ConsoleDaOperacao({ email, sair }: { email: string; sair: () => Promise<void> }) {
+function ConsoleDaOperacao({
+  email, sair, isMaster, entrarComoMestre,
+}: {
+  email: string;
+  sair: () => Promise<void>;
+  isMaster: boolean;
+  entrarComoMestre: (tenant: Sessao["tenant"]) => Promise<void>;
+}) {
   return (
     <div className="app" style={{ gridTemplateColumns: "1fr" }}>
       <div className="main">
@@ -246,8 +285,8 @@ function ConsoleDaOperacao({ email, sair }: { email: string; sair: () => Promise
             <ImobiBoardMark size={24} />
           </span>
           <div>
-            <div className="eyebrow">Imobi-Board</div>
-            <div className="topbar-title">Operacao</div>
+            <div className="eyebrow">{isMaster ? "Imobi-Board Master" : "Imobi-Board"}</div>
+            <div className="topbar-title">{isMaster ? "Contas de clientes" : "Operacao"}</div>
           </div>
           <span className="spacer" />
           <span className="topbar-sub some-no-mobile">{email}</span>
@@ -255,7 +294,14 @@ function ConsoleDaOperacao({ email, sair }: { email: string; sair: () => Promise
             {Ico.out({ size: 15 })}
           </button>
         </header>
-        <main className="content"><Operacao /></main>
+        <main className="content">
+          <Operacao
+            aoAcessar={isMaster ? async (t) => {
+              await entrarComoMestre({ id: t.id, name: t.nome, slug: t.slug });
+              irPara("/");
+            } : undefined}
+          />
+        </main>
       </div>
     </div>
   );
@@ -284,7 +330,7 @@ function Carregando() {
 }
 
 export default function App() {
-  const { estado, entrar, sair } = useSessao();
+  const { estado, entrar, sair, entrarComoMestre, voltarAoMestre } = useSessao();
   const rota = useRota();
 
   // Convite tem tela propria e precisa funcionar antes de existir sessao:
@@ -330,7 +376,16 @@ export default function App() {
     );
   }
 
-  if (estado.fase === "operador") return <ConsoleDaOperacao sair={sair} email={estado.email} />;
+  if (estado.fase === "operador") {
+    return (
+      <ConsoleDaOperacao
+        sair={sair}
+        email={estado.email}
+        isMaster={estado.isMaster}
+        entrarComoMestre={entrarComoMestre}
+      />
+    );
+  }
 
   if (estado.fase === "sem-tenant") {
     return (
@@ -352,7 +407,14 @@ export default function App() {
     );
   }
 
-  return <Shell sessao={estado.sessao} sair={sair} />;
+  return (
+    <Shell
+      sessao={estado.sessao}
+      sair={sair}
+      entrarComoMestre={entrarComoMestre}
+      voltarAoMestre={voltarAoMestre}
+    />
+  );
 }
 
 export { primeiroNome };

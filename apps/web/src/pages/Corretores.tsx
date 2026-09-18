@@ -26,6 +26,7 @@ async function membros(tenantId: string): Promise<Membro[]> {
     .from("memberships")
     .select("id, user_id, role, status, profile:profiles(full_name, phone)")
     .eq("tenant_id", tenantId)
+    .eq("is_internal", false)
     .order("role");
   if (error) throw error;
   return (data ?? []) as unknown as Membro[];

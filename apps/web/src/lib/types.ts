@@ -107,6 +107,8 @@ export interface Sessao {
   isAdmin: boolean;
   /** dono da operacao: pode criar imobiliaria */
   ehOperador?: boolean;
+  /** acesso interno que pode alternar entre todas as contas */
+  modoMestre?: boolean;
 }
 
 /* ---------------------------------------------- imoveis e pos-qualificacao */

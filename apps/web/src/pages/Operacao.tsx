@@ -21,7 +21,11 @@ const linkDoConvite = (token: string) =>
  * e-mail: no volume de uma agência, mandar o link no WhatsApp onde a conversa
  * já está acontecendo chega melhor do que e-mail de sistema, que cai em spam.
  */
-export default function Operacao() {
+export default function Operacao({
+  aoAcessar,
+}: {
+  aoAcessar?: (imobiliaria: Imobiliaria) => void | Promise<void>;
+}) {
   const avisar = useToast();
   const [criando, setCriando] = useState(false);
   const [convite, setConvite] = useState<{
@@ -67,6 +71,7 @@ export default function Operacao() {
                     <th className="num">Leads</th>
                     <th>Situacao</th>
                     <th>Criada</th>
+                    {aoAcessar && <th aria-label="Acoes" />}
                   </tr>
                 </thead>
                 <tbody>
@@ -94,6 +99,17 @@ export default function Operacao() {
                       <td className="nowrap" style={{ color: "var(--muted)" }}>
                         {dataHora(t.criada_em)}
                       </td>
+                      {aoAcessar && (
+                        <td className="nowrap" style={{ textAlign: "right" }}>
+                          <button
+                            className="btn primary sm"
+                            onClick={() => void aoAcessar(t)}
+                            title={`Administrar ${t.nome}`}
+                          >
+                            Acessar conta
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>
