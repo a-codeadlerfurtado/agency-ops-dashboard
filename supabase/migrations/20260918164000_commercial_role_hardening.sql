@@ -18,3 +18,8 @@ where person='Gustavo Lima' and is_former=false;
 update agency_ops.user_preferences
 set role='SDR', updated_at=now()
 where collaborator_person='Gustavo Lima';
+
+-- Remove herancas de visualizacao do antigo perfil CS do SDR.
+delete from agency_ops.dashboard_view_permissions
+where scope_type='PERSON'
+  and scope_value='Gustavo Lima';
