@@ -1,3 +1,10 @@
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 const api = process.env.WORKER_API_URL;
 const token = process.env.AGENCY_WORKER_TOKEN;
 const worker = process.env.WORKER_ID || "leonardoimobi-primary-1";
@@ -624,6 +631,59 @@ async function processGroupMeetingCalendarJob(job) {
   return await call("group_meeting_commit",{agenda_event_id:eventId,sync_status:"SYNCED",calendar_event_id:result.event_id,calendar_html_link:result.html_link,meet_url:result.meet_url,calendar_owner_person:owner,calendar_title:title});
 }
 
+async function processMeetingAudioJob(job) {
+  const sessionId = String(job?.payload?.session_id || "").trim();
+  if (!sessionId) throw new Error("meeting_audio_job_missing_session_id");
+  const snapshot = await call("meeting_audio_snapshot", { session_id: sessionId }, 120000);
+  const originals = Array.isArray(snapshot.originals) ? snapshot.originals : [];
+  if (!originals.length) throw new Error("meeting_audio_originals_not_found");
+  const mixed = snapshot.mixed_upload || {};
+  if (!mixed.signed_url || !mixed.path) throw new Error("meeting_audio_mixed_target_missing");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "relato-meeting-audio-"));
+  try {
+    const inputs = [];
+    for (const item of originals) {
+      const role = String(item.role || "audio").replace(/[^a-z0-9_-]/gi, "");
+      const ext = String(item.path || "").toLowerCase().endsWith(".wav") ? ".wav" : String(item.path || "").toLowerCase().endsWith(".ogg") ? ".ogg" : ".webm";
+      const file = path.join(dir, role + ext);
+      const response = await fetch(String(item.signed_url || ""));
+      if (!response.ok) throw new Error(`meeting_audio_download_${role}_${response.status}`);
+      await writeFile(file, Buffer.from(await response.arrayBuffer()));
+      inputs.push({ role, file });
+    }
+    const output = path.join(dir, "meeting.webm");
+    const args = ["-hide_banner", "-loglevel", "error", "-y"];
+    for (const input of inputs) args.push("-i", input.file);
+    if (inputs.length >= 2) {
+      args.push("-filter_complex", `[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0,alimiter=limit=0.95[a]`, "-map", "[a]");
+    } else {
+      args.push("-map", "0:a:0");
+    }
+    args.push("-vn", "-c:a", "libopus", "-b:a", "48k", "-vbr", "on", "-application", "voip", "-ac", "1", "-ar", "48000", "-f", "webm", output);
+    await execFileAsync("ffmpeg", args, { timeout: 30 * 60 * 1000, maxBuffer: 4 * 1024 * 1024 });
+    const bytes = await readFile(output);
+    if (bytes.length < 512) throw new Error("meeting_audio_mixed_empty");
+    const upload = await fetch(String(mixed.signed_url), {
+      method: "PUT",
+      headers: { "content-type": "audio/webm", "x-upsert": "true" },
+      body: bytes,
+    });
+    if (!upload.ok) throw new Error(`meeting_audio_mixed_upload_${upload.status}:${(await upload.text()).slice(0,300)}`);
+    const durationMs = Number(snapshot.session?.audio_duration_ms || 0) || null;
+    return await call("meeting_audio_commit", {
+      session_id: sessionId,
+      mixed_path: mixed.path,
+      bytes: bytes.length,
+      duration_ms: durationMs,
+      mime_type: "audio/webm",
+    }, 120000);
+  } catch (error) {
+    await call("meeting_audio_failed", { session_id: sessionId, error: String(error?.message || error) }, 120000).catch(() => {});
+    throw error;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
 async function handleQueueJob(job) {
   const type = String(job.job_type || "").toUpperCase();
   if (type === "SELF_TEST") {
@@ -643,6 +703,9 @@ async function handleQueueJob(job) {
   }
   if (type === "MEETING_POSTPROCESS") {
     return await processMeetingJob(job);
+  }
+  if (type === "MEETING_AUDIO_PROCESS") {
+    return await processMeetingAudioJob(job);
   }
   if (type === "CALL_TRANSCRIBE") {
     return await processCallJob(job);

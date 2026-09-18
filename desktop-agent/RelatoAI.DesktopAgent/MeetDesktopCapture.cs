@@ -49,6 +49,9 @@ internal sealed class MeetDesktopCapture : IDisposable
     private DateTimeOffset remoteSpeakerAt;
     private double remoteSpeakerConfidence;
     private long segmentSeq;
+    private MeetingAudioOutboxItem? audioOutbox;
+    private readonly System.Threading.Timer retryTimer;
+    private int retrying;
     private bool disposed;
 
     public event Action<string>? StatusChanged;
@@ -56,7 +59,11 @@ internal sealed class MeetDesktopCapture : IDisposable
     public event Action<string, bool, string?>? MeetingFinished;
     public bool IsRecording => current is not null;
 
-    public MeetDesktopCapture(Func<AgentConfig?> configProvider) => this.configProvider = configProvider;
+    public MeetDesktopCapture(Func<AgentConfig?> configProvider)
+    {
+        this.configProvider = configProvider;
+        retryTimer = new System.Threading.Timer(_ => RetryOutboxSafe(), null, TimeSpan.FromSeconds(5), TimeSpan.FromMinutes(1));
+    }
 
     public async Task StartAsync(MeetStartRequest request)
     {
@@ -72,10 +79,9 @@ internal sealed class MeetDesktopCapture : IDisposable
             localChunk.Reset(request.StartedAt); remoteChunk.Reset(request.StartedAt);
             remoteSpeaker = null; remoteSpeakerAt = DateTimeOffset.MinValue; remoteSpeakerConfidence = 0;
         }
-        var dir = Path.Combine(Path.GetTempPath(), "RelatoAI", request.LocalSessionId);
-        Directory.CreateDirectory(dir);
-        localPath = Path.Combine(dir, "local.wav");
-        remotePath = Path.Combine(dir, "remote.wav");
+        audioOutbox = MeetingAudioOutbox.Create(request);
+        localPath = audioOutbox.LocalPath;
+        remotePath = audioOutbox.RemotePath;
         await StartRecordersAsync();
         MeetingStarted?.Invoke(request.MeetingCode);
         StatusChanged?.Invoke($"REC · Google Meet · {request.MeetingCode} · Desktop Agent");
@@ -276,14 +282,24 @@ internal sealed class MeetDesktopCapture : IDisposable
         MeetStartRequest? closing;
         lock (gate) closing = current;
         if (closing is null) return;
+
+        var endedAt = DateTimeOffset.Now;
         StopRecorders();
+        if (audioOutbox is not null)
+            audioOutbox = MeetingAudioOutbox.MarkRecorded(audioOutbox, endedAt);
+
         lock (gate)
         {
-            FlushChunkLocked("local", localChunk, DateTimeOffset.Now);
-            FlushChunkLocked("remote", remoteChunk, DateTimeOffset.Now);
+            FlushChunkLocked("local", localChunk, endedAt);
+            FlushChunkLocked("remote", remoteChunk, endedAt);
         }
         Task[] jobs; lock (gate) jobs = pending.ToArray();
-        if (jobs.Length > 0) await Task.WhenAll(jobs).WaitAsync(TimeSpan.FromSeconds(45));
+        if (jobs.Length > 0)
+        {
+            try { await Task.WhenAll(jobs).WaitAsync(TimeSpan.FromSeconds(45)); }
+            catch (TimeoutException) { StatusChanged?.Invoke("STT pendente; preservando áudio para processamento."); }
+        }
+
         IReadOnlyList<MeetLiveSegment> finalSegments;
         IReadOnlyList<string> finalParticipants;
         lock (gate)
@@ -292,27 +308,131 @@ internal sealed class MeetDesktopCapture : IDisposable
             finalParticipants = participants.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         }
 
-        var success = false; string? error = null;
+        var transcriptOk = false;
+        string? transcriptError = null;
         try
         {
             var cfg = configProvider() ?? throw new InvalidOperationException("Desktop Agent não pareado");
-            var api = new RelatoApi(cfg);
-            await api.FinalizeMeetingAsync(closing, DateTimeOffset.Now, reason, finalSegments, finalParticipants);
-            success = true;
-            StatusChanged?.Invoke("Meet enviado ao Relato AI");
+            await new RelatoApi(cfg).FinalizeMeetingAsync(closing, endedAt, reason, finalSegments, finalParticipants);
+            transcriptOk = true;
         }
         catch (Exception ex)
         {
-            error = ex.Message;
-            StatusChanged?.Invoke("Falha ao finalizar Meet: " + ex.Message);
+            transcriptError = ex.Message;
+            StatusChanged?.Invoke("Falha ao finalizar transcrição: " + ex.Message);
         }
-        finally
+
+        var audioStored = false;
+        if (audioOutbox is not null)
         {
-            lock (gate) current = null;
-            MeetingFinished?.Invoke(closing.LocalSessionId, success, error);
-            if (success) CleanupFiles(localPath, remotePath);
-            localPath = null; remotePath = null;
+            var outboxItem = audioOutbox;
+            try
+            {
+                await UploadAudioItemAsync(outboxItem);
+                audioStored = true;
+                audioOutbox = null;
+            }
+            catch (Exception ex)
+            {
+                audioOutbox = MeetingAudioOutbox.MarkFailed(outboxItem, ex);
+                StatusChanged?.Invoke("Gravação aguardando envio: " + ex.Message);
+            }
         }
+
+        lock (gate) current = null;
+        localPath = null;
+        remotePath = null;
+
+        var safe = transcriptOk && (audioStored || audioOutbox is not null);
+        var finalError = transcriptOk
+            ? (audioStored ? null : "Transcrição salva; gravação aguardando envio automático.")
+            : transcriptError;
+        StatusChanged?.Invoke(audioStored
+            ? (transcriptOk ? "Meet e gravação enviados ao Relato AI" : "Gravação preservada; transcrição precisa de revisão")
+            : "Meet finalizado; gravação preservada na fila local");
+        MeetingFinished?.Invoke(closing.LocalSessionId, safe, finalError);
+    }
+
+    private async Task UploadAudioItemAsync(MeetingAudioOutboxItem item)
+    {
+        var cfg = configProvider() ?? AgentConfig.Load() ?? throw new InvalidOperationException("Desktop Agent não pareado");
+        if (item.EndedAt is null) throw new InvalidOperationException("Gravação ainda não encerrada");
+        var endedAt = item.EndedAt.Value;
+
+        var mixedReady = MeetingAudioMixer.TryCreateMixedMp3(item, out var mixError);
+        if (!mixedReady && !string.IsNullOrWhiteSpace(mixError))
+            StatusChanged?.Invoke("Mix local indisponível; preservando WAVs: " + mixError);
+
+        var files = new List<(string Role, string Ext, string Mime)>();
+        if (File.Exists(item.LocalPath) && new FileInfo(item.LocalPath).Length > 1000) files.Add(("local", "wav", "audio/wav"));
+        if (File.Exists(item.RemotePath) && new FileInfo(item.RemotePath).Length > 1000) files.Add(("remote", "wav", "audio/wav"));
+        if (mixedReady && !string.IsNullOrWhiteSpace(item.MixedPath)
+            && File.Exists(item.MixedPath) && new FileInfo(item.MixedPath).Length > 1000)
+            files.Add(("mixed", "mp3", "audio/mpeg"));
+        if (files.Count == 0) throw new InvalidOperationException("Nenhum áudio preservado para upload");
+
+        item = MeetingAudioOutbox.MarkUploading(item);
+        var durationMs = Math.Max(0, (long)Math.Round((endedAt - item.StartedAt).TotalMilliseconds));
+        var api = new RelatoApi(cfg);
+        var prepared = await api.PrepareMeetingAudioAsync(item.LocalSessionId, durationMs, "DESKTOP_AGENT", files);
+        if (prepared.State == "READY" && prepared.Uploads.Count == 0)
+        {
+            MeetingAudioOutbox.Remove(item);
+            return;
+        }
+
+        var uploaded = new List<object>();
+        foreach (var target in prepared.Uploads)
+        {
+            string? file = target.Role switch
+            {
+                "local" => item.LocalPath,
+                "remote" => item.RemotePath,
+                "mixed" => item.MixedPath,
+                _ => null
+            };
+            if (string.IsNullOrWhiteSpace(file) || !File.Exists(file)) continue;
+            var mime = target.Role == "mixed" ? "audio/mpeg" : "audio/wav";
+            await api.UploadAsync(target.SignedUrl, file, mime);
+            uploaded.Add(new
+            {
+                role = target.Role,
+                path = target.Path,
+                bytes = new FileInfo(file).Length,
+                mime_type = mime
+            });
+        }
+        if (uploaded.Count == 0) throw new InvalidOperationException("Nenhum áudio enviado");
+        await api.FinalizeMeetingAudioAsync(item.LocalSessionId, uploaded, durationMs);
+        MeetingAudioOutbox.Remove(item);
+    }
+
+    private void RetryOutboxSafe()
+    {
+        if (disposed || Interlocked.Exchange(ref retrying, 1) == 1) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (configProvider() is null && AgentConfig.Load() is null) return;
+                foreach (var item in MeetingAudioOutbox.LoadPending().Where(x => x.EndedAt is not null && x.State != "RECORDING"))
+                {
+                    try
+                    {
+                        await UploadAudioItemAsync(item);
+                        StatusChanged?.Invoke("Gravação pendente enviada ao Relato AI");
+                    }
+                    catch (Exception ex)
+                    {
+                        MeetingAudioOutbox.MarkFailed(item, ex);
+                    }
+                }
+            }
+            finally
+            {
+                Volatile.Write(ref retrying, 0);
+            }
+        });
     }
 
     private void StopRecorders()
@@ -358,6 +478,7 @@ internal sealed class MeetDesktopCapture : IDisposable
     {
         if (disposed) return;
         disposed = true;
+        retryTimer.Dispose();
         try { if (current is not null) FinishAsync("agent_exit").GetAwaiter().GetResult(); } catch { }
         StopRecorders();
         sttSlots.Dispose();

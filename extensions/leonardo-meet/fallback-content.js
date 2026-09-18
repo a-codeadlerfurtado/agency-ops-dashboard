@@ -1,3 +1,4 @@
+(() => {
 const VERSION = "0.6.0";
 const MEETING_CODE_RE = /\/([a-z0-9]{3}-[a-z0-9]{4}-[a-z0-9]{3})(?:[/?#]|$)/i;
 const LEAVE_RE = /(sair da chamada|encerrar chamada|sair da reunião|leave call|leave meeting|hang up|desligar)/i;
@@ -792,3 +793,5 @@ setInterval(async () => {
 window.addEventListener("pageshow", () => requestRtcCapture(true));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") requestRtcCapture(true); });
 requestRtcCapture(true);
+
+})();

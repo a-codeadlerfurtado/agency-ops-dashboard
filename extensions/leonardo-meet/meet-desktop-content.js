@@ -10,6 +10,8 @@ let panel = null;
 let panelBody = null;
 let badge = null;
 let lastStateSentAt = 0;
+let bridgeFailures = 0;
+let fallbackEnabled = false;
 
 function norm(value) { return String(value || "").replace(/\s+/g, " ").trim(); }
 function nowIso() { return new Date().toISOString(); }
@@ -136,8 +138,19 @@ function pushSegment(row) {
   panelBody.appendChild(item);
   panelBody.scrollTop = panelBody.scrollHeight;
 }
+async function observeBridge(result, reason, localSessionId = session?.id || null) {
+  if (result?.ok) { bridgeFailures = 0; return true; }
+  bridgeFailures += 1;
+  if (!fallbackEnabled && bridgeFailures >= 3) {
+    fallbackEnabled = true;
+    await runtime({ type: "ENABLE_MEET_RTC_FALLBACK", local_session_id: localSessionId, reason });
+    if (badge) badge.textContent = "🔴  Relato AI · Fallback WebRTC";
+    console.warn("Relato ativou fallback WebRTC", reason);
+  }
+  return false;
+}
 async function startSession() {
-  if (session || !getMeetingCode()) return;
+  if (session || fallbackEnabled || !getMeetingCode()) return;
   const status = await runtime({ type: "GET_STATUS" });
   ownerPerson = norm(status?.device?.owner_person) || ownerPerson;
   const startedAt = nowIso();
@@ -153,8 +166,11 @@ async function startSession() {
   const result = await bridge("/meet/start", "POST", body);
   if (!result?.ok) {
     console.warn("Relato Desktop Agent indisponível", result?.error || "unknown");
+    bridgeFailures = 3;
+    await observeBridge(result, "desktop_start_failed", localSessionId);
     return;
   }
+  bridgeFailures = 0;
   session = { id: localSessionId, started_at: startedAt, meeting_code: getMeetingCode() };
   liveCursor = 0;
   ensureUi();
@@ -175,7 +191,7 @@ async function finishSession(reason = "left_call") {
 async function pollLive() {
   if (!session) return;
   const result = await bridge(`/meet/live?after=${liveCursor}`);
-  if (!result?.ok) return;
+  if (!(await observeBridge(result, "desktop_live_failed"))) return;
   for (const row of result.segments || []) {
     const seq = Number(row.Seq ?? row.seq ?? 0);
     if (seq > liveCursor) liveCursor = seq;
@@ -190,11 +206,12 @@ async function sendMeetState(force = false) {
   lastStateSentAt = now;
   const participants = collectParticipants();
   const activeSpeaker = activeSpeakerName();
-  await bridge("/meet/state", "POST", {
+  const result = await bridge("/meet/state", "POST", {
     participants,
     active_speaker: activeSpeaker || null,
     confidence: activeSpeaker ? 0.82 : 0
   });
+  await observeBridge(result, "desktop_state_failed");
 }
 
 async function tick() {

@@ -3,7 +3,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 type Row = Record<string, any>;
 
-const VERSION = "meeting-capture-v1";
+const VERSION = "meeting-capture-v1.1-audio";
 const DASHBOARD_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
   "http://localhost:3000",
@@ -44,6 +44,25 @@ function randomToken() {
 async function sha256(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function safeObjectPart(value: unknown) {
+  return clean(value, 180).replace(/[^a-zA-Z0-9._-]/g, "_") || "session";
+}
+
+function normalizedAudioFile(raw: Row) {
+  const role = clean(raw?.role, 20).toLowerCase();
+  const extRaw = clean(raw?.ext, 12).toLowerCase();
+  const mimeRaw = clean(raw?.mime_type, 120).toLowerCase();
+  if (!["local", "remote", "mixed"].includes(role)) return null;
+  const ext = ["wav", "webm", "ogg", "mp3"].includes(extRaw)
+    ? extRaw
+    : mimeRaw.includes("wav") ? "wav"
+      : mimeRaw.includes("ogg") ? "ogg"
+        : mimeRaw.includes("mpeg") || mimeRaw.includes("mp3") ? "mp3"
+          : "webm";
+  const mime = ext === "wav" ? "audio/wav" : ext === "ogg" ? "audio/ogg" : ext === "mp3" ? "audio/mpeg" : "audio/webm";
+  return { role, ext, mime };
 }
 
 function normalizeSegments(input: unknown) {
@@ -309,7 +328,11 @@ Deno.serve(async (req: Request) => {
     if (!localSessionId || !Number.isFinite(Date.parse(startedAt))) return respond({ error: "invalid_session_heartbeat" }, 400);
     const requestedState = clean(raw.state, 40).toUpperCase();
     const allowedState = ["CAPTURING","NEEDS_REVIEW","FINISHING"].includes(requestedState) ? requestedState : "CAPTURING";
-    const payload = {
+    const requestedAudioStatus = clean(raw.audio_status,40).toUpperCase();
+    const requestedAudioSource = clean(raw.audio_source,40).toUpperCase();
+    const inferredAudioStatus = (clean(raw.metadata?.recorder,40).toUpperCase() === "DESKTOP_AGENT" || clean(raw.capture_mode,40).toUpperCase() === "MEET_RTC_AUDIO") ? "RECORDING" : null;
+    const inferredAudioSource = clean(raw.metadata?.recorder,40).toUpperCase() === "DESKTOP_AGENT" ? "DESKTOP_AGENT" : clean(raw.capture_mode,40).toUpperCase() === "MEET_RTC_AUDIO" ? "EXTENSION_WEBRTC" : null;
+    const payload: Row = {
       device_id: device.id, owner_person: device.owner_person, local_session_id: localSessionId,
       meeting_code: clean(raw.meeting_code, 80) || null, meeting_url: clean(raw.meeting_url, 1000) || null,
       title: clean(raw.title, 500) || "Reunião Google Meet", started_at: startedAt,
@@ -319,9 +342,171 @@ Deno.serve(async (req: Request) => {
       metadata: { ...(raw.metadata || {}), extension_version: clean(raw.extension_version,40) || null, heartbeat_at: new Date().toISOString(), last_error: clean(raw.last_error,500) || null },
       updated_at: new Date().toISOString(),
     };
-    const { data, error } = await ops.from("meeting_capture_sessions").upsert(payload, { onConflict: "device_id,local_session_id" }).select("id,state,meeting_code,owner_person").single();
-    if (error) return respond({ error: "session_heartbeat_failed", detail: error.message }, 500);
-    return respond({ ok: true, session: data });
+    const { data: existingSession, error: existingError } = await ops.from("meeting_capture_sessions")
+      .select("id,metadata").eq("owner_person", device.owner_person).eq("local_session_id", localSessionId).maybeSingle();
+    if (existingError) return respond({ error: "session_heartbeat_lookup_failed", detail: existingError.message }, 500);
+    const validAudioStatuses = ["RECORDING","RECORDED_LOCAL","UPLOADING","STORED","PROCESSING","READY","UPLOAD_FAILED"];
+    const validAudioSources = ["DESKTOP_AGENT","EXTENSION_WEBRTC","FALLBACK_EXTENSION"];
+    const nextAudioStatus = validAudioStatuses.includes(requestedAudioStatus) ? requestedAudioStatus : (!existingSession && inferredAudioStatus ? inferredAudioStatus : null);
+    const nextAudioSource = validAudioSources.includes(requestedAudioSource) ? requestedAudioSource : (!existingSession && inferredAudioSource ? inferredAudioSource : null);
+    if (nextAudioStatus) payload.audio_status = nextAudioStatus;
+    if (nextAudioSource) payload.audio_source = nextAudioSource;
+    if (nextAudioStatus || nextAudioSource) payload.audio_updated_at = new Date().toISOString();
+    let saved: Row | null = null;
+    let saveError: any = null;
+    if (existingSession?.id) {
+      const updatePayload: Row = { ...payload };
+      delete updatePayload.device_id;
+      delete updatePayload.owner_person;
+      delete updatePayload.local_session_id;
+      updatePayload.metadata = { ...(existingSession.metadata || {}), ...(payload.metadata || {}) };
+      const result = await ops.from("meeting_capture_sessions").update(updatePayload).eq("id", existingSession.id).select("id,state,meeting_code,owner_person").single();
+      saved = result.data; saveError = result.error;
+    } else {
+      const result = await ops.from("meeting_capture_sessions").insert(payload).select("id,state,meeting_code,owner_person").single();
+      saved = result.data; saveError = result.error;
+    }
+    if (saveError) return respond({ error: "session_heartbeat_failed", detail: saveError.message }, 500);
+    return respond({ ok: true, session: saved });
+  }
+
+  if (action === "meeting_audio_prepare") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const audio = (body?.audio || {}) as Row;
+    const localSessionId = clean(audio.local_session_id || body?.local_session_id, 180);
+    if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
+    const requestedSource = clean(audio.audio_source || body?.audio_source, 40).toUpperCase();
+    const audioSource = ["DESKTOP_AGENT","EXTENSION_WEBRTC","FALLBACK_EXTENSION"].includes(requestedSource)
+      ? requestedSource : "DESKTOP_AGENT";
+    const files = (Array.isArray(body?.files) ? body.files : []).map((row: Row) => normalizedAudioFile(row)).filter(Boolean) as Array<{role:string;ext:string;mime:string}>;
+    if (!files.length) return respond({ error: "audio_files_required" }, 400);
+    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
+      .select("id,device_id,started_at,ended_at,audio_status,audio_local_path,audio_remote_path,audio_mixed_path,metadata")
+      .eq("owner_person", device.owner_person).eq("local_session_id", localSessionId).maybeSingle();
+    if (sessionError || !session) return respond({ error: "meeting_session_not_found", detail: sessionError?.message }, 404);
+    if (session.audio_status === "READY" && session.audio_mixed_path) {
+      return respond({ ok: true, session_id: session.id, state: "READY", uploads: [], audio_source: audioSource, idempotent: true });
+    }
+    const safeLocal = safeObjectPart(localSessionId);
+    const paths: Row = {};
+    for (const file of files) paths[file.role] = "meetings/" + session.device_id + "/" + safeLocal + "/" + file.role + "." + file.ext;
+    const durationMs = Number.isFinite(Number(audio.duration_ms))
+      ? Math.max(0, Math.round(Number(audio.duration_ms)))
+      : (session.ended_at && session.started_at ? Math.max(0, Date.parse(session.ended_at) - Date.parse(session.started_at)) : null);
+    const patch: Row = {
+      audio_status: "UPLOADING", audio_source: audioSource, audio_duration_ms: durationMs,
+      audio_last_error: null, audio_updated_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      metadata: { ...(session.metadata || {}), audio_recorded: true, audio_source: audioSource },
+    };
+    if (paths.local) patch.audio_local_path = paths.local;
+    if (paths.remote) patch.audio_remote_path = paths.remote;
+    if (paths.mixed) {
+      patch.audio_mixed_path = paths.mixed;
+      patch.audio_mime_type = files.find((file) => file.role === "mixed")?.mime || "audio/mpeg";
+    }
+    const { error: updateError } = await ops.from("meeting_capture_sessions").update(patch).eq("id", session.id);
+    if (updateError) return respond({ error: "meeting_audio_prepare_state_failed", detail: updateError.message }, 500);
+    const uploads: Row[] = [];
+    for (const file of files) {
+      const path = paths[file.role];
+      const { data, error } = await db.storage.from("relato-call-audio").createSignedUploadUrl(String(path), { upsert: true });
+      if (error || !data?.signedUrl) {
+        await ops.from("meeting_capture_sessions").update({
+          audio_status: "UPLOAD_FAILED", audio_last_error: error?.message || "signed_upload_url_failed",
+          audio_updated_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        }).eq("id", session.id);
+        return respond({ error: "meeting_audio_upload_url_failed", role: file.role, detail: error?.message }, 500);
+      }
+      uploads.push({ role: file.role, path, mime_type: file.mime, signed_url: data.signedUrl, token: data.token || null });
+    }
+    return respond({ ok: true, session_id: session.id, owner_person: device.owner_person, uploads, audio_source: audioSource, state: "UPLOADING" });
+  }
+
+  if (action === "meeting_audio_finalize") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const localSessionId = clean(body?.local_session_id, 180);
+    if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
+    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
+      .select("id,device_id,started_at,ended_at,audio_status,audio_source,audio_local_path,audio_remote_path,audio_mixed_path,metadata")
+      .eq("owner_person", device.owner_person).eq("local_session_id", localSessionId).maybeSingle();
+    if (sessionError || !session) return respond({ error: "meeting_session_not_found", detail: sessionError?.message }, 404);
+    if (session.audio_status === "READY" && session.audio_mixed_path) {
+      return respond({ ok: true, session_id: session.id, state: "READY", idempotent: true });
+    }
+    const uploaded = Array.isArray(body?.uploaded) ? body.uploaded : [];
+    let totalBytes = 0;
+    let mixedBytes = 0;
+    let mixedMime = "audio/mpeg";
+    const verified: Row[] = [];
+    for (const raw of uploaded) {
+      const role = clean(raw?.role,20).toLowerCase();
+      if (!["local","remote","mixed"].includes(role)) continue;
+      const expected = role === "local"
+        ? session.audio_local_path
+        : role === "remote" ? session.audio_remote_path : session.audio_mixed_path;
+      const path = clean(raw?.path,1000);
+      if (!expected || path !== expected) return respond({ error: "meeting_audio_path_mismatch", role }, 400);
+      const bytes = Math.max(0, Math.round(Number(raw?.bytes || 0)));
+      if (!bytes) return respond({ error: "meeting_audio_empty_upload", role }, 400);
+      const mimeType = clean(raw?.mime_type,120) || (role === "mixed" ? "audio/mpeg" : null);
+      totalBytes += bytes;
+      if (role === "mixed") {
+        mixedBytes = bytes;
+        mixedMime = mimeType || "audio/mpeg";
+      }
+      verified.push({ role, path, bytes, mime_type: mimeType });
+    }
+    if (!verified.length) {
+      await ops.from("meeting_capture_sessions").update({
+        audio_status: "UPLOAD_FAILED", audio_last_error: "no_verified_uploads",
+        audio_updated_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq("id", session.id);
+      return respond({ error: "meeting_audio_uploads_required" }, 400);
+    }
+    const durationMs = Number.isFinite(Number(body?.duration_ms))
+      ? Math.max(0, Math.round(Number(body.duration_ms)))
+      : (session.ended_at && session.started_at ? Math.max(0, Date.parse(session.ended_at) - Date.parse(session.started_at)) : null);
+    const directMixed = mixedBytes > 0 && Boolean(session.audio_mixed_path);
+    const mixedPath = directMixed
+      ? session.audio_mixed_path
+      : "meetings/" + session.device_id + "/" + safeObjectPart(localSessionId) + "/meeting.webm";
+    const nextMetadata = {
+      ...(session.metadata || {}),
+      audio_recorded: true,
+      audio_uploads: verified,
+      audio_source: session.audio_source || "DESKTOP_AGENT",
+      player_ready_direct: directMixed,
+    };
+    const { error: storedError } = await ops.from("meeting_capture_sessions").update({
+      audio_status: directMixed ? "READY" : "STORED",
+      audio_size_bytes: directMixed ? mixedBytes : totalBytes,
+      audio_duration_ms: durationMs,
+      audio_mixed_path: mixedPath,
+      audio_mime_type: directMixed ? mixedMime : "audio/webm",
+      audio_last_error: null,
+      audio_updated_at: new Date().toISOString(),
+      metadata: nextMetadata,
+      updated_at: new Date().toISOString(),
+    }).eq("id", session.id);
+    if (storedError) return respond({ error: "meeting_audio_finalize_state_failed", detail: storedError.message }, 500);
+    if (directMixed) {
+      return respond({ ok: true, session_id: session.id, state: "READY", direct_mixed: true, job_id: null });
+    }
+    const { data: jobId, error: jobError } = await ops.rpc("enqueue_heavy_job", {
+      p_job_type: "MEETING_AUDIO_PROCESS",
+      p_payload: { session_id: session.id },
+      p_dedupe_key: "meeting-audio:" + session.id,
+      p_max_attempts: 8,
+      p_available_at: new Date().toISOString(),
+    });
+    if (!jobError) {
+      await ops.from("meeting_capture_sessions").update({
+        audio_status: "PROCESSING", audio_updated_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq("id", session.id);
+    }
+    return respond({ ok: true, session_id: session.id, state: jobError ? "STORED" : "PROCESSING", job_id: jobId || null, processing_error: jobError?.message || null });
   }
 
   if (action === "call_prepare") {
@@ -660,10 +845,23 @@ Deno.serve(async (req: Request) => {
       metadata: { ...(meeting?.metadata || {}), extension_version: clean(meeting?.extension_version, 40) || null, captured_at: new Date().toISOString() },
       updated_at: new Date().toISOString(),
     };
-    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
-      .upsert(sessionPayload, { onConflict: "device_id,local_session_id" })
-      .select("id,transcript_id")
-      .single();
+    const { data: existingSession, error: existingSessionError } = await ops.from("meeting_capture_sessions")
+      .select("id,transcript_id,metadata").eq("owner_person", device.owner_person).eq("local_session_id", localSessionId).maybeSingle();
+    if (existingSessionError) return respond({ error: "session_lookup_failed", detail: existingSessionError.message }, 500);
+    let session: Row | null = null;
+    let sessionError: any = null;
+    if (existingSession?.id) {
+      const updatePayload: Row = { ...sessionPayload };
+      delete updatePayload.device_id;
+      delete updatePayload.owner_person;
+      delete updatePayload.local_session_id;
+      updatePayload.metadata = { ...(existingSession.metadata || {}), ...(sessionPayload.metadata || {}) };
+      const result = await ops.from("meeting_capture_sessions").update(updatePayload).eq("id", existingSession.id).select("id,transcript_id").single();
+      session = result.data; sessionError = result.error;
+    } else {
+      const result = await ops.from("meeting_capture_sessions").insert(sessionPayload).select("id,transcript_id").single();
+      session = result.data; sessionError = result.error;
+    }
     if (sessionError || !session) return respond({ error: "session_upsert_failed", detail: sessionError?.message }, 500);
 
     const participantInput = Array.isArray(body?.participants) ? body.participants : [];

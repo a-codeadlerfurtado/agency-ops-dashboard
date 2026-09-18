@@ -176,7 +176,7 @@ async function getControl() {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 11 });
+  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 12 });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   if (!(await authorized(req))) return json({ error: "unauthorized" }, 401);
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return json({ error: "server_not_configured" }, 500);
@@ -214,6 +214,61 @@ Deno.serve(async (req) => {
       }) });
     }
 
+    if (action === "meeting_audio_snapshot") {
+      const sessionId = String(body.session_id || "").trim();
+      if (!sessionId) return json({ error: "session_id_required" }, 400);
+      const sb = client("agency_ops");
+      const { data: session, error } = await sb.from("meeting_capture_sessions")
+        .select("id,device_id,owner_person,local_session_id,started_at,ended_at,audio_local_path,audio_remote_path,audio_mixed_path,audio_status,audio_source,audio_duration_ms,audio_retention_until,metadata")
+        .eq("id", sessionId).maybeSingle();
+      if (error) throw error;
+      if (!session) return json({ error: "meeting_audio_session_not_found" }, 404);
+      const paths = [["local", session.audio_local_path], ["remote", session.audio_remote_path]].filter((row) => Boolean(row[1]));
+      if (!paths.length) return json({ error: "meeting_audio_originals_not_found" }, 404);
+      const storage = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } }).storage.from("relato-call-audio");
+      const originals: Record<string, unknown>[] = [];
+      for (const [role, path] of paths) {
+        const { data: signed, error: signedError } = await storage.createSignedUrl(String(path), 3600);
+        if (signedError || !signed?.signedUrl) throw signedError || new Error("meeting_audio_signed_url_failed");
+        originals.push({ role, path, signed_url: signed.signedUrl });
+      }
+      const safeLocal = String(session.local_session_id || "session").replace(/[^a-zA-Z0-9._-]/g, "_");
+      const mixedPath = String(session.audio_mixed_path || ("meetings/" + session.device_id + "/" + safeLocal + "/meeting.webm"));
+      const { data: upload, error: uploadError } = await storage.createSignedUploadUrl(mixedPath, { upsert: true });
+      if (uploadError || !upload?.signedUrl) throw uploadError || new Error("meeting_audio_mixed_upload_url_failed");
+      return json({ ok: true, session: { ...session, audio_mixed_path: mixedPath }, originals, mixed_upload: { path: mixedPath, signed_url: upload.signedUrl, mime_type: "audio/webm" } });
+    }
+
+    if (action === "meeting_audio_commit") {
+      const sessionId = String(body.session_id || "").trim();
+      const mixedPath = String(body.mixed_path || "").trim();
+      const bytes = Math.max(0, Math.round(Number(body.bytes || 0)));
+      if (!sessionId || !mixedPath || !bytes) return json({ error: "meeting_audio_commit_data_required" }, 400);
+      const sb = client("agency_ops");
+      const { data: session, error } = await sb.from("meeting_capture_sessions").select("id,audio_mixed_path,audio_status,metadata").eq("id", sessionId).maybeSingle();
+      if (error) throw error;
+      if (!session) return json({ error: "meeting_audio_session_not_found" }, 404);
+      if (session.audio_status === "READY" && session.audio_mixed_path === mixedPath) return json({ ok: true, session_id: sessionId, state: "READY", idempotent: true });
+      if (session.audio_mixed_path && String(session.audio_mixed_path) !== mixedPath) return json({ error: "meeting_audio_mixed_path_mismatch" }, 400);
+      const durationMs = Number.isFinite(Number(body.duration_ms)) ? Math.max(0, Math.round(Number(body.duration_ms))) : null;
+      const metadata = { ...(session.metadata || {}), audio_player: { path: mixedPath, bytes, mime_type: "audio/webm", codec: "opus", bitrate_kbps: 48, generated_at: new Date().toISOString() } };
+      const { error: updateError } = await sb.from("meeting_capture_sessions").update({
+        audio_status: "READY", audio_mixed_path: mixedPath, audio_size_bytes: bytes, audio_mime_type: "audio/webm",
+        ...(durationMs != null ? { audio_duration_ms: durationMs } : {}), audio_last_error: null, audio_updated_at: new Date().toISOString(), metadata, updated_at: new Date().toISOString(),
+      }).eq("id", sessionId);
+      if (updateError) throw updateError;
+      return json({ ok: true, session_id: sessionId, state: "READY", mixed_path: mixedPath, bytes });
+    }
+
+    if (action === "meeting_audio_failed") {
+      const sessionId = String(body.session_id || "").trim();
+      if (!sessionId) return json({ error: "session_id_required" }, 400);
+      const sb = client("agency_ops");
+      const message = String(body.error || "meeting_audio_processing_failed").slice(0, 4000);
+      const { error } = await sb.from("meeting_capture_sessions").update({ audio_status: "STORED", audio_last_error: message, audio_updated_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", sessionId);
+      if (error) throw error;
+      return json({ ok: true, session_id: sessionId, state: "STORED", retryable: true });
+    }
     if (action === "call_snapshot") {
       const sessionId = String(body.session_id || "").trim();
       if (!sessionId) return json({ error: "session_id_required" }, 400);

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Relato AI â€” Transcriber",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Relato AI â€” Transcriber: captura e inteligÃªncia de reuniÃµes e chamadas para o Leonardo Imobi.",
   "permissions": [
     "storage",
@@ -65,6 +65,14 @@
       ],
       "matches": [
         "https://web.whatsapp.com/*"
+      ]
+    },
+    {
+      "resources": [
+        "page-rtc-capture.js"
+      ],
+      "matches": [
+        "https://meet.google.com/*"
       ]
     }
   ],

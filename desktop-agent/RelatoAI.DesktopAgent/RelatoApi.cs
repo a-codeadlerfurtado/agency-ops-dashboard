@@ -6,6 +6,7 @@ namespace RelatoAI.DesktopAgent;
 internal sealed record PairResult(string DeviceToken, string DeviceId, string OwnerPerson);
 internal sealed record UploadTarget(string Role, string Path, string SignedUrl);
 internal sealed record PreparedCall(string SessionId, IReadOnlyList<UploadTarget> Uploads);
+internal sealed record PreparedMeetingAudio(string SessionId, IReadOnlyList<UploadTarget> Uploads, string State);
 internal sealed record ClientOption(string Id, string Name);
 internal sealed record FeedbackContext(
     bool Pending, bool RequiresSelection, string? RemotePhone, string? RemoteName, string? RemoteRole,
@@ -108,14 +109,14 @@ internal sealed partial class RelatoApi
             Read("client_id"), Read("client_name"), Read("resolution_status"), clients);
     }
 
-    public async Task UploadAsync(string signedUrl, string filePath)
+    public async Task UploadAsync(string signedUrl, string filePath, string mimeType = "audio/wav")
     {
         using var fs = File.OpenRead(filePath);
         using var req = new HttpRequestMessage(HttpMethod.Put, signedUrl)
         {
             Content = new StreamContent(fs)
         };
-        req.Content.Headers.ContentType = new("audio/wav");
+        req.Content.Headers.ContentType = new(mimeType);
         req.Headers.TryAddWithoutValidation("x-upsert", "true");
         using var res = await http.SendAsync(req);
         if (!res.IsSuccessStatusCode)

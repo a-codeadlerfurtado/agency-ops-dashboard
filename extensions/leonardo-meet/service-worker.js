@@ -7,6 +7,7 @@ const OUTBOX_KEY = "meeting_capture_outbox";
 const DEVICE_KEY = "meeting_capture_device";
 const STATE_KEY = "meeting_capture_state";
 const RETRY_ALARM = "meeting-capture-outbox";
+const FALLBACK_TABS_KEY = "meeting_rtc_fallback_tabs";
 const RPC_MARKER = "$rpc/google.rtc.meetings.v1.";
 const liveHeartbeatAt = new Map();
 
@@ -267,18 +268,39 @@ async function finalizeStoredSession(sessionId, finishOverride = null) {
   const [frames, speakers] = await Promise.all([getFrames(sessionId), getSpeakers(sessionId)]);
   if (!frames.length) {
     const endedAt = finishOverride?.ended_at || stored.ended_at || new Date().toISOString();
-    const failed = { ...stored, state: "NEEDS_REVIEW", ended_at: endedAt, last_error: "no_rtc_frames" };
+    let audioSaved = false;
+    let audioError = null;
+    if (captureMode === "MEET_RTC_AUDIO") {
+      try {
+        await persistMeetFallbackAudio(stored, endedAt);
+        audioSaved = true;
+      } catch (error) {
+        audioError = String(error?.message || error);
+      }
+    }
+    const failed = {
+      ...stored,
+      state: audioError ? "PENDING_UPLOAD" : "NEEDS_REVIEW",
+      ended_at: endedAt,
+      last_error: audioError || "no_rtc_frames",
+      finish_payload: finishOverride || null,
+    };
     await putSession(failed);
-    await setCaptureState({ active: false, error: "NO_RTC_FRAMES", meeting_code: stored.meeting_code, ended_at: endedAt });
+    await setCaptureState({ active: false, error: "NO_RTC_FRAMES", meeting_code: stored.meeting_code, ended_at: endedAt, audio_saved: audioSaved });
     const device = await getDevice();
     if (device?.device_token) {
       await callApi("session_heartbeat", { session: {
-        ...failed, local_session_id: stored.id, capture_mode: captureMode,
-        captions_available: false, extension_version: chrome.runtime.getManifest().version,
-        metadata: { ...(stored.metadata || {}), diagnostics: stored.diagnostics || [] },
+        ...failed,
+        state: "NEEDS_REVIEW",
+        local_session_id: stored.id,
+        capture_mode: captureMode,
+        captions_available: false,
+        extension_version: chrome.runtime.getManifest().version,
+        metadata: { ...(stored.metadata || {}), diagnostics: stored.diagnostics || [], audio_saved: audioSaved },
       } }, device.device_token).catch(() => null);
     }
-    return { ok: false, error: "no_rtc_frames" };
+    if (audioSaved) await clearSession(sessionId);
+    return { ok: false, error: "no_rtc_frames", audio_saved: audioSaved, audio_error: audioError };
   }
 
   const meeting = {
@@ -307,7 +329,9 @@ async function finalizeStoredSession(sessionId, finishOverride = null) {
   const payload = { meeting, participants, segments };
   try {
     const result = await deliver(payload);
-    await setCaptureState({ active: false, saved: true, error: null, meeting_code: meeting.meeting_code, ended_at: meeting.ended_at, transcript_id: result?.transcript_id || null });
+    let audioResult = null;
+    if (captureMode === "MEET_RTC_AUDIO") audioResult = await persistMeetFallbackAudio(stored, meeting.ended_at);
+    await setCaptureState({ active: false, saved: true, error: null, meeting_code: meeting.meeting_code, ended_at: meeting.ended_at, transcript_id: result?.transcript_id || null, audio_saved: Boolean(audioResult) });
     const feedback = { local_session_id: stored.id, transcript_id: result?.transcript_id || null, capture_session_id: result?.session_id || null, channel: "MEET", title: meeting.title || "ReuniÃ£o Google Meet" };
     if (stored.tab_id != null) {
       await confirmSavedToUser(stored.tab_id, result?.transcript_id || null);
@@ -338,6 +362,46 @@ async function uploadSignedAudio(url, chunks, mimeType) {
   return blob.size;
 }
 
+async function persistMeetFallbackAudio(stored, endedAt) {
+  const chunks = await getAudioChunks(stored.id);
+  if (!chunks.length) throw new Error("no_fallback_audio");
+  const roles = [...new Set(chunks.map((chunk) => chunk.role).filter((role) => role === "local" || role === "remote"))];
+  if (!roles.length) throw new Error("no_fallback_audio_roles");
+  const device = await getDevice();
+  if (!device?.device_token) throw new Error("extension_not_paired");
+  const durationMs = Math.max(0, Date.parse(endedAt) - Date.parse(stored.started_at || endedAt));
+  await callApi("session_heartbeat", { session: {
+    ...stored,
+    local_session_id: stored.id,
+    ended_at: endedAt,
+    state: "FINISHING",
+    capture_mode: "MEET_RTC_AUDIO",
+    audio_status: "RECORDED_LOCAL",
+    audio_source: "FALLBACK_EXTENSION",
+    captions_available: false,
+    extension_version: chrome.runtime.getManifest().version,
+    metadata: { ...(stored.metadata || {}), recorder: "EXTENSION_WEBRTC", fallback: true, audio_source: "FALLBACK_EXTENSION" },
+  } }, device.device_token);
+  const prepared = await callApi("meeting_audio_prepare", {
+    audio: { local_session_id: stored.id, duration_ms: durationMs, audio_source: "FALLBACK_EXTENSION" },
+    files: roles.map((role) => {
+      const sample = chunks.find((chunk) => chunk.role === role);
+      const mime = String(sample?.mime_type || "audio/webm");
+      return { role, ext: mime.includes("ogg") ? "ogg" : "webm", mime_type: mime };
+    }),
+  }, device.device_token);
+  if (prepared?.state === "READY" && !(prepared?.uploads || []).length) return { ok: true, idempotent: true, session_id: prepared.session_id };
+  const uploaded = [];
+  for (const item of prepared.uploads || []) {
+    const roleChunks = chunks.filter((chunk) => chunk.role === item.role).sort((a,b) => Number(a.seq||0)-Number(b.seq||0));
+    if (!roleChunks.length) continue;
+    const mime = roleChunks.find((chunk) => chunk.mime_type)?.mime_type || "audio/webm";
+    const bytes = await uploadSignedAudio(item.signed_url, roleChunks, mime);
+    uploaded.push({ role: item.role, path: item.path, bytes, mime_type: mime });
+  }
+  if (!uploaded.length) throw new Error("fallback_audio_upload_empty");
+  return callApi("meeting_audio_finalize", { local_session_id: stored.id, uploaded, duration_ms: durationMs }, device.device_token);
+}
 async function finalizeCallSession(sessionId, finish = null) {
   const stored = await getSession(sessionId);
   if (!stored) return { ok: false, error: "session_not_found" };
@@ -412,13 +476,46 @@ async function flushAll() {
 }
 
 async function injectMainCapture(_tabId) {
-  // Meet 0.5+: audio capture belongs exclusively to the Desktop Agent.
+  // Desktop Agent is canonical. Never inject WebRTC capture proactively.
   return;
 }
 
+async function getFallbackTabs() {
+  const data = await chrome.storage.local.get(FALLBACK_TABS_KEY);
+  return data[FALLBACK_TABS_KEY] && typeof data[FALLBACK_TABS_KEY] === "object" ? data[FALLBACK_TABS_KEY] : {};
+}
+
+async function clearFallbackTab(tabId) {
+  const rows = await getFallbackTabs();
+  delete rows[String(tabId)];
+  await chrome.storage.local.set({ [FALLBACK_TABS_KEY]: rows });
+}
+
+async function enableMeetRtcFallback(tabId, seed = {}) {
+  if (!Number.isInteger(tabId)) throw new Error("fallback_tab_required");
+  const tab = await chrome.tabs.get(tabId);
+  if (!String(tab?.url || "").startsWith("https://meet.google.com/")) throw new Error("fallback_not_meet");
+  const rows = await getFallbackTabs();
+  const key = String(tabId);
+  if (rows[key]?.url === tab.url) return { ok: true, already_enabled: true };
+  const previous = (await chrome.storage.local.get(STATE_KEY))[STATE_KEY] || {};
+  await setCaptureState({
+    ...previous,
+    tab_id: tabId,
+    desktop_session_id: seed.local_session_id || previous.desktop_session_id || null,
+    fallback_enabled: true,
+    fallback_reason: seed.reason || "desktop_unavailable",
+  });
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["rtc-injector.js"] });
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["fallback-content.js"] });
+  rows[key] = { url: tab.url, enabled_at: new Date().toISOString(), local_session_id: seed.local_session_id || null };
+  await chrome.storage.local.set({ [FALLBACK_TABS_KEY]: rows });
+  return { ok: true, enabled: true };
+}
+
 async function injectExistingMeetTabs() {
-  const tabs = await chrome.tabs.query({ url: "https://meet.google.com/*" });
-  for (const tab of tabs) if (tab.id != null) injectMainCapture(tab.id);
+  // Intentionally no-op. Fallback is injected only after Desktop Agent failure.
+  return;
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -438,11 +535,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if ((changeInfo.status === "loading" || changeInfo.url) && String(changeInfo.url || tab.url || "").startsWith("https://meet.google.com/")) injectMainCapture(tabId);
+  if (changeInfo.status === "loading" && String(changeInfo.url || tab.url || "").startsWith("https://meet.google.com/"))
+    clearFallbackTab(tabId).catch(() => {});
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   (async () => {
+    await clearFallbackTab(tabId).catch(() => {});
     const state = (await chrome.storage.local.get(STATE_KEY))[STATE_KEY] || {};
     if (state.active && state.mode === "MEET_DESKTOP_AGENT_AUDIO" && state.tab_id === tabId) {
       await callDesktopBridge("/meet/finish", "POST", { reason: "tab_closed" }).catch(() => null);
@@ -465,6 +564,15 @@ chrome.webRequest.onBeforeRequest.addListener((details) => {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    if (message?.type === "ENABLE_MEET_RTC_FALLBACK") {
+      const tabId = sender.tab?.id;
+      if (!Number.isInteger(tabId)) return { ok: false, error: "fallback_tab_required" };
+      return enableMeetRtcFallback(tabId, {
+        local_session_id: message.local_session_id || null,
+        reason: message.reason || "desktop_unavailable",
+      });
+    }
+
     if (message?.type === "DESKTOP_BRIDGE") {
       const path = String(message.path || "");
       const method = String(message.method || "GET").toUpperCase();

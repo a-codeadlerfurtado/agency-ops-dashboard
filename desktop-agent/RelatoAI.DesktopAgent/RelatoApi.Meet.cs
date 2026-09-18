@@ -8,7 +8,7 @@ internal sealed partial class RelatoApi
 {
     private const string SttEndpoint =
         "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/api/jarvis/stt";
-    private const string DesktopVersion = "desktop-0.2.0";
+    private const string DesktopVersion = "desktop-0.3.0";
 
     public async Task<string> TranscribeAudioAsync(byte[] wavBytes)
     {
@@ -113,6 +113,44 @@ internal sealed partial class RelatoApi
         });
     }
 
+    public async Task<PreparedMeetingAudio> PrepareMeetingAudioAsync(
+        string localSessionId, long durationMs, string audioSource, IReadOnlyList<(string Role, string Ext, string Mime)> files)
+    {
+        using var doc = await SendAsync(new
+        {
+            action = "meeting_audio_prepare",
+            audio = new
+            {
+                local_session_id = localSessionId,
+                duration_ms = durationMs,
+                audio_source = audioSource
+            },
+            files = files.Select(file => new { role = file.Role, ext = file.Ext, mime_type = file.Mime }).ToArray()
+        });
+        var root = doc.RootElement;
+        var uploads = new List<UploadTarget>();
+        if (root.TryGetProperty("uploads", out var uploadRows) && uploadRows.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in uploadRows.EnumerateArray())
+                uploads.Add(new UploadTarget(
+                    item.GetProperty("role").GetString() ?? "",
+                    item.GetProperty("path").GetString() ?? "",
+                    item.GetProperty("signed_url").GetString() ?? ""));
+        }
+        var state = root.TryGetProperty("state", out var stateEl) ? stateEl.GetString() ?? "" : "";
+        return new PreparedMeetingAudio(root.GetProperty("session_id").GetString() ?? "", uploads, state);
+    }
+
+    public async Task FinalizeMeetingAudioAsync(string localSessionId, IEnumerable<object> uploaded, long durationMs)
+    {
+        using var _ = await SendAsync(new
+        {
+            action = "meeting_audio_finalize",
+            local_session_id = localSessionId,
+            uploaded = uploaded.ToArray(),
+            duration_ms = durationMs
+        });
+    }
     private static string Slug(string value)
     {
         var chars = value.ToLowerInvariant().Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
