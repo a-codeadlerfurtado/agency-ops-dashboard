@@ -35,7 +35,7 @@ const STYLE = `
 .brief-staff-file{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;border-bottom:1px solid #223039;padding:10px 2px}.brief-staff-file:last-child{border-bottom:0}.brief-staff-file b{display:block;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.brief-staff-file span{display:block;color:#82919b;font-size:10px;margin-top:3px}.brief-staff-file a{font-size:10px;color:#83cfff;text-decoration:none}.brief-staff-file a:hover{text-decoration:underline}
 .brief-staff-error{border:1px solid #6d3030;background:rgba(125,35,35,.12);border-radius:11px;padding:11px 12px;color:#ffaaaa;font-size:11px;margin-bottom:10px}
 .brief-staff-loading{padding:28px;text-align:center;color:#94a3ad;font-size:12px}.brief-staff-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#ff7a2f;margin-right:7px;animation:briefpulse 1s ease-in-out infinite}@keyframes briefpulse{50%{opacity:.35;transform:scale(.72)}}
-.brief-staff-drawer-bg{position:fixed;inset:0 0 0 var(--sidenav-width,224px);z-index:2147482500;background:rgba(0,0,0,.5);display:flex;justify-content:flex-end}.brief-staff-drawer{width:min(720px,94vw);height:100%;background:#0c1216;border-left:1px solid #33414b;overflow:auto;padding:20px;box-shadow:-20px 0 60px rgba(0,0,0,.35)}.brief-staff-drawer-head{position:sticky;top:-20px;background:#0c1216;border-bottom:1px solid #28343b;padding:20px 0 14px;z-index:2;display:flex;justify-content:space-between;gap:12px}.brief-staff-drawer h2{margin:4px 0 3px;font:800 22px/1.15 Inter Tight,Inter,sans-serif}.brief-staff-answer{padding:12px 0;border-bottom:1px solid #223039}.brief-staff-answer:last-child{border-bottom:0}.brief-staff-answer label{display:block;color:#96a5af;font-size:10px;font-weight:800;margin-bottom:5px}.brief-staff-answer div{font-size:12px;line-height:1.55;white-space:pre-wrap;color:#e0e7eb}.brief-staff-answer small{display:block;color:#71818b;font-size:9px;margin-top:5px}.brief-staff-section-chip{margin:16px 0 2px;color:#ff9b61;font:900 9px Inter,sans-serif;letter-spacing:.1em;text-transform:uppercase}
+.brief-staff-drawer-bg{position:fixed;inset:0 0 0 var(--sidenav-width,224px);z-index:2147482500;background:rgba(0,0,0,.5);display:flex;justify-content:flex-end}.brief-staff-drawer{width:min(720px,94vw);height:100%;background:#0c1216;border-left:1px solid #33414b;overflow:auto;padding:20px;box-shadow:-20px 0 60px rgba(0,0,0,.35)}.brief-staff-drawer-head{position:sticky;top:-20px;background:#0c1216;border-bottom:1px solid #28343b;padding:20px 0 14px;z-index:2;display:flex;justify-content:space-between;gap:12px}.brief-staff-drawer-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.brief-staff-drawer h2{margin:4px 0 3px;font:800 22px/1.15 Inter Tight,Inter,sans-serif}.brief-staff-answer{padding:12px 0;border-bottom:1px solid #223039}.brief-staff-answer:last-child{border-bottom:0}.brief-staff-answer label{display:block;color:#96a5af;font-size:10px;font-weight:800;margin-bottom:5px}.brief-staff-answer div{font-size:12px;line-height:1.55;white-space:pre-wrap;color:#e0e7eb}.brief-staff-answer small{display:block;color:#71818b;font-size:9px;margin-top:5px}.brief-staff-section-chip{margin:16px 0 2px;color:#ff9b61;font:900 9px Inter,sans-serif;letter-spacing:.1em;text-transform:uppercase}
 .brief-staff-strategy{display:grid;gap:12px}.brief-staff-strategy-hero{border:1px solid #2d4553;border-radius:14px;padding:16px;background:linear-gradient(120deg,rgba(18,93,132,.16),rgba(13,21,27,.95) 55%)}.brief-staff-strategy-hero h3{margin:4px 0 8px;font:800 18px/1.2 Inter,sans-serif}.brief-staff-strategy-hero p{margin:0;color:#c3d0d8;font-size:12px;line-height:1.6;white-space:pre-wrap}.brief-staff-strategy-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.brief-staff-copy{border:1px solid #2d3d47;background:#10191f;border-radius:13px;padding:13px}.brief-staff-copy-head{display:flex;justify-content:space-between;gap:8px;align-items:start}.brief-staff-copy h4{margin:0;font:800 13px/1.3 Inter,sans-serif}.brief-staff-copy p{margin:9px 0 0;color:#c3d1d9;font-size:11px;line-height:1.55;white-space:pre-wrap}.brief-staff-copy strong{display:block;margin-top:9px;color:#eff6f8;font-size:11px}.brief-staff-copy small{display:block;margin-top:5px;color:#8b9ca7;font-size:10px;line-height:1.45}.brief-staff-copy-btn{border:1px solid #3a5666;background:#112331;color:#a9ddfa;border-radius:7px;padding:5px 7px;font:800 10px Inter,sans-serif;cursor:pointer}.brief-staff-plan{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.brief-staff-plan-item{border:1px solid #293a43;background:#0e151a;border-radius:10px;padding:11px}.brief-staff-plan-item small{display:block;color:#84bfea;font-size:9px;font-weight:850;letter-spacing:.07em;text-transform:uppercase}.brief-staff-plan-item div{margin-top:5px;color:#d9e3e9;font-size:11px;line-height:1.45;white-space:pre-wrap}.brief-staff-benchmark{border:1px solid #26485a;background:rgba(28,95,132,.11);border-radius:10px;padding:10px 12px;color:#b8dbe9;font-size:11px;line-height:1.45}.brief-staff-map-wrap{overflow:auto;border:1px solid #2b3a44;border-radius:13px}.brief-staff-map{width:100%;min-width:620px;border-collapse:collapse;background:#0e151a}.brief-staff-map th,.brief-staff-map td{padding:11px;border-bottom:1px solid #23313a;border-right:1px solid #23313a;text-align:left;font-size:11px}.brief-staff-map th{color:#9fcff0;background:#101c24;font-size:10px;text-transform:uppercase;letter-spacing:.05em}.brief-staff-map td:first-child{font-weight:750;color:#eff5f7;min-width:170px}.brief-staff-map-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#44525a}.brief-staff-map-dot.linked{background:#63d6a4;box-shadow:0 0 0 3px rgba(99,214,164,.12)}.brief-staff-history{display:grid;gap:0;border:1px solid #293943;border-radius:12px;overflow:hidden}.brief-staff-history-item{padding:12px;border-bottom:1px solid #24323b}.brief-staff-history-item:last-child{border-bottom:0}.brief-staff-history-item b{display:block;font-size:12px}.brief-staff-history-item p{margin:4px 0 0;color:#a6b5be;font-size:11px;line-height:1.45}.brief-staff-history-item small{display:block;margin-top:5px;color:#71828e;font-size:10px}
 @media(max-width:850px){.brief-staff-shell{left:58px;padding:18px 14px 36px}.brief-staff-drawer-bg{left:58px}.brief-staff-head{flex-direction:column}.brief-staff-picker{grid-template-columns:1fr}.brief-staff-stats{grid-template-columns:1fr 1fr}.brief-staff-drive{grid-template-columns:1fr}.brief-staff-drawer{width:100%}}
 `;
@@ -60,7 +60,7 @@ function valueText(answer: Row | undefined) {
 function statusClass(value: unknown) {
   const v=String(value||"").toUpperCase(); return v.includes("COMPLE")||v.includes("COMPLETE") ? "ok" : "warn";
 }
-function summaryText(value: unknown) {
+function summaryText(value: unknown): string {
   if (value === null || value === undefined || value === "") return "";
   if (typeof value === "string") return value;
   if (Array.isArray(value)) return value.map(summaryText).filter(Boolean).join("\n");
@@ -79,6 +79,143 @@ function planEntries(value: unknown, prefix = ""): Array<[string,string]> {
     else { const text = summaryText(nested); if (text) rows.push([label,text]); }
   }
   return rows;
+}
+
+function pdfSafe(value: unknown) {
+  return String(value ?? "")
+    .replace(/[–—]/g, "-")
+    .replace(/[“”]/g, '"')
+    .replace(/[•·]/g, "-")
+    .replace(/[^\x20-\x7EÀ-ÿ\n]/g, "");
+}
+function pdfByte(value: unknown) {
+  return pdfSafe(value).replace(/[^\x20-\x7E\xA0-\xFF]/g, "?");
+}
+function pdfEsc(value: unknown) {
+  return pdfByte(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+function pdfSlug(value: unknown) {
+  return pdfSafe(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "briefing";
+}
+function pdfWrap(value: unknown, max = 88) {
+  const words = pdfSafe(value).replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    if (word.length > max) {
+      if (line) { lines.push(line); line = ""; }
+      for (let i = 0; i < word.length; i += max) lines.push(word.slice(i, i + max));
+      continue;
+    }
+    const next = line ? line + " " + word : word;
+    if (next.length > max) { if (line) lines.push(line); line = word; }
+    else line = next;
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : ["-"];
+}
+function pdfText(x: number, y: number, size: number, value: unknown, bold = false, color = "0.09 0.12 0.16") {
+  return "BT /" + (bold ? "F2" : "F1") + " " + size + " Tf " + color + " rg 1 0 0 1 " + x + " " + (842-y) + " Tm (" + pdfEsc(value) + ") Tj ET\n";
+}
+function pdfBytes(pages: string[]) {
+  const objects: string[] = [];
+  const pageIds: string[] = [];
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
+  for (let i = 0; i < pages.length; i++) {
+    const pageId = 5 + i * 2, contentId = 6 + i * 2, ops = pages[i];
+    pageIds.push(pageId + " 0 R");
+    objects[pageId] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents " + contentId + " 0 R >>";
+    objects[contentId] = "<< /Length " + ops.length + " >>\nstream\n" + ops + "endstream";
+  }
+  objects[2] = "<< /Type /Pages /Count " + pages.length + " /Kids [" + pageIds.join(" ") + "] >>";
+  let out = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
+  const offsets = [0];
+  for (let i = 1; i < objects.length; i++) {
+    offsets[i] = out.length;
+    out += i + " 0 obj\n" + objects[i] + "\nendobj\n";
+  }
+  const xref = out.length;
+  out += "xref\n0 " + objects.length + "\n0000000000 65535 f \n";
+  for (let i = 1; i < objects.length; i++) out += String(offsets[i]).padStart(10, "0") + " 00000 n \n";
+  out += "trailer\n<< /Size " + objects.length + " /Root 1 0 R >>\nstartxref\n" + xref + "\n%%EOF";
+  const bytes = new Uint8Array(out.length);
+  for (let i = 0; i < out.length; i++) bytes[i] = out.charCodeAt(i) & 255;
+  return bytes;
+}
+function briefingPdf(detail: Row, clientName: string) {
+  const type = String(detail?.type || "").toUpperCase() === "PERSONA" ? "PERSONA" : "PRODUCT";
+  const name = String(detail?.entity?.name || "Sem nome");
+  const typeLabel = type === "PRODUCT" ? "BRIEFING DE PRODUTO" : "BRIEFING DE PERSONA";
+  const answers = new Map((detail?.answers || []).map((a: Row) => [String(a.question_key), a]));
+  const questions: Row[] = detail?.questions || [];
+  const generated = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date());
+  const pages: string[] = [];
+  let page = "", y = 126;
+
+  const header = () => {
+    page += "0.03 0.05 0.08 rg 0 750 595 92 re f\n1 0.35 0.11 rg 0 750 8 92 re f\n";
+    page += pdfText(44,34,10,"LEONARDO IMOBI / BRIEFING HUB",true,"1 1 1");
+    page += pdfText(44,53,8,"Documento gerado em " + generated,false,"0.72 0.78 0.84");
+    page += pdfText(44,69,8,"Cliente: " + (clientName || "Não informado"),false,"0.58 0.66 0.73");
+  };
+  const footer = () => {
+    page += "0.85 0.88 0.91 RG 44 32 m 551 32 l S\n";
+    page += pdfText(44,824,7.5,name,false,"0.42 0.48 0.54");
+    page += pdfText(500,824,7.5,"Briefing Hub",false,"0.42 0.48 0.54");
+  };
+  const newPage = () => {
+    if (page) { footer(); pages.push(page); }
+    page = ""; y = 126; header();
+  };
+  const need = (height: number) => { if (y + height > 790) newPage(); };
+
+  newPage();
+  page += pdfText(44,y,10,typeLabel,true,"0.07 0.27 0.42"); y += 24;
+  for (const line of pdfWrap(name,38)) { page += pdfText(44,y,24,line,true); y += 28; }
+  y += 4;
+
+  let answered = 0, lastSection = "";
+  for (const q of questions) {
+    const a = answers.get(String(q.question_key)) as Row | undefined;
+    if (!a) continue;
+    const raw = a.value_json ?? a.value_text;
+    const answer = raw === null || raw === undefined || raw === "" ? "" :
+      (typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map(summaryText).filter(Boolean).join(", ") : summaryText(raw));
+    if (!answer) continue;
+    const section = String(q.section?.title || "Informações gerais");
+    if (section !== lastSection) {
+      need(43);
+      page += "0.93 0.96 0.98 rg 44 " + (842-y-14) + " 507 27 re f\n";
+      page += pdfText(56,y+3,10,section.toUpperCase(),true,"0.07 0.27 0.42");
+      y += 32; lastSection = section;
+    }
+    const labels = pdfWrap(q.label || q.question_key, 92);
+    const values = pdfWrap(answer, 90);
+    need(labels.length * 10 + values.length * 13 + 18);
+    for (const line of labels) { page += pdfText(44,y,8,line,true,"0.36 0.42 0.48"); y += 10; }
+    y += 3;
+    for (const line of values) { page += pdfText(44,y,9.5,line); y += 13; }
+    y += 12; answered++;
+  }
+  if (!answered) page += pdfText(44,y,10,"Nenhuma resposta foi registrada neste briefing.",false,"0.36 0.42 0.48");
+  footer(); pages.push(page);
+
+  return {
+    bytes: pdfBytes(pages),
+    filename: "briefing-" + (type === "PRODUCT" ? "produto" : "persona") + "-" + pdfSlug(name) + ".pdf",
+  };
+}
+function downloadBriefingPdf(detail: Row, clientName: string) {
+  const { bytes, filename } = briefingPdf(detail, clientName);
+  const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.rel = "noopener";
+  document.body.appendChild(a); a.click(); a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export default function BriefingStaffBridge({ session: _session }: { session: Session }) {
@@ -140,7 +277,7 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
     call({action:"bootstrap"}).then((body)=>{
       if(!active)return;
       const person=String(body.person||""),role=String(body.role||"").toUpperCase();
-      const allowed=role==="GT"||ALLOWED_PEOPLE.has(person);
+      const allowed=role==="GT"||role==="CS"||ALLOWED_PEOPLE.has(person);
       setAuthorized(allowed); if(allowed)setBoot(body);
     }).catch(()=>{if(active)setAuthorized(false)});
     return()=>{active=false};
@@ -284,7 +421,7 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
         </>}
       </div>
     </main>,document.body)}
-    {detail&&createPortal(<div className="brief-staff-drawer-bg" onMouseDown={(e)=>{if(e.target===e.currentTarget)setDetail(null)}}><aside className="brief-staff-drawer"><div className="brief-staff-drawer-head"><div><div className="brief-staff-kicker">{detail.type==='PRODUCT'?'Produto':'Persona'}</div><h2>{detail.entity?.name||'Briefing'}</h2><div className="brief-staff-muted">{questions.length} perguntas · atualizado {fmtDate(detail.entity?.updated_at)}</div></div><button className="brief-staff-close" onClick={()=>setDetail(null)}>Fechar</button></div>
+    {detail&&createPortal(<div className="brief-staff-drawer-bg" onMouseDown={(e)=>{if(e.target===e.currentTarget)setDetail(null)}}><aside className="brief-staff-drawer"><div className="brief-staff-drawer-head"><div><div className="brief-staff-kicker">{detail.type==='PRODUCT'?'Produto':'Persona'}</div><h2>{detail.entity?.name||'Briefing'}</h2><div className="brief-staff-muted">{questions.length} perguntas · atualizado {fmtDate(detail.entity?.updated_at)}</div></div><div className="brief-staff-drawer-actions">{detail.permissions?.export===true&&<button className="brief-staff-btn primary" title={detail.type==='PRODUCT'?'Baixar briefing de produto em PDF':'Baixar briefing de persona em PDF'} onClick={()=>downloadBriefingPdf(detail,String(selected?.display_name||''))}>Baixar PDF</button>}<button className="brief-staff-close" onClick={()=>setDetail(null)}>Fechar</button></div></div>
       <nav className="brief-staff-tabs" aria-label="Detalhes do briefing"><button className={`brief-staff-tab${detailTab==="strategy"?" active":""}`} onClick={()=>setDetailTab("strategy")}>Estratégia</button><button className={`brief-staff-tab${detailTab==="briefing"?" active":""}`} onClick={()=>setDetailTab("briefing")}>Briefing completo</button><button className={`brief-staff-tab${detailTab==="history"?" active":""}`} onClick={()=>setDetailTab("history")}>Histórico</button></nav>
       {detailTab==="strategy"&&<section className="brief-staff-strategy">
         {strategyLoading&&<div className="brief-staff-loading"><span className="brief-staff-dot"/>Cruzando briefing, contexto e benchmark interno…</div>}
