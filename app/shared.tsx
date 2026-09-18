@@ -32,7 +32,7 @@ supabase.auth.signOut = ((options?: Parameters<typeof rawSignOut>[0]) => rawSign
 export type Row = Record<string, any>;
 export type TeamMember = {
   person: string;
-  role: "GT" | "CS" | "DESIGN" | "AI" | "MGMT" | "UNASSIGNED" | "FORMER";
+  role: "GT" | "CS" | "DESIGN" | "AI" | "MGMT" | "COMMERCIAL" | "CLOSER" | "SDR" | "UNASSIGNED" | "FORMER";
   in_roster: boolean;
   is_former: boolean;
   former_reason: string | null;
@@ -343,7 +343,7 @@ const PROFILE_LITE_CACHE_MS = 30_000;
  */
 const PROFILE_LITE_TIMEOUT_MS = 20_000;
 /** Perfil da ultima sessao boa, para abrir a tela sem esperar a rede. */
-const PERFIL_CACHE_KEY = "ops-perfil:v1";
+const PERFIL_CACHE_KEY = "ops-perfil:v2";
 /**
  * Validade do perfil guardado.
  *
@@ -488,7 +488,7 @@ export async function api(view: string, _token: string, params: Record<string, s
   // saldo seguem exatamente a mesma regra porque também carregam client_id.
   if (view === "home" && json?.profile?.role === "GT") {
     const walletIds = new Set((json.clients || []).map((client: Row) => String(client.client_id)).filter(Boolean));
-    json.notifications = (json.notifications || []).filter((item: Row) => item?.client_id && walletIds.has(String(item.client_id)));
+    json.notifications = (json.notifications || []).filter((item: Row) => String(item?.type || "") === "BRIEFING_CLIENT_UPDATE" || (item?.client_id && walletIds.has(String(item.client_id))));
   }
 
   return json;

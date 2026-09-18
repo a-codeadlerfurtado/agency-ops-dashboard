@@ -34,8 +34,10 @@ Deno.serve(async(req:Request)=>{
   const isAdler=person==="Adler Furtado"&&role==="MGMT";
   if(!isAdler&&!isLeonardo&&!isCloser)return reply({error:"forbidden"},403);
 
-  const{data:crmProfiles,error:profileError}=await db.from("profiles").select("id,email,sees_all_leads").eq("sees_all_leads",true);if(profileError)return reply({error:"crm_profiles_failed",detail:profileError.message},500);
-  const allOwnerIds=(crmProfiles||[]).map((r:Row)=>String(r.id)),ownerMap=new Map((crmProfiles||[]).map((r:Row)=>[String(r.id),ownerLabel(r.email)]));
+  const{data:crmProfiles,error:profileError}=await db.from("profiles").select("id,email,sees_all_leads");if(profileError)return reply({error:"crm_profiles_failed",detail:profileError.message},500);
+  const directionProfiles=(crmProfiles||[]).filter((r:Row)=>r.sees_all_leads===true);
+  const allOwnerIds=directionProfiles.map((r:Row)=>String(r.id));
+  const ownerMap=new Map((crmProfiles||[]).map((r:Row)=>[String(r.id),ownerLabel(r.email)]));
   const currentOwner=(crmProfiles||[]).find((r:Row)=>String(r.id)===String(userData.user.id));
   const ownerIds=isCloser?(currentOwner?[String(currentOwner.id)]:[]): allOwnerIds;
 
