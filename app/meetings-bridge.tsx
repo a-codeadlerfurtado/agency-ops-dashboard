@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { authenticatedFetch, SUPABASE_URL } from "./shared";
 
@@ -42,6 +42,16 @@ function participants(value: unknown) {
   return asItems(value).slice(0, 8);
 }
 
+function fmtTimestamp(value: unknown) {
+  const total = Math.max(0, Math.floor(Number(value || 0) / 1000));
+  const hh = Math.floor(total / 3600);
+  const mm = Math.floor((total % 3600) / 60);
+  const ss = total % 60;
+  return hh > 0
+    ? [hh, mm, ss].map((part) => String(part).padStart(2, "0")).join(":")
+    : [mm, ss].map((part) => String(part).padStart(2, "0")).join(":");
+}
+
 const STYLE = `
   .meetings-nav-button::before{content:""!important;width:18px!important;min-width:18px!important;height:18px!important;flex:0 0 18px!important;margin:0!important;transform:none!important;background-color:currentColor!important;background-image:none!important;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3.5' y='5' width='17' height='15.5' rx='2' fill='none' stroke='black' stroke-width='1.8'/%3E%3Cpath d='M7 3v4M17 3v4M3.5 9h17' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat!important;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect x='3.5' y='5' width='17' height='15.5' rx='2' fill='none' stroke='black' stroke-width='1.8'/%3E%3Cpath d='M7 3v4M17 3v4M3.5 9h17' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat!important;}
   .meetings-nav-button{display:flex!important;align-items:center!important;gap:12px!important;}
@@ -81,6 +91,18 @@ const STYLE = `
   .meeting-transcript{white-space:pre-wrap;background:#090d10;border:1px solid #273139;border-radius:11px;padding:14px;max-height:48vh;overflow:auto;color:#aebbc4;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;}
   .meeting-participants{display:flex;gap:6px;flex-wrap:wrap;}
   .meeting-participant{padding:5px 7px;border-radius:8px;background:#141c21;border:1px solid #2b3942;font-size:10px;color:#b9c6ce;}
+  .meeting-audio-card{border:1px solid #30414d;background:linear-gradient(180deg,#121b21,#0d1419);border-radius:12px;padding:12px;display:grid;gap:10px;}
+  .meeting-audio-head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+  .meeting-audio-status{font-size:10px;font-weight:900;letter-spacing:.06em;text-transform:uppercase;color:#8fd2ff;}
+  .meeting-audio-card audio{width:100%;height:40px;}
+  .meeting-audio-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .meeting-audio-note{font-size:11px;color:#8e9ca6;line-height:1.45;}
+  .meeting-transcript-rows{display:grid;gap:7px;max-height:48vh;overflow:auto;background:#090d10;border:1px solid #273139;border-radius:11px;padding:10px;}
+  .meeting-transcript-row{display:grid;grid-template-columns:54px minmax(0,1fr);gap:9px;align-items:start;padding:8px;border-radius:8px;background:#0d1418;border:1px solid #1d2930;}
+  .meeting-transcript-time{border:0;background:#17232b;color:#8fd2ff;border-radius:7px;padding:5px 6px;font:800 10px ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer;}
+  .meeting-transcript-time:hover{background:#203441;color:#c7eaff;}
+  .meeting-transcript-speaker{font-size:10px;font-weight:900;color:#ff9a61;margin-bottom:3px;}
+  .meeting-transcript-text{font-size:11px;line-height:1.5;color:#b8c4cb;white-space:pre-wrap;}
   @media(max-width:720px){.meetings-shell{left:58px;padding:18px 14px 34px}.meetings-head{flex-direction:column}.meetings-toolbar{grid-template-columns:1fr 1fr}.meetings-toolbar input{grid-column:1/-1}.meetings-grid{grid-template-columns:1fr}.meeting-drawer-backdrop{left:58px}.meeting-drawer{width:100%}}
 `;
 
@@ -95,6 +117,7 @@ export default function MeetingsBridge() {
   const [activeQuery, setActiveQuery] = useState("");
   const [detail, setDetail] = useState<Row | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const load = useCallback(async (reset = true, q = activeQuery) => {
     setLoading(true);
@@ -215,12 +238,19 @@ export default function MeetingsBridge() {
       const response = await authenticatedFetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error(`API ${response.status}`);
       const body = await response.json();
-      setDetail(body.transcript || row);
+      setDetail({ ...(body.transcript || row), _segments: Array.isArray(body.segments) ? body.segments : [], _audio: body.audio || null });
     } catch {
       setDetail(row);
     } finally {
       setDetailLoading(false);
     }
+  };
+
+  const seekAudio = (startedMs: unknown) => {
+    const audio = audioRef.current;
+    if (!audio || !detail?._audio?.signed_url) return;
+    audio.currentTime = Math.max(0, Number(startedMs || 0) / 1000);
+    void audio.play().catch(() => {});
   };
 
   const totalChars = useMemo(() => records.reduce((sum, row) => sum + Number(row.transcript_chars || 0), 0), [records]);
@@ -294,6 +324,32 @@ export default function MeetingsBridge() {
               <button className="meetings-btn" onClick={() => setDetail(null)}>Fechar</button>
             </div>
 
+            <div className="meeting-section">
+              <h3>Gravação</h3>
+              <div className="meeting-audio-card">
+                <div className="meeting-audio-head">
+                  <span className="meeting-audio-status">
+                    {detail._audio?.audio_status === "READY" ? "Áudio pronto" : detail._audio?.audio_status ? `Áudio · ${detail._audio.audio_status}` : "Sem gravação"}
+                  </span>
+                  {detail._audio?.audio_source && <span className="meeting-pill">{String(detail._audio.audio_source)}</span>}
+                </div>
+                {detail._audio?.signed_url ? <>
+                  <audio ref={audioRef} controls preload="metadata" src={String(detail._audio.signed_url)} />
+                  <div className="meeting-audio-actions">
+                    <a className="meetings-btn" href={String(detail._audio.download_url || detail._audio.signed_url)} download={String(detail._audio.download_name || "relato-reuniao.webm")}>Baixar áudio</a>
+                    {Number(detail._audio.audio_duration_ms || 0) > 0 && <span className="meeting-audio-note">Duração {fmtTimestamp(detail._audio.audio_duration_ms)}</span>}
+                  </div>
+                  <div className="meeting-audio-note">Arquivo privado com URL temporária. Clique em qualquer timestamp da transcrição para ouvir daquele ponto.</div>
+                </> : <div className="meeting-audio-note">
+                  {detail._audio?.audio_status === "PROCESSING" || detail._audio?.audio_status === "STORED" || detail._audio?.audio_status === "UPLOADING"
+                    ? "A gravação foi preservada e ainda está sendo preparada para reprodução."
+                    : detail._audio?.audio_last_error
+                      ? `Gravação preservada, mas o processamento precisa de retry: ${String(detail._audio.audio_last_error)}`
+                      : "Esta reunião ainda não possui um arquivo de áudio reproduzível."}
+                </div>}
+              </div>
+            </div>
+
             <div className="meeting-section"><h3>Resumo</h3><p>{String(detail.summary || "Sem resumo processado.")}</p></div>
 
             {participants(detail.participants).length > 0 && <div className="meeting-section"><h3>Participantes</h3><div className="meeting-participants">{participants(detail.participants).map((name, index) => <span className="meeting-participant" key={`${name}-${index}`}>{name}</span>)}</div></div>}
@@ -301,7 +357,17 @@ export default function MeetingsBridge() {
             {asItems(detail.decisions).length > 0 && <div className="meeting-section"><h3>Decisões</h3><ul>{asItems(detail.decisions).map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
             {asItems(detail.commitments).length > 0 && <div className="meeting-section"><h3>Compromissos</h3><ul>{asItems(detail.commitments).map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
 
-            <div className="meeting-section"><h3>Transcrição</h3><div className="meeting-transcript">{String(detail.transcript_text || "Transcrição completa indisponível para este registro.")}</div></div>
+            <div className="meeting-section"><h3>Transcrição</h3>
+              {Array.isArray(detail._segments) && detail._segments.length > 0
+                ? <div className="meeting-transcript-rows">{detail._segments.map((segment: Row, index: number) => <div className="meeting-transcript-row" key={String(segment.sequence_no ?? index)}>
+                    <button className="meeting-transcript-time" type="button" title={detail._audio?.signed_url ? "Ouvir deste ponto" : "Timestamp"} onClick={() => seekAudio(segment.started_ms)}>{fmtTimestamp(segment.started_ms)}</button>
+                    <div>
+                      <div className="meeting-transcript-speaker">{String(segment.speaker_name || "Participante")}</div>
+                      <div className="meeting-transcript-text">{String(segment.text || "")}</div>
+                    </div>
+                  </div>)}</div>
+                : <div className="meeting-transcript">{String(detail.transcript_text || "Transcrição completa indisponível para este registro.")}</div>}
+            </div>
             {detail.source_url && <div className="meeting-section"><a className="meetings-btn" href={String(detail.source_url)} target="_blank" rel="noreferrer">Abrir origem ↗</a></div>}
           </>}
         </aside>

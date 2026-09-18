@@ -61,7 +61,7 @@ Deno.serve(async (req: Request) => {
   const clientId = String(url.searchParams.get("client_id") || "").trim();
 
   if (transcriptId > 0) {
-    let q = ops.from("meeting_transcripts").select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,transcript_text,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,created_at").eq("id", transcriptId);
+    let q = ops.from("meeting_transcripts").select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_text,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,capture_session_id,created_at").eq("id", transcriptId);
     if (clientId) q = q.eq("client_id", clientId);
     const { data, error } = await q.maybeSingle();
     if (error) return reply({ error: "query_failed" }, 500, "no-store");
@@ -70,7 +70,47 @@ Deno.serve(async (req: Request) => {
       const { data: client } = await ops.from("clients").select("gt_owner").eq("id", data.client_id).maybeSingle();
       if (!client || String(client.gt_owner || "") !== person) return reply({ error: "forbidden" }, 403, "no-store");
     }
-    return reply({ transcript: data, generated_at: new Date().toISOString() }, 200, "private, max-age=300");
+    const [{ data: segments, error: segmentsError }, { data: captureSession, error: sessionError }] = await Promise.all([
+      ops.from("meeting_transcript_segments")
+        .select("sequence_no,started_ms,ended_ms,speaker_key,speaker_name,text,confidence,source")
+        .eq("transcript_id", data.id)
+        .order("sequence_no", { ascending: true }),
+      data.capture_session_id
+        ? ops.from("meeting_capture_sessions")
+            .select("id,audio_status,audio_source,audio_mixed_path,audio_duration_ms,audio_size_bytes,audio_mime_type,audio_last_error,audio_updated_at")
+            .eq("id", data.capture_session_id)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+    if (segmentsError || sessionError) return reply({ error: "detail_query_failed" }, 500, "no-store");
+
+    let audio: Row | null = captureSession ? { ...captureSession, signed_url: null, download_url: null } : null;
+    if (captureSession?.audio_status === "READY" && captureSession?.audio_mixed_path) {
+      const storage = db.storage.from("relato-call-audio");
+      const extension = String(captureSession.audio_mime_type || "").includes("mpeg") ? "mp3" : "webm";
+      const [{ data: signed, error: signedError }, { data: downloadSigned, error: downloadError }] = await Promise.all([
+        storage.createSignedUrl(String(captureSession.audio_mixed_path), 900, { download: false }),
+        storage.createSignedUrl(String(captureSession.audio_mixed_path), 900, { download: "relato-reuniao." + extension }),
+      ]);
+      if (!signedError && signed?.signedUrl) {
+        audio = {
+          ...audio,
+          signed_url: signed.signedUrl,
+          download_url: !downloadError && downloadSigned?.signedUrl ? downloadSigned.signedUrl : signed.signedUrl,
+          download_name: "relato-reuniao." + extension,
+          expires_in: 900,
+        };
+      } else if (audio) {
+        audio.signed_url_error = signedError?.message || "signed_url_failed";
+      }
+    }
+
+    return reply({
+      transcript: data,
+      segments: segments || [],
+      audio,
+      generated_at: new Date().toISOString(),
+    }, 200, "private, max-age=30");
   }
 
   const rawLimit = Number(url.searchParams.get("limit") || 30);
