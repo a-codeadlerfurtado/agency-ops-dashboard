@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { authenticatedFetch, SUPABASE_URL } from "./shared";
+import { RelatoPairingCard } from "./relato-pairing-card";
 
 type Row = Record<string, any>;
 
@@ -67,6 +68,16 @@ const STYLE = `
   .meetings-toolbar{max-width:1440px;margin:0 auto 14px;display:grid;grid-template-columns:minmax(240px,1fr) auto auto;gap:8px;}
   .meetings-toolbar input{min-width:0;border:1px solid #33414b;background:#10161b;color:#eef5f8;border-radius:10px;padding:10px 12px;outline:none;}
   .meetings-toolbar input:focus{border-color:#76c6ff;box-shadow:0 0 0 2px rgba(118,198,255,.08);}
+  .relato-self-tabs{max-width:1440px;margin:0 auto 12px;display:flex;gap:7px;flex-wrap:wrap;}
+  .relato-self-tabs button{border:1px solid #33414b;background:#10161b;color:#9eacb7;border-radius:999px;padding:7px 11px;font:800 10px Inter,sans-serif;cursor:pointer;}
+  .relato-self-tabs button.active{border-color:#ff934f;background:#2b1a11;color:#ffc19a;}
+  .relato-pair-wrap{max-width:1440px;margin:0 auto 14px;}
+  .relato-record-kind{font-size:9px;font-weight:900;letter-spacing:.09em;text-transform:uppercase;color:#ff9a61;}
+  .relato-call-meta{display:flex;gap:7px;flex-wrap:wrap;color:#8f9da8;font-size:10px;}
+  .meeting-audio-files{display:grid;gap:8px;margin-top:8px;}
+  .meeting-audio-file{border:1px solid #26363f;background:#0a1014;border-radius:10px;padding:9px;display:grid;gap:7px;}
+  .meeting-audio-file-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:#9fb0ba;}
+  .meeting-audio-file audio{width:100%;height:34px;}
   .meetings-meta{max-width:1440px;margin:0 auto 10px;color:#8f9da8;font-size:11px;display:flex;gap:12px;flex-wrap:wrap;}
   .meetings-grid{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;}
   .meeting-card{border:1px solid #2e3a43;background:linear-gradient(180deg,#151b20,#11171b);border-radius:14px;padding:15px;text-align:left;color:inherit;cursor:pointer;min-height:210px;display:flex;flex-direction:column;gap:9px;box-shadow:0 8px 20px rgba(0,0,0,.12);}
@@ -117,6 +128,7 @@ export default function MeetingsBridge() {
   const [activeQuery, setActiveQuery] = useState("");
   const [detail, setDetail] = useState<Row | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [recordType, setRecordType] = useState<"ALL" | "CALL" | "MEETING">("ALL");
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const load = useCallback(async (reset = true, q = activeQuery) => {
@@ -126,6 +138,7 @@ export default function MeetingsBridge() {
       const url = new URL(API);
       url.searchParams.set("limit", String(PAGE_SIZE));
       url.searchParams.set("offset", String(reset ? 0 : records.length));
+      url.searchParams.set("scope", "self");
       if (q.trim()) url.searchParams.set("q", q.trim());
       const response = await authenticatedFetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error(`API ${response.status}`);
@@ -151,7 +164,7 @@ export default function MeetingsBridge() {
     let cleanupButton: (() => void) | null = null;
 
     const ensureButton = () => {
-      const container = document.querySelector<HTMLElement>(".side-nav-items");
+      const container = document.querySelector<HTMLElement>(".side-nav-items, .lc-sidebar nav, .sdr-sidebar nav");
       if (!container) return;
       let button = container.querySelector<HTMLButtonElement>("[data-meetings-nav]");
       if (!button) {
@@ -159,9 +172,9 @@ export default function MeetingsBridge() {
         button.type = "button";
         button.dataset.meetingsNav = "true";
         button.className = "meetings-nav-button";
-        button.title = "Equipe";
-        button.setAttribute("aria-label", "Reuniões");
-        button.textContent = "Reuniões";
+        button.title = "Relato AI";
+        button.setAttribute("aria-label", "Relato AI");
+        button.textContent = "Relato AI";
         container.appendChild(button);
       }
       button.classList.toggle("active", open);
@@ -193,7 +206,7 @@ export default function MeetingsBridge() {
 
     const closeOnOtherNav = (event: Event) => {
       if (!open) return;
-      const target = event.target instanceof Element ? event.target.closest(".side-nav-items > button,.side-nav-items > a") : null;
+      const target = event.target instanceof Element ? event.target.closest(".side-nav-items > button,.side-nav-items > a,.lc-sidebar nav > button,.sdr-sidebar nav > button") : null;
       if (!target || target.hasAttribute("data-meetings-nav") || target.classList.contains("sidebar-ia-group-title")) return;
       setOpen(false);
     };
@@ -235,10 +248,11 @@ export default function MeetingsBridge() {
     try {
       const url = new URL(API);
       url.searchParams.set("transcript_id", String(row.id));
+      url.searchParams.set("scope", "self");
       const response = await authenticatedFetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error(`API ${response.status}`);
       const body = await response.json();
-      setDetail({ ...(body.transcript || row), _segments: Array.isArray(body.segments) ? body.segments : [], _audio: body.audio || null });
+      setDetail({ ...(body.transcript || row), _segments: Array.isArray(body.segments) ? body.segments : [], _audio: body.audio || null, _audio_files: Array.isArray(body.audio_files) ? body.audio_files : [] });
     } catch {
       setDetail(row);
     } finally {
@@ -253,18 +267,21 @@ export default function MeetingsBridge() {
     void audio.play().catch(() => {});
   };
 
-  const totalChars = useMemo(() => records.reduce((sum, row) => sum + Number(row.transcript_chars || 0), 0), [records]);
+  const visibleRecords = useMemo(() => records.filter((row) => recordType === "ALL" || String(row.record_type || "MEETING").toUpperCase() === recordType), [records, recordType]);
+  const totalChars = useMemo(() => visibleRecords.reduce((sum, row) => sum + Number(row.transcript_chars || 0), 0), [visibleRecords]);
+  const callCount = useMemo(() => records.filter((row) => String(row.record_type || "").toUpperCase() === "CALL").length, [records]);
+  const meetingCount = useMemo(() => records.filter((row) => String(row.record_type || "MEETING").toUpperCase() === "MEETING").length, [records]);
 
   if (typeof document === "undefined") return <style dangerouslySetInnerHTML={{ __html: STYLE }} />;
 
   return <>
     <style dangerouslySetInnerHTML={{ __html: STYLE }} />
-    {open && createPortal(<section className="meetings-shell" aria-label="Reuniões">
+    {open && createPortal(<section className="meetings-shell" aria-label="Relato AI">
       <div className="meetings-head">
         <div>
-          <div className="meetings-kicker">Reuniões</div>
-          <h1>Histórico de reuniões</h1>
-          <div className="meetings-sub">Resumo, decisões, compromissos e participantes já processados. A transcrição completa só é buscada quando você abre uma reunião.</div>
+          <div className="meetings-kicker">Relato AI · Meu histórico</div>
+          <h1>Minhas calls e reuniões</h1>
+          <div className="meetings-sub">Somente registros gravados no seu próprio perfil. Consulte transcrição, gravação, download, decisões e participantes sem acessar o histórico de outros colaboradores.</div>
         </div>
         <div className="meetings-actions">
           <button className="meetings-btn" onClick={() => load(true, activeQuery)} disabled={loading}>{loading ? "Atualizando…" : "Atualizar"}</button>
@@ -272,34 +289,46 @@ export default function MeetingsBridge() {
         </div>
       </div>
 
+      <div className="relato-pair-wrap"><RelatoPairingCard /></div>
+      <div className="relato-self-tabs">
+        <button type="button" className={recordType === "ALL" ? "active" : ""} onClick={() => setRecordType("ALL")}>Tudo · {records.length}</button>
+        <button type="button" className={recordType === "CALL" ? "active" : ""} onClick={() => setRecordType("CALL")}>Ligações · {callCount}</button>
+        <button type="button" className={recordType === "MEETING" ? "active" : ""} onClick={() => setRecordType("MEETING")}>Reuniões · {meetingCount}</button>
+      </div>
+
       <form className="meetings-toolbar" onSubmit={submitSearch}>
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar cliente, título ou resumo" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar contato, cliente, título ou resumo" />
         <button className="meetings-btn primary" type="submit">Buscar</button>
         {(activeQuery || query) && <button className="meetings-btn" type="button" onClick={() => { setQuery(""); setActiveQuery(""); setRecords([]); load(true, ""); }}>Limpar</button>}
       </form>
 
       <div className="meetings-meta">
-        <span>{count} reuniões encontradas</span>
-        <span>{records.length} carregadas</span>
+        <span>{count} registros pessoais encontrados</span>
+        <span>{visibleRecords.length} exibidos · {records.length} carregados</span>
         <span>{Math.round(totalChars / 1000)} mil caracteres referenciados sem carregar transcript</span>
         <span>Sem polling automático</span>
       </div>
 
       {error && <div className="meeting-empty">{error}</div>}
-      {!error && !loading && !records.length && <div className="meeting-empty">Nenhuma reunião encontrada.</div>}
+      {!error && !loading && !records.length && <div className="meeting-empty">Nenhuma call ou reunião encontrada no seu perfil.</div>}
+      {!error && !loading && records.length > 0 && !visibleRecords.length && <div className="meeting-empty">Nenhum registro desse tipo foi encontrado.</div>}
 
       <div className="meetings-grid">
-        {records.map((row) => {
+        {visibleRecords.map((row) => {
           const decisions = asItems(row.decisions);
           const commitments = asItems(row.commitments);
           const people = participants(row.participants);
+          const isCall = String(row.record_type || "").toUpperCase() === "CALL";
+          const callLabel = String(row.contact_name || row.remote_phone || row.client_name_raw || "Contato não identificado");
           return <button className="meeting-card" key={String(row.id)} onClick={() => openDetail(row)}>
             <div className="meeting-card-top">
-              <span className="meeting-client">{String(row.client_name_raw || "Cliente não vinculado")}</span>
+              <span className="meeting-client">{isCall ? callLabel : String(row.client_name_raw || "Cliente não vinculado")}</span>
               <span className="meeting-date">{fmtDate(row.meeting_started_at || row.created_at)}</span>
             </div>
-            <div className="meeting-title">{cleanTitle(row)}</div>
-            <div className="meeting-summary">{String(row.summary || "Sem resumo processado. Abra a reunião para consultar o conteúdo disponível.")}</div>
+            <span className="relato-record-kind">{isCall ? "Ligação" : "Reunião"}</span>
+            <div className="meeting-title">{isCall ? callLabel : cleanTitle(row)}</div>
+            {isCall && <div className="relato-call-meta"><span>{Number(row.duration_seconds || 0) ? fmtTimestamp(Number(row.duration_seconds || 0) * 1000) : "Duração não informada"}</span><span>{row.has_audio ? "Gravação disponível" : "Sem áudio"}</span></div>}
+            <div className="meeting-summary">{String(row.summary || (isCall ? "Abra a ligação para consultar transcrição e gravação." : "Sem resumo processado. Abra a reunião para consultar o conteúdo disponível."))}</div>
             <div className="meeting-card-footer">
               {decisions.length > 0 && <span className="meeting-pill">{decisions.length} decisões</span>}
               {commitments.length > 0 && <span className="meeting-pill">{commitments.length} compromissos</span>}
@@ -317,8 +346,8 @@ export default function MeetingsBridge() {
           {detailLoading && !detail ? <div className="meeting-empty">Carregando reunião…</div> : detail && <>
             <div className="meeting-drawer-head">
               <div>
-                <div className="meeting-client">{String(detail.client_name_raw || "Cliente")}</div>
-                <h2>{cleanTitle(detail)}</h2>
+                <div className="meeting-client">{String(detail.record_type || "").toUpperCase() === "CALL" ? String(detail.contact_name || detail.remote_phone || "Ligação") : String(detail.client_name_raw || "Cliente")}</div>
+                <h2>{String(detail.record_type || "").toUpperCase() === "CALL" ? String(detail.contact_name || detail.remote_phone || cleanTitle(detail)) : cleanTitle(detail)}</h2>
                 <div className="meeting-date">{fmtDate(detail.meeting_started_at || detail.created_at)}</div>
               </div>
               <button className="meetings-btn" onClick={() => setDetail(null)}>Fechar</button>
@@ -336,10 +365,14 @@ export default function MeetingsBridge() {
                 {detail._audio?.signed_url ? <>
                   <audio ref={audioRef} controls preload="metadata" src={String(detail._audio.signed_url)} />
                   <div className="meeting-audio-actions">
-                    <a className="meetings-btn" href={String(detail._audio.download_url || detail._audio.signed_url)} download={String(detail._audio.download_name || "relato-reuniao.webm")}>Baixar áudio</a>
+                    <a className="meetings-btn" href={String(detail._audio.download_url || detail._audio.signed_url)} download={String(detail._audio.download_name || "relato-audio")}>Baixar áudio principal</a>
                     {Number(detail._audio.audio_duration_ms || 0) > 0 && <span className="meeting-audio-note">Duração {fmtTimestamp(detail._audio.audio_duration_ms)}</span>}
                   </div>
-                  <div className="meeting-audio-note">Arquivo privado com URL temporária. Clique em qualquer timestamp da transcrição para ouvir daquele ponto.</div>
+                  {Array.isArray(detail._audio_files) && detail._audio_files.length > 1 && <div className="meeting-audio-files">{detail._audio_files.map((file: Row) => <div className="meeting-audio-file" key={String(file.role)}>
+                    <div className="meeting-audio-file-head"><b>{file.role === "mixed" ? "Gravação completa" : file.role === "remote" ? "Outro lado" : "Minha voz"}</b><a className="meetings-btn" href={String(file.download_url || file.signed_url)} download={String(file.download_name || "relato-audio")}>Baixar</a></div>
+                    <audio controls preload="metadata" src={String(file.play_url || file.signed_url || "")} />
+                  </div>)}</div>}
+                  <div className="meeting-audio-note">Arquivos privados com URL temporária. Clique em qualquer timestamp da transcrição para ouvir daquele ponto.</div>
                 </> : <div className="meeting-audio-note">
                   {detail._audio?.audio_status === "PROCESSING" || detail._audio?.audio_status === "STORED" || detail._audio?.audio_status === "UPLOADING"
                     ? "A gravação foi preservada e ainda está sendo preparada para reprodução."

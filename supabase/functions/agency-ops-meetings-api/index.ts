@@ -53,20 +53,22 @@ Deno.serve(async (req: Request) => {
   const role = String(roster.role || "").toUpperCase();
   const isAdler = person === "Adler Furtado";
   const isLeonardo = person === "Leonardo Augusto" && role === "COMMERCIAL";
-  if (!(isAdler || isLeonardo || ["GT", "CS", "MGMT"].includes(role))) return reply({ error: "forbidden" }, 403, "no-store");
   const elevated = (approvals || []).some((row: Row) => row.kind === "ELEVATION");
-
   const url = new URL(req.url);
+  const selfScope = String(url.searchParams.get("scope") || "").toLowerCase() === "self";
+  if (!selfScope && !(isAdler || isLeonardo || ["GT", "CS", "MGMT"].includes(role))) return reply({ error: "forbidden" }, 403, "no-store");
+
   const transcriptId = Number(url.searchParams.get("transcript_id") || 0);
   const clientId = String(url.searchParams.get("client_id") || "").trim();
 
   if (transcriptId > 0) {
-    let q = ops.from("meeting_transcripts").select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_text,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,capture_session_id,created_at").eq("id", transcriptId);
+    let q = ops.from("meeting_transcripts").select("id,client_id,client_name_raw,owner_person,source_system,transcript_source,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_text,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,capture_session_id,created_at").eq("id", transcriptId);
+    if (selfScope) q = q.eq("owner_person", person);
     if (clientId) q = q.eq("client_id", clientId);
     const { data, error } = await q.maybeSingle();
     if (error) return reply({ error: "query_failed" }, 500, "no-store");
     if (!data) return reply({ error: "not_found" }, 404, "no-store");
-    if (role === "GT" && !elevated) {
+    if (!selfScope && role === "GT" && !elevated) {
       const { data: client } = await ops.from("clients").select("gt_owner").eq("id", data.client_id).maybeSingle();
       if (!client || String(client.gt_owner || "") !== person) return reply({ error: "forbidden" }, 403, "no-store");
     }
@@ -77,38 +79,62 @@ Deno.serve(async (req: Request) => {
         .order("sequence_no", { ascending: true }),
       data.capture_session_id
         ? ops.from("meeting_capture_sessions")
-            .select("id,audio_status,audio_source,audio_mixed_path,audio_duration_ms,audio_size_bytes,audio_mime_type,audio_last_error,audio_updated_at")
+            .select("id,owner_person,capture_mode,metadata,audio_status,audio_source,audio_local_path,audio_remote_path,audio_mixed_path,audio_duration_ms,audio_size_bytes,audio_mime_type,audio_last_error,audio_updated_at")
             .eq("id", data.capture_session_id)
             .maybeSingle()
         : Promise.resolve({ data: null, error: null }),
     ]);
     if (segmentsError || sessionError) return reply({ error: "detail_query_failed" }, 500, "no-store");
 
-    let audio: Row | null = captureSession ? { ...captureSession, signed_url: null, download_url: null } : null;
-    if (captureSession?.audio_status === "READY" && captureSession?.audio_mixed_path) {
-      const storage = db.storage.from("relato-call-audio");
-      const extension = String(captureSession.audio_mime_type || "").includes("mpeg") ? "mp3" : "webm";
+    if (selfScope && captureSession?.owner_person && String(captureSession.owner_person) !== person)
+      return reply({ error: "forbidden" }, 403, "no-store");
+
+    const storage = db.storage.from("relato-call-audio");
+    const audioFiles: Row[] = [];
+    const candidates = [
+      ["mixed", captureSession?.audio_mixed_path, captureSession?.audio_mime_type || "audio/mpeg"],
+      ["remote", captureSession?.audio_remote_path || captureSession?.metadata?.audio_paths?.remote, "audio/wav"],
+      ["local", captureSession?.audio_local_path || captureSession?.metadata?.audio_paths?.local, "audio/wav"],
+    ] as const;
+    for (const [audioRole, audioPath, audioMime] of candidates) {
+      if (!audioPath) continue;
+      const extension = String(audioMime).includes("mpeg") ? "mp3" : String(audioPath).toLowerCase().endsWith(".webm") ? "webm" : "wav";
       const [{ data: signed, error: signedError }, { data: downloadSigned, error: downloadError }] = await Promise.all([
-        storage.createSignedUrl(String(captureSession.audio_mixed_path), 900, { download: false }),
-        storage.createSignedUrl(String(captureSession.audio_mixed_path), 900, { download: "relato-reuniao." + extension }),
+        storage.createSignedUrl(String(audioPath), 900, { download: false }),
+        storage.createSignedUrl(String(audioPath), 900, { download: "relato-" + audioRole + "." + extension }),
       ]);
-      if (!signedError && signed?.signedUrl) {
-        audio = {
-          ...audio,
-          signed_url: signed.signedUrl,
-          download_url: !downloadError && downloadSigned?.signedUrl ? downloadSigned.signedUrl : signed.signedUrl,
-          download_name: "relato-reuniao." + extension,
-          expires_in: 900,
-        };
-      } else if (audio) {
-        audio.signed_url_error = signedError?.message || "signed_url_failed";
-      }
+      if (!signedError && signed?.signedUrl) audioFiles.push({
+        role: audioRole,
+        path: audioPath,
+        mime_type: audioMime,
+        signed_url: signed.signedUrl,
+        play_url: signed.signedUrl,
+        download_url: !downloadError && downloadSigned?.signedUrl ? downloadSigned.signedUrl : signed.signedUrl,
+        download_name: "relato-" + audioRole + "." + extension,
+        expires_in: 900,
+      });
     }
+    const primaryAudio = audioFiles.find((row: Row) => row.role === "mixed")
+      || audioFiles.find((row: Row) => row.role === "remote")
+      || audioFiles[0]
+      || null;
+    const audio: Row | null = captureSession ? {
+      ...captureSession,
+      signed_url: primaryAudio?.signed_url || null,
+      download_url: primaryAudio?.download_url || null,
+      download_name: primaryAudio?.download_name || null,
+      files: audioFiles,
+    } : null;
+    const captureMode = String(captureSession?.capture_mode || "");
+    const transcriptSource = String(data.transcript_source || "");
+    const recordType = captureMode.toUpperCase().includes("WHATSAPP") || transcriptSource.toUpperCase().includes("WHATSAPP") ? "CALL" : "MEETING";
+
 
     return reply({
-      transcript: data,
+      transcript: { ...data, record_type: recordType, capture_mode: captureMode, contact_name: captureSession?.metadata?.remote_name || captureSession?.metadata?.contact_name || null, remote_phone: captureSession?.metadata?.remote_phone || null },
       segments: segments || [],
       audio,
+      audio_files: audioFiles,
       generated_at: new Date().toISOString(),
     }, 200, "private, max-age=30");
   }
@@ -121,7 +147,7 @@ Deno.serve(async (req: Request) => {
   const to = String(url.searchParams.get("to") || "").trim();
 
   let allowedClientIds: string[] | null = null;
-  if (role === "GT" && !elevated) {
+  if (!selfScope && role === "GT" && !elevated) {
     const { data: owned, error } = await ops.from("clients").select("id").eq("gt_owner", person).in("lifecycle", ["ACTIVE", "ONBOARDING"]);
     if (error) return reply({ error: "query_failed" }, 500, "no-store");
     allowedClientIds = (owned || []).map((row: Row) => String(row.id));
@@ -129,10 +155,11 @@ Deno.serve(async (req: Request) => {
   }
 
   let q = ops.from("meeting_transcripts")
-    .select("id,client_id,client_name_raw,source_system,source_file_name,source_url,meeting_code,meeting_started_at,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,created_at", { count: "exact" })
+    .select("id,client_id,client_name_raw,owner_person,source_system,transcript_source,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,capture_session_id,created_at", { count: "exact" })
     .order("meeting_started_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
+  if (selfScope) q = q.eq("owner_person", person);
   if (allowedClientIds) q = q.in("client_id", allowedClientIds);
   if (clientId) q = q.eq("client_id", clientId);
   if (from) q = q.gte("meeting_started_at", from);
@@ -140,7 +167,33 @@ Deno.serve(async (req: Request) => {
   if (search) q = q.or(`client_name_raw.ilike.%${search}%,source_file_name.ilike.%${search}%,summary.ilike.%${search}%`);
   const { data, error, count } = await q;
   if (error) return reply({ error: "query_failed", detail: error.message }, 500, "no-store");
-  const records = data || [];
+  const baseRecords = data || [];
+  const sessionIds = [...new Set(baseRecords.map((row: Row) => String(row.capture_session_id || "")).filter(Boolean))];
+  const sessionMap = new Map<string, Row>();
+  if (sessionIds.length) {
+    const { data: sessionRows, error: sessionRowsError } = await ops.from("meeting_capture_sessions")
+      .select("id,owner_person,capture_mode,metadata,audio_status,audio_local_path,audio_remote_path,audio_mixed_path,audio_duration_ms,audio_mime_type")
+      .in("id", sessionIds);
+    if (sessionRowsError) return reply({ error: "capture_session_query_failed", detail: sessionRowsError.message }, 500, "no-store");
+    for (const row of sessionRows || []) sessionMap.set(String(row.id), row);
+  }
+  const records = baseRecords.map((row: Row) => {
+    const session = sessionMap.get(String(row.capture_session_id || "")) || null;
+    const captureMode = String(session?.capture_mode || "");
+    const transcriptSource = String(row.transcript_source || "");
+    const recordType = captureMode.toUpperCase().includes("WHATSAPP") || transcriptSource.toUpperCase().includes("WHATSAPP") ? "CALL" : "MEETING";
+    const fallbackDuration = Math.max(0, Math.round(Number(session?.audio_duration_ms || 0) / 1000));
+    return {
+      ...row,
+      record_type: recordType,
+      capture_mode: captureMode || null,
+      contact_name: session?.metadata?.remote_name || session?.metadata?.contact_name || null,
+      remote_phone: session?.metadata?.remote_phone || null,
+      audio_status: session?.audio_status || null,
+      has_audio: Boolean(session?.audio_mixed_path || session?.audio_local_path || session?.audio_remote_path || session?.metadata?.audio_paths?.local || session?.metadata?.audio_paths?.remote),
+      duration_seconds: Number(row.duration_seconds || 0) || fallbackDuration,
+    };
+  });
   return reply({
     records,
     count: count || 0,
@@ -148,6 +201,6 @@ Deno.serve(async (req: Request) => {
     limit,
     offset,
     generated_at: new Date().toISOString(),
-    policy: { transcript_on_demand: true, polling: false, cache_seconds: 60 },
+    policy: { transcript_on_demand: true, polling: false, cache_seconds: 60, scope: selfScope ? "self" : "role" },
   });
 });
