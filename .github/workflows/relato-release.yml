@@ -1,0 +1,70 @@
+name: Relato AI Package Release
+
+on:
+  push:
+    tags:
+      - "relato-package-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Publish Desktop Agent
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          dotnet publish desktop-agent/RelatoAI.DesktopAgent/RelatoAI.DesktopAgent.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -o release/desktop
+          Copy-Item release/desktop/RelatoAI.DesktopAgent.exe release/RelatoAI-Desktop-SDR.exe -Force
+
+      - name: Package Chrome Extension
+        shell: pwsh
+        run: |
+          Compress-Archive -Path extensions/leonardo-meet/* -DestinationPath release/RelatoAI-Extension-Chrome.zip -Force
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          $files = @(
+            "release/RelatoAI-Desktop-SDR.exe",
+            "release/RelatoAI-Extension-Chrome.zip"
+          )
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash $file -Algorithm SHA256).Hash
+            "$hash  $([System.IO.Path]::GetFileName($file))"
+          }
+          $lines | Set-Content release/SHA256SUMS.txt -Encoding ascii
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "Relato AI SDR - ${{ github.ref_name }}"
+          body: |
+            Pacote para o SDR Gustavo Royce.
+
+            Arquivos:
+            - RelatoAI-Desktop-SDR.exe
+            - RelatoAI-Extension-Chrome.zip
+            - SHA256SUMS.txt
+
+            O Desktop Agent deve ser pareado com o perfil do SDR no Dash Ops.
+          files: |
+            release/RelatoAI-Desktop-SDR.exe
+            release/RelatoAI-Extension-Chrome.zip
+            release/SHA256SUMS.txt
