@@ -11,6 +11,7 @@ const reply=(body:unknown,status=200)=>new Response(JSON.stringify(body),{
   status,headers:{...CORS,"content-type":"application/json; charset=utf-8","cache-control":"no-store"}
 });
 const clean=(v:unknown)=>String(v??"").trim();
+const phoneDigits=(v:unknown)=>clean(v).replace(/\D/g,"");
 
 Deno.serve(async(req:Request)=>{
   if(req.method==="OPTIONS") return new Response(null,{status:204,headers:CORS});
@@ -90,6 +91,20 @@ Deno.serve(async(req:Request)=>{
       || (Number.isFinite(startedMs)&&Number.isFinite(endedMs)?Math.max(0,Math.round((endedMs-startedMs)/1000)):0)
       || Math.max(0,Math.round(Number(sessionRow.audio_duration_ms||0)/1000));
 
+    const detailPhone=phoneDigits(sessionRow.metadata?.remote_phone);
+    const commercialLeadId=clean(sessionRow.metadata?.commercial_prospect?.lead_id);
+    let detailLead:Row|null=null;
+    if(commercialLeadId){
+      const {data}=await crm.from("leads").select("id,name,company,stage,phone").eq("id",commercialLeadId).maybeSingle();
+      detailLead=data||null;
+    }
+    if(!detailLead&&detailPhone){
+      const variants=[detailPhone,"+"+detailPhone];
+      const {data}=await crm.from("leads").select("id,name,company,stage,phone").in("phone",variants).is("archived_at",null).order("updated_at",{ascending:false}).limit(1).maybeSingle();
+      detailLead=data||null;
+    }
+    const resolvedDetailName=clean(detailLead?.company||detailLead?.name||sessionRow.metadata?.commercial_prospect?.name||sessionRow.metadata?.remote_name||sessionRow.metadata?.contact_name)||null;
+
     return reply({
       call:{
         id:sessionRow.id,session_id:sessionRow.id,local_session_id:sessionRow.local_session_id,
@@ -97,6 +112,9 @@ Deno.serve(async(req:Request)=>{
         state:sessionRow.state,capture_mode:sessionRow.capture_mode,
         remote_phone:sessionRow.metadata?.remote_phone||null,
         remote_name:sessionRow.metadata?.remote_name||sessionRow.metadata?.contact_name||null,
+        prospect_name:resolvedDetailName,
+        prospect_lead_id:detailLead?.id||commercialLeadId||null,
+        prospect_stage:detailLead?.stage||null,
         contact_name:sessionRow.metadata?.contact_name||null,
         identity_status:sessionRow.metadata?.identity_resolution?.status||"UNRESOLVED",
         duration_seconds:durationSeconds,
@@ -145,10 +163,33 @@ Deno.serve(async(req:Request)=>{
     kind:String(r.capture_mode||"").toUpperCase().includes("WHATSAPP")?"CALL":"MEETING"
   }));
   const callSessions=sessions.filter((r:Row)=>r.kind==="CALL");
+  const sessionPhones=[...new Set(callSessions.map((r:Row)=>phoneDigits(r.metadata?.remote_phone)).filter(Boolean))];
+  const phoneLeadMap=new Map<string,Row>();
+  if(sessionPhones.length){
+    const variants=[...new Set(sessionPhones.flatMap((p:string)=>[p,"+"+p]))];
+    const {data:phoneLeads,error:phoneLeadError}=await crm.from("leads")
+      .select("id,name,company,stage,phone,updated_at").in("phone",variants).is("archived_at",null)
+      .order("updated_at",{ascending:false}).limit(1000);
+    if(phoneLeadError) return reply({error:"phone_lead_lookup_failed",detail:phoneLeadError.message},500);
+    for(const row of phoneLeads||[]){
+      const key=phoneDigits(row.phone);
+      if(key&&!phoneLeadMap.has(key)) phoneLeadMap.set(key,row);
+    }
+  }
   const enrichedCalls=callSessions.map((session:Row)=>{
     const record:any=callBySession.get(String(session.id))||callByTranscript.get(String(session.transcript_id||""))||null;
     const transcript:any=session.transcript_id?transcriptMap.get(String(session.transcript_id)):null;
-    const lead:any=record?.lead_id?leadMap.get(String(record.lead_id))||null:null;
+    const recordLead:any=record?.lead_id?leadMap.get(String(record.lead_id))||null:null;
+    const remotePhone=record?.remote_phone||session.metadata?.remote_phone||null;
+    const phoneLead:any=phoneLeadMap.get(phoneDigits(remotePhone))||null;
+    const metadataLeadId=clean(session.metadata?.commercial_prospect?.lead_id);
+    const lead:any=recordLead||phoneLead||null;
+    const candidateName=clean(
+      lead?.company||lead?.name||
+      session.metadata?.commercial_prospect?.company||session.metadata?.commercial_prospect?.name||
+      record?.remote_name||session.metadata?.remote_name||session.metadata?.contact_name
+    );
+    const genericName=["Contato","Contato WhatsApp","Contato WhatsApp Desktop","WhatsApp"].includes(candidateName)?"":candidateName;
     const startedMs=Date.parse(String(session.started_at||""));
     const endedMs=Date.parse(String(session.ended_at||""));
     const durationSeconds=Number(transcript?.duration_seconds||0)
@@ -161,9 +202,11 @@ Deno.serve(async(req:Request)=>{
       commercial_call_id:record?.id||null,
       transcript_id:session.transcript_id||record?.transcript_id||null,
       channel:record?.channel||"WHATSAPP_DESKTOP_CALL",
-      remote_phone:record?.remote_phone||session.metadata?.remote_phone||null,
+      capture_mode:session.capture_mode||null,
+      remote_phone:remotePhone,
       remote_name:record?.remote_name||session.metadata?.remote_name||session.metadata?.contact_name||null,
-      prospect_name:lead?.company||lead?.name||record?.remote_name||session.metadata?.remote_name||session.metadata?.contact_name||null,
+      prospect_name:genericName||null,
+      prospect_lead_id:lead?.id||metadataLeadId||null,
       stage:lead?.stage||null,
       notes:record?.notes||null,
       next_step:record?.next_step||null,
@@ -173,6 +216,9 @@ Deno.serve(async(req:Request)=>{
       duration_seconds:durationSeconds,
       state:session.state,
       audio_status:session.audio_status||null,
+      has_audio:Boolean(session.audio_mixed_path||session.audio_local_path||session.audio_remote_path||session.metadata?.audio_paths?.local||session.metadata?.audio_paths?.remote),
+      has_transcript:Boolean(session.transcript_id||record?.transcript_id),
+      prospect_identified:Boolean(genericName),
       identity_status:session.metadata?.identity_resolution?.status||"UNRESOLVED",
       transcript_summary:transcript?.metadata?.donnah_summary||transcript?.summary||record?.ai_summary||null,
       decisions:transcript?.decisions||[],commitments:transcript?.commitments||[],ai_signals:transcript?.ai_signals||{}
