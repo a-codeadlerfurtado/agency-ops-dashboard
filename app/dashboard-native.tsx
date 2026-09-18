@@ -603,7 +603,13 @@ export default function Dashboard() {
   }, [activeClients]);
   const unread = (data?.notifications || []).filter((item) => !item.read_at).length;
   const todayOps = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-  const dailyLeadAlerts = useMemo(() => (data?.notifications || []).filter((item: Row) => item.type === "DAILY_LEAD_ALERT" && !item.read_at && String(item.metadata?.alert_date || "") === todayOps), [data?.notifications, todayOps]);
+  const dailyLeadAlerts = useMemo(() => (data?.notifications || []).filter((item: Row) => {
+    if (item.type !== "DAILY_LEAD_ALERT" || String(item.metadata?.alert_date || "") !== todayOps) return false;
+    if (!item.read_at) return true;
+    return data?.profile?.role === "GT"
+      && Number(item.metadata?.leads || 0) === 0
+      && !item.metadata?.daily_lead_explanation?.reason_code;
+  }), [data?.notifications, data?.profile?.role, todayOps]);
   const filteredCampaigns = (data?.campaigns || []).filter((row) => campaignFilter === "ALL" || (campaignFilter === "ACTIVE" ? ["ACTIVE","ONBOARDING"].includes(row.lifecycle) : row.lifecycle === campaignFilter));
 
   if (!authReady) return <div className="auth-loading"><span className="dot loading"/> Validando sessão…</div>;
