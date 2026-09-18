@@ -108,7 +108,7 @@ export default function SdrProfileShell() {
   },[role,load]);
 
   if(role!=="SDR"||!session)return null;
-  const displayName=data.profile?.person||person||"Gustavo Lima";
+  const displayName=data.profile?.person||person||"SDR";
   return <div className="sdr-root"><style>{styles}</style>
     <aside className="sdr-sidebar"><div className="sdr-brand"><BrandMark/><div><b>Leonardo Imobi</b><span>Relato AI · SDR</span></div></div>
       <nav>{views.map(([key,label])=><button key={key} className={view===key?"active":""} onClick={()=>setView(key)}>{label}</button>)}</nav>
