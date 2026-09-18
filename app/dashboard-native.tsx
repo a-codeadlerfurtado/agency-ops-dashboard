@@ -6,6 +6,7 @@ import { API_URL, CONTRACTS_API, DASHBOARD_CLIENT_VERSION, SUPABASE_ANON_KEY, SU
 import type { HomeData, Row, TeamMember, View } from "./shared";
 import { nextLabel } from "./material-triage-bridge";
 import { TabHelp } from "./tab-help";
+import { PasswordRecoveryScreen } from "./password-recovery-screen";
 import { ViewErrorBoundary } from "./view-error-boundary";
 import AdlerWalletManagement from "./adler-wallet-management";
 import { PortfolioCenter } from "./views/portfolio";
@@ -79,11 +80,26 @@ function AuthScreen() {
       .finally(() => setRosterLoading(false));
   }, [mode]);
 
+  const selectedRoster = roster.find((row) => row.person === collaborator) || null;
+  const existingAccount = Boolean(selectedRoster?.existing_account);
+
+  function selectCollaborator(person: string) {
+    setCollaborator(person);
+    const row = roster.find((item) => item.person === person);
+    if (row?.email) setEmail(String(row.email));
+  }
+
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setMessage("");
     try {
       if (mode === "signup") {
         if (!collaborator) throw new Error("Selecione qual colaborador da empresa você é.");
+        if (existingAccount) {
+          const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: window.location.origin });
+          if (error) throw error;
+          setMessage("Esta conta já existe. Enviamos um link para definir uma nova senha nesse e-mail.");
+          return;
+        }
         const { data, error } = await supabase.auth.signUp({ email: email.trim(), password, options: { data: { name: name.trim(), full_name: name.trim(), collaborator_person: collaborator } } });
         if (error) throw error;
         if (!data.session) setMessage("Cadastro criado. Confirme seu e-mail para entrar.");
@@ -95,12 +111,13 @@ function AuthScreen() {
     finally { setBusy(false); }
   }
 
-  return <main className="auth-shell"><aside className="auth-aside"><div className="auth-aside-mark"><BrandMark /></div><div className="auth-aside-word"><b>Leonardo Imobi</b><span>Growth Imobiliário</span></div><p className="auth-aside-note">Clientes, onboarding, conversas e mídia em um só lugar.</p></aside><section className="auth-card"><div className="auth-head"><span className="eyebrow">Central de Operações</span><h1>{mode === "login" ? "Entre na operação" : "Crie seu acesso"}</h1><p>{mode === "login" ? "Acesse seu perfil para continuar." : "A conta é liberada após aprovação do Adler."}</p></div><div className="auth-tabs"><button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setMessage(""); }}>Entrar</button><button type="button" className={mode === "signup" ? "active" : ""} onClick={() => { setMode("signup"); setMessage(""); }}>Criar conta</button></div><form onSubmit={submit}>{mode === "signup" && <label>Nome completo<input autoComplete="name" required value={name} onChange={(event) => setName(event.target.value)} placeholder="Seu nome" /></label>}{mode === "signup" && <label>Qual colaborador da empresa você é?<select required value={collaborator} onChange={(event) => setCollaborator(event.target.value)}><option value="">{rosterLoading ? "Carregando…" : "Selecione…"}</option>{roster.map((person) => <option key={person.person} value={person.person}>{person.person}</option>)}</select>{!rosterLoading && !roster.length && <small className="auth-hint">Todos os colaboradores já têm conta. Fale com o Adler se precisar de acesso.</small>}</label>}<label>E-mail<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com" /></label><label>Senha<input type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={6} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 6 caracteres" /></label>{message && <p className="auth-message" role="status">{message}</p>}<button className="auth-submit" disabled={busy}>{busy ? "Processando…" : mode === "login" ? "Entrar no dashboard" : "Criar minha conta"}</button></form></section></main>;
+  return <main className="auth-shell"><aside className="auth-aside"><div className="auth-aside-mark"><BrandMark /></div><div className="auth-aside-word"><b>Leonardo Imobi</b><span>Growth Imobiliário</span></div><p className="auth-aside-note">Clientes, onboarding, conversas e mídia em um só lugar.</p></aside><section className="auth-card"><div className="auth-head"><span className="eyebrow">Central de Operações</span><h1>{mode === "login" ? "Entre na operação" : "Crie seu acesso"}</h1><p>{mode === "login" ? "Acesse seu perfil para continuar." : "A conta é liberada após aprovação do Adler."}</p></div><div className="auth-tabs"><button type="button" className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setMessage(""); }}>Entrar</button><button type="button" className={mode === "signup" ? "active" : ""} onClick={() => { setMode("signup"); setMessage(""); }}>Criar conta</button></div><form onSubmit={submit}>{mode === "signup" && <label>Nome completo<input autoComplete="name" required value={name} onChange={(event) => setName(event.target.value)} placeholder="Seu nome" /></label>}{mode === "signup" && <label>Qual colaborador da empresa você é?<select required value={collaborator} onChange={(event) => selectCollaborator(event.target.value)}><option value="">{rosterLoading ? "Carregando…" : "Selecione…"}</option>{roster.map((person) => <option key={person.person} value={person.person}>{person.person}</option>)}</select>{!rosterLoading && !roster.length && <small className="auth-hint">Todos os colaboradores já têm conta. Fale com o Adler se precisar de acesso.</small>}</label>}<label>E-mail<input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="voce@empresa.com" /></label>{mode === "signup" && existingAccount && <small className="auth-hint">Esta conta já existe. Ao continuar, enviaremos um link para definir uma nova senha sem recriar o usuário.</small>}{(mode === "login" || !existingAccount) && <label>Senha<input type="password" autoComplete={mode === "login" ? "current-password" : "new-password"} required minLength={6} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Mínimo de 6 caracteres" /></label>}{message && <p className="auth-message" role="status">{message}</p>}<button className="auth-submit" disabled={busy}>{busy ? "Processando…" : mode === "login" ? "Entrar no dashboard" : existingAccount ? "Definir nova senha" : "Criar minha conta"}</button></form></section></main>;
 }
 
 export default function Dashboard() {
   const [session, setSession] = useState<Session | null>(null);
   const [authReady, setAuthReady] = useState(false);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
   const [data, setData] = useState<HomeData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -146,7 +163,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session: current } }) => { setSession(current); setAuthReady(true); });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, current) => { setSession(current); setAuthReady(true); if (!current) { setData(null); loadedRef.current = false; } });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, current) => { if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true); setSession(current); setAuthReady(true); if (!current) { setData(null); loadedRef.current = false; } });
     return () => subscription.unsubscribe();
   }, []);
 
@@ -613,6 +630,7 @@ export default function Dashboard() {
   const filteredCampaigns = (data?.campaigns || []).filter((row) => campaignFilter === "ALL" || (campaignFilter === "ACTIVE" ? ["ACTIVE","ONBOARDING"].includes(row.lifecycle) : row.lifecycle === campaignFilter));
 
   if (!authReady) return <div className="auth-loading"><span className="dot loading"/> Validando sessão…</div>;
+  if (passwordRecovery && session) return <PasswordRecoveryScreen onDone={() => setPasswordRecovery(false)} />;
   if (!session) return <AuthScreen />;
 
   return (

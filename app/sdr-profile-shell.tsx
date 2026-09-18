@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { BrandMark, SUPABASE_URL, authenticatedFetch, loadProfileLite, supabase } from "./shared";
 
-type Row = Record<string, any>;
 import { RelatoPairingCard } from "./relato-pairing-card";
+
+type Row = Record<string, any>;
 
 type View = "calls" | "meetings";
 const API = SUPABASE_URL + "/functions/v1/agency-ops-sdr-api";
