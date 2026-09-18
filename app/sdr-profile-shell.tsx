@@ -5,6 +5,8 @@ import type { Session } from "@supabase/supabase-js";
 import { BrandMark, SUPABASE_URL, authenticatedFetch, loadProfileLite, supabase } from "./shared";
 
 type Row = Record<string, any>;
+import { RelatoPairingCard } from "./relato-pairing-card";
+
 type View = "calls" | "meetings";
 const API = SUPABASE_URL + "/functions/v1/agency-ops-sdr-api";
 const views: Array<[View,string]> = [["calls","Minhas ligações"],["meetings","Minhas reuniões"]];
@@ -120,6 +122,7 @@ export default function SdrProfileShell() {
       <button onClick={load} disabled={loading}>Atualizar</button><button className="ghost" onClick={()=>supabase.auth.signOut({scope:"local"})}>Sair</button></div></header>
       {error&&<div className="sdr-error">{error}</div>}
       <section className="sdr-content">
+        <RelatoPairingCard/>
         <div className="sdr-kpis"><article><span>Ligações</span><b>{Number(data.summary?.calls||0)}</b></article>
         <article><span>Reuniões</span><b>{Number(data.summary?.meetings||0)}</b></article></div>
         {view==="calls"?<CallsView data={data}/>:<MeetingsView data={data}/>}
