@@ -45,6 +45,8 @@ const ROLE_LABEL: Record<string, string> = {
   AI: "Inteligência Artificial",
   MGMT: "Gestão",
   COMMERCIAL: "Comercial",
+  CLOSER: "Closer",
+  SDR: "SDR",
 };
 
 const ACCESS_LABEL: Record<string, string> = {

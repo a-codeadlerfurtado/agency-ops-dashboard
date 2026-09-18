@@ -16,7 +16,7 @@ const VIEW_LABELS: Record<string,string> = {
   clickup:"ClickUp", evidence:"Evidências", audit:"Auditoria", alerts:"Alertas",
   opsperf:"Desempenho OP", finance:"Financeiro", executive:"Executivo"
 };
-const ROLES = new Set(["GT","CS","DESIGN","AI","MGMT","COMMERCIAL"]);
+const ROLES = new Set(["GT","CS","DESIGN","AI","MGMT","COMMERCIAL","CLOSER","SDR"]);
 const ACCESS_LEVELS = new Set(["FULL","WALLET_ONLY","RESTRICTED"]);
 
 const cors = {
@@ -261,7 +261,7 @@ Deno.serve(async (req) => {
     ok:true,
     actor:{ person:"Adler Furtado", central_brain:true },
     profiles,
-    roles:["GT","CS","DESIGN","AI","MGMT","COMMERCIAL"],
+    roles:["GT","CS","DESIGN","AI","MGMT","COMMERCIAL","CLOSER","SDR"],
     access_levels:["FULL","WALLET_ONLY","RESTRICTED"],
     generated_at:new Date().toISOString(),
   });
