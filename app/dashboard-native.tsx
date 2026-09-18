@@ -134,6 +134,7 @@ export default function Dashboard() {
   const loadedRef = useRef(false);
   const loadInFlightRef = useRef(false);
   const lastNotificationRef = useRef<string | null>(null);
+  const briefingToastSeenRef = useRef<Set<string>>(new Set());
   const preferencesRef = useRef<Row>({});
   const [materialTriage, setMaterialTriage] = useState<Row[]>([]);
   const [triageBusy, setTriageBusy] = useState<string | null>(null);
@@ -203,6 +204,46 @@ export default function Dashboard() {
   }, [viewsKey, allowedViews, navItems]);
   const canSee = useCallback((key: View) => allowedViews.has(key), [allowedViews]);
 
+  const briefingToastStorageKey = `ops-briefing-toast-seen-v1:${session?.user?.id ?? "anon"}`;
+  useEffect(() => {
+    if (!session?.user?.id) {
+      briefingToastSeenRef.current = new Set();
+      return;
+    }
+    try {
+      briefingToastSeenRef.current = new Set(
+        JSON.parse(window.localStorage.getItem(briefingToastStorageKey) || "[]"),
+      );
+    } catch {
+      briefingToastSeenRef.current = new Set();
+    }
+  }, [briefingToastStorageKey, session?.user?.id]);
+
+  const briefingToastKey = useCallback((item: Row | null | undefined) => {
+    if (!item || String(item.type || "") !== "BRIEFING_CLIENT_UPDATE") return "";
+    return String(item.event_key || item.id || "");
+  }, []);
+
+  const rememberBriefingToast = useCallback((item: Row | null | undefined) => {
+    const key = briefingToastKey(item);
+    if (!key) return;
+    const seen = briefingToastSeenRef.current;
+    if (seen.has(key)) return;
+    seen.add(key);
+    try {
+      window.localStorage.setItem(
+        briefingToastStorageKey,
+        JSON.stringify(Array.from(seen).slice(-500)),
+      );
+    } catch { /* modo privado */ }
+  }, [briefingToastKey, briefingToastStorageKey]);
+
+  const canShowToast = useCallback((item: Row | null | undefined) => {
+    if (!item || item.type === "DAILY_LEAD_ALERT") return false;
+    const key = briefingToastKey(item);
+    return !key || !briefingToastSeenRef.current.has(key);
+  }, [briefingToastKey]);
+
   const playTone = useCallback((kind: "pop" | "win") => {
     const prefs = preferencesRef.current;
     if (prefs.sounds_enabled === false || (kind === "win" && prefs.win_sound_enabled === false)) return;
@@ -263,7 +304,17 @@ export default function Dashboard() {
       } catch { /* complemento nunca derruba a tela principal */ }
       preferencesRef.current = next.preferences || {};
       const newest = next.notifications?.[0];
-      if (loadedRef.current && newest?.id && newest.id !== lastNotificationRef.current) {
+
+      // No primeiro carregamento, tudo que já estava no feed de briefing é
+      // histórico daquela sessão e não deve ressuscitar como toast.
+      if (!loadedRef.current) {
+        for (const item of next.notifications || []) {
+          if (String(item?.type || "") === "BRIEFING_CLIENT_UPDATE") rememberBriefingToast(item);
+        }
+      }
+
+      if (loadedRef.current && newest?.id && newest.id !== lastNotificationRef.current && canShowToast(newest)) {
+        rememberBriefingToast(newest);
         setToast(newest);
         if (newest.type === "CLIENT_WON") { setWin(newest); playTone("win"); } else playTone("pop");
       }
@@ -276,7 +327,7 @@ export default function Dashboard() {
       loadInFlightRef.current = false;
       setLoading(false);
     }
-  }, [playTone, session?.access_token]);
+  }, [canShowToast, playTone, rememberBriefingToast, session?.access_token]);
 
   useEffect(() => {
     if (!session?.access_token) return;
@@ -284,6 +335,46 @@ export default function Dashboard() {
     const timer = window.setInterval(load, 120_000);
     return () => window.clearInterval(timer);
   }, [load, session?.access_token]);
+
+  // Atualiza??es de briefing precisam aparecer para todo mundo sem esperar o ciclo
+  // pesado de 2 minutos da home. Consulta apenas o feed leve a cada 15s e mescla na
+  // Central de Notifica??es, preservando a leitura individual de cada colaborador.
+  useEffect(() => {
+    if (!session?.access_token) return;
+    let active = true;
+    let inFlight = false;
+    const poll = async () => {
+      if (!active || inFlight) return;
+      inFlight = true;
+      try {
+        const feed = await api("notification-feed", session.access_token);
+        if (!active || !Array.isArray(feed?.notifications)) return;
+        const incoming: Row[] = feed.notifications;
+        const newest = incoming[0];
+        setData((current: any) => {
+          if (!current) return current;
+          const incomingIds = new Set(incoming.map((item) => String(item.id)));
+          const currentById = new Map<string, Row>((current.notifications || []).map((item: Row) => [String(item.id), item]));
+          const mergedIncoming = incoming.map((item) => ({ ...item, read_at: item.read_at ?? currentById.get(String(item.id))?.read_at ?? null }));
+          const rest = (current.notifications || []).filter((item: Row) => !["BRIEFING_CLIENT_UPDATE","DAILY_LEAD_ALERT"].includes(String(item.type)) && !incomingIds.has(String(item.id)));
+          return { ...current, notifications: [...mergedIncoming, ...rest].sort((a: Row, b: Row) => new Date(String(b.occurred_at || 0)).getTime() - new Date(String(a.occurred_at || 0)).getTime()) };
+        });
+        if (loadedRef.current && newest?.id && newest.id !== lastNotificationRef.current && canShowToast(newest)) {
+          rememberBriefingToast(newest);
+          setToast(newest);
+          playTone("pop");
+        }
+        if (newest?.id) lastNotificationRef.current = newest.id;
+      } catch {
+        // O feed ? complementar; falha nele nunca derruba a opera??o principal.
+      } finally {
+        inFlight = false;
+      }
+    };
+    poll();
+    const timer = window.setInterval(poll, 15_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [canShowToast, playTone, rememberBriefingToast, session?.access_token]);
 
   useEffect(() => {
     if (!toast) { setToastLeaving(false); return; }
@@ -511,6 +602,8 @@ export default function Dashboard() {
     return [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
   }, [activeClients]);
   const unread = (data?.notifications || []).filter((item) => !item.read_at).length;
+  const todayOps = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const dailyLeadAlerts = useMemo(() => (data?.notifications || []).filter((item: Row) => item.type === "DAILY_LEAD_ALERT" && !item.read_at && String(item.metadata?.alert_date || "") === todayOps), [data?.notifications, todayOps]);
   const filteredCampaigns = (data?.campaigns || []).filter((row) => campaignFilter === "ALL" || (campaignFilter === "ACTIVE" ? ["ACTIVE","ONBOARDING"].includes(row.lifecycle) : row.lifecycle === campaignFilter));
 
   if (!authReady) return <div className="auth-loading"><span className="dot loading"/> Validando sessão…</div>;
@@ -702,6 +795,7 @@ export default function Dashboard() {
       {profileOpen && <ProfileMenu preferences={data?.preferences || {}} profile={data?.profile || {}} email={session.user.email || ""} settings={() => { setProfileOpen(false); setSettingsOpen(true); }} openWalletManagement={() => { setProfileOpen(false); setWalletManagementOpen(true); }} canManageWallets={canManageWallets} close={() => setProfileOpen(false)} signOut={() => supabase.auth.signOut()} requestAccess={requestAccess} token={session.access_token} clients={allClients} />}
       {walletManagementOpen && canManageWallets && <AdlerWalletManagement token={session.access_token} close={() => setWalletManagementOpen(false)} refresh={load} />}
       {notificationsOpen && <NotificationCenter items={data?.notifications || []} close={() => setNotificationsOpen(false)} refresh={load} openClient={openClient} openWork={(id) => { setNotificationsOpen(false); setWorkItemId(id); setView("work"); }} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
+      {dailyLeadAlerts.length > 0 && <DailyLeadRadarModal items={dailyLeadAlerts} token={session.access_token} refresh={load} openClient={openClient} profile={data?.profile || {}} />}
       {settingsOpen && <SettingsModal preferences={data?.preferences || {}} close={() => setSettingsOpen(false)} refresh={load} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
       {toast && <button className={`toast${toastLeaving ? " leaving" : ""}`} onClick={() => { const workId = toast.metadata?.work_item_id; if (workId) { setWorkItemId(String(workId)); setView("work"); } else if (toast.client_id) openClient(toast.client_id); setToast(null); }}><Chip value={toast.level}/><span><b>{text(toast.title)}</b><small>{text(toast.actor ? `${toast.actor}: ${toast.description}` : toast.description)}</small>{(toast.gestor || toast.carteira) && <small className="toast-meta">{text(toast.carteira ? `Carteira ${toast.carteira}` : (toast.gestor ? `Gestor: ${toast.gestor}` : ""))}</small>}</span><i onClick={(event) => { event.stopPropagation(); setToast(null); }}>×</i></button>}
       {win && data?.preferences?.win_celebration_enabled !== false && <button className="win-pulse" onClick={() => { if (win.client_id) openClient(win.client_id); setWin(null); }}><small>NOVO CLIENTE</small><strong>{text(win.description)}</strong><span>Acabou de entrar para a operação</span></button>}
@@ -1477,7 +1571,7 @@ function TeamCenter({ team, teamMembers, unassigned, openClient }: { team: TeamM
   const sections: Array<{ role: TeamMember["role"]; title: string }> = [
     { role: "GT", title: "Gestores de Tráfego" }, { role: "CS", title: "Customer Success" }, { role: "DESIGN", title: "Design" }, { role: "AI", title: "Inteligência Artificial" }, { role: "MGMT", title: "Gestão" },
   ];
-  const roleLabel: Record<TeamMember["role"], string> = { GT:"Gestor de Tráfego", CS:"Customer Success", DESIGN:"Design", AI:"Head de IA", MGMT:"Gestão", UNASSIGNED:"Sem cadastro", FORMER:"Desligado" };
+  const roleLabel: Record<TeamMember["role"], string> = { GT:"Gestor de Tráfego", CS:"Customer Success", DESIGN:"Design", AI:"Head de IA", MGMT:"Gestão", COMMERCIAL:"Comercial", CLOSER:"Closer", SDR:"SDR", UNASSIGNED:"Sem cadastro", FORMER:"Desligado" };
   const portfolioRank: Record<string, number> = { ATTENTION:0, FOLLOW_UP:1, DATA_INCOMPLETE:2, OK:3, UNDETERMINED:4 };
   function toggle(member: TeamMember) {
     if (member.role !== "GT" || member.portfolio.length === 0) return;
@@ -1969,17 +2063,286 @@ function ProfileMenu({preferences,profile,email,settings,openWalletManagement,ca
     {canManageWallets && <button className="wallet-management-entry" onClick={openWalletManagement}>Gestão de carteiras</button>}<NoteBox token={token} clients={clients} /><button onClick={settings}>Meu perfil</button><button onClick={settings}>Configurações</button><button onClick={settings}>Preferências</button><button onClick={close}>Notificações</button><button className="muted" onClick={() => signOut()}>Sair</button></div>;
 }
 
+function DailyLeadRadarModal({items,token,refresh,openClient,profile}:{items:Row[];token:string;refresh:()=>Promise<void>;openClient:(id:string)=>void;profile:Row}) {
+  const [closing,setClosing]=useState(false);
+  const [dismissed,setDismissed]=useState(false);
+  const [selectedGt,setSelectedGt]=useState("ALL");
+  const [drafts,setDrafts]=useState<Record<string,Row>>({});
+  const [saving,setSaving]=useState<string|null>(null);
+  const [formError,setFormError]=useState("");
+  const profileRole=String(profile?.role||"");
+  const profilePerson=String(profile?.person||"");
+  const reasonOptions=[
+    ["CLIENT_NO_RESPONSE","Cliente sumido / sem retorno"],
+    ["WAITING_AD_BALANCE","Aguardando cliente abastecer saldo"],
+    ["CLIENT_PAYMENT_PENDING","Pendência financeira do cliente"],
+    ["CLIENT_REQUESTED_PAUSE","Cliente pediu pausa / stand-by"],
+    ["NO_ACTIVE_CAMPAIGN","Sem campanha ativa"],
+    ["CAMPAIGN_REVIEW_OR_BLOCK","Campanha/anúncio em análise ou bloqueado"],
+    ["CAMPAIGN_DELIVERY_ISSUE","Problema de entrega da campanha"],
+    ["NEW_CAMPAIGN_LEARNING","Campanha nova / em aprendizado"],
+    ["TRACKING_OR_INTEGRATION","Tracking / integração / dado do Meta"],
+    ["LOW_BUDGET","Orçamento insuficiente / limitado"],
+    ["OTHER","Outro motivo"],
+  ] as const;
+  const reasonLabel=(code:unknown)=>reasonOptions.find(([value])=>value===String(code||""))?.[1]||String(code||"—");
+  const getGt=(item:Row)=>String(item.metadata?.gt_owner||item.metadata?.target_person||"Sem GT").trim()||"Sem GT";
+  const gtNames=Array.from(new Set(items.map(getGt))).sort((a,b)=>a.localeCompare(b,"pt-BR"));
+  const visibleItems=selectedGt==="ALL"?items:items.filter((item)=>getGt(item)===selectedGt);
+  const zero=visibleItems.filter((item)=>Number(item.metadata?.leads||0)===0);
+  const low=visibleItems.filter((item)=>Number(item.metadata?.leads||0)>0);
+  const money=(value:unknown)=>value==null||value===""?"—":formatMoney(Number(value));
+  const numberPt=(value:unknown,digits=0)=>new Intl.NumberFormat("pt-BR",{maximumFractionDigits:digits,minimumFractionDigits:digits}).format(Number(value||0));
+  const savedFor=(item:Row)=>{
+    const local=drafts[String(item.id)];
+    if(local?.__saved)return local;
+    return item.metadata?.daily_lead_explanation||null;
+  };
+  const pendingRequired=profileRole==="GT"
+    ? items.filter((item)=>Number(item.metadata?.leads||0)===0&&!savedFor(item)?.reason_code)
+    : [];
+
+  useEffect(()=>{
+    setDrafts((current)=>{
+      let changed=false;
+      const next={...current};
+      for(const item of items){
+        const id=String(item.id||"");
+        if(!id)continue;
+        const saved=item.metadata?.daily_lead_explanation;
+        if(saved&&(!next[id]||(!next[id].__touched&&!next[id].__saved))){
+          next[id]={...saved,__saved:true,__touched:false};
+          changed=true;
+        }else if(!next[id]){
+          next[id]={reason_code:"",reason_detail:"",action_taken:"",follow_up_on:"",__saved:false,__touched:false};
+          changed=true;
+        }
+      }
+      return changed?next:current;
+    });
+  },[items]);
+
+  const updateDraft=(id:string,patch:Row)=>setDrafts((current)=>({
+    ...current,
+    [id]:{...(current[id]||{}),...patch,__saved:false,__touched:true},
+  }));
+
+  async function saveExplanation(item:Row){
+    const id=String(item.id||"");
+    const draft=drafts[id]||{};
+    if(!draft.reason_code){
+      setFormError("Selecione o motivo antes de salvar a justificativa.");
+      return;
+    }
+    setSaving(id);
+    setFormError("");
+    try{
+      const result=await apiPost("daily-lead-explanation",token,{
+        notification_id:id,
+        reason_code:draft.reason_code,
+        reason_detail:draft.reason_detail||null,
+        action_taken:draft.action_taken||null,
+        follow_up_on:draft.follow_up_on||null,
+      });
+      setDrafts((current)=>({
+        ...current,
+        [id]:{...(result?.explanation||draft),__saved:true,__touched:false},
+      }));
+    }catch(caught){
+      setFormError(caught instanceof Error?caught.message:"Falha ao salvar a justificativa.");
+    }finally{
+      setSaving(null);
+    }
+  }
+
+  async function acknowledge(){
+    if(closing||dismissed)return;
+    if(pendingRequired.length){
+      setFormError(`Justifique ${pendingRequired.length} cliente${pendingRequired.length===1?"":"s"} com zero leads antes de concluir.`);
+      return;
+    }
+    setFormError("");
+    setClosing(true);
+    try{
+      const ids=items.map((item)=>String(item.id)).filter(Boolean);
+      await apiPost("notifications-read",token,{ids});
+      setDismissed(true);
+      await refresh();
+    }finally{setClosing(false);}
+  }
+
+  useEffect(()=>{
+    const onKeyDown=(event:KeyboardEvent)=>{
+      if(event.key==="Escape"){
+        event.preventDefault();
+        void acknowledge();
+      }
+    };
+    document.addEventListener("keydown",onKeyDown);
+    return ()=>document.removeEventListener("keydown",onKeyDown);
+  },[closing,dismissed,items,token,pendingRequired.length]);
+
+  function exportCsv(){
+    const headers=["Cliente","Carteira GT","Leads","Investimento","CPL","Impressões","Alcance","Cliques","CTR","CPC","CPM","Frequência","Campanhas ativas","Fonte KPI","Meta vinculada","Motivo","Detalhe","Ação / próximo passo","Prazo / retorno","Justificado por","Justificado em"];
+    const clean=(value:unknown)=>String(value??"").replace(/"/g,'""');
+    const rows=visibleItems.map((item)=>{
+      const m=item.metadata||{};
+      const x=savedFor(item)||{};
+      const name=String(item.title||"").replace(/^ZERO LEADS HOJE\s*[—-]?\s*/i,"").replace(/^BAIXO VOLUME DE LEADS\s*[—-]?\s*/i,"").replace(/\s*\(\d+\)\s*$/,"");
+      return [
+        name,getGt(item),Number(m.leads||0),m.spend==null?"":numberPt(m.spend,2),m.cpl==null?"":numberPt(m.cpl,2),
+        m.impressions==null?"":numberPt(m.impressions),m.reach==null?"":numberPt(m.reach),m.clicks==null?"":numberPt(m.clicks),
+        m.ctr==null?"":numberPt(m.ctr,2),m.cpc==null?"":numberPt(m.cpc,2),m.cpm==null?"":numberPt(m.cpm,2),
+        m.frequency==null?"":numberPt(m.frequency,2),m.active_campaigns==null?"":numberPt(m.active_campaigns),m.kpi_source||"",
+        m.meta_data_available===false?"Não":"Sim",x.reason_code?reasonLabel(x.reason_code):"",x.reason_detail||"",x.action_taken||"",
+        x.follow_up_on||"",x.submitted_by||"",x.updated_at||x.submitted_at||"",
+      ];
+    });
+    const csv="\uFEFF"+[headers,...rows].map((row)=>row.map((cell)=>`"${clean(cell)}"`).join(";")).join("\r\n");
+    const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a");
+    a.href=url;
+    a.download=`radar-leads-${todayOpsSafe()}-${selectedGt==="ALL"?"geral":selectedGt.replace(/[^a-z0-9]+/gi,"-").toLowerCase()}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  function todayOpsSafe(){
+    return new Intl.DateTimeFormat("en-CA",{timeZone:"America/Sao_Paulo",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+  }
+
+  const Card=({item}:{item:Row})=>{
+    const m=item.metadata||{};
+    const noLeads=Number(m.leads||0)===0;
+    const id=String(item.id||"");
+    const name=String(item.title||"").replace(/^ZERO LEADS HOJE\s*[—-]?\s*/i,"").replace(/^BAIXO VOLUME DE LEADS\s*[—-]?\s*/i,"").replace(/\s*\(\d+\)\s*$/,"");
+    const draft=drafts[id]||{reason_code:"",reason_detail:"",action_taken:"",follow_up_on:""};
+    const saved=savedFor(item);
+    const canExplain=(profileRole==="GT"&&getGt(item)===profilePerson)||profileRole==="MGMT"||profilePerson==="Adler Furtado";
+    return <article className={`dlr-client ${noLeads?"zero":"low"}`}>
+      <button type="button" className="dlr-card-open" onClick={()=>item.client_id&&openClient(String(item.client_id))}>
+        <div className="dlr-client-head"><div><small>{noLeads?"CRÍTICO • ZERO LEADS":"ATENÇÃO • BAIXO VOLUME"}</small><strong>{name}</strong><em>Carteira GT: {getGt(item)}</em></div><b>{Number(m.leads||0)} lead{Number(m.leads||0)===1?"":"s"}</b></div>
+      </button>
+      <div className="dlr-kpis">
+        <span><small>Investimento</small><b>{money(m.spend)}</b></span>
+        <span><small>CPL</small><b>{Number(m.leads||0)>0?money(m.cpl):"—"}</b></span>
+        <span><small>Impressões</small><b>{m.impressions==null?"—":numberPt(m.impressions)}</b></span>
+        <span><small>Alcance</small><b>{m.reach==null?"—":numberPt(m.reach)}</b></span>
+        <span><small>Cliques</small><b>{m.clicks==null?"—":numberPt(m.clicks)}</b></span>
+        <span><small>CTR</small><b>{m.ctr==null?"—":`${numberPt(m.ctr,2)}%`}</b></span>
+        <span><small>CPC</small><b>{money(m.cpc)}</b></span>
+        <span><small>CPM</small><b>{money(m.cpm)}</b></span>
+        <span><small>Frequência</small><b>{m.frequency==null?"—":numberPt(m.frequency,2)}</b></span>
+        <span><small>Campanhas ativas</small><b>{m.active_campaigns==null?"—":numberPt(m.active_campaigns)}</b></span>
+      </div>
+      {m.meta_data_available===false&&<div className="dlr-source-warning">KPIs de mídia indisponíveis: a conta Meta ainda não está vinculada a este cliente no Dash.</div>}
+      <p className="dlr-recommended">{text(m.recommended_action)}</p>
+      <div className={`dlr-explanation${canExplain?"":" readonly"}`}>
+        <div className="dlr-explanation-head">
+          <b>Motivo do baixo volume</b>
+          {canExplain&&<span className={draft.__saved?"saved":"pending"}>{draft.__saved?"Justificativa salva":"Justificativa pendente"}</span>}
+        </div>
+        {canExplain?<>
+          <div className="dlr-explanation-grid">
+            <label><span>Motivo</span><select value={String(draft.reason_code||"")} onChange={(event)=>updateDraft(id,{reason_code:event.target.value})}>
+              <option value="">Selecione o motivo...</option>
+              {reasonOptions.map(([value,label])=><option key={value} value={value}>{label}</option>)}
+            </select></label>
+            <label><span>Prazo / retorno</span><input type="date" value={String(draft.follow_up_on||"")} onChange={(event)=>updateDraft(id,{follow_up_on:event.target.value})}/></label>
+          </div>
+          <label><span>Detalhe</span><textarea rows={2} value={String(draft.reason_detail||"")} placeholder="Ex.: cliente não responde desde ontem; estamos aguardando retorno." onChange={(event)=>updateDraft(id,{reason_detail:event.target.value})}/></label>
+          <label><span>O que foi feito / próximo passo</span><textarea rows={2} value={String(draft.action_taken||"")} placeholder="Ex.: cobrei a recarga do saldo e vou revisar a conta amanhã às 10h." onChange={(event)=>updateDraft(id,{action_taken:event.target.value})}/></label>
+          <button type="button" className="dlr-save" disabled={saving===id||!draft.reason_code} onClick={()=>void saveExplanation(item)}>{saving===id?"Salvando…":draft.__saved?"Atualizar justificativa":"Salvar justificativa"}</button>
+        </>:saved?.reason_code?<div className="dlr-explanation-read">
+          <strong>{reasonLabel(saved.reason_code)}</strong>
+          {saved.reason_detail&&<p>{text(saved.reason_detail)}</p>}
+          {saved.action_taken&&<p><b>Ação:</b> {text(saved.action_taken)}</p>}
+          {saved.follow_up_on&&<small>Prazo / retorno: {text(saved.follow_up_on)}</small>}
+          <small>Registrado por {text(saved.submitted_by||getGt(item))}{saved.updated_at||saved.submitted_at?` · ${formatDate(saved.updated_at||saved.submitted_at)}`:""}</small>
+        </div>:<div className="dlr-explanation-waiting">Aguardando justificativa de <b>{getGt(item)}</b>.</div>}
+      </div>
+    </article>;
+  };
+
+  if(dismissed)return null;
+
+  return <><div className="dlr-overlay"/><section role="alertdialog" aria-modal="true" aria-label="Radar diário de leads" className="dlr-modal">
+    <style>{`
+      .dlr-overlay{position:fixed;inset:0;background:rgba(2,7,12,.82);backdrop-filter:blur(8px);z-index:220}
+      .dlr-modal{position:fixed;z-index:221;left:50%;top:50%;transform:translate(-50%,-50%);width:min(1120px,calc(100vw - 32px));max-height:88vh;overflow:auto;background:#09131d;border:1px solid #294156;border-radius:24px;box-shadow:0 32px 90px rgba(0,0,0,.58);padding:24px;color:#edf5ff}
+      .dlr-head{display:flex;justify-content:space-between;gap:24px;align-items:flex-start;padding-bottom:18px;border-bottom:1px solid #203445}.dlr-head small{display:block;color:#8ea6ba;font-weight:800;letter-spacing:.12em}.dlr-head h2{font-size:30px;margin:5px 0 7px}.dlr-head p{margin:0;color:#a9bac8;max-width:760px}.dlr-counts{display:flex;gap:10px;white-space:nowrap}.dlr-counts b{padding:9px 12px;border-radius:999px;background:#152635;font-size:13px}.dlr-counts .danger{background:#431a22;color:#ff9ca8}.dlr-counts .warn{background:#3a2d12;color:#ffd784}
+      .dlr-toolbar{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin-top:16px}.dlr-filter{display:grid;gap:5px}.dlr-filter span{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#8ea6ba}.dlr-filter select,.dlr-export{height:38px;border:1px solid #31495b;border-radius:10px;background:#0e1a24;color:#edf5ff;padding:0 12px}.dlr-export{font-weight:800;cursor:pointer}.dlr-export:hover{background:#152635}.dlr-filter-summary{color:#91a7b9;font-size:12px;margin-left:auto}
+      .dlr-group{margin-top:20px}.dlr-group>h3{margin:0 0 10px;font-size:15px;text-transform:uppercase;letter-spacing:.08em}.dlr-list{display:grid;gap:10px}.dlr-client{text-align:left;width:100%;border:1px solid #2b4050;border-radius:17px;padding:16px;background:#0e1a24;color:inherit}.dlr-client.zero{border-color:#7b2a39;background:linear-gradient(135deg,rgba(105,25,39,.34),rgba(14,26,36,.96))}.dlr-client.low{border-color:#665125;background:linear-gradient(135deg,rgba(100,74,24,.24),rgba(14,26,36,.96))}.dlr-card-open{display:block;width:100%;border:0;background:transparent;color:inherit;text-align:left;padding:0;cursor:pointer}.dlr-card-open:hover .dlr-client-head strong{text-decoration:underline;text-decoration-color:#47647a}.dlr-client-head{display:flex;justify-content:space-between;gap:16px;align-items:center}.dlr-client-head small{display:block;font-size:10px;letter-spacing:.1em;color:#9fb2c1}.dlr-client.zero .dlr-client-head small{color:#ff8e9c}.dlr-client.low .dlr-client-head small{color:#ffd16e}.dlr-client-head strong{display:block;font-size:18px;margin-top:4px}.dlr-client-head em{display:block;margin-top:3px;color:#8ea6ba;font-size:11px;font-style:normal}.dlr-client-head>b{font-size:24px}.dlr-kpis{display:grid;grid-template-columns:repeat(5,minmax(110px,1fr));gap:8px;margin-top:13px}.dlr-kpis span{background:rgba(8,16,23,.55);border:1px solid rgba(90,120,142,.18);padding:9px 10px;border-radius:11px}.dlr-kpis small{display:block;color:#8298aa;font-size:10px;text-transform:uppercase}.dlr-kpis b{display:block;margin-top:3px;font-size:14px}.dlr-source-warning{margin-top:11px;padding:8px 10px;border-radius:9px;background:rgba(255,209,110,.08);border:1px solid rgba(255,209,110,.22);color:#ffd784;font-size:11px}.dlr-recommended{margin:11px 0 0;color:#b5c4d0;font-size:12px}
+      .dlr-explanation{margin-top:13px;padding:13px;border-radius:12px;border:1px solid rgba(121,158,184,.24);background:rgba(4,11,17,.45)}.dlr-explanation-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.dlr-explanation-head>b{font-size:12px}.dlr-explanation-head span{font-size:10px;padding:4px 7px;border-radius:999px}.dlr-explanation-head .saved{background:rgba(52,211,153,.12);color:#7ee2bd}.dlr-explanation-head .pending{background:rgba(255,209,110,.10);color:#ffd784}.dlr-explanation-grid{display:grid;grid-template-columns:minmax(0,1fr) 190px;gap:10px}.dlr-explanation label{display:grid;gap:5px;margin-top:9px}.dlr-explanation label>span{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#8ea6ba}.dlr-explanation select,.dlr-explanation input,.dlr-explanation textarea{width:100%;box-sizing:border-box;border:1px solid #31495b;border-radius:9px;background:#0b1721;color:#edf5ff;padding:9px 10px;font:inherit;outline:none}.dlr-explanation textarea{resize:vertical;min-height:54px}.dlr-explanation select:focus,.dlr-explanation input:focus,.dlr-explanation textarea:focus{border-color:#5c819e}.dlr-save{margin-top:10px;border:1px solid #41627b;border-radius:9px;background:#143047;color:#e8f5ff;padding:9px 12px;font-weight:800;cursor:pointer}.dlr-save:disabled{opacity:.5;cursor:not-allowed}.dlr-explanation-read strong{display:block;margin-top:8px;color:#dcecff}.dlr-explanation-read p{margin:6px 0 0;color:#b5c4d0;font-size:12px}.dlr-explanation-read small{display:block;margin-top:6px;color:#8298aa}.dlr-explanation-waiting{margin-top:8px;color:#ffd784;font-size:12px}.dlr-form-error{margin-top:14px;padding:10px 12px;border-radius:10px;border:1px solid rgba(255,105,120,.35);background:rgba(105,25,39,.28);color:#ffb0ba;font-size:12px;font-weight:700}.dlr-actions{position:sticky;bottom:-24px;margin:20px -24px -24px;padding:16px 24px;background:rgba(9,19,29,.96);border-top:1px solid #203445;display:flex;align-items:center;justify-content:space-between;gap:12px}.dlr-actions small{color:#8197a9}.dlr-actions button{border:0;border-radius:12px;padding:12px 18px;font-weight:800;background:#dbefff;color:#07111a}.dlr-actions button:disabled{opacity:.5;cursor:not-allowed}
+      @media(max-width:760px){.dlr-modal{padding:18px}.dlr-head{display:block}.dlr-counts{margin-top:12px;flex-wrap:wrap}.dlr-kpis{grid-template-columns:repeat(2,1fr)}.dlr-explanation-grid{grid-template-columns:1fr}.dlr-filter-summary{width:100%;margin-left:0}.dlr-actions{bottom:-18px;margin:18px -18px -18px;padding:14px 18px}}
+    `}</style>
+    <div className="dlr-head"><div><small>RADAR DIÁRIO DE LEADS • FECHAMENTO DO DIA</small><h2>Clientes com geração abaixo do mínimo</h2><p>Zero leads exige revisão imediata e justificativa do GT. De 1 a 3 leads entra como atenção e também pode receber contexto e próximo passo.</p></div><div className="dlr-counts"><b className="danger">{zero.length} com 0 leads</b><b className="warn">{low.length} com 1–3</b></div></div>
+    <div className="dlr-toolbar">
+      <label className="dlr-filter"><span>Carteira de GT</span><select value={selectedGt} onChange={(event)=>setSelectedGt(event.target.value)}><option value="ALL">Todas as carteiras</option>{gtNames.map((gt)=><option key={gt} value={gt}>{gt}</option>)}</select></label>
+      <button className="dlr-export" onClick={exportCsv}>Exportar CSV</button>
+      <span className="dlr-filter-summary">{visibleItems.length} cliente{visibleItems.length===1?"":"s"} no filtro atual</span>
+    </div>
+    {zero.length>0&&<div className="dlr-group"><h3>🚨 Zero leads • ação imediata</h3><div className="dlr-list">{zero.map((item)=><Card key={item.id} item={item}/>)}</div></div>}
+    {low.length>0&&<div className="dlr-group"><h3>⚠️ 1 a 3 leads • acompanhar e corrigir</h3><div className="dlr-list">{low.map((item)=><Card key={item.id} item={item}/>)}</div></div>}
+    {formError&&<div className="dlr-form-error">{formError}</div>}
+    <div className="dlr-actions"><small>{profileRole==="GT"&&pendingRequired.length?`${pendingRequired.length} cliente${pendingRequired.length===1?"":"s"} com zero leads ainda sem justificativa.`:profileRole==="GT"?"Todos os clientes zerados estão justificados.":"Pressione Esc para fechar"}</small><button disabled={closing||pendingRequired.length>0} onClick={acknowledge}>{closing?"Confirmando…":profileRole==="GT"?"Justifiquei e vou acompanhar":"Entendi e vou acompanhar"}</button></div>
+  </section></>;
+}
+
+
 function NotificationCenter({items,close,refresh,openClient,openWork,token,pendingRequests,canDecide,decide}:{items:Row[];close:()=>void;refresh:()=>Promise<void>;openClient:(id:string)=>void;openWork:(id:string)=>void;token:string;pendingRequests:Row[];canDecide:boolean;decide:(id:string,decision:"APPROVED"|"DENIED")=>Promise<void>}) {
   const dialogRef = useDialogFocus(close);
   const [deciding,setDeciding]=useState<string|null>(null);
-  async function read(id?:string){await apiPost("notifications-read",token,id?{id}:{});await refresh();}
+
+  const radarGroups=new Map<string,Row[]>();
+  const regularItems:Row[]=[];
+  for(const item of items){
+    if(item.type==="DAILY_LEAD_ALERT"){
+      const day=String(item.metadata?.alert_date||String(item.occurred_at||"").slice(0,10)||"sem-data");
+      const group=radarGroups.get(day)||[];
+      group.push(item);
+      radarGroups.set(day,group);
+    }else{
+      regularItems.push(item);
+    }
+  }
+  const radarBatches:Row[]=Array.from(radarGroups.entries()).map(([day,rows])=>{
+    const zero=rows.filter((row)=>Number(row.metadata?.leads||0)===0).length;
+    const low=rows.length-zero;
+    const occurredAt=rows.map((row)=>String(row.occurred_at||"")).sort().reverse()[0]||new Date().toISOString();
+    const allRead=rows.every((row)=>Boolean(row.read_at));
+    const readAt=allRead?(rows.map((row)=>String(row.read_at||"")).sort().reverse()[0]||occurredAt):null;
+    return {
+      id:`daily-lead-radar-batch:${day}`,
+      type:"DAILY_LEAD_ALERT_BATCH",
+      level:zero>0?"CRITICAL":"ATTENTION",
+      title:"Radar diário de leads",
+      description:`${rows.length} clientes abaixo do mínimo: ${zero} com 0 leads e ${low} com 1–3 leads.`,
+      occurred_at:occurredAt,
+      read_at:readAt,
+      metadata:{alert_date:day,child_ids:rows.map((row)=>String(row.id)),zero_count:zero,low_count:low},
+    };
+  });
+  const displayItems=[...regularItems,...radarBatches].sort((a,b)=>new Date(String(b.occurred_at||0)).getTime()-new Date(String(a.occurred_at||0)).getTime());
+
+  async function read(id?:string,ids?:string[]){
+    await apiPost("notifications-read",token,ids?.length?{ids}:id?{id}:{});
+    await refresh();
+  }
   // Solicitacoes de acesso ainda pendentes viram acao inline: aprovar aqui ja libera o colaborador.
   const pendingIds=new Set(pendingRequests.map((request)=>String(request.id)));
   async function act(requestId:string,decision:"APPROVED"|"DENIED"){
     setDeciding(requestId);
     try{await decide(requestId,decision);}finally{setDeciding(null);}
   }
-  return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Central de notificações" className="notification-panel"><div className="panel-heading"><div><span className="eyebrow">Central de Notificações</span><h3>Atualizações da operação</h3></div><button onClick={close}>×</button></div><button className="mark-read" onClick={()=>read()}>Marcar todas como lidas</button><div className="notification-list">{items.map(item=>{
+  return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Central de notificações" className="notification-panel"><div className="panel-heading"><div><span className="eyebrow">Central de Notificações</span><h3>Atualizações da operação</h3></div><button onClick={close}>×</button></div><button className="mark-read" onClick={()=>read()}>Marcar todas como lidas</button><div className="notification-list">{displayItems.map(item=>{
+    if(item.type==="DAILY_LEAD_ALERT_BATCH"){
+      const childIds=Array.isArray(item.metadata?.child_ids)?item.metadata.child_ids.map(String):[];
+      return <button className={item.read_at?"":"unread"} data-notification-id={String(item.id)} key={item.id} onClick={()=>read(undefined,childIds)}><Chip value={item.level}/><span><b>{text(item.title)}</b><small>{text(item.description)} · {formatDate(item.occurred_at)}</small><small className="notification-owner">Aviso único do Radar Diário · os clientes ficam agrupados dentro do radar</small></span></button>;
+    }
     const requestId=item.metadata?.access_request_id?String(item.metadata.access_request_id):null;
     if(canDecide&&requestId&&pendingIds.has(requestId)) return <div className={`notification-action${item.read_at?"":" unread"}`} key={item.id}><Chip value={item.level}/><span><b>{text(item.title)}</b><small>{text(item.description)} · {formatDate(item.occurred_at)}</small></span><span className="access-request-actions"><button disabled={deciding===requestId} onClick={()=>act(requestId,"APPROVED")}>Aprovar</button><button className="muted" disabled={deciding===requestId} onClick={()=>act(requestId,"DENIED")}>Recusar</button></span></div>;
     const conclusao=taskCompletion(item);
@@ -1991,7 +2354,7 @@ function NotificationCenter({items,close,refresh,openClient,openWork,token,pendi
     return <button className={item.read_at?"":"unread"} data-notification-id={String(item.id)} key={item.id} onClick={()=>{read(item.id);const workId=item.metadata?.work_item_id;if(hasOperationalContext&&item.client_id)openClient(String(item.client_id));else if(workId)openWork(String(workId));else if(item.client_id)openClient(String(item.client_id));}}><Chip value={item.level}/><span><b>{item.title}</b>{conclusao
       ? <><small>{text(conclusao.tarefa)}</small><small className="notification-owner">Concluída por: {conclusao.concluidaPor || "não identificado"}</small><small className="notification-owner">Responsável: {text(conclusao.responsavel)}</small><small>{formatDate(item.occurred_at)}</small></>
       : <small>{text(item.actor ? `${item.actor}: ${item.description}` : item.description)} · {formatDate(item.occurred_at)}</small>}{(item.gestor || item.carteira) && <small className="notification-owner">{text(item.carteira ? `Carteira ${item.carteira}` : (item.gestor ? `Gestor: ${item.gestor}` : ""))}</small>}</span></button>;
-  })}{!items.length&&<div className="empty">Nenhuma notificação.</div>}</div></div>;
+  })}{!displayItems.length&&<div className="empty">Nenhuma notificação.</div>}</div></div>;
 }
 
 function SettingsModal({preferences,close,refresh,token,pendingRequests,canDecide,decide}:{preferences:Row;close:()=>void;refresh:()=>Promise<void>;token:string;pendingRequests:Row[];canDecide:boolean;decide:(id:string,decision:"APPROVED"|"DENIED")=>Promise<void>}) {

@@ -138,7 +138,7 @@ export function CapacityCenter({ token }: { token: string }) {
   const calibratedCaps = agregado.cargas.filter((c) => c.capacidadePontos>0).map((c) => c.capacidadePontos);
   const suggestedHireCap = calibratedCaps.length ? calibratedCaps.reduce((a,b)=>a+b,0)/calibratedCaps.length : 0;
   const hireCapValue = num(hireCapacity) || suggestedHireCap;
-  const hireSim = useMemo(() => simularContratacao(resumo.cargaPontos,resumo.capacidadePontos,resumo.cargaMediaPorCliente,{ quantidade:hireQty,papel:"GT",capacidadePontosPorPessoa:hireCapValue,custoMensalPorPessoa:hireCost || null,margemEstimadaPorCliente:marginPerClient || null }), [resumo,hireQty,hireCapValue,hireCost,marginPerClient]);
+  const hireSim = useMemo(() => simularContratacao(resumo.cargaPontos,resumo.capacidadePontos,resumo.cargaMediaPorCliente,{ quantidade:hireQty,papel:"GT",capacidadePontosPorPessoa:hireCapValue,custoMensalPorPessoa:num(hireCost) || null,margemEstimadaPorCliente:num(marginPerClient) || null }), [resumo,hireQty,hireCapValue,hireCost,marginPerClient]);
   const termByClient = useMemo(() => new Map((payload?.commercial_terms || []).map((t) => [String(t.client_id),t])), [payload]);
   const scoreById = useMemo(() => new Map(scores.map((s) => [s.clientId,s])), [scores]);
   const opCost = num(operationCost);

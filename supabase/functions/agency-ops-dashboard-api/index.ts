@@ -50,6 +50,11 @@ const globalNotificationKey = (row: any) => isGlobalNotification(row)
 const SYNTHETIC_NAME = /^[A-Za-z]+-\d{9,}-[a-z0-9]{4,8}$/;
 const ALL_VIEWS = ["overview","focus","work","clients","onboarding","campaigns","preclients","conversations","team","diary","clickup","evidence","audit","alerts","health","opsperf","creative","capacity","view-oncall","finance","executive"];
 const opsDay = (date = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+const DAILY_LEAD_REASON_CODES = new Set([
+  "CLIENT_NO_RESPONSE","WAITING_AD_BALANCE","CLIENT_PAYMENT_PENDING","CLIENT_REQUESTED_PAUSE",
+  "NO_ACTIVE_CAMPAIGN","CAMPAIGN_REVIEW_OR_BLOCK","CAMPAIGN_DELIVERY_ISSUE","NEW_CAMPAIGN_LEARNING",
+  "TRACKING_OR_INTEGRATION","LOW_BUDGET","OTHER",
+]);
 
 const aggregateMedia = (rows: any[]) => {
   const daily = rows.filter((row) => (row.granularity ?? "day") === "day");
@@ -122,11 +127,14 @@ Deno.serve(async (req) => {
 
   if (req.method === "GET" && view === "roster") {
     const [{ data: rosterRows }, { data: claimedRows }] = await Promise.all([
-      ops.from("team_roster").select("person").eq("is_former", false).order("person"),
+      ops.from("team_roster").select("person,email,role").eq("is_former", false).order("person"),
       ops.from("user_preferences").select("collaborator_person").not("collaborator_person", "is", null),
     ]);
     const claimed = new Set((claimedRows ?? []).map((row: any) => row.collaborator_person));
-    const available = (rosterRows ?? []).filter((row: any) => !claimed.has(row.person));
+    const commercialSetup = new Set(["Gustavo Royce", "Vitor Feitoza"]);
+    const available = (rosterRows ?? [])
+      .filter((row: any) => !claimed.has(row.person) || commercialSetup.has(row.person))
+      .map((row: any) => ({ ...row, existing_account: claimed.has(row.person) }));
     return respond({ roster: available });
   }
 
@@ -228,6 +236,12 @@ Deno.serve(async (req) => {
     ]);
     if (rowsError) return queryFailed(rowsError);
     if (readsError) return queryFailed(readsError);
+    const dailyLeadIds = (rows ?? []).filter(isDailyLeadAlert).map((row: any) => String(row.id)).filter(Boolean);
+    const explanationResult = dailyLeadIds.length
+      ? await ops.from("daily_lead_alert_explanations").select("*").in("notification_id", dailyLeadIds)
+      : { data: [], error: null } as any;
+    if (explanationResult.error) return queryFailed(explanationResult.error);
+    const explanationByNotification = new Map((explanationResult.data ?? []).map((row: any) => [String(row.notification_id), row]));
     const readAt = new Map((reads ?? []).map((row: any) => [String(row.notification_id), row.read_at]));
     const seen = new Set<string>();
     const notifications = (rows ?? []).filter((row: any) => isGlobalNotification(row) || canReceiveDailyLeadAlert(row)).filter((row: any) => {
@@ -238,7 +252,11 @@ Deno.serve(async (req) => {
     }).map((row: any) => ({
       ...row,
       event_key: globalNotificationKey(row),
-      metadata: isGlobalNotification(row) ? { ...(row.metadata || {}), target_role: "ALL" } : row.metadata,
+      metadata: isGlobalNotification(row)
+        ? { ...(row.metadata || {}), target_role: "ALL" }
+        : isDailyLeadAlert(row)
+          ? { ...(row.metadata || {}), daily_lead_explanation: explanationByNotification.get(String(row.id)) ?? null }
+          : row.metadata,
       read_at: readAt.get(String(row.id)) ?? null,
     }));
     return respond({ notifications, generated_at: new Date().toISOString() });
@@ -354,6 +372,39 @@ Deno.serve(async (req) => {
       }, { onConflict: "client_id" }).select().single();
       if (result.error) return queryFailed(result.error);
       return respond({ ok: true, override: result.data });
+    }
+
+    if (view === "daily-lead-explanation") {
+      const notificationId = String(body.notification_id ?? "").trim();
+      const reasonCode = String(body.reason_code ?? "").trim().toUpperCase();
+      if (!notificationId || !DAILY_LEAD_REASON_CODES.has(reasonCode)) return respond({ error: "invalid_explanation" }, 400);
+      const { data: notification, error: notificationError } = await ops.from("platform_notifications").select("id,type,client_id,metadata").eq("id", notificationId).maybeSingle();
+      if (notificationError) return queryFailed(notificationError);
+      if (!notification || !isDailyLeadAlert(notification) || !notification.client_id || !canReceiveDailyLeadAlert(notification)) return respond({ error: "not_found_or_forbidden" }, 404);
+      const targetPerson = String(notification.metadata?.target_person ?? "").trim();
+      const canSubmit = isAdler || profileRole === "MGMT" || (profileRole === "GT" && targetPerson === String(profilePerson ?? ""));
+      if (!canSubmit) return respond({ error: "forbidden" }, 403);
+      const alertDate = /^\d{4}-\d{2}-\d{2}$/.test(String(notification.metadata?.alert_date ?? "")) ? String(notification.metadata.alert_date) : opsDay();
+      const followUpOn = /^\d{4}-\d{2}-\d{2}$/.test(String(body.follow_up_on ?? "")) ? String(body.follow_up_on) : null;
+      const now = new Date().toISOString();
+      const payload = {
+        notification_id: notification.id,
+        client_id: notification.client_id,
+        alert_date: alertDate,
+        gt_owner: targetPerson || String(profilePerson ?? "Sem GT"),
+        leads_count: Math.max(0, Math.round(number(notification.metadata?.leads))),
+        reason_code: reasonCode,
+        reason_detail: typeof body.reason_detail === "string" ? body.reason_detail.trim().slice(0, 1200) || null : null,
+        action_taken: typeof body.action_taken === "string" ? body.action_taken.trim().slice(0, 1600) || null : null,
+        follow_up_on: followUpOn,
+        submitted_by: profilePerson ?? "Adler Furtado",
+        submitted_by_user_key: currentUserKey,
+        submitted_at: now,
+        updated_at: now,
+      };
+      const result = await ops.from("daily_lead_alert_explanations").upsert(payload, { onConflict: "client_id,alert_date" }).select().single();
+      if (result.error) return queryFailed(result.error);
+      return respond({ ok: true, explanation: result.data });
     }
 
     if (view === "notifications-read") {
