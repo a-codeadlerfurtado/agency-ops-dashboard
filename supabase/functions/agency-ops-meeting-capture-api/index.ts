@@ -383,7 +383,7 @@ Deno.serve(async (req: Request) => {
     const identity = session.metadata?.identity_resolution?.auto === true
       ? session.metadata.identity_resolution
       : await resolveCallIdentity(ops, remotePhone);
-    const requiresSelection = !Boolean(identity?.auto);
+    const requiresSelection = !Boolean(identity?.auto) || (!identity?.client_id && String(identity?.side || "").toUpperCase() !== "TEAM");
     let clients: Row[] = [];
     if (requiresSelection) {
       const { data, error } = await ops.from("clients").select("id,display_name,lifecycle")
@@ -432,8 +432,15 @@ Deno.serve(async (req: Request) => {
     let selectedClientName: string | null = null;
     let bindingSource = "AUTO";
     let noClient = false;
+    let commercialLead: Row | null = null;
+    const prospectInput = (feedback.prospect || {}) as Row;
+    const isProspect = !dismissed && Boolean(feedback.is_prospect);
+    const requestedBindingSource = clean(feedback.binding_source, 40).toUpperCase();
 
-    if (!dismissed && currentIdentity?.auto) {
+    if (isProspect) {
+      bindingSource = "RELATO_COMMERCIAL";
+      noClient = false;
+    } else if (!dismissed && currentIdentity?.auto && requestedBindingSource === "AUTO") {
       selectedClientId = currentIdentity.client_id || null;
       selectedClientName = currentIdentity.client_name || null;
       noClient = !selectedClientId;
@@ -453,6 +460,104 @@ Deno.serve(async (req: Request) => {
     const remotePhone = normalizePhone(session.metadata?.remote_phone);
     const remoteName = clean(session.metadata?.remote_name || currentIdentity?.name, 160) || null;
     const remoteRole = clean(session.metadata?.remote_role || currentIdentity?.role, 80) || null;
+
+    if (isProspect) {
+      const crm = db.schema("crm");
+      const prospectName = clean(prospectInput.name || remoteName, 200);
+      if (!prospectName) return respond({ error: "prospect_name_required" }, 400);
+      const prospectCompany = clean(prospectInput.company, 240) || null;
+      const prospectEmail = clean(prospectInput.email, 240).toLowerCase() || null;
+      const prospectPhone = normalizePhone(prospectInput.phone || remotePhone) || null;
+      const prospectCity = clean(prospectInput.city, 200) || null;
+      const prospectInstagram = clean(prospectInput.instagram, 500) || null;
+      const marketingInvestment = clean(prospectInput.marketing_investment, 240) || null;
+      const brokerCountRaw = Number(prospectInput.broker_count);
+      const brokerCount = Number.isFinite(brokerCountRaw) && brokerCountRaw > 0 ? Math.round(brokerCountRaw) : null;
+      const painPoints = Array.isArray(prospectInput.pain_points) ? prospectInput.pain_points.map((v: unknown) => clean(v, 400)).filter(Boolean).slice(0, 30) : [];
+      const servicesInterest = Array.isArray(prospectInput.services_interest) ? prospectInput.services_interest.map((v: unknown) => clean(v, 400)).filter(Boolean).slice(0, 30) : [];
+      const objections = Array.isArray(prospectInput.objections) ? prospectInput.objections.map((v: unknown) => clean(v, 400)).filter(Boolean).slice(0, 30) : [];
+      const nextStep = clean(prospectInput.next_step, 2000) || null;
+      const nextStepRaw = clean(prospectInput.next_step_at, 100);
+      const nextStepAt = nextStepRaw && Number.isFinite(Date.parse(nextStepRaw)) ? new Date(nextStepRaw).toISOString() : null;
+      const now = new Date().toISOString();
+      const { data: closerProfile, error: closerError } = await db.from("profiles")
+        .select("id,email").eq("email", "feitozaluizvitor@gmail.com").maybeSingle();
+      if (closerError || !closerProfile?.id) return respond({ error: "commercial_closer_not_configured", detail: closerError?.message }, 500);
+
+      let existingLead: Row | null = null;
+      if (prospectEmail) {
+        const { data } = await crm.from("leads").select("id,owner_id,stage").eq("owner_id", closerProfile.id).eq("email", prospectEmail).is("archived_at", null).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+        existingLead = data || null;
+      }
+      if (!existingLead && prospectPhone) {
+        const { data } = await crm.from("leads").select("id,owner_id,stage").eq("owner_id", closerProfile.id).eq("phone", prospectPhone).is("archived_at", null).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+        existingLead = data || null;
+      }
+
+      const leadPatch: Row = {
+        owner_id: closerProfile.id, name: prospectName, company: prospectCompany,
+        email: prospectEmail, phone: prospectPhone, instagram: prospectInstagram,
+        orcamento_mkt: marketingInvestment, source: "RELATO_AI_SDR", updated_at: now,
+      };
+      let leadError: any = null;
+      if (existingLead?.id) {
+        const result = await crm.from("leads").update(leadPatch).eq("id", existingLead.id).select("id,owner_id,name,company,stage,email,phone").single();
+        commercialLead = result.data || null; leadError = result.error;
+      } else {
+        const result = await crm.from("leads").insert({ ...leadPatch, stage: "qualificacao", created_at: now }).select("id,owner_id,name,company,stage,email,phone").single();
+        commercialLead = result.data || null; leadError = result.error;
+      }
+      if (leadError || !commercialLead?.id) return respond({ error: "commercial_lead_save_failed", detail: leadError?.message }, 500);
+
+      const closerBriefing = [
+        prospectCompany ? `Empresa: ${prospectCompany}` : null,
+        prospectCity ? `Região: ${prospectCity}` : null,
+        marketingInvestment ? `Investimento atual: ${marketingInvestment}` : null,
+        brokerCount ? `Corretores: ${brokerCount}` : null,
+        painPoints.length ? `Dores: ${painPoints.join(" · ")}` : null,
+        servicesInterest.length ? `Interesses: ${servicesInterest.join(" · ")}` : null,
+        objections.length ? `Objeções: ${objections.join(" · ")}` : null,
+        nextStep ? `Próximo passo: ${nextStep}` : null,
+        clean(feedback.note, 2000) ? `Nota do SDR: ${clean(feedback.note, 2000)}` : null,
+      ].filter(Boolean).join("\n");
+
+      const { error: prospectProfileError } = await ops.from("commercial_prospect_profiles").upsert({
+        lead_id: commercialLead.id, city: prospectCity, website: prospectInstagram?.startsWith("http") ? prospectInstagram : null,
+        broker_count: brokerCount, marketing_investment: marketingInvestment, pain_points: painPoints,
+        services_interest: servicesInterest, objections, qualification_summary: clean(feedback.note, 6000) || closerBriefing || null,
+        closer_briefing: closerBriefing || null, next_step: nextStep, next_step_at: nextStepAt,
+        sdr_person: device.owner_person, closer_person: "Vitor Feitoza", last_call_at: now,
+        last_transcript_id: session.transcript_id || null,
+        metadata: { source: "RELATO_AI", remote_phone: prospectPhone, remote_name: remoteName, capture_session_id: session.id },
+        updated_at: now,
+      }, { onConflict: "lead_id" });
+      if (prospectProfileError) return respond({ error: "commercial_prospect_profile_failed", detail: prospectProfileError.message }, 500);
+
+      const { error: callRecordError } = await ops.from("commercial_call_records").upsert({
+        lead_id: commercialLead.id, capture_session_id: session.id, transcript_id: session.transcript_id || null,
+        sdr_person: device.owner_person, closer_person: "Vitor Feitoza", channel: clean(feedback.channel, 40) || "WHATSAPP_DESKTOP",
+        remote_phone: prospectPhone, remote_name: remoteName, outcome: clean(feedback.relationship_direction, 80) || null,
+        notes: clean(feedback.note, 3000) || null, pain_points: painPoints, objections,
+        next_step: nextStep, next_step_at: nextStepAt,
+        metadata: { source: "RELATO_AI", tags: Array.isArray(feedback.tags) ? feedback.tags : [], prospect_company: prospectCompany },
+        updated_at: now,
+      }, { onConflict: "capture_session_id" });
+      if (callRecordError) return respond({ error: "commercial_call_record_failed", detail: callRecordError.message }, 500);
+
+      if (nextStep) {
+        const { data: existingActivity } = await ops.from("commercial_activities").select("id")
+          .eq("lead_id", commercialLead.id).contains("metadata", { capture_session_id: session.id }).limit(1).maybeSingle();
+        if (!existingActivity?.id) {
+          const { error: activityError } = await ops.from("commercial_activities").insert({
+            lead_id: commercialLead.id, activity_type: "FOLLOW_UP", title: nextStep.slice(0, 500),
+            description: closerBriefing || null, owner_person: "Vitor Feitoza", due_at: nextStepAt,
+            source: "RELATO_AI", metadata: { capture_session_id: session.id, sdr_person: device.owner_person },
+          });
+          if (activityError) return respond({ error: "commercial_activity_failed", detail: activityError.message }, 500);
+        }
+      }
+    }
+
     if (!dismissed && bindingSource === "MANUAL" && remotePhone) {
       const now = new Date().toISOString();
       const manualIdentity = {
@@ -470,7 +575,12 @@ Deno.serve(async (req: Request) => {
       if (identityError) return respond({ error: "identity_learning_failed", detail: identityError.message }, 500);
     }
 
-    const resolvedIdentity = dismissed ? currentIdentity : {
+    const resolvedIdentity = dismissed ? currentIdentity : isProspect ? {
+      ...(currentIdentity || {}), status: "COMMERCIAL_PROSPECT", auto: false,
+      phone: remotePhone, name: clean(prospectInput.name || remoteName, 160) || remoteName, role: "PROSPECT",
+      client_id: null, client_name: null, side: "EXTERNAL", source: "RELATO_COMMERCIAL",
+      commercial_lead_id: commercialLead?.id || null,
+    } : {
       ...(currentIdentity || {}), status: selectedClientId ? "AUTO_CLIENT" : "AUTO_NON_CLIENT", auto: true,
       phone: remotePhone, name: remoteName, role: remoteRole, client_id: selectedClientId,
       client_name: selectedClientName, side: selectedClientId ? "CLIENT_SIDE" : (currentIdentity?.side || "EXTERNAL"),
@@ -478,9 +588,13 @@ Deno.serve(async (req: Request) => {
     };
     if (!dismissed) {
       const nextMetadata = { ...(session.metadata || {}),
-        remote_name: remoteName, remote_role: remoteRole,
+        remote_name: remoteName, remote_role: isProspect ? "PROSPECT" : remoteRole,
         resolved_client_id: selectedClientId, resolved_client_name: selectedClientName,
         identity_resolution: resolvedIdentity,
+        ...(isProspect && commercialLead ? { commercial_prospect: {
+          lead_id: commercialLead.id, name: commercialLead.name, company: commercialLead.company,
+          closer_person: "Vitor Feitoza", sdr_person: device.owner_person,
+        }} : {}),
         feedback_binding: { source: bindingSource, confirmed_by: device.owner_person, confirmed_at: new Date().toISOString() },
       };
       await ops.from("meeting_capture_sessions").update({ metadata: nextMetadata, updated_at: new Date().toISOString() }).eq("id", session.id);
@@ -508,7 +622,7 @@ Deno.serve(async (req: Request) => {
     };
     const { data, error } = await ops.from("meeting_human_feedback").upsert(payload, { onConflict: "owner_person,local_session_id" }).select("id,transcript_id,client_id,submitted_at,dismissed").single();
     if (error) return respond({ error: "feedback_save_failed", detail: error.message }, 500);
-    return respond({ ok: true, feedback: data, binding: { source: bindingSource, client_id: selectedClientId, client_name: selectedClientName, no_client: noClient } });
+    return respond({ ok: true, feedback: data, binding: { source: bindingSource, client_id: selectedClientId, client_name: selectedClientName, no_client: noClient, is_prospect: isProspect, commercial_lead_id: commercialLead?.id || null } });
   }
 
   if (action === "finalize") {
