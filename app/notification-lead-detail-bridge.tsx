@@ -151,7 +151,7 @@ export default function NotificationLeadDetailBridge() {
       }
 
       if (briefing) {
-        const deepLink = String(briefing.metadata?.deep_link || briefing.metadata?.dashboard_path || "").trim();
+        const deepLink = String(briefing.metadata?.dashboard_path || briefing.metadata?.deep_link || "").trim();
         if (deepLink) {
           event.preventDefault();
           event.stopPropagation();
