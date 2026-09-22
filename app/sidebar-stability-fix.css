@@ -2,10 +2,9 @@
  * Sidebar hard-stability layer.
  *
  * The dashboard historically had multiple runtime systems touching the same
- * .side-nav-items container. Runtime information-architecture reordering is no
- * longer mounted. This file keeps navigation geometry stable and defines a
- * deterministic semantic order with CSS only, so role-specific tabs are simply
- * omitted when the profile does not have access.
+ * .side-nav-items container. The information-architecture layer owns section
+ * grouping and ordering; this file keeps navigation geometry stable underneath
+ * it and provides a deterministic fallback before the client layer mounts.
  */
 
 /* Never let legacy runtime group labels enter layout. */
