@@ -37,15 +37,42 @@ function apify():ProviderAdapter{
     async expandAdvertisers(ids,limit){if(!ids.length)return {rows:[],cursor:null,creditCost:0,creditsRemaining:null};return apifyCall(key,{page_id:ids[0],country:"BR",active_only:true,max_ads:Math.min(25,limit)})}
   };
 }
+
+const metaBrowserRow=(r:any)=>{
+  const cs=Array.isArray(r?.creatives)?r.creatives:[],firstImage=cs.find((c:any)=>c?.kind==="image"),firstVideo=cs.find((c:any)=>c?.kind==="video");
+  const image=clean(firstImage?.imageUrl||firstImage?.imageResizedUrl,3000),video=clean(firstVideo?.videoHdUrl||firstVideo?.videoSdUrl,3000),thumbnail=clean(firstVideo?.previewImageUrl,3000);
+  const mainIndex=image?cs.indexOf(firstImage):video?cs.indexOf(firstVideo):-1;
+  const cards=cs.filter((_:any,i:number)=>i!==mainIndex).map((c:any)=>({image:clean(c?.imageUrl||c?.imageResizedUrl,3000)||undefined,video:clean(c?.videoHdUrl||c?.videoSdUrl,3000)||undefined,thumbnail:clean(c?.previewImageUrl,3000)||undefined})).filter((c:any)=>c.image||c.video);
+  const adId=clean(r?.libraryId,400),pageId=clean(r?.pageId,300);
+  return {brand_id:pageId||"unknown",ad_id:adId,id:adId,name:clean(r?.pageName,500),description:clean(r?.body||r?.linkDescription||r?.caption,5000),headline:clean(r?.title,1000),link_url:clean(r?.linkUrl,3000),cta_title:clean(r?.ctaText,300),cta_type:clean(r?.ctaType,300),display_format:clean(r?.displayFormat,100),publisher_platform:Array.isArray(r?.platforms)?r.platforms:[],live:typeof r?.isActive==="boolean"?r.isActive:true,started_running:r?.startedRunning||null,image,video,thumbnail,cards,avatar:clean(r?.pageProfilePictureUrl,3000),source_url:clean(r?.adDetailsUrl,3000)||("https://www.facebook.com/ads/library/?id="+encodeURIComponent(adId)),provider_payload:{countries:r?.countries||[],categories:r?.categories||[],page_categories:r?.pageCategories||[],days_active:r?.daysActive??null,variants_using_creative:r?.variantsUsingCreative??null,link_domain:r?.linkDomain||null,source:r?.source||"browser"}};
+};
+async function metaBrowserCall(input:any):Promise<ProviderPage>{
+  const base=clean(Deno.env.get("RADAR_COLLECTOR_URL"),2000).replace(/\/+$/,""),token=clean(Deno.env.get("RADAR_COLLECTOR_TOKEN"),4000);
+  if(!base||!token){const e:any=new Error("Radar Meta Browser collector não está configurado.");e.status=503;throw e}
+  const res=await fetch(base+"/search",{method:"POST",headers:{"content-type":"application/json",Authorization:"Bearer "+token},body:JSON.stringify(input),signal:AbortSignal.timeout(90000)});
+  const payload=await res.json().catch(()=>({}));
+  if(!res.ok){const e:any=new Error(clean(payload?.detail||payload?.error||res.statusText,300)||("meta_browser_http_"+res.status));e.status=res.status;throw e}
+  const rows=(Array.isArray(payload?.ads)?payload.ads:[]).map(metaBrowserRow).filter((x:any)=>x.ad_id);
+  return {rows,cursor:clean(payload?.cursor,1000)||null,creditCost:0,creditsRemaining:null};
+}
+function metaBrowser():ProviderAdapter{
+  const url=clean(Deno.env.get("RADAR_COLLECTOR_URL"),2000),token=clean(Deno.env.get("RADAR_COLLECTOR_TOKEN"),4000);
+  return {name:"META_BROWSER",configured:Boolean(url&&token),missingCode:"META_BROWSER_NOT_CONFIGURED",missingDetail:"Coletor gratuito da Meta Ads Library não está configurado.",
+    search:(query,limit)=>metaBrowserCall({query,country:"BR",limit:Math.min(30,Math.max(1,limit))}),
+    async expandAdvertisers(ids,limit){if(!ids.length)return {rows:[],cursor:null,creditCost:0,creditsRemaining:null};return metaBrowserCall({page_id:ids[0],country:"BR",limit:Math.min(30,Math.max(1,limit))})}
+  };
+}
+
 function auto():ProviderAdapter{
+  const b=metaBrowser();if(b.configured)return b;
   const f=foreplay();if(f.configured)return f;
   const a=apify();if(a.configured)return a;
-  return {name:"AUTO",configured:false,missingCode:"RADAR_PROVIDER_CREDENTIAL_MISSING",missingDetail:"Nenhuma credencial de coleta externa está configurada. Adicione FOREPLAY_API_KEY ou APIFY_TOKEN.",search:async()=>({rows:[],cursor:null,creditCost:0,creditsRemaining:null}),expandAdvertisers:async()=>({rows:[],cursor:null,creditCost:0,creditsRemaining:null})};
+  return {name:"AUTO",configured:false,missingCode:"RADAR_PROVIDER_UNAVAILABLE",missingDetail:"Nenhuma fonte de coleta do Radar está disponível. O coletor Meta Browser gratuito, Foreplay e Apify estão indisponíveis.",search:async()=>({rows:[],cursor:null,creditCost:0,creditsRemaining:null}),expandAdvertisers:async()=>({rows:[],cursor:null,creditCost:0,creditsRemaining:null})};
 }
 
 function unsupported(name:string):ProviderAdapter{
   const n=clean(name,80).toUpperCase()||"UNKNOWN",fail=async()=>{const e:any=new Error("Provider "+n+" ainda não possui adapter ativo.");e.status=501;throw e};
   return {name:n,configured:false,missingCode:"PROVIDER_ADAPTER_UNAVAILABLE",missingDetail:"Provider "+n+" ainda não possui adapter ativo. Configure um adapter suportado antes de habilitar a coleta.",search:fail,expandAdvertisers:fail};
 }
-export function providerAdapter(name:unknown):ProviderAdapter{const n=clean(name,80).toUpperCase();if(n==="AUTO")return auto();if(n==="FOREPLAY")return foreplay();if(n==="APIFY")return apify();return unsupported(n)}
-export function providerErrorCode(error:any,providerName:string){const s=Number(error?.status||0);if(providerName==="FOREPLAY"){if(s===402)return "FOREPLAY_CREDITS_EXHAUSTED";if(s===429)return "FOREPLAY_RATE_LIMIT";if(s===401||s===403)return "FOREPLAY_AUTH";if(s)return "FOREPLAY_HTTP_"+s}if(providerName==="APIFY"){if(s===402)return "APIFY_CREDITS_EXHAUSTED";if(s===429)return "APIFY_RATE_LIMIT";if(s===401||s===403)return "APIFY_AUTH";if(s)return "APIFY_HTTP_"+s}return s?"PROVIDER_HTTP_"+s:"NETWORK_ERROR"}
+export function providerAdapter(name:unknown):ProviderAdapter{const n=clean(name,80).toUpperCase();if(n==="AUTO")return auto();if(n==="META_BROWSER")return metaBrowser();if(n==="FOREPLAY")return foreplay();if(n==="APIFY")return apify();return unsupported(n)}
+export function providerErrorCode(error:any,providerName:string){const s=Number(error?.status||0);if(providerName==="META_BROWSER"){if(s===429)return "META_BROWSER_RATE_LIMIT";if(s===401||s===403)return "META_BROWSER_AUTH";if(s===502||s===503)return "META_BROWSER_TEMPORARY";if(s)return "META_BROWSER_HTTP_"+s}if(providerName==="FOREPLAY"){if(s===402)return "FOREPLAY_CREDITS_EXHAUSTED";if(s===429)return "FOREPLAY_RATE_LIMIT";if(s===401||s===403)return "FOREPLAY_AUTH";if(s)return "FOREPLAY_HTTP_"+s}if(providerName==="APIFY"){if(s===402)return "APIFY_CREDITS_EXHAUSTED";if(s===429)return "APIFY_RATE_LIMIT";if(s===401||s===403)return "APIFY_AUTH";if(s)return "APIFY_HTTP_"+s}return s?"PROVIDER_HTTP_"+s:"NETWORK_ERROR"}
