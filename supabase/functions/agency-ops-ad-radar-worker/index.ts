@@ -67,7 +67,8 @@ async function processRun(ops:any,run:any,cfg:any,key:string){
   if(!cfg.external_collection_enabled){await setRun(ops,run.id,{status:"ACTION_REQUIRED",completed_at:new Date().toISOString(),error_code:"EXTERNAL_COLLECTION_DISABLED",error_detail:"Coleta externa está desligada pelo kill switch. Referências manuais continuam disponíveis.",elapsed_ms:Date.now()-started});return "ACTION_REQUIRED"}
   if(!key){await setRun(ops,run.id,{status:"ACTION_REQUIRED",completed_at:new Date().toISOString(),error_code:"FOREPLAY_API_KEY_MISSING",error_detail:"FOREPLAY_API_KEY não está configurada. Nenhuma coleta externa foi simulada.",elapsed_ms:Date.now()-started});return "ACTION_REQUIRED"}
 
-  const maker=clean(entity.builder||entity.developer,200);\n  const parts=[clean(entity.canonical_name,300),...(Array.isArray(entity.aliases)?entity.aliases:[]).map((x:any)=>clean(x,300)),entity.city?`${clean(entity.canonical_name,300)} ${clean(entity.city,200)}`:"",maker?`${clean(entity.canonical_name,300)} ${maker}`:""].filter(Boolean);
+  const maker=clean(entity.builder||entity.developer,200);
+  const parts=[clean(entity.canonical_name,300),...(Array.isArray(entity.aliases)?entity.aliases:[]).map((x:any)=>clean(x,300)),entity.city?`${clean(entity.canonical_name,300)} ${clean(entity.city,200)}`:"",maker?`${clean(entity.canonical_name,300)} ${maker}`:""].filter(Boolean);
   const queries=uniq(parts).slice(0,Number(cfg.max_queries_per_run||4));
   let total=0,media=0,credits=0,failed=0,blockedCode="",blockedDetail="";
   const brandIds=new Set<string>();
