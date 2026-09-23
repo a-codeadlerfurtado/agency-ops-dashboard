@@ -67,15 +67,21 @@ Deno.serve(async(req:Request)=>{
     if(action==="product"){
       const productId=clean(u.searchParams.get("product_id"),80);if(!productId)return json({ok:false,error:"product_required"},400);
       const ctx=await ensureContext(productId);
-      const [{data:product},{data:entity},{data:runs},{data:matches},{data:saved},{data:directions},{data:own}]=await Promise.all([
+      const page=Math.max(0,Number(u.searchParams.get("page")||0)||0),limit=Math.min(36,Math.max(6,Number(u.searchParams.get("limit")||24)||24));
+      const category=clean(u.searchParams.get("category"),40).toUpperCase();
+      let matchQuery=ops.from("ad_radar_matches").select("*",{count:"exact"}).eq("context_id",ctx.id).order("created_at",{ascending:false});
+      if(["CONFIRMED","POSSIBLE","REGIONAL_COMPETITOR","EXECUTION_REFERENCE","OURS","REJECTED"].includes(category))matchQuery=matchQuery.eq("category",category);
+      matchQuery=matchQuery.range(page*limit,page*limit+limit-1);
+      const [{data:product},{data:entity},{data:runs},matchResult,{data:saved},{data:directions},{data:own}]=await Promise.all([
         admin.from("briefing_products").select("id,client_id,name,completion_status,briefing_status,completed_at,updated_at").eq("id",productId).single(),
         ops.from("ad_radar_product_entities").select("*").eq("id",ctx.product_entity_id).single(),
         ops.from("ad_radar_runs").select("*").eq("context_id",ctx.id).order("requested_at",{ascending:false}).limit(20),
-        ops.from("ad_radar_matches").select("*").eq("context_id",ctx.id).order("created_at",{ascending:false}).limit(250),
+        matchQuery,
         ops.from("ad_radar_saved_references").select("*").eq("context_id",ctx.id).order("created_at",{ascending:false}),
         ops.from("ad_radar_directions").select("*").eq("context_id",ctx.id).order("version",{ascending:false}),
-        ops.from("meta_creative_catalog").select("ad_id,creative_id,creative_name,ad_name,campaign_name,creative_format,preview_storage_path,thumbnail_url,image_url,spend_7d,impressions_7d,clicks_7d,ctr_7d,leads_7d,cost_per_result_7d,last_seen_at,is_current").eq("client_id",ctx.client_id).order("last_seen_at",{ascending:false}).limit(30)
+        ops.from("meta_creative_catalog").select("ad_id,creative_id,creative_name,ad_name,campaign_name,creative_format,preview_storage_path,thumbnail_url,image_url,spend_7d,impressions_7d,clicks_7d,ctr_7d,leads_7d,cost_per_result_7d,last_seen_at,is_current").eq("client_id",ctx.client_id).order("last_seen_at",{ascending:false}).limit(24)
       ]);
+      const matches=matchResult.data||[];
       const adIds=[...new Set((matches||[]).map((x:any)=>x.ad_id))];
       const {data:ads}=adIds.length?await ops.from("ad_radar_ads").select("*").in("id",adIds):{data:[] as any[]};
       const advertiserIds=[...new Set((ads||[]).map((x:any)=>x.advertiser_id).filter(Boolean))];
@@ -83,7 +89,7 @@ Deno.serve(async(req:Request)=>{
       const {data:media}=adIds.length?await ops.from("ad_radar_media").select("*").in("ad_id",adIds).order("position"):{data:[] as any[]};
       const signed=await signMedia(media||[]);
       const ownSigned=await Promise.all((own||[]).map(async(x:any)=>{let preview=x.thumbnail_url||x.image_url||null;if(x.preview_storage_path){const {data}=await admin.storage.from("agency-meta-creative-previews").createSignedUrl(x.preview_storage_path,900);preview=data?.signedUrl||preview}return {...x,preview_url:preview}}));
-      return json({ok:true,product,context:ctx,entity,runs:runs||[],matches:matches||[],ads:ads||[],advertisers:advertisers||[],media:signed,saved:saved||[],directions:directions||[],own_ads:ownSigned});
+      return json({ok:true,product,context:ctx,entity,runs:runs||[],matches,ads:ads||[],advertisers:advertisers||[],media:signed,saved:saved||[],directions:directions||[],own_ads:ownSigned,pagination:{page,limit,total:matchResult.count||0,has_more:(page+1)*limit<(matchResult.count||0)},category:category||null});
     }
 
     if(action==="enqueue"&&req.method==="POST"){
