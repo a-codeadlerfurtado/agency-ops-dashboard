@@ -123,6 +123,7 @@ function placementFor(node: HTMLElement): Placement {
   if (node.hasAttribute("data-video-scripts-nav") || label.startsWith("producao de roteiros")) return { group: "criativo", order: 20 };
   if (label.startsWith("videos automaticos")) return { group: "criativo", order: 30 };
   if (node.hasAttribute("data-meta-radar-nav") || href === "/meta-radar" || href === "/creative-intelligence" || label.startsWith("inteligencia criativa")) return { group: "criativo", order: 40 };
+  if (node.hasAttribute("data-ad-radar-nav") || label === "radar de anuncios") return { group: "criativo", order: 50 };
 
   if (href === "/ia" || label === "ia" || label.startsWith("ia (beta")) return { group: "sistemas", order: 10 };
   if (node.hasAttribute("data-meetings-nav") || label === "relato ai") return { group: "sistemas", order: 20 };
