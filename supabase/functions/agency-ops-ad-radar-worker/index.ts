@@ -30,10 +30,10 @@ function classify(ad:any,entity:any){
 async function ingestAd(ops:any,run:any,ctx:any,entity:any,providerName:string,raw:any){
   const now=new Date().toISOString(),brand=clean(raw?.brand_id,300)||"unknown";
   const {data:adv,error:advErr}=await ops.from("ad_radar_advertisers").upsert({
-    provider:providerName,external_id:brand,name:null,metadata:{avatar:safeHttp(raw?.avatar)||null},
+    provider:providerName,external_id:brand,name:clean(raw?.name,500)||null,metadata:{avatar:safeHttp(raw?.avatar)||null},
     last_seen_at:now
   },{onConflict:"provider,external_id"}).select("id").single();if(advErr)throw advErr;
-  const external=clean(raw?.ad_id||raw?.id,400);if(!external)throw new Error("foreplay_ad_without_id");
+  const external=clean(raw?.ad_id||raw?.id,400);if(!external)throw new Error("provider_ad_without_id");
   const {data:ad,error:adErr}=await ops.from("ad_radar_ads").upsert({
     provider:providerName,external_ad_id:external,advertiser_id:adv.id,
     source_url:safeHttp(raw?.source_url||raw?.foreplay_url)||null,provider_url:safeHttp(raw?.source_url||raw?.foreplay_url)||null,
