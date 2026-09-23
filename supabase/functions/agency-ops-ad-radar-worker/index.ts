@@ -7,7 +7,7 @@ const clean=(v:unknown,n=4000)=>String(v??"").trim().slice(0,n);
 const fold=(v:unknown)=>clean(v,10000).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLocaleLowerCase("pt-BR").replace(/\s+/g," ").trim();
 const uniq=<T>(xs:T[])=>[...new Set(xs)];
 const safeHttp=(v:unknown)=>{try{const u=new URL(clean(v,3000));return ["http:","https:"].includes(u.protocol)?u.toString():""}catch{return ""}};
-const epochDate=(v:unknown)=>{const n=Number(v);if(!Number.isFinite(n)||n<=0)return null;const ms=n>1e12?n:n*1000;const d=new Date(ms);return Number.isNaN(d.getTime())?null:d.toISOString()};
+const epochDate=(v:unknown)=>{const raw=clean(v,200);if(!raw)return null;const n=Number(raw),d=Number.isFinite(n)&&n>0?new Date(n>1e12?n:n*1000):new Date(raw);return Number.isNaN(d.getTime())?null:d.toISOString()};
 const jwtRole=(v:string)=>{try{const token=v.replace(/^Bearer\s+/i,"");const p=token.split(".")[1];if(!p)return "";const b64=p.replace(/-/g,"+").replace(/_/g,"/").padEnd(Math.ceil(p.length/4)*4,"=");return clean(JSON.parse(atob(b64))?.role,80)}catch{return ""}};
 
 type DB=ReturnType<typeof createClient>;
@@ -36,7 +36,7 @@ async function ingestAd(ops:any,run:any,ctx:any,entity:any,providerName:string,r
   const external=clean(raw?.ad_id||raw?.id,400);if(!external)throw new Error("foreplay_ad_without_id");
   const {data:ad,error:adErr}=await ops.from("ad_radar_ads").upsert({
     provider:providerName,external_ad_id:external,advertiser_id:adv.id,
-    source_url:safeHttp(raw?.foreplay_url)||null,provider_url:safeHttp(raw?.foreplay_url)||null,
+    source_url:safeHttp(raw?.source_url||raw?.foreplay_url)||null,provider_url:safeHttp(raw?.source_url||raw?.foreplay_url)||null,
     destination_url:safeHttp(raw?.link_url)||null,ad_name:clean(raw?.name,500)||null,
     primary_text:clean(raw?.description,5000)||null,headline:clean(raw?.headline,1000)||null,
     description:clean(raw?.description,5000)||null,cta:clean(raw?.cta_title||raw?.cta_type,300)||null,
@@ -44,7 +44,7 @@ async function ingestAd(ops:any,run:any,ctx:any,entity:any,providerName:string,r
     platforms:Array.isArray(raw?.publisher_platform)?raw.publisher_platform.map((x:any)=>clean(x,80)).filter(Boolean):[],
     live_state:typeof raw?.live==="boolean"?(raw.live?"LIVE":"NOT_LIVE"):"UNKNOWN",
     started_at:epochDate(raw?.started_running),last_seen_at:now,
-    raw_metadata:{foreplay_id:raw?.id||null,brand_id:raw?.brand_id||null,languages:raw?.languages||[],niches:raw?.niches||[],full_transcription:clean(raw?.full_transcription,12000)||null,timestamped_transcription:raw?.timestamped_transcription||[],video_duration:raw?.video_duration??null}
+    raw_metadata:{provider:providerName,provider_id:raw?.id||null,brand_id:raw?.brand_id||null,languages:raw?.languages||[],niches:raw?.niches||[],full_transcription:clean(raw?.full_transcription,12000)||null,timestamped_transcription:raw?.timestamped_transcription||[],video_duration:raw?.video_duration??null,provider_payload:raw?.provider_payload||null}
   },{onConflict:"provider,external_ad_id"}).select("*").single();if(adErr)throw adErr;
 
   const media:any[]=[];
@@ -67,6 +67,7 @@ async function processRun(ops:any,run:any,cfg:any,provider:any){
   const {data:entity,error:ee}=await ops.from("ad_radar_product_entities").select("*").eq("id",ctx.product_entity_id).single();if(ee)throw ee;
   if(!cfg.external_collection_enabled){await setRun(ops,run.id,{status:"ACTION_REQUIRED",completed_at:new Date().toISOString(),error_code:"EXTERNAL_COLLECTION_DISABLED",error_detail:"Coleta externa está desligada pelo kill switch. Referências manuais continuam disponíveis.",elapsed_ms:Date.now()-started});return "ACTION_REQUIRED"}
   if(!provider.configured){await setRun(ops,run.id,{status:"ACTION_REQUIRED",completed_at:new Date().toISOString(),error_code:provider.missingCode,error_detail:provider.missingDetail,elapsed_ms:Date.now()-started});return "ACTION_REQUIRED"}
+  if(run.provider!==provider.name)await setRun(ops,run.id,{provider:provider.name});
 
   const maker=clean(entity.builder||entity.developer,200);
   const parts=[clean(entity.canonical_name,300),...(Array.isArray(entity.aliases)?entity.aliases:[]).map((x:any)=>clean(x,300)),entity.city?`${clean(entity.canonical_name,300)} ${clean(entity.city,200)}`:"",maker?`${clean(entity.canonical_name,300)} ${maker}`:""].filter(Boolean);
