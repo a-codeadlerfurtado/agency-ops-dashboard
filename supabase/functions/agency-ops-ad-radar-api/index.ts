@@ -74,7 +74,7 @@ Deno.serve(async(req:Request)=>{
       const scopedRuns=(runs||[]).filter((r:any)=>allowedContextIds.has(String(r.context_id)));
       const contextByProduct=new Map(scopedContexts.map((x:any)=>[String(x.briefing_product_id),x]));
       const latestByContext=new Map<string,any>();for(const r of scopedRuns)if(!latestByContext.has(String(r.context_id)))latestByContext.set(String(r.context_id),r);
-      return json({ok:true,person:actor,role:staffRole,clients:scopedClients,products:scopedProducts.map((p:any)=>{const c=contextByProduct.get(String(p.id));return {...p,radar_context_id:c?.id||null,radar_run:c?latestByContext.get(String(c.id))||null:null}}),config:{...cfg,provider_configured:String(cfg.provider||"").toUpperCase()==="FOREPLAY"?Boolean(Deno.env.get("FOREPLAY_API_KEY")):false},generated_at:new Date().toISOString()});
+      return json({ok:true,person:actor,role:staffRole,clients:scopedClients,products:scopedProducts.map((p:any)=>{const c=contextByProduct.get(String(p.id));return {...p,radar_context_id:c?.id||null,radar_run:c?latestByContext.get(String(c.id))||null:null}}),config:{...cfg,provider_configured:(()=>{const n=String(cfg.provider||"").toUpperCase(),f=Boolean(Deno.env.get("FOREPLAY_API_KEY")),ap=Boolean(Deno.env.get("APIFY_TOKEN")||Deno.env.get("APIFY_API_TOKEN"));return n==="AUTO"?(f||ap):n==="FOREPLAY"?f:n==="APIFY"?ap:false})()},generated_at:new Date().toISOString()});
     }
 
     if(action==="product"){
