@@ -366,7 +366,7 @@ begin
 
   insert into agency_ops.ad_radar_runs(context_id,trigger_type,trigger_event_id,idempotency_key,provider,run_version)
   values(v_context,upper(coalesce(nullif(p_trigger,''),'MANUAL')),p_trigger_event_id,v_key,coalesce(v_provider,'FOREPLAY'),v_version)
-  on conflict(idempotency_key) do update set updated_at=agency_ops.ad_radar_runs.updated_at
+  on conflict(idempotency_key) do update set idempotency_key=excluded.idempotency_key
   returning id into v_run;
   return v_run;
 end;
