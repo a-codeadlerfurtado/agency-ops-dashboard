@@ -302,6 +302,76 @@ Deno.serve(async(req:Request)=>{
       const {data,error}=await ops.from("ad_radar_saved_references").upsert({context_id:ctx,ad_id:ad,title:clean(body.title,220)||null,notes:clean(body.notes,1200)||null,saved_by:actor},{onConflict:"context_id,ad_id"}).select("*").single();if(error)throw error;return json({ok:true,reference:data});
     }
 
+    if(action==="generate-directions"&&req.method==="POST"){
+      const productId=clean(body.product_id,80);if(!productId)return json({ok:false,error:"product_required"},400);
+      const ctx=await ensureContext(productId);
+      const [{data:entity,error:entityError},{data:matches,error:matchError},{data:own,error:ownError}]=await Promise.all([
+        ops.from("ad_radar_product_entities").select("*").eq("id",ctx.product_entity_id).single(),
+        ops.from("ad_radar_matches").select("id,ad_id,category,evidence,confidence_label,decision_source").eq("context_id",ctx.id).neq("category","REJECTED").order("created_at",{ascending:false}).limit(40),
+        ops.from("meta_creative_catalog").select("ad_id,creative_name,ad_name,campaign_name,creative_format,spend_7d,leads_7d,ctr_7d,cost_per_result_7d,last_seen_at").eq("client_id",ctx.client_id).order("spend_7d",{ascending:false}).limit(12)
+      ]);
+      if(entityError||matchError||ownError)throw entityError||matchError||ownError;
+      const adIds=[...new Set((matches||[]).map((m:any)=>m.ad_id).filter(Boolean))];
+      const [{data:ads},{data:analyses}]=await Promise.all([
+        adIds.length?ops.from("ad_radar_ads").select("id,advertiser_id,headline,primary_text,description,cta,display_format,source_url").in("id",adIds):Promise.resolve({data:[] as any[]}),
+        adIds.length?ops.from("ad_radar_analyses").select("ad_id,source_scope,output,limitations,status").in("ad_id",adIds).eq("status","COMPLETED").order("created_at",{ascending:false}).limit(80):Promise.resolve({data:[] as any[]})
+      ]);
+      const adById=new Map((ads||[]).map((a:any)=>[String(a.id),a]));
+      const analysisByAd=new Map<string,any>();for(const a of analyses||[])if(!analysisByAd.has(String(a.ad_id)))analysisByAd.set(String(a.ad_id),a);
+      const refs=(matches||[]).map((m:any)=>{const a:any=adById.get(String(m.ad_id))||{},an:any=analysisByAd.get(String(m.ad_id))||null;return {
+        reference_id:String(m.ad_id),category:m.category,headline:clean(a.headline,500)||null,primary_text:clean(a.primary_text,1800)||null,
+        cta:clean(a.cta,200)||null,format:clean(a.display_format,120)||null,evidence:m.evidence||[],
+        visual_analysis:an?an.output:null,analysis_scope:an?.source_scope||null,analysis_limitations:an?.limitations||null
+      }});
+      const generationContext={
+        product:{canonical_name:entity?.canonical_name,aliases:entity?.aliases,city:entity?.city,neighborhood:entity?.neighborhood,builder:entity?.builder,developer:entity?.developer,phase:entity?.phase,tower:entity?.tower,typology:entity?.typology,approved_public_facts:entity?.approved_public_facts||{}},
+        commercial_context:ctx.commercial_context||{},
+        references:refs,
+        own_performance:(own||[]).map((x:any)=>({ad_id:x.ad_id,name:x.creative_name||x.ad_name,campaign:x.campaign_name,format:x.creative_format,spend_7d:x.spend_7d,leads_7d:x.leads_7d,ctr_7d:x.ctr_7d,cost_per_result_7d:x.cost_per_result_7d,last_seen_at:x.last_seen_at})),
+        rules:["Não inventar condições comerciais.","Não copiar condição de concorrente.","Usar referência externa como inspiração de execução.","Separar hipótese de fato aprovado."]
+      };
+      const response=await fetch(ORIGIN+"/api/internal/ad-radar-directions",{
+        method:"POST",headers:{Authorization:"Bearer "+service,"content-type":"application/json"},
+        body:JSON.stringify({context:generationContext}),signal:AbortSignal.timeout(45000)
+      });
+      const generated=await response.json().catch(()=>({ok:false,error:"invalid_direction_response"}));
+      if(!response.ok||!generated?.ok||!Array.isArray(generated.directions))return json({ok:false,error:"direction_generation_failed",detail:clean(generated?.error||("direction_http_"+response.status),500)},422);
+      const commercial:any=ctx.commercial_context||{},allowedBlob=JSON.stringify({commercial_context:commercial,approved_public_facts:entity?.approved_public_facts||{}}).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+      const norm=(v:any)=>clean(v,5000).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+      const unsupported=(d:any)=>{
+        const claims=norm([d.argument,d.suggested_call,d.composition].filter(Boolean).join(" "));
+        if(/r\$/.test(claims)&&!clean(commercial.price,300))return "preco_sem_fonte";
+        if(/\bentrada\b/.test(claims)&&!clean(commercial.entry_facility,1000))return "entrada_sem_fonte";
+        if(/\b(parcel|financ|pagamento)/.test(claims)&&!clean(commercial.payment_methods,1200)&&!clean(commercial.payment_facility,1200))return "pagamento_sem_fonte";
+        if(/\bsubsid/.test(claims)&&!allowedBlob.includes("subsid"))return "subsidio_sem_fonte";
+        if(/\brentabilidade\b/.test(claims)&&!allowedBlob.includes("rentabilidade"))return "rentabilidade_sem_fonte";
+        const areaClaims=claims.match(/\b\d+(?:[.,]\d+)?\s*m(?:2|²)\b/g)||[];
+        if(areaClaims.some((x:string)=>!allowedBlob.includes(norm(x).replace(/\s+/g," "))))return "metragem_sem_fonte";
+        return "";
+      };
+      const allowedRefIds=new Set(refs.map((r:any)=>String(r.reference_id)));
+      const valid:any[]=[],rejected:any[]=[];
+      for(const d of generated.directions.slice(0,3)){
+        const reason=unsupported(d);if(reason){rejected.push({reason,objective:clean(d.objective,300)});continue}
+        valid.push(d);
+      }
+      if(!valid.length)return json({ok:false,error:"all_generated_directions_rejected",detail:"A IA tentou usar condição sem evidência aprovada; nada foi salvo.",rejected},422);
+      const {data:last}=await ops.from("ad_radar_directions").select("version").eq("context_id",ctx.id).order("version",{ascending:false}).limit(1).maybeSingle();
+      let version=Number(last?.version||0),saved:any[]=[];
+      for(const d of valid){
+        version+=1;
+        const refIds=(Array.isArray(d.reference_ids)?d.reference_ids:[]).map((x:any)=>clean(x,80)).filter((x:string)=>allowedRefIds.has(x));
+        const payload={
+          context_id:ctx.id,version,status:"DRAFT",audience:clean(d.audience,1000)||null,objective:clean(d.objective,1000)||null,
+          argument:clean(d.argument,3000)||null,suggested_call:clean(d.suggested_call,1500)||null,
+          composition:{proposal:clean(d.composition,4000)},source_materials:refIds.map((id:string)=>({type:"RADAR_REFERENCE",ad_id:id})),
+          reference_ids:refIds,hypothesis:clean(d.hypothesis,2000)||null,confirmation_needed:clean(d.confirmation_needed,2000)||null,created_by:actor
+        };
+        const {data,error}=await ops.from("ad_radar_directions").insert(payload).select("*").single();if(error)throw error;saved.push(data);
+      }
+      return json({ok:true,directions:saved,rejected,model:clean(generated.model,200)||null,prompt_version:clean(generated.prompt_version,100)||null});
+    }
+
     if(action==="save-direction"&&req.method==="POST"){
       const ctx=clean(body.context_id,80);if(!ctx)return json({ok:false,error:"context_required"},400);await assertContextAccess(ctx);
       const {data:last}=await ops.from("ad_radar_directions").select("version").eq("context_id",ctx).order("version",{ascending:false}).limit(1).maybeSingle();
