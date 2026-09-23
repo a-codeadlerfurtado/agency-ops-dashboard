@@ -14,9 +14,38 @@ function foreplay():ProviderAdapter{
     async expandAdvertisers(ids,limit){const p=new URLSearchParams({brand_ids:ids.join(","),limit:String(Math.min(25,limit)),order:"most_relevant"});p.append("languages","pt");return parse(await fetch("https://public.api.foreplay.co/api/brand/getAdsByBrandId?"+p.toString(),{headers:{Authorization:key},signal:AbortSignal.timeout(20000)}))}
   };
 }
+
+const pickUrl=(v:any)=>{if(typeof v==="string")return v;if(!v||typeof v!=="object")return "";return clean(v.url||v.src||v.video_url||v.image_url||v.original_image_url||v.resized_image_url||v.thumbnail_url,3000)};
+const apifyRow=(r:any)=>{
+  const images=(Array.isArray(r?.images)?r.images:[]).map(pickUrl).filter(Boolean),videos=(Array.isArray(r?.videos)?r.videos:[]).map(pickUrl).filter(Boolean);
+  const cards=[...images.slice(1).map((url:string)=>({image:url})),...videos.slice(1).map((url:string)=>({video:url}))];
+  const adId=clean(r?.ad_id||r?.id,400),pageId=clean(r?.page_id||r?.resolved_page_id||r?.pageId,300);
+  return {brand_id:pageId||"unknown",ad_id:adId,id:adId,name:clean(r?.page_name||r?.title,500),description:clean(r?.body_text||r?.link_description||r?.caption,5000),headline:clean(r?.title,1000),link_url:clean(r?.link_url,3000),cta_title:clean(r?.cta_text,300),cta_type:clean(r?.cta_type,300),display_format:clean(r?.display_format,100),publisher_platform:Array.isArray(r?.publisher_platform)?r.publisher_platform:(r?.publisher_platform?[r.publisher_platform]:[]),live:typeof r?.is_active==="boolean"?r.is_active:true,started_running:r?.start_date||null,image:images[0]||"",video:videos[0]||"",thumbnail:"",cards,avatar:clean(r?.page_profile_picture_url,3000),source_url:adId?"https://www.facebook.com/ads/library/?id="+encodeURIComponent(adId):"",provider_payload:{country:r?.country||r?.country_iso_code||null,query:r?.query||null,collation_id:r?.collation_id||null,impressions_text:r?.impressions_text||null,spend_text:r?.spend_text||null}};
+};
+async function apifyCall(token:string,input:any){
+  const u="https://api.apify.com/v2/acts/s-r~meta-ads-library/run-sync-get-dataset-items?token="+encodeURIComponent(token);
+  const res=await fetch(u,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(input),signal:AbortSignal.timeout(60000)});
+  const payload=await res.json().catch(()=>[]);
+  if(!res.ok){const e:any=new Error(clean((payload as any)?.error?.message||(payload as any)?.error||res.statusText,300)||("apify_http_"+res.status));e.status=res.status;throw e}
+  const rows=Array.isArray(payload)?payload.map(apifyRow).filter((x:any)=>x.ad_id):[];
+  return {rows,cursor:null,creditCost:0,creditsRemaining:null};
+}
+function apify():ProviderAdapter{
+  const key=Deno.env.get("APIFY_TOKEN")||Deno.env.get("APIFY_API_TOKEN")||"";
+  return {name:"APIFY",configured:Boolean(key),missingCode:"APIFY_TOKEN_MISSING",missingDetail:"APIFY_TOKEN não está configurado. Nenhuma coleta externa foi simulada.",
+    search:(query,limit)=>apifyCall(key,{search:query,country:"BR",active_only:true,max_ads:Math.min(250,limit)}),
+    async expandAdvertisers(ids,limit){if(!ids.length)return {rows:[],cursor:null,creditCost:0,creditsRemaining:null};return apifyCall(key,{page_id:ids[0],country:"BR",active_only:true,max_ads:Math.min(25,limit)})}
+  };
+}
+function auto():ProviderAdapter{
+  const f=foreplay();if(f.configured)return f;
+  const a=apify();if(a.configured)return a;
+  return {name:"AUTO",configured:false,missingCode:"RADAR_PROVIDER_CREDENTIAL_MISSING",missingDetail:"Nenhuma credencial de coleta externa está configurada. Adicione FOREPLAY_API_KEY ou APIFY_TOKEN.",search:async()=>({rows:[],cursor:null,creditCost:0,creditsRemaining:null}),expandAdvertisers:async()=>({rows:[],cursor:null,creditCost:0,creditsRemaining:null})};
+}
+
 function unsupported(name:string):ProviderAdapter{
   const n=clean(name,80).toUpperCase()||"UNKNOWN",fail=async()=>{const e:any=new Error("Provider "+n+" ainda não possui adapter ativo.");e.status=501;throw e};
   return {name:n,configured:false,missingCode:"PROVIDER_ADAPTER_UNAVAILABLE",missingDetail:"Provider "+n+" ainda não possui adapter ativo. Configure um adapter suportado antes de habilitar a coleta.",search:fail,expandAdvertisers:fail};
 }
-export function providerAdapter(name:unknown):ProviderAdapter{const n=clean(name,80).toUpperCase();return n==="FOREPLAY"?foreplay():unsupported(n)}
-export function providerErrorCode(error:any,providerName:string){const s=Number(error?.status||0);if(providerName==="FOREPLAY"){if(s===402)return "FOREPLAY_CREDITS_EXHAUSTED";if(s===429)return "FOREPLAY_RATE_LIMIT";if(s===401||s===403)return "FOREPLAY_AUTH";if(s)return "FOREPLAY_HTTP_"+s}return s?"PROVIDER_HTTP_"+s:"NETWORK_ERROR"}
+export function providerAdapter(name:unknown):ProviderAdapter{const n=clean(name,80).toUpperCase();if(n==="AUTO")return auto();if(n==="FOREPLAY")return foreplay();if(n==="APIFY")return apify();return unsupported(n)}
+export function providerErrorCode(error:any,providerName:string){const s=Number(error?.status||0);if(providerName==="FOREPLAY"){if(s===402)return "FOREPLAY_CREDITS_EXHAUSTED";if(s===429)return "FOREPLAY_RATE_LIMIT";if(s===401||s===403)return "FOREPLAY_AUTH";if(s)return "FOREPLAY_HTTP_"+s}if(providerName==="APIFY"){if(s===402)return "APIFY_CREDITS_EXHAUSTED";if(s===429)return "APIFY_RATE_LIMIT";if(s===401||s===403)return "APIFY_AUTH";if(s)return "APIFY_HTTP_"+s}return s?"PROVIDER_HTTP_"+s:"NETWORK_ERROR"}
