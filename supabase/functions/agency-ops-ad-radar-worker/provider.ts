@@ -49,7 +49,12 @@ const metaBrowserRow=(r:any)=>{
 async function metaBrowserCall(input:any):Promise<ProviderPage>{
   const base=clean(Deno.env.get("RADAR_COLLECTOR_URL"),2000).replace(/\/+$/,""),token=clean(Deno.env.get("RADAR_COLLECTOR_TOKEN"),4000);
   if(!base||!token){const e:any=new Error("Radar Meta Browser collector não está configurado.");e.status=503;throw e}
-  const res=await fetch(base+"/search",{method:"POST",headers:{"content-type":"application/json",Authorization:"Bearer "+token},body:JSON.stringify(input),signal:AbortSignal.timeout(90000)});
+  let res:Response|undefined,lastNetwork:any;
+  for(let attempt=0;attempt<3;attempt++){
+    try{res=await fetch(base+"/search",{method:"POST",headers:{"content-type":"application/json",Authorization:"Bearer "+token},body:JSON.stringify(input),signal:AbortSignal.timeout(90000)});break}
+    catch(e:any){lastNetwork=e;if(attempt<2)await new Promise(r=>setTimeout(r,1500*(attempt+1)))}
+  }
+  if(!res){const e:any=new Error("meta_browser_network: "+clean(lastNetwork?.message||lastNetwork,240));e.status=0;throw e}
   const payload=await res.json().catch(()=>({}));
   if(!res.ok){const e:any=new Error(clean(payload?.detail||payload?.error||res.statusText,300)||("meta_browser_http_"+res.status));e.status=res.status;throw e}
   const rows=(Array.isArray(payload?.ads)?payload.ads:[]).map(metaBrowserRow).filter((x:any)=>x.ad_id);
