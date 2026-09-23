@@ -29,7 +29,16 @@ Deno.serve(async(req:Request)=>{
   let body:any={};
   if(req.method==="POST"&&req.headers.get("content-type")?.includes("application/json"))body=await req.json().catch(()=>({}));
 
+  const same=(a:unknown,b:unknown)=>clean(a,160).toLocaleLowerCase("pt-BR")===clean(b,160).toLocaleLowerCase("pt-BR");
+  const canAccessClient=(client:any)=>staffRole==="MGMT"||(staffRole==="GT"&&same(client?.gt_owner,actor))||(staffRole==="CS"&&same(client?.cs_owner,actor))||(staffRole==="DESIGN"&&same(client?.designer_owner,actor));
+  const assertClientAccess=async(clientId:string)=>{const {data,error}=await ops.from("clients").select("id,display_name,lifecycle,gt_owner,cs_owner,designer_owner").eq("id",clientId).maybeSingle();if(error)throw error;if(!data||!canAccessClient(data))throw new Error("radar_client_forbidden");return data};
+  const assertContextAccess=async(contextId:string)=>{const {data,error}=await ops.from("ad_radar_product_contexts").select("id,client_id,briefing_product_id,product_entity_id,context_version").eq("id",contextId).maybeSingle();if(error)throw error;if(!data)throw new Error("radar_context_not_found");await assertClientAccess(String(data.client_id));return data};
+  const assertProductAccess=async(productId:string)=>{const {data,error}=await admin.from("briefing_products").select("id,client_id").eq("id",productId).is("archived_at",null).maybeSingle();if(error)throw error;if(!data)throw new Error("radar_product_not_found");await assertClientAccess(String(data.client_id));return data};
+  const assertContextAd=async(contextId:string,adId:string)=>{await assertContextAccess(contextId);const {data,error}=await ops.from("ad_radar_matches").select("id").eq("context_id",contextId).eq("ad_id",adId).limit(1).maybeSingle();if(error)throw error;if(!data)throw new Error("radar_ad_not_in_context")};
+  const assertDirectionAccess=async(directionId:string)=>{const {data,error}=await ops.from("ad_radar_directions").select("id,context_id").eq("id",directionId).maybeSingle();if(error)throw error;if(!data)throw new Error("radar_direction_not_found");await assertContextAccess(String(data.context_id));return data};
+
   const ensureContext=async(productId:string)=>{
+    await assertProductAccess(productId);
     let {data:ctx}=await ops.from("ad_radar_product_contexts").select("*").eq("briefing_product_id",productId).maybeSingle();
     if(!ctx){
       const {data,error}=await ops.rpc("ad_radar_context_for_product",{p_product_id:productId});
@@ -52,16 +61,20 @@ Deno.serve(async(req:Request)=>{
 
     if(action==="bootstrap"){
       const [{data:clients,error:ce},{data:products,error:pe},{data:contexts,error:xe},{data:runs,error:re},{data:cfg,error:cfe}]=await Promise.all([
-        ops.from("clients").select("id,display_name,lifecycle,gt_owner,cs_owner").in("lifecycle",["ACTIVE","ONBOARDING"]).order("display_name"),
+        ops.from("clients").select("id,display_name,lifecycle,gt_owner,cs_owner,designer_owner").in("lifecycle",["ACTIVE","ONBOARDING"]).order("display_name"),
         admin.from("briefing_products").select("id,client_id,name,completion_status,briefing_status,completed_at,updated_at").is("archived_at",null).order("updated_at",{ascending:false}).limit(500),
         ops.from("ad_radar_product_contexts").select("id,client_id,briefing_product_id,context_version,updated_at").limit(1000),
         ops.from("ad_radar_runs").select("id,context_id,status,requested_at,completed_at,is_partial,ads_found,error_code").order("requested_at",{ascending:false}).limit(1500),
         ops.from("ad_radar_runtime_config").select("*").eq("id",1).single()
       ]);
       if(ce||pe||xe||re||cfe)throw ce||pe||xe||re||cfe;
-      const contextByProduct=new Map((contexts||[]).map((x:any)=>[String(x.briefing_product_id),x]));
-      const latestByContext=new Map<string,any>();for(const r of runs||[])if(!latestByContext.has(String(r.context_id)))latestByContext.set(String(r.context_id),r);
-      return json({ok:true,person:actor,role:staffRole,clients:clients||[],products:(products||[]).map((p:any)=>{const c=contextByProduct.get(String(p.id));return {...p,radar_context_id:c?.id||null,radar_run:c?latestByContext.get(String(c.id))||null:null}}),config:{...cfg,provider_configured:Boolean(Deno.env.get("FOREPLAY_API_KEY"))},generated_at:new Date().toISOString()});
+      const scopedClients=(clients||[]).filter((c:any)=>canAccessClient(c)),allowedClientIds=new Set(scopedClients.map((c:any)=>String(c.id)));
+      const scopedProducts=(products||[]).filter((p:any)=>allowedClientIds.has(String(p.client_id)));
+      const scopedContexts=(contexts||[]).filter((x:any)=>allowedClientIds.has(String(x.client_id))),allowedContextIds=new Set(scopedContexts.map((x:any)=>String(x.id)));
+      const scopedRuns=(runs||[]).filter((r:any)=>allowedContextIds.has(String(r.context_id)));
+      const contextByProduct=new Map(scopedContexts.map((x:any)=>[String(x.briefing_product_id),x]));
+      const latestByContext=new Map<string,any>();for(const r of scopedRuns)if(!latestByContext.has(String(r.context_id)))latestByContext.set(String(r.context_id),r);
+      return json({ok:true,person:actor,role:staffRole,clients:scopedClients,products:scopedProducts.map((p:any)=>{const c=contextByProduct.get(String(p.id));return {...p,radar_context_id:c?.id||null,radar_run:c?latestByContext.get(String(c.id))||null:null}}),config:{...cfg,provider_configured:Boolean(Deno.env.get("FOREPLAY_API_KEY"))},generated_at:new Date().toISOString()});
     }
 
     if(action==="product"){
@@ -128,6 +141,7 @@ Deno.serve(async(req:Request)=>{
     if(action==="feedback"&&req.method==="POST"){
       const ctx=clean(body.context_id,80),ad=clean(body.ad_id,80),category=clean(body.category,40).toUpperCase();
       if(!ctx||!ad||!["CONFIRMED","POSSIBLE","REGIONAL_COMPETITOR","EXECUTION_REFERENCE","OURS","REJECTED"].includes(category))return json({ok:false,error:"invalid_feedback"},400);
+      await assertContextAd(ctx,ad);
       const now=new Date().toISOString();
       const {error}=await ops.from("ad_radar_match_overrides").upsert({context_id:ctx,ad_id:ad,category,note:clean(body.note,1000)||null,actor,updated_at:now},{onConflict:"context_id,ad_id"});if(error)throw error;
       await ops.from("ad_radar_matches").update({category,decision_source:"HUMAN",decided_by:actor,decided_at:now}).eq("context_id",ctx).eq("ad_id",ad);
@@ -136,18 +150,20 @@ Deno.serve(async(req:Request)=>{
     }
 
     if(action==="save-reference"&&req.method==="POST"){
-      const {data,error}=await ops.from("ad_radar_saved_references").upsert({context_id:body.context_id,ad_id:body.ad_id,title:clean(body.title,220)||null,notes:clean(body.notes,1200)||null,saved_by:actor},{onConflict:"context_id,ad_id"}).select("*").single();if(error)throw error;return json({ok:true,reference:data});
+      const ctx=clean(body.context_id,80),ad=clean(body.ad_id,80);if(!ctx||!ad)return json({ok:false,error:"context_and_ad_required"},400);await assertContextAd(ctx,ad);
+      const {data,error}=await ops.from("ad_radar_saved_references").upsert({context_id:ctx,ad_id:ad,title:clean(body.title,220)||null,notes:clean(body.notes,1200)||null,saved_by:actor},{onConflict:"context_id,ad_id"}).select("*").single();if(error)throw error;return json({ok:true,reference:data});
     }
 
     if(action==="save-direction"&&req.method==="POST"){
-      const ctx=clean(body.context_id,80);if(!ctx)return json({ok:false,error:"context_required"},400);
+      const ctx=clean(body.context_id,80);if(!ctx)return json({ok:false,error:"context_required"},400);await assertContextAccess(ctx);
       const {data:last}=await ops.from("ad_radar_directions").select("version").eq("context_id",ctx).order("version",{ascending:false}).limit(1).maybeSingle();
       const payload={context_id:ctx,version:Number(last?.version||0)+1,status:"DRAFT",audience:clean(body.audience,1000)||null,objective:clean(body.objective,1000)||null,argument:clean(body.argument,3000)||null,suggested_call:clean(body.suggested_call,1500)||null,composition:body.composition&&typeof body.composition==="object"?body.composition:{},source_materials:Array.isArray(body.source_materials)?body.source_materials:[],reference_ids:Array.isArray(body.reference_ids)?body.reference_ids:[],hypothesis:clean(body.hypothesis,2000)||null,confirmation_needed:clean(body.confirmation_needed,2000)||null,created_by:actor};
       const {data,error}=await ops.from("ad_radar_directions").insert(payload).select("*").single();if(error)throw error;return json({ok:true,direction:data});
     }
 
     if(action==="direction-task"&&req.method==="POST"){
-      const {data,error}=await ops.rpc("ad_radar_direction_to_work_item",{p_direction_id:body.direction_id,p_actor:actor});if(error)throw error;return json({ok:true,work_item_id:data});
+      const directionId=clean(body.direction_id,80);if(!directionId)return json({ok:false,error:"direction_required"},400);await assertDirectionAccess(directionId);
+      const {data,error}=await ops.rpc("ad_radar_direction_to_work_item",{p_direction_id:directionId,p_actor:actor});if(error)throw error;return json({ok:true,work_item_id:data});
     }
 
     if(action==="identity"&&req.method==="POST"){
