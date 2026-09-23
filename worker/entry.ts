@@ -7,6 +7,7 @@ const OLD_IMG_SRC = "img-src 'self' data:";
 const NEW_IMG_SRC = `img-src 'self' data: ${SUPABASE}`;
 const MEDIA_SRC = "media-src 'self' blob:";
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
+const RADAR_TEXT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const VISION_BULK_KEY = "cvi_20260829_5b1d73f04c784898";
 
 function widenImageCsp(response: Response): Response {
@@ -133,6 +134,9 @@ async function radarServiceAuthorized(request: Request, env: any): Promise<boole
 }
 
 function parseRadarVisionResult(result: any): Record<string, unknown> {
+  if (result?.response && typeof result.response === "object" && !Array.isArray(result.response)) {
+    return result.response as Record<string, unknown>;
+  }
   const raw = typeof result?.response === "string"
     ? result.response
     : typeof result === "string"
@@ -146,6 +150,13 @@ function parseRadarVisionResult(result: any): Record<string, unknown> {
   } catch {
     return { raw_text: raw };
   }
+}
+
+async function runRadarStructured(env: any, model: string, input: Record<string, unknown>, schema: Record<string, unknown>): Promise<any> {
+  return env.AI.run(model, {
+    ...input,
+    response_format: { type: "json_schema", json_schema: schema },
+  });
 }
 
 async function runAdRadarVision(request: Request, env: any): Promise<Response | null> {
@@ -163,7 +174,22 @@ async function runAdRadarVision(request: Request, env: any): Promise<Response | 
     if (!imageUrl) return Response.json({ ok: false, error: "missing_image_url" }, { status: 400 });
 
     const fetched = await fetchImageDataUrl(imageUrl);
-    const result = await env.AI.run(VISION_MODEL, {
+    const visionSchema = {
+      type: "object",
+      properties: {
+        visible_text: { type: "array", items: { type: "string" } },
+        primary_visual: { type: "string" },
+        composition: { type: "string" },
+        hierarchy: { type: "string" },
+        offer: { type: ["string", "null"] },
+        cta: { type: ["string", "null"] },
+        benefits: { type: "array", items: { type: "string" } },
+        visual_patterns: { type: "array", items: { type: "string" } },
+        warnings: { type: "array", items: { type: "string" } }
+      },
+      required: ["visible_text","primary_visual","composition","hierarchy","offer","cta","benefits","visual_patterns","warnings"]
+    };
+    const result = await runRadarStructured(env, VISION_MODEL, {
       messages: [
         {
           role: "system",
@@ -173,14 +199,14 @@ async function runAdRadarVision(request: Request, env: any): Promise<Response | 
         {
           role: "user",
           content:
-            'Retorne SOMENTE JSON valido com as chaves: visible_text (array de textos legiveis), primary_visual (string), composition (string), hierarchy (string), offer (string|null), cta (string|null), benefits (array), visual_patterns (array), warnings (array). Descreva somente o que esta efetivamente visivel. Se algo nao estiver legivel, use null ou omita do array.',
+            "Extraia somente o que esta efetivamente visivel. Se algo nao estiver legivel, use null ou lista vazia. warnings deve conter apenas problemas observaveis de legibilidade, corte ou composicao.",
         },
       ],
       image: fetched.dataUrl,
       max_tokens: 420,
       temperature: 0,
       repetition_penalty: 1.15,
-    });
+    }, visionSchema);
 
     return Response.json({
       ok: true,
@@ -194,6 +220,73 @@ async function runAdRadarVision(request: Request, env: any): Promise<Response | 
     const message = caught instanceof Error ? caught.message : String(caught);
     const status = /image_host_not_allowed|image_too_large|image_empty|image_http_/.test(message) ? 422 : 500;
     return Response.json({ ok: false, error: message }, { status });
+  }
+}
+
+async function runAdRadarDirections(request: Request, env: any): Promise<Response | null> {
+  const url = new URL(request.url);
+  if (url.pathname !== "/api/internal/ad-radar-directions") return null;
+  if (request.method !== "POST") return Response.json({ ok: false, error: "method_not_allowed" }, { status: 405 });
+  if (!(await radarServiceAuthorized(request, env))) {
+    return Response.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const body = await request.json().catch(() => null) as any;
+    const context = body?.context && typeof body.context === "object" ? body.context : null;
+    if (!context) return Response.json({ ok: false, error: "missing_context" }, { status: 400 });
+
+    const schema = {
+      type: "object",
+      properties: {
+        directions: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              audience: { type: "string" },
+              objective: { type: "string" },
+              argument: { type: "string" },
+              suggested_call: { type: "string" },
+              composition: { type: "string" },
+              reference_ids: { type: "array", items: { type: "string" } },
+              hypothesis: { type: "string" },
+              confirmation_needed: { type: "string" }
+            },
+            required: ["audience","objective","argument","suggested_call","composition","reference_ids","hypothesis","confirmation_needed"]
+          }
+        }
+      },
+      required: ["directions"]
+    };
+    const result = await runRadarStructured(env, RADAR_TEXT_MODEL, {
+      messages: [
+        {
+          role: "system",
+          content:
+            "Voce cria direcionamentos criativos imobiliarios baseados SOMENTE no JSON fornecido. Dados do briefing sao fatos do cliente. Referencias externas sao inspiracao, nunca fonte de condicao comercial do cliente. Nao invente preco, entrada, metragem, subsidio, prazo, rentabilidade, parcelas ou oferta. Nao copie condicoes de concorrentes. Quando faltar informacao, escreva em confirmation_needed. Use 'pouco explorado na amostra encontrada' em vez de afirmacoes absolutas sobre o mercado. Retorne no maximo 3 direcoes distintas.",
+        },
+        {
+          role: "user",
+          content: JSON.stringify(context).slice(0, 90_000),
+        },
+      ],
+      max_tokens: 1800,
+      temperature: 0.25,
+    }, schema);
+    const payload = result?.response && typeof result.response === "object" ? result.response : null;
+    if (!payload || !Array.isArray(payload.directions)) {
+      return Response.json({ ok: false, error: "invalid_structured_direction_output" }, { status: 422 });
+    }
+    return Response.json({
+      ok: true,
+      model: RADAR_TEXT_MODEL,
+      prompt_version: "ad-radar-directions-v1",
+      directions: payload.directions.slice(0, 3),
+    });
+  } catch (caught) {
+    const message = caught instanceof Error ? caught.message : String(caught);
+    return Response.json({ ok: false, error: message }, { status: 500 });
   }
 }
 
@@ -246,6 +339,8 @@ export default {
   async fetch(request: Request, env: any, context: any): Promise<Response> {
     const radarVision = await runAdRadarVision(request, env);
     if (radarVision) return radarVision;
+    const radarDirections = await runAdRadarDirections(request, env);
+    if (radarDirections) return radarDirections;
     const vision = await runVisionBulk(request, env);
     if (vision) return vision;
     // A Jarvis entra aqui, antes do baseWorker, pelo mesmo motivo do
