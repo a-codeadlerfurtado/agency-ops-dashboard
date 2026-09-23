@@ -85,14 +85,15 @@ Deno.serve(async(req:Request)=>{
       let matchQuery=ops.from("ad_radar_matches").select("*",{count:"exact"}).eq("context_id",ctx.id).order("created_at",{ascending:false});
       if(["CONFIRMED","POSSIBLE","REGIONAL_COMPETITOR","EXECUTION_REFERENCE","OURS","REJECTED"].includes(category))matchQuery=matchQuery.eq("category",category);
       matchQuery=matchQuery.range(page*limit,page*limit+limit-1);
-      const [{data:product},{data:entity},{data:runs},matchResult,{data:saved},{data:directions},{data:own}]=await Promise.all([
+      const [{data:product},{data:entity},{data:runs},matchResult,{data:saved},{data:directions},{data:own},{data:pieceReviews}]=await Promise.all([
         admin.from("briefing_products").select("id,client_id,name,completion_status,briefing_status,completed_at,updated_at").eq("id",productId).single(),
         ops.from("ad_radar_product_entities").select("*").eq("id",ctx.product_entity_id).single(),
         ops.from("ad_radar_runs").select("*").eq("context_id",ctx.id).order("requested_at",{ascending:false}).limit(20),
         matchQuery,
         ops.from("ad_radar_saved_references").select("*").eq("context_id",ctx.id).order("created_at",{ascending:false}),
         ops.from("ad_radar_directions").select("*").eq("context_id",ctx.id).order("version",{ascending:false}),
-        ops.from("meta_creative_catalog").select("ad_id,creative_id,creative_name,ad_name,campaign_name,creative_format,preview_storage_path,thumbnail_url,image_url,spend_7d,impressions_7d,clicks_7d,ctr_7d,leads_7d,cost_per_result_7d,last_seen_at,is_current").eq("client_id",ctx.client_id).order("last_seen_at",{ascending:false}).limit(24)
+        ops.from("meta_creative_catalog").select("ad_id,creative_id,creative_name,ad_name,campaign_name,creative_format,preview_storage_path,thumbnail_url,image_url,spend_7d,impressions_7d,clicks_7d,ctr_7d,leads_7d,cost_per_result_7d,last_seen_at,is_current").eq("client_id",ctx.client_id).order("last_seen_at",{ascending:false}).limit(24),
+        ops.from("ad_radar_piece_reviews").select("*").eq("context_id",ctx.id).order("created_at",{ascending:false}).limit(12)
       ]);
       const matches=matchResult.data||[];
       const adIds=[...new Set((matches||[]).map((x:any)=>x.ad_id))];
@@ -104,7 +105,7 @@ Deno.serve(async(req:Request)=>{
       const mediaIds=(media||[]).map((m:any)=>m.id);
       const {data:analyses}=mediaIds.length?await ops.from("ad_radar_analyses").select("*").in("media_id",mediaIds).order("created_at",{ascending:false}):{data:[] as any[]};
       const ownSigned=await Promise.all((own||[]).map(async(x:any)=>{let preview=x.thumbnail_url||x.image_url||null;if(x.preview_storage_path){const {data}=await admin.storage.from("agency-meta-creative-previews").createSignedUrl(x.preview_storage_path,900);preview=data?.signedUrl||preview}return {...x,preview_url:preview}}));
-      return json({ok:true,product,context:ctx,entity,runs:runs||[],matches,ads:ads||[],advertisers:advertisers||[],media:signed,analyses:analyses||[],saved:saved||[],directions:directions||[],own_ads:ownSigned,pagination:{page,limit,total:matchResult.count||0,has_more:(page+1)*limit<(matchResult.count||0)},category:category||null});
+      return json({ok:true,product,context:ctx,entity,runs:runs||[],matches,ads:ads||[],advertisers:advertisers||[],media:signed,analyses:analyses||[],saved:saved||[],directions:directions||[],piece_reviews:pieceReviews||[],own_ads:ownSigned,pagination:{page,limit,total:matchResult.count||0,has_more:(page+1)*limit<(matchResult.count||0)},category:category||null});
     }
 
     if(action==="enqueue"&&req.method==="POST"){
@@ -194,6 +195,89 @@ Deno.serve(async(req:Request)=>{
       if(saveError)throw saveError;
       if(!response.ok||!vision?.ok)return json({ok:false,error:"analysis_failed",detail:saved.limitations,analysis:saved},422);
       return json({ok:true,reused:false,analysis:saved});
+    }
+
+    if(action==="review-piece"&&req.method==="POST"){
+      const form=await req.formData(),productId=clean(form.get("product_id"),80),directionId=clean(form.get("direction_id"),80),file=form.get("file");
+      if(!productId||!(file instanceof File))return json({ok:false,error:"product_and_file_required"},400);
+      if(!file.type.startsWith("image/"))return json({ok:false,error:"review_requires_image",detail:"A revisão assistida atual processa imagens; vídeo deve usar frame/thumbnail identificado."},415);
+      if(file.size>15*1024*1024)return json({ok:false,error:"file_too_large",max_mb:15},413);
+      const ctx=await ensureContext(productId);
+      let selectedDirection:any=null;
+      if(directionId){
+        const {data,error}=await ops.from("ad_radar_directions").select("*").eq("id",directionId).eq("context_id",ctx.id).maybeSingle();
+        if(error)throw error;if(!data)return json({ok:false,error:"direction_not_in_context"},400);selectedDirection=data;
+      }
+      const [{data:entity,error:entityError}]=await Promise.all([
+        ops.from("ad_radar_product_entities").select("*").eq("id",ctx.product_entity_id).single()
+      ]);
+      if(entityError)throw entityError;
+      const ext=(file.name.split(".").pop()||"bin").replace(/[^a-z0-9]/gi,"").slice(0,8),path=`ad-radar/reviews/${ctx.client_id}/${ctx.id}/${crypto.randomUUID()}.${ext}`;
+      const up=await admin.storage.from("agency-ai-private").upload(path,file,{contentType:file.type,upsert:false});if(up.error)throw up.error;
+      const {data:signed,error:signedError}=await admin.storage.from("agency-ai-private").createSignedUrl(path,300);if(signedError)throw signedError;
+      const response=await fetch(ORIGIN+"/api/internal/ad-radar-vision",{
+        method:"POST",
+        headers:{Authorization:"Bearer "+service,"content-type":"application/json"},
+        body:JSON.stringify({image_url:signed?.signedUrl,source_scope:"PRODUCED_PIECE_IMAGE"}),
+        signal:AbortSignal.timeout(30000)
+      });
+      const vision=await response.json().catch(()=>({ok:false,error:"invalid_vision_response"}));
+      const visual=vision?.analysis&&typeof vision.analysis==="object"?vision.analysis:{};
+      const visibleBlob=JSON.stringify(visual).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
+      const commercial=ctx.commercial_context||{};
+      const boolNo=(v:any)=>/^(nao|não|false|0)$/i.test(clean(v,40));
+      const parseMoney=(value:any)=>{
+        const s=clean(value,500).toLowerCase();
+        let m=s.match(/r\$\s*([\d.]+(?:,\d{1,2})?)/i);
+        let multiplier=1;
+        if(!m){m=s.match(/(\d+(?:[.,]\d+)?)\s*(k|mil)\b/i);if(m)multiplier=1000}
+        if(!m)return null;
+        const raw=String(m[1]);
+        let n:number;
+        if(multiplier===1000)n=Number(raw.replace(",","."));
+        else n=Number(raw.replace(/\./g,"").replace(",","."));
+        return Number.isFinite(n)?n*multiplier:null;
+      };
+      const approvedPrice=parseMoney(commercial.price),shownPrice=parseMoney(visibleBlob),hasVisiblePrice=shownPrice!==null||/r\$/.test(visibleBlob);
+      const norm=(v:any)=>clean(v,1000).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+      const nameTokens=norm(entity?.canonical_name).split(" ").filter((x:string)=>x.length>=4);
+      const nameHits=nameTokens.filter((x:string)=>visibleBlob.includes(x)).length;
+      const nameCoverage=nameTokens.length?nameHits/nameTokens.length:null;
+      const checks:any[]=[];
+      checks.push({
+        key:"PUBLIC_PRICE_PERMISSION",kind:"OBJECTIVE",
+        status:boolNo(commercial.public_price_allowed)&&hasVisiblePrice?"ALERT":"OK",
+        evidence:boolNo(commercial.public_price_allowed)&&hasVisiblePrice?"A peça aparenta exibir preço, mas o briefing não autoriza divulgação pública.":"Nenhum conflito objetivo de permissão de preço foi detectado."
+      });
+      checks.push({
+        key:"APPROVED_PRICE",kind:"OBJECTIVE",
+        status:hasVisiblePrice&&approvedPrice!==null&&shownPrice!==null?(Math.abs(shownPrice-approvedPrice)<=Math.max(1,approvedPrice*.01)?"OK":"ALERT"):"NOT_VERIFIED",
+        evidence:hasVisiblePrice&&approvedPrice!==null&&shownPrice!==null?`Briefing: ${commercial.price}. Valor detectado visualmente: ${shownPrice}.`:"Não houve evidência suficiente para comparar preço automaticamente."
+      });
+      checks.push({
+        key:"PRODUCT_NAME",kind:"OBJECTIVE",
+        status:nameCoverage!==null&&nameCoverage>=0.5?"OK":"NOT_VERIFIED",
+        evidence:nameCoverage!==null?`Cobertura de tokens do nome oficial no texto detectado: ${Math.round(nameCoverage*100)}%.`:"Nome oficial insuficiente para checagem automática."
+      });
+      checks.push({key:"PRODUCT_IMAGE",kind:"OBJECTIVE",status:"NOT_VERIFIED",evidence:"A imagem do produto não é confirmada automaticamente sem comparação inequívoca com book/ativo oficial vinculado."});
+      checks.push({key:"SAFE_AREAS_AND_CROPS",kind:"SUBJECTIVE",status:"HUMAN_REVIEW",evidence:"Cortes, áreas de segurança e legibilidade visual devem ser confirmados pelo revisor humano usando a análise visual como apoio."});
+      checks.push({key:"DIRECTION_COHERENCE",kind:"SUBJECTIVE",status:selectedDirection?"HUMAN_REVIEW":"NOT_APPLICABLE",evidence:selectedDirection?"Direcionamento vinculado; a coerência final permanece decisão humana.":"Nenhum direcionamento foi vinculado a esta revisão."});
+      const limitations=[
+        "A IA não aprova, rejeita, bloqueia ou autoriza publicação.",
+        "A análise considera apenas a imagem enviada.",
+        "OCR/visão pode deixar de ler textos pequenos; alertas devem ser conferidos na peça."
+      ].join(" ");
+      const {data:review,error:reviewError}=await ops.from("ad_radar_piece_reviews").insert({
+        context_id:ctx.id,direction_id:selectedDirection?.id||null,
+        storage_bucket:"agency-ai-private",storage_path:path,file_name:clean(file.name,220),media_type:file.type,
+        model_name:clean(vision?.model,200)||null,prompt_version:clean(vision?.prompt_version,100)||"ad-radar-vision-v1",
+        source_scope:"PRODUCED_PIECE_IMAGE",visual_analysis:visual,objective_checks:checks,
+        subjective_suggestions:[{type:"HUMAN_REVIEW",text:"Revisar legibilidade, cortes, hierarquia e coerência com o direcionamento usando a imagem original e as evidências acima."}],
+        status:response.ok&&vision?.ok?"REVIEWED":"ANALYSIS_FAILED",limitations,created_by:actor
+      }).select("*").single();
+      if(reviewError)throw reviewError;
+      if(!response.ok||!vision?.ok)return json({ok:false,error:"piece_analysis_failed",detail:clean(vision?.error||("vision_http_"+response.status),500),review},422);
+      return json({ok:true,review});
     }
 
     if(action==="feedback"&&req.method==="POST"){
