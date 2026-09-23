@@ -101,8 +101,10 @@ Deno.serve(async(req:Request)=>{
       const {data:advertisers}=advertiserIds.length?await ops.from("ad_radar_advertisers").select("*").in("id",advertiserIds):{data:[] as any[]};
       const {data:media}=adIds.length?await ops.from("ad_radar_media").select("*").in("ad_id",adIds).order("position"):{data:[] as any[]};
       const signed=await signMedia(media||[]);
+      const mediaIds=(media||[]).map((m:any)=>m.id);
+      const {data:analyses}=mediaIds.length?await ops.from("ad_radar_analyses").select("*").in("media_id",mediaIds).order("created_at",{ascending:false}):{data:[] as any[]};
       const ownSigned=await Promise.all((own||[]).map(async(x:any)=>{let preview=x.thumbnail_url||x.image_url||null;if(x.preview_storage_path){const {data}=await admin.storage.from("agency-meta-creative-previews").createSignedUrl(x.preview_storage_path,900);preview=data?.signedUrl||preview}return {...x,preview_url:preview}}));
-      return json({ok:true,product,context:ctx,entity,runs:runs||[],matches,ads:ads||[],advertisers:advertisers||[],media:signed,saved:saved||[],directions:directions||[],own_ads:ownSigned,pagination:{page,limit,total:matchResult.count||0,has_more:(page+1)*limit<(matchResult.count||0)},category:category||null});
+      return json({ok:true,product,context:ctx,entity,runs:runs||[],matches,ads:ads||[],advertisers:advertisers||[],media:signed,analyses:analyses||[],saved:saved||[],directions:directions||[],own_ads:ownSigned,pagination:{page,limit,total:matchResult.count||0,has_more:(page+1)*limit<(matchResult.count||0)},category:category||null});
     }
 
     if(action==="enqueue"&&req.method==="POST"){
@@ -136,6 +138,62 @@ Deno.serve(async(req:Request)=>{
       const {data:run,error:re}=await ops.from("ad_radar_runs").insert({context_id:ctx.id,trigger_type:"MANUAL_REFERENCE",idempotency_key:"MANUAL_UPLOAD:"+crypto.randomUUID(),provider:"MANUAL",status:"AVAILABLE",run_version:ctx.context_version,completed_at:now,ads_found:1,media_available:1}).select("*").single();if(re)throw re;
       await ops.from("ad_radar_matches").insert({run_id:run.id,context_id:ctx.id,ad_id:ad.id,category:"EXECUTION_REFERENCE",evidence:[{type:"AUTHORIZED_UPLOAD",file_name:file.name}],confidence_label:"HUMAN_ADDED",decision_source:"HUMAN",decided_by:actor,decided_at:now});
       return json({ok:true,ad_id:ad.id,media_id:media.id});
+    }
+
+    if(action==="analyze-media"&&req.method==="POST"){
+      const contextId=clean(body.context_id,80),adId=clean(body.ad_id,80),requestedMediaId=clean(body.media_id,80);
+      if(!contextId||!adId)return json({ok:false,error:"context_and_ad_required"},400);
+      await assertContextAd(contextId,adId);
+      const [{data:ad,error:adError},{data:rows,error:mediaError}]=await Promise.all([
+        ops.from("ad_radar_ads").select("id,raw_metadata").eq("id",adId).single(),
+        ops.from("ad_radar_media").select("*").eq("ad_id",adId).order("position")
+      ]);
+      if(adError||mediaError)throw adError||mediaError;
+      const all=rows||[];
+      let media=requestedMediaId?all.find((m:any)=>String(m.id)===requestedMediaId):null;
+      if(!media)media=all.find((m:any)=>m.media_type==="IMAGE")||all.find((m:any)=>m.media_type==="THUMBNAIL")||all[0];
+      if(!media)return json({ok:false,error:"media_not_found"},404);
+      if(media.media_type==="VIDEO"){
+        const thumb=all.find((m:any)=>m.media_type==="THUMBNAIL");
+        if(thumb)media=thumb;
+      }
+      if(!["IMAGE","THUMBNAIL"].includes(String(media.media_type)))return json({ok:false,error:"visual_media_required",detail:"Vídeo sem thumbnail e PDF não são descritos como análise visual completa."},422);
+
+      let imageUrl=safeUrl(media.provider_url);
+      if(media.storage_bucket&&media.storage_path){
+        const {data:signed,error:signedError}=await admin.storage.from(media.storage_bucket).createSignedUrl(media.storage_path,300);
+        if(signedError)throw signedError;imageUrl=safeUrl(signed?.signedUrl);
+      }
+      if(!imageUrl)return json({ok:false,error:"media_url_unavailable"},422);
+      const reuseKey="ad-radar-vision-v1:"+String(media.id)+":"+String(media.last_verified_at||media.captured_at||"");
+      const {data:existing}=await ops.from("ad_radar_analyses").select("*").eq("reuse_key",reuseKey).eq("status","COMPLETED").maybeSingle();
+      if(existing)return json({ok:true,reused:true,analysis:existing});
+
+      const sourceScope=(all.some((m:any)=>m.media_type==="VIDEO")&&media.media_type==="THUMBNAIL")?"VIDEO_THUMBNAIL":"IMAGE";
+      const response=await fetch(ORIGIN+"/api/internal/ad-radar-vision",{
+        method:"POST",
+        headers:{Authorization:"Bearer "+service,"content-type":"application/json"},
+        body:JSON.stringify({image_url:imageUrl,source_scope:sourceScope}),
+        signal:AbortSignal.timeout(30000)
+      });
+      const vision=await response.json().catch(()=>({ok:false,error:"invalid_vision_response"}));
+      const transcription=clean(ad?.raw_metadata?.full_transcription,12000)||null;
+      const limitations=sourceScope==="VIDEO_THUMBNAIL"
+        ?"Análise visual limitada à thumbnail; não descreve o vídeo inteiro."+ (transcription?" A transcrição veio do fornecedor e é mantida separadamente.":"")
+        :"Análise limitada à imagem efetivamente processada.";
+      const row={
+        ad_id:adId,media_id:media.id,analysis_type:"RADAR_VISUAL",
+        model_name:clean(vision?.model,200)||"@cf/meta/llama-3.2-11b-vision-instruct",
+        prompt_version:clean(vision?.prompt_version,100)||"ad-radar-vision-v1",
+        source_scope:sourceScope,status:response.ok&&vision?.ok?"COMPLETED":"FAILED",
+        output:response.ok&&vision?.ok?{...vision.analysis,provider_transcription:transcription}: {},
+        limitations:response.ok&&vision?.ok?limitations:clean(vision?.error||("vision_http_"+response.status),500),
+        reuse_key:reuseKey,completed_at:new Date().toISOString()
+      };
+      const {data:saved,error:saveError}=await ops.from("ad_radar_analyses").upsert(row,{onConflict:"reuse_key"}).select("*").single();
+      if(saveError)throw saveError;
+      if(!response.ok||!vision?.ok)return json({ok:false,error:"analysis_failed",detail:saved.limitations,analysis:saved},422);
+      return json({ok:true,reused:false,analysis:saved});
     }
 
     if(action==="feedback"&&req.method==="POST"){
