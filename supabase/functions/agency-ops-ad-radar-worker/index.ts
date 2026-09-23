@@ -126,7 +126,7 @@ Deno.serve(async(req:Request)=>{
     const {data:cfg,error:ce}=await ops.from("ad_radar_runtime_config").select("*").eq("id",1).single();if(ce)throw ce;
     if(!cfg.enabled)return j({ok:true,disabled:true,processed:[]});
     let scheduledEnqueued=0;
-    if(cfg.external_collection_enabled){const {data,error}=await ops.rpc("enqueue_due_ad_radar_refreshes",{p_limit:Number(cfg.max_runs_per_tick||2)});if(error)throw error;scheduledEnqueued=Number(data||0)}
+    if(cfg.external_collection_enabled&&cfg.scheduled_refresh_enabled===true){const {data,error}=await ops.rpc("enqueue_due_ad_radar_refreshes",{p_limit:Number(cfg.max_runs_per_tick||2)});if(error)throw error;scheduledEnqueued=Number(data||0)}
     const {data:runs,error:re}=await ops.rpc("claim_ad_radar_runs",{p_limit:Number(cfg.max_runs_per_tick||2)});if(re)throw re;
     const key=Deno.env.get("FOREPLAY_API_KEY")||"",processed:any[]=[];
     for(const run of runs||[]){try{processed.push({id:run.id,status:await processRun(ops,run,cfg,key)})}catch(e:any){console.error(e);await setRun(ops,run.id,{status:run.attempts>=run.max_attempts?"ACTION_REQUIRED":"FAILED_RECOVERABLE",available_at:new Date(Date.now()+Math.min(60,5*Math.max(1,run.attempts))*60000).toISOString(),locked_at:null,error_code:"WORKER_EXCEPTION",error_detail:clean(e?.message||e,300)});processed.push({id:run.id,status:"FAILED_RECOVERABLE"})}}
