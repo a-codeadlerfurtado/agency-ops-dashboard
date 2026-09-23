@@ -175,5 +175,5 @@ Deno.serve(async(req:Request)=>{
     }
 
     return json({ok:false,error:"unknown_action"},404);
-  }catch(e:any){console.error(e);return json({ok:false,error:"internal_error",detail:clean(e?.message||e,300)},500)}
+  }catch(e:any){const detail=clean(e?.message||e,300);console.error(e);if(detail==="radar_client_forbidden")return json({ok:false,error:"forbidden"},403);if(["radar_product_not_found","radar_context_not_found","radar_ad_not_in_context","radar_direction_not_found"].includes(detail))return json({ok:false,error:"not_found"},404);return json({ok:false,error:"internal_error",detail},500)}
 });
