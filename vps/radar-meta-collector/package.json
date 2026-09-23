@@ -1,0 +1,8 @@
+{
+  "name": "radar-meta-collector",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@thenavidm/facebook-ad-library-mcp": "0.4.0"
+  }
+}
