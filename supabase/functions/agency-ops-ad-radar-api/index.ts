@@ -168,9 +168,11 @@ Deno.serve(async(req:Request)=>{
 
     if(action==="identity"&&req.method==="POST"){
       const ctx=await ensureContext(clean(body.product_id,80));
-      const update:any={updated_at:new Date().toISOString()};
-      for(const key of ["canonical_name","city","neighborhood","address","builder","developer","phase","tower","typology","official_site_url"])if(body[key]!==undefined)update[key]=key==="official_site_url"?(safeUrl(body[key])||null):(clean(body[key],1000)||null);
-      if(Array.isArray(body.aliases))update.aliases=body.aliases.map((x:any)=>clean(x,220)).filter(Boolean).slice(0,20);
+      const {data:current,error:currentError}=await ops.from("ad_radar_product_entities").select("identity_sources").eq("id",ctx.product_entity_id).single();if(currentError)throw currentError;
+      const update:any={updated_at:new Date().toISOString()},sources={...(current?.identity_sources||{})};
+      for(const key of ["canonical_name","city","neighborhood","address","builder","developer","phase","tower","typology","official_site_url"])if(body[key]!==undefined){update[key]=key==="official_site_url"?(safeUrl(body[key])||null):(clean(body[key],1000)||null);sources[key]="HUMAN"}
+      if(Array.isArray(body.aliases)){update.aliases=body.aliases.map((x:any)=>clean(x,220)).filter(Boolean).slice(0,20);sources.aliases="HUMAN"}
+      update.identity_sources=sources;
       const {data,error}=await ops.from("ad_radar_product_entities").update(update).eq("id",ctx.product_entity_id).select("*").single();if(error)throw error;return json({ok:true,entity:data});
     }
 
