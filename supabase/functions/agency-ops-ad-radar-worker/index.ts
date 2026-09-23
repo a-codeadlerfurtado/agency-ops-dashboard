@@ -7,6 +7,7 @@ const fold=(v:unknown)=>clean(v,10000).normalize("NFD").replace(/[\u0300-\u036f]
 const uniq=<T>(xs:T[])=>[...new Set(xs)];
 const safeHttp=(v:unknown)=>{try{const u=new URL(clean(v,3000));return ["http:","https:"].includes(u.protocol)?u.toString():""}catch{return ""}};
 const epochDate=(v:unknown)=>{const n=Number(v);if(!Number.isFinite(n)||n<=0)return null;const ms=n>1e12?n:n*1000;const d=new Date(ms);return Number.isNaN(d.getTime())?null:d.toISOString()};
+const jwtRole=(v:string)=>{try{const token=v.replace(/^Bearer\s+/i,"");const p=token.split(".")[1];if(!p)return "";const b64=p.replace(/-/g,"+").replace(/_/g,"/").padEnd(Math.ceil(p.length/4)*4,"=");return clean(JSON.parse(atob(b64))?.role,80)}catch{return ""}};
 
 type DB=ReturnType<typeof createClient>;
 async function setRun(ops:any,id:string,patch:any){await ops.from("ad_radar_runs").update({...patch,updated_at:new Date().toISOString()}).eq("id",id)}
@@ -119,7 +120,7 @@ Deno.serve(async(req:Request)=>{
   if(req.method!=="POST")return j({ok:false,error:"method_not_allowed"},405);
   const url=Deno.env.get("SUPABASE_URL")||"",service=Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")||"";
   if(!url||!service)return j({ok:false,error:"server_configuration"},500);
-  if((req.headers.get("authorization")||"")!==`Bearer ${service}`)return j({ok:false,error:"unauthorized"},401);
+  if(jwtRole(req.headers.get("authorization")||"")!=="service_role")return j({ok:false,error:"unauthorized"},401);
   const admin=createClient(url,service,{auth:{persistSession:false,autoRefreshToken:false}}),ops=admin.schema("agency_ops");
   try{
     await ops.rpc("recover_stale_ad_radar_runs");
