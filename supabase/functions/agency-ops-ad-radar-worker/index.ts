@@ -15,14 +15,20 @@ async function setRun(ops:any,id:string,patch:any){await ops.from("ad_radar_runs
 
 function classify(ad:any,entity:any){
   const name=fold(entity?.canonical_name),city=fold(entity?.city),builder=fold(entity?.builder||entity?.developer);
+  const aliases=(Array.isArray(entity?.aliases)?entity.aliases:[]).map((x:any)=>fold(x)).filter(Boolean);
   const hay=fold([ad?.name,ad?.description,ad?.headline,ad?.full_transcription,ad?.link_url].filter(Boolean).join(" | "));
   const evidence:any[]=[];
-  if(name&&hay.includes(name))evidence.push({type:"EXACT_NAME_IN_TEXT",value:entity.canonical_name});
+  const nameHit=Boolean(name&&hay.includes(name)),aliasHit=aliases.find((x:string)=>hay.includes(x));
+  if(nameHit)evidence.push({type:"EXACT_NAME_IN_TEXT",value:entity.canonical_name});
+  if(aliasHit)evidence.push({type:"ALIAS_IN_TEXT",value:aliasHit});
   if(city&&hay.includes(city))evidence.push({type:"CITY_IN_TEXT",value:entity.city});
-  if(builder&&hay.includes(builder))evidence.push({type:"BUILDER_IN_TEXT",value:entity.builder});
+  if(builder&&hay.includes(builder))evidence.push({type:"BUILDER_IN_TEXT",value:entity.builder||entity.developer});
   let officialDomain="";try{officialDomain=entity?.official_site_url?new URL(entity.official_site_url).hostname.replace(/^www\./,""):""}catch{}
   if(officialDomain&&clean(ad?.link_url).includes(officialDomain))evidence.push({type:"OFFICIAL_DOMAIN_DESTINATION",value:officialDomain});
-  if(evidence.some(x=>x.type==="EXACT_NAME_IN_TEXT"))return {category:"POSSIBLE",label:evidence.length>=2?"STRONG_EVIDENCE":"NAME_EVIDENCE",evidence};
+  const identityHit=nameHit||Boolean(aliasHit),corroborated=evidence.some(x=>["CITY_IN_TEXT","BUILDER_IN_TEXT","OFFICIAL_DOMAIN_DESTINATION"].includes(x.type));
+  const genericName=name.split(/\s+/).filter(Boolean).length<=1&&name.length<12;
+  if(identityHit&&(!genericName||corroborated))return {category:"POSSIBLE",label:corroborated?"STRONG_EVIDENCE":"NAME_EVIDENCE",evidence};
+  if(identityHit&&genericName&&!corroborated)return {category:"EXECUTION_REFERENCE",label:"AMBIGUOUS_NAME_ONLY",evidence:[...evidence,{type:"IDENTITY_NEEDS_CORROBORATION",value:true}]};
   if(city&&hay.includes(city))return {category:"REGIONAL_COMPETITOR",label:"REGIONAL_EVIDENCE",evidence};
   return {category:"EXECUTION_REFERENCE",label:"EXECUTION_ONLY",evidence:[{type:"QUERY_RETURNED",value:true}]};
 }
