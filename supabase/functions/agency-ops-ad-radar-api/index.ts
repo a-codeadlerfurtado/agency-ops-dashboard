@@ -85,7 +85,7 @@ Deno.serve(async(req:Request)=>{
       let matchQuery=ops.from("ad_radar_matches").select("*",{count:"exact"}).eq("context_id",ctx.id).order("created_at",{ascending:false});
       if(["CONFIRMED","POSSIBLE","REGIONAL_COMPETITOR","EXECUTION_REFERENCE","OURS","REJECTED"].includes(category))matchQuery=matchQuery.eq("category",category);
       matchQuery=matchQuery.range(page*limit,page*limit+limit-1);
-      const [{data:product},{data:entity},{data:runs},matchResult,{data:saved},{data:directions},{data:own},{data:pieceReviews}]=await Promise.all([
+      const [{data:product},{data:entity},{data:runs},matchResult,{data:saved},{data:directions},{data:own},{data:pieceReviews},{data:preapprovalItems}]=await Promise.all([
         admin.from("briefing_products").select("id,client_id,name,completion_status,briefing_status,completed_at,updated_at").eq("id",productId).single(),
         ops.from("ad_radar_product_entities").select("*").eq("id",ctx.product_entity_id).single(),
         ops.from("ad_radar_runs").select("*").eq("context_id",ctx.id).order("requested_at",{ascending:false}).limit(20),
@@ -93,7 +93,8 @@ Deno.serve(async(req:Request)=>{
         ops.from("ad_radar_saved_references").select("*").eq("context_id",ctx.id).order("created_at",{ascending:false}),
         ops.from("ad_radar_directions").select("*").eq("context_id",ctx.id).order("version",{ascending:false}),
         ops.from("meta_creative_catalog").select("ad_id,creative_id,creative_name,ad_name,campaign_name,creative_format,preview_storage_path,thumbnail_url,image_url,spend_7d,impressions_7d,clicks_7d,ctr_7d,leads_7d,cost_per_result_7d,last_seen_at,is_current").eq("client_id",ctx.client_id).order("last_seen_at",{ascending:false}).limit(24),
-        ops.from("ad_radar_piece_reviews").select("*").eq("context_id",ctx.id).order("created_at",{ascending:false}).limit(12)
+        ops.from("ad_radar_piece_reviews").select("*").eq("context_id",ctx.id).order("created_at",{ascending:false}).limit(12),
+        ops.from("creative_preapproval_items").select("id,client_id,subject,drive_url,status,revision_no,submitted_at").eq("client_id",ctx.client_id).order("submitted_at",{ascending:false}).limit(12)
       ]);
       const matches=matchResult.data||[];
       const adIds=[...new Set((matches||[]).map((x:any)=>x.ad_id))];
@@ -105,7 +106,7 @@ Deno.serve(async(req:Request)=>{
       const mediaIds=(media||[]).map((m:any)=>m.id);
       const {data:analyses}=mediaIds.length?await ops.from("ad_radar_analyses").select("*").in("media_id",mediaIds).order("created_at",{ascending:false}):{data:[] as any[]};
       const ownSigned=await Promise.all((own||[]).map(async(x:any)=>{let preview=x.thumbnail_url||x.image_url||null;if(x.preview_storage_path){const {data}=await admin.storage.from("agency-meta-creative-previews").createSignedUrl(x.preview_storage_path,900);preview=data?.signedUrl||preview}return {...x,preview_url:preview}}));
-      return json({ok:true,product,context:ctx,entity,runs:runs||[],matches,ads:ads||[],advertisers:advertisers||[],media:signed,analyses:analyses||[],saved:saved||[],directions:directions||[],piece_reviews:pieceReviews||[],own_ads:ownSigned,pagination:{page,limit,total:matchResult.count||0,has_more:(page+1)*limit<(matchResult.count||0)},category:category||null});
+      return json({ok:true,product,context:ctx,entity,runs:runs||[],matches,ads:ads||[],advertisers:advertisers||[],media:signed,analyses:analyses||[],saved:saved||[],directions:directions||[],piece_reviews:pieceReviews||[],preapproval_items:preapprovalItems||[],own_ads:ownSigned,pagination:{page,limit,total:matchResult.count||0,has_more:(page+1)*limit<(matchResult.count||0)},category:category||null});
     }
 
     if(action==="enqueue"&&req.method==="POST"){
@@ -198,7 +199,7 @@ Deno.serve(async(req:Request)=>{
     }
 
     if(action==="review-piece"&&req.method==="POST"){
-      const form=await req.formData(),productId=clean(form.get("product_id"),80),directionId=clean(form.get("direction_id"),80),file=form.get("file");
+      const form=await req.formData(),productId=clean(form.get("product_id"),80),directionId=clean(form.get("direction_id"),80),preapprovalId=clean(form.get("preapproval_item_id"),40),file=form.get("file");
       if(!productId||!(file instanceof File))return json({ok:false,error:"product_and_file_required"},400);
       if(!file.type.startsWith("image/"))return json({ok:false,error:"review_requires_image",detail:"A revisão assistida atual processa imagens; vídeo deve usar frame/thumbnail identificado."},415);
       if(file.size>15*1024*1024)return json({ok:false,error:"file_too_large",max_mb:15},413);
@@ -207,6 +208,11 @@ Deno.serve(async(req:Request)=>{
       if(directionId){
         const {data,error}=await ops.from("ad_radar_directions").select("*").eq("id",directionId).eq("context_id",ctx.id).maybeSingle();
         if(error)throw error;if(!data)return json({ok:false,error:"direction_not_in_context"},400);selectedDirection=data;
+      }
+      let selectedPreapproval:any=null;
+      if(preapprovalId){
+        const {data,error}=await ops.from("creative_preapproval_items").select("id,client_id,subject,status").eq("id",Number(preapprovalId)).eq("client_id",ctx.client_id).maybeSingle();
+        if(error)throw error;if(!data)return json({ok:false,error:"preapproval_not_in_client"},400);selectedPreapproval=data;
       }
       const [{data:entity,error:entityError}]=await Promise.all([
         ops.from("ad_radar_product_entities").select("*").eq("id",ctx.product_entity_id).single()
@@ -268,7 +274,7 @@ Deno.serve(async(req:Request)=>{
         "OCR/visão pode deixar de ler textos pequenos; alertas devem ser conferidos na peça."
       ].join(" ");
       const {data:review,error:reviewError}=await ops.from("ad_radar_piece_reviews").insert({
-        context_id:ctx.id,direction_id:selectedDirection?.id||null,
+        context_id:ctx.id,direction_id:selectedDirection?.id||null,preapproval_item_id:selectedPreapproval?.id||null,
         storage_bucket:"agency-ai-private",storage_path:path,file_name:clean(file.name,220),media_type:file.type,
         model_name:clean(vision?.model,200)||null,prompt_version:clean(vision?.prompt_version,100)||"ad-radar-vision-v1",
         source_scope:"PRODUCED_PIECE_IMAGE",visual_analysis:visual,objective_checks:checks,
