@@ -134,6 +134,7 @@ Deno.serve(async(req:Request)=>{
     await ops.rpc("recover_stale_ad_radar_runs");
     const {data:cfg,error:ce}=await ops.from("ad_radar_runtime_config").select("*").eq("id",1).single();if(ce)throw ce;
     if(!cfg.enabled)return j({ok:true,disabled:true,processed:[]});
+    if(String(cfg.provider||"").toUpperCase()==="LOCAL_META_LIBRARY")return j({ok:true,delegated_to:"LOCAL_META_LIBRARY",processed:[]});
     let scheduledEnqueued=0;
     if(cfg.external_collection_enabled&&cfg.scheduled_refresh_enabled===true){const {data,error}=await ops.rpc("enqueue_due_ad_radar_refreshes",{p_limit:Number(cfg.max_runs_per_tick||2)});if(error)throw error;scheduledEnqueued=Number(data||0)}
     const {data:runs,error:re}=await ops.rpc("claim_ad_radar_runs",{p_limit:Number(cfg.max_runs_per_tick||2)});if(re)throw re;
