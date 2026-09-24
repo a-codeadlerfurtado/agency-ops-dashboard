@@ -81,6 +81,143 @@ function planEntries(value: unknown, prefix = ""): Array<[string,string]> {
   return rows;
 }
 
+function pdfSafe(value: unknown) {
+  return String(value ?? "")
+    .replace(/[–—]/g, "-")
+    .replace(/[“”]/g, '"')
+    .replace(/[•·]/g, "-")
+    .replace(/[^\x20-\x7EÀ-ÿ\n]/g, "");
+}
+function pdfByte(value: unknown) {
+  return pdfSafe(value).replace(/[^\x20-\x7E\xA0-\xFF]/g, "?");
+}
+function pdfEsc(value: unknown) {
+  return pdfByte(value).replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+}
+function pdfSlug(value: unknown) {
+  return pdfSafe(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "briefing";
+}
+function pdfWrap(value: unknown, max = 88) {
+  const words = pdfSafe(value).replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+  const lines: string[] = [];
+  let line = "";
+  for (const word of words) {
+    if (word.length > max) {
+      if (line) { lines.push(line); line = ""; }
+      for (let i = 0; i < word.length; i += max) lines.push(word.slice(i, i + max));
+      continue;
+    }
+    const next = line ? line + " " + word : word;
+    if (next.length > max) { if (line) lines.push(line); line = word; }
+    else line = next;
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : ["-"];
+}
+function pdfText(x: number, y: number, size: number, value: unknown, bold = false, color = "0.09 0.12 0.16") {
+  return "BT /" + (bold ? "F2" : "F1") + " " + size + " Tf " + color + " rg 1 0 0 1 " + x + " " + (842-y) + " Tm (" + pdfEsc(value) + ") Tj ET\n";
+}
+function pdfBytes(pages: string[]) {
+  const objects: string[] = [];
+  const pageIds: string[] = [];
+  objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+  objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+  objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>";
+  for (let i = 0; i < pages.length; i++) {
+    const pageId = 5 + i * 2, contentId = 6 + i * 2, ops = pages[i];
+    pageIds.push(pageId + " 0 R");
+    objects[pageId] = "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents " + contentId + " 0 R >>";
+    objects[contentId] = "<< /Length " + ops.length + " >>\nstream\n" + ops + "endstream";
+  }
+  objects[2] = "<< /Type /Pages /Count " + pages.length + " /Kids [" + pageIds.join(" ") + "] >>";
+  let out = "%PDF-1.4\n%\xE2\xE3\xCF\xD3\n";
+  const offsets = [0];
+  for (let i = 1; i < objects.length; i++) {
+    offsets[i] = out.length;
+    out += i + " 0 obj\n" + objects[i] + "\nendobj\n";
+  }
+  const xref = out.length;
+  out += "xref\n0 " + objects.length + "\n0000000000 65535 f \n";
+  for (let i = 1; i < objects.length; i++) out += String(offsets[i]).padStart(10, "0") + " 00000 n \n";
+  out += "trailer\n<< /Size " + objects.length + " /Root 1 0 R >>\nstartxref\n" + xref + "\n%%EOF";
+  const bytes = new Uint8Array(out.length);
+  for (let i = 0; i < out.length; i++) bytes[i] = out.charCodeAt(i) & 255;
+  return bytes;
+}
+function briefingPdf(detail: Row, clientName: string) {
+  const type = String(detail?.type || "").toUpperCase() === "PERSONA" ? "PERSONA" : "PRODUCT";
+  const name = String(detail?.entity?.name || "Sem nome");
+  const typeLabel = type === "PRODUCT" ? "BRIEFING DE PRODUTO" : "BRIEFING DE PERSONA";
+  const answers = new Map((detail?.answers || []).map((a: Row) => [String(a.question_key), a]));
+  const questions: Row[] = detail?.questions || [];
+  const generated = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" }).format(new Date());
+  const pages: string[] = [];
+  let page = "", y = 126;
+
+  const header = () => {
+    page += "0.03 0.05 0.08 rg 0 750 595 92 re f\n1 0.35 0.11 rg 0 750 8 92 re f\n";
+    page += pdfText(44,34,10,"LEONARDO IMOBI / BRIEFING HUB",true,"1 1 1");
+    page += pdfText(44,53,8,"Documento gerado em " + generated,false,"0.72 0.78 0.84");
+    page += pdfText(44,69,8,"Cliente: " + (clientName || "Não informado"),false,"0.58 0.66 0.73");
+  };
+  const footer = () => {
+    page += "0.85 0.88 0.91 RG 44 32 m 551 32 l S\n";
+    page += pdfText(44,824,7.5,name,false,"0.42 0.48 0.54");
+    page += pdfText(500,824,7.5,"Briefing Hub",false,"0.42 0.48 0.54");
+  };
+  const newPage = () => {
+    if (page) { footer(); pages.push(page); }
+    page = ""; y = 126; header();
+  };
+  const need = (height: number) => { if (y + height > 790) newPage(); };
+
+  newPage();
+  page += pdfText(44,y,10,typeLabel,true,"0.07 0.27 0.42"); y += 24;
+  for (const line of pdfWrap(name,38)) { page += pdfText(44,y,24,line,true); y += 28; }
+  y += 4;
+
+  let answered = 0, lastSection = "";
+  for (const q of questions) {
+    const a = answers.get(String(q.question_key)) as Row | undefined;
+    if (!a) continue;
+    const raw = a.value_json ?? a.value_text;
+    const answer = raw === null || raw === undefined || raw === "" ? "" :
+      (typeof raw === "string" ? raw : Array.isArray(raw) ? raw.map(summaryText).filter(Boolean).join(", ") : summaryText(raw));
+    if (!answer) continue;
+    const section = String(q.section?.title || "Informações gerais");
+    if (section !== lastSection) {
+      need(43);
+      page += "0.93 0.96 0.98 rg 44 " + (842-y-14) + " 507 27 re f\n";
+      page += pdfText(56,y+3,10,section.toUpperCase(),true,"0.07 0.27 0.42");
+      y += 32; lastSection = section;
+    }
+    const labels = pdfWrap(q.label || q.question_key, 92);
+    const values = pdfWrap(answer, 90);
+    need(labels.length * 10 + values.length * 13 + 18);
+    for (const line of labels) { page += pdfText(44,y,8,line,true,"0.36 0.42 0.48"); y += 10; }
+    y += 3;
+    for (const line of values) { page += pdfText(44,y,9.5,line); y += 13; }
+    y += 12; answered++;
+  }
+  if (!answered) page += pdfText(44,y,10,"Nenhuma resposta foi registrada neste briefing.",false,"0.36 0.42 0.48");
+  footer(); pages.push(page);
+
+  return {
+    bytes: pdfBytes(pages),
+    filename: "briefing-" + (type === "PRODUCT" ? "produto" : "persona") + "-" + pdfSlug(name) + ".pdf",
+  };
+}
+function downloadBriefingPdf(detail: Row, clientName: string) {
+  const { bytes, filename } = briefingPdf(detail, clientName);
+  const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; a.rel = "noopener";
+  document.body.appendChild(a); a.click(); a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 export default function BriefingStaffBridge({ session: _session }: { session: Session }) {
   const [authorized,setAuthorized]=useState<boolean|null>(null);
   const [open,setOpen]=useState(false);
@@ -284,7 +421,7 @@ export default function BriefingStaffBridge({ session: _session }: { session: Se
         </>}
       </div>
     </main>,document.body)}
-    {detail&&createPortal(<div className="brief-staff-drawer-bg" onMouseDown={(e)=>{if(e.target===e.currentTarget)setDetail(null)}}><aside className="brief-staff-drawer"><div className="brief-staff-drawer-head"><div><div className="brief-staff-kicker">{detail.type==='PRODUCT'?'Produto':'Persona'}</div><h2>{detail.entity?.name||'Briefing'}</h2><div className="brief-staff-muted">{questions.length} perguntas · atualizado {fmtDate(detail.entity?.updated_at)}</div></div><div style={{display:"flex",gap:8}}>{detail.type==="PRODUCT"&&<button className="brief-staff-btn primary" onClick={()=>{window.dispatchEvent(new CustomEvent("ad-radar-open",{detail:{client_id:detail.entity?.client_id,product_id:detail.entity?.id}}));setDetail(null);setOpen(false)}}>Ver Radar</button>}<button className="brief-staff-close" onClick={()=>setDetail(null)}>Fechar</button></div></div>
+    {detail&&createPortal(<div className="brief-staff-drawer-bg" onMouseDown={(e)=>{if(e.target===e.currentTarget)setDetail(null)}}><aside className="brief-staff-drawer"><div className="brief-staff-drawer-head"><div><div className="brief-staff-kicker">{detail.type==='PRODUCT'?'Produto':'Persona'}</div><h2>{detail.entity?.name||'Briefing'}</h2><div className="brief-staff-muted">{questions.length} perguntas · atualizado {fmtDate(detail.entity?.updated_at)}</div></div><div className="brief-staff-drawer-actions">{detail.type==="PRODUCT"&&<button className="brief-staff-btn" onClick={()=>{window.dispatchEvent(new CustomEvent("ad-radar-open",{detail:{client_id:detail.entity?.client_id,product_id:detail.entity?.id}}));setDetail(null);setOpen(false)}}>Ver Radar</button>}{detail.permissions?.export===true&&<button className="brief-staff-btn primary" title={detail.type==="PRODUCT"?"Baixar briefing de produto em PDF":"Baixar briefing de persona em PDF"} onClick={()=>downloadBriefingPdf(detail,String(selected?.display_name||""))}>Baixar PDF</button>}<button className="brief-staff-close" onClick={()=>setDetail(null)}>Fechar</button></div></div>
       <nav className="brief-staff-tabs" aria-label="Detalhes do briefing"><button className={`brief-staff-tab${detailTab==="strategy"?" active":""}`} onClick={()=>setDetailTab("strategy")}>Estratégia</button><button className={`brief-staff-tab${detailTab==="briefing"?" active":""}`} onClick={()=>setDetailTab("briefing")}>Briefing completo</button><button className={`brief-staff-tab${detailTab==="history"?" active":""}`} onClick={()=>setDetailTab("history")}>Histórico</button></nav>
       {detailTab==="strategy"&&<section className="brief-staff-strategy">
         {strategyLoading&&<div className="brief-staff-loading"><span className="brief-staff-dot"/>Cruzando briefing, contexto e benchmark interno…</div>}
