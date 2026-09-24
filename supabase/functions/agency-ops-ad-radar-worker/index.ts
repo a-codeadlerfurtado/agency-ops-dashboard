@@ -76,14 +76,14 @@ async function processRun(ops:any,run:any,cfg:any,provider:any){
   if(!provider.configured){await setRun(ops,run.id,{status:"ACTION_REQUIRED",completed_at:new Date().toISOString(),error_code:provider.missingCode,error_detail:provider.missingDetail,elapsed_ms:Date.now()-started});return "ACTION_REQUIRED"}
   if(run.provider!==provider.name)await setRun(ops,run.id,{provider:provider.name});
 
-  const base=searchTerm(entity.canonical_name),city=clean(entity.city,200),maker=clean(entity.builder||entity.developer,200);
-  const genericBase=fold(base).split(/\s+/).filter(Boolean).length<=1&&fold(base).length<12;
-  const makerDistinct=maker&&fold(maker)!==fold(base)&&!fold(base).includes(fold(maker));
+  const searchBase=searchTerm(entity.canonical_name),city=clean(entity.city,200),maker=clean(entity.builder||entity.developer,200);
+  const genericBase=fold(searchBase).split(/\s+/).filter(Boolean).length<=1&&fold(searchBase).length<12;
+  const makerDistinct=maker&&fold(maker)!==fold(searchBase)&&!fold(searchBase).includes(fold(maker));
   let officialDomain="";try{officialDomain=entity?.official_site_url?new URL(entity.official_site_url).hostname.replace(/^www\./,""):""}catch{}
   if(genericBase&&!city&&!makerDistinct&&!officialDomain){await setRun(ops,run.id,{status:"ACTION_REQUIRED",completed_at:new Date().toISOString(),error_code:"IDENTITY_INSUFFICIENT_FOR_SEARCH",error_detail:"Nome do produto é genérico e falta cidade, construtora/incorporadora ou site oficial para uma busca precisa.",elapsed_ms:Date.now()-started});return "ACTION_REQUIRED"}
   const aliases=(Array.isArray(entity.aliases)?entity.aliases:[]).map((x:any)=>searchTerm(x)).filter(Boolean);
-  const primary=genericBase&&city?`${base} ${city}`:genericBase&&makerDistinct?`${base} ${maker}`:base;
-  const parts=[primary,...aliases,city&&!genericBase?`${base} ${city}`:"",makerDistinct&&!genericBase?`${base} ${maker}`:""].filter(Boolean);
+  const primary=genericBase&&city?`${searchBase} ${city}`:genericBase&&makerDistinct?`${searchBase} ${maker}`:searchBase;
+  const parts=[primary,...aliases,city&&!genericBase?`${searchBase} ${city}`:"",makerDistinct&&!genericBase?`${searchBase} ${maker}`:""].filter(Boolean);
   const queries=uniq(parts).slice(0,Number(cfg.max_queries_per_run||4));
   let total=0,media=0,credits=0,failed=0,blockedCode="",blockedDetail="";
   const brandIds=new Set<string>();
