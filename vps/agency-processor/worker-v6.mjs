@@ -263,8 +263,9 @@ function segmentClock(ms) {
 function likelyWhisperHallucination(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return false;
-  const words = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  const normalized = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (/legenda(s)? por|legendas pela comunidade|amara\.org|obrigado por assistir|inscreva-se no canal|subscribe|subtitles by/i.test(normalized)) return true;
+  const words = normalized.replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
   if (words.length < 12) return false;
   const uniqueRatio = new Set(words).size / words.length;
   if (words.length >= 20 && uniqueRatio <= 0.20) return true;
@@ -407,7 +408,18 @@ async function processCallJob(job) {
     for (const row of rows) collected.push(row);
   }
   collected.sort((a,b) => Number(a.started_ms || 0) - Number(b.started_ms || 0));
-  const segments = collected.map((row,index) => ({ ...row, sequence_no:index }));
+  const shortCounts=new Map();
+  for(const row of collected){
+    const key=String(row.text||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+    if(key && key.split(/\s+/).length<=2) shortCounts.set(key,(shortCounts.get(key)||0)+1);
+  }
+  const cleaned=collected.filter((row)=>{
+    if(likelyWhisperHallucination(row.text)) return false;
+    const key=String(row.text||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+    if(key && key.split(/\s+/).length<=2 && (shortCounts.get(key)||0)>=8) return false;
+    return true;
+  });
+  const segments = cleaned.map((row,index) => ({ ...row, sequence_no:index }));
   const transcriptText = segments.map((row) => `[${segmentClock(row.started_ms)}] ${row.speaker_name}: ${row.text}`).join("\n\n");
   if (transcriptText.trim().length < 3) throw new Error("call_transcript_empty");
   const committed = await call("call_commit", { session_id:sessionId, transcript_text:transcriptText, segments }, 120000);
