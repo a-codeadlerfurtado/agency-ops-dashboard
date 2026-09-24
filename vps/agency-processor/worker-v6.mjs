@@ -1,9 +1,8 @@
+import { mkdtemp, writeFile, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { promisify } from "node:util";
-
 const execFileAsync = promisify(execFile);
 const api = process.env.WORKER_API_URL;
 const token = process.env.AGENCY_WORKER_TOKEN;
@@ -261,21 +260,51 @@ function segmentClock(ms) {
   return `${hh}:${mm}:${ss}`;
 }
 
+function likelyWhisperHallucination(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return false;
+  const words = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (words.length < 12) return false;
+  const uniqueRatio = new Set(words).size / words.length;
+  if (words.length >= 20 && uniqueRatio <= 0.20) return true;
+  for (const size of [2, 3, 4]) {
+    if (words.length < size * 4) continue;
+    const counts = new Map();
+    let max = 0;
+    for (let i = 0; i <= words.length - size; i++) {
+      const key = words.slice(i, i + size).join(" ");
+      const next = (counts.get(key) || 0) + 1;
+      counts.set(key, next);
+      if (next > max) max = next;
+    }
+    if (max >= 4 && (max * size) / words.length >= 0.45) return true;
+  }
+  return false;
+}
+
 async function whisperTranscribe(audio, speakerName, transcriptSource = "WHATSAPP_WEB_WHISPER") {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15 * 60_000);
+  const dir = await mkdtemp(join(tmpdir(), "relato-stt-"));
   try {
     const source = await fetch(String(audio.signed_url), { signal: controller.signal });
     if (!source.ok) throw new Error(`call_audio_download_${source.status}`);
-    const bytes = await source.arrayBuffer();
-    if (!bytes.byteLength) throw new Error("call_audio_empty");
-    const path = String(audio.path || "").toLowerCase();
-    const isWav = path.endsWith(".wav");
-    const mime = isWav ? "audio/wav" : "audio/webm";
-    const ext = isWav ? "wav" : "webm";
-    const blob = new Blob([bytes], { type: mime });
+    const bytes = Buffer.from(await source.arrayBuffer());
+    if (!bytes.length) throw new Error("call_audio_empty");
+    const rawPath = String(audio.path || "").toLowerCase();
+    const ext = rawPath.endsWith(".webm") ? ".webm" : rawPath.endsWith(".mp3") ? ".mp3" : ".wav";
+    const input = join(dir, "input" + ext);
+    const normalized = join(dir, "normalized.wav");
+    await writeFile(input, bytes);
+    await execFileAsync("ffmpeg", [
+      "-hide_banner","-loglevel","error","-y",
+      "-i",input,"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",normalized
+    ], { timeout: 120000 });
+    const normalizedBytes = await readFile(normalized);
+    const blob = new Blob([normalizedBytes], { type: "audio/wav" });
     const form = new FormData();
-    form.append("file", blob, `${audio.role || "audio"}.${ext}`);
+    form.append("file", blob, `${audio.role || "audio"}.wav`);
     form.append("model", whisperModel);
     form.append("language", "pt");
     form.append("response_format", "verbose_json");
@@ -290,26 +319,76 @@ async function whisperTranscribe(audio, speakerName, transcriptSource = "WHATSAP
     if (!response.ok) throw new Error(`whisper_${response.status}:${raw.slice(0,500)}`);
     const body = JSON.parse(raw || "{}");
     const segments = Array.isArray(body.segments) ? body.segments : [];
-    return segments.map((seg, index) => ({
-      sequence_no: index,
-      started_ms: Math.max(0, Math.round(Number(seg.start || 0) * 1000)),
-      ended_ms: Math.max(0, Math.round(Number(seg.end || seg.start || 0) * 1000)),
-      speaker_key: speakerName,
-      speaker_name: speakerName,
-      device_id: null,
-      text: String(seg.text || "").trim(),
-      confidence: null,
-      source: transcriptSource,
-    })).filter((seg) => seg.text);
+    return segments.map((seg, index) => {
+      const avgLogprob = Number(seg.avg_logprob);
+      const noSpeechProb = Number(seg.no_speech_prob);
+      const confidence = Number.isFinite(avgLogprob) ? Math.max(0, Math.min(1, Math.exp(avgLogprob))) : null;
+      return {
+        sequence_no: index,
+        started_ms: Math.max(0, Math.round(Number(seg.start || 0) * 1000)),
+        ended_ms: Math.max(0, Math.round(Number(seg.end || seg.start || 0) * 1000)),
+        speaker_key: speakerName,
+        speaker_name: speakerName,
+        device_id: null,
+        text: String(seg.text || "").trim(),
+        confidence,
+        avg_logprob: Number.isFinite(avgLogprob) ? avgLogprob : null,
+        no_speech_prob: Number.isFinite(noSpeechProb) ? noSpeechProb : null,
+        source: transcriptSource,
+      };
+    }).filter((seg) =>
+      seg.text &&
+      !likelyWhisperHallucination(seg.text) &&
+      (seg.no_speech_prob == null || seg.no_speech_prob < 0.65) &&
+      (seg.avg_logprob == null || seg.avg_logprob > -1.15)
+    );
   } finally {
     clearTimeout(timeout);
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
+async function ensureMixedAudio(snapshot, sessionId) {
+  const upload = snapshot?.mixed_upload;
+  if (!upload?.signed_url || !upload?.path || snapshot?.session?.audio_mixed_path) return null;
+  const audio = Array.isArray(snapshot?.audio) ? snapshot.audio : [];
+  if (!audio.length) return null;
+  const dir = await mkdtemp(join(tmpdir(), "relato-mix-"));
+  try {
+    const inputs = [];
+    for (const item of audio) {
+      const response = await fetch(item.signed_url);
+      if (!response.ok) throw new Error("audio_download_" + response.status);
+      const ext = String(item.path || "").toLowerCase().endsWith(".webm") ? ".webm" : ".wav";
+      const file = join(dir, String(item.role || "audio") + ext);
+      await writeFile(file, Buffer.from(await response.arrayBuffer()));
+      inputs.push(file);
+    }
+    const output = join(dir, "mixed.mp3");
+    const args = ["-hide_banner","-loglevel","error","-y"];
+    for (const file of inputs) args.push("-i", file);
+    if (inputs.length >= 2) {
+      args.push("-filter_complex","[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0,alimiter=limit=0.95[a]","-map","[a]");
+    }
+    args.push("-vn","-c:a","libmp3lame","-b:a","128k","-ac","1","-ar","48000",output);
+    await execFileAsync("ffmpeg", args, { timeout: 120000 });
+    const bytes = await readFile(output);
+    const put = await fetch(upload.signed_url, { method: "PUT", headers: { "content-type": "audio/mpeg", "x-upsert": "true" }, body: bytes });
+    if (!put.ok) throw new Error("mixed_upload_" + put.status + ":" + (await put.text()).slice(0,300));
+    await call("call_audio_commit", { session_id: sessionId, path: upload.path, bytes: bytes.length }, 120000);
+    return { path: upload.path, bytes: bytes.length };
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function processCallJob(job) {
   const sessionId = String(job?.payload?.session_id || "").trim();
   if (!sessionId) throw new Error("call_job_missing_session_id");
   const snapshot = await call("call_snapshot", { session_id: sessionId }, 120000);
   const session = snapshot.session || {};
+  await ensureMixedAudio(snapshot, sessionId).catch((error) => {
+    console.error(JSON.stringify({ event: "call_audio_mix_failed", session_id: sessionId, error: String(error?.message || error) }));
+  });
   const contactName = String(session.metadata?.contact_name || "Contato WhatsApp").trim() || "Contato WhatsApp";
   const ownerName = String(session.owner_person || "Colaborador").trim() || "Colaborador";
   const audio = Array.isArray(snapshot.audio) ? snapshot.audio : [];
@@ -379,7 +458,7 @@ const analysisSchema = {
   required: ["summary","decisions","commitments","action_items","summary_topics","highlights","keywords","rewritten_notes","objections","pain_points","opportunities","follow_up"]
 };
 
-async function ollamaJson(prompt, timeoutMs = 180000) {
+async function ollamaJson(prompt, timeoutMs = 120000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -424,15 +503,34 @@ async function analyzeMeeting(snapshot) {
   return { ...final, model: meetingModel };
 }
 
+function fallbackMeetingAnalysis(snapshot, error) {
+  const raw = meetingText(snapshot).replace(/\s+/g, " ").trim();
+  const summary = raw.length > 1200 ? raw.slice(0, 1197) + "..." : raw;
+  return {
+    summary: summary || "Transcrição capturada; resumo automático indisponível.",
+    decisions: [], commitments: [], action_items: [], summary_topics: [],
+    highlights: { opportunities: [], insights: [], ideas: [], objectives: [], problems: [], lessons: [] },
+    keywords: [], rewritten_notes: [], objections: [], pain_points: [], opportunities: [], follow_up: "",
+    model: "extractive-fallback",
+    fallback_reason: String(error?.message || error || "analysis_failed").slice(0, 500),
+  };
+}
+
 async function processMeetingJob(job) {
   const transcriptId = Number(job?.payload?.transcript_id || 0);
   if (!Number.isInteger(transcriptId) || transcriptId <= 0) throw new Error("meeting_job_missing_transcript_id");
   const snapshot = await call("meeting_snapshot", { transcript_id: transcriptId }, 120000);
-  const analysis = await analyzeMeeting(snapshot);
+  let analysis;
+  try {
+    analysis = await analyzeMeeting(snapshot);
+  } catch (error) {
+    console.error(JSON.stringify({ event: "meeting_analysis_fallback", transcript_id: transcriptId, error: String(error?.message || error) }));
+    analysis = fallbackMeetingAnalysis(snapshot, error);
+  }
   if (String(job?.payload?.mode || "execute") === "shadow") return { ok: true, shadow: true, transcript_id: transcriptId, analysis };
   const committed = await call("meeting_commit", { transcript_id: transcriptId, analysis }, 120000);
   const notification = await call("meeting_ready_notify", { transcript_id: transcriptId }, 120000).catch((error) => ({ ok: false, error: String(error?.message || error) }));
-  return { ok: true, transcript_id: transcriptId, committed, notification, model: meetingModel };
+  return { ok: true, transcript_id: transcriptId, committed, notification, model: analysis.model || meetingModel };
 }
 const agendaSchema = {
   type: "object",
@@ -631,59 +729,6 @@ async function processGroupMeetingCalendarJob(job) {
   return await call("group_meeting_commit",{agenda_event_id:eventId,sync_status:"SYNCED",calendar_event_id:result.event_id,calendar_html_link:result.html_link,meet_url:result.meet_url,calendar_owner_person:owner,calendar_title:title});
 }
 
-async function processMeetingAudioJob(job) {
-  const sessionId = String(job?.payload?.session_id || "").trim();
-  if (!sessionId) throw new Error("meeting_audio_job_missing_session_id");
-  const snapshot = await call("meeting_audio_snapshot", { session_id: sessionId }, 120000);
-  const originals = Array.isArray(snapshot.originals) ? snapshot.originals : [];
-  if (!originals.length) throw new Error("meeting_audio_originals_not_found");
-  const mixed = snapshot.mixed_upload || {};
-  if (!mixed.signed_url || !mixed.path) throw new Error("meeting_audio_mixed_target_missing");
-  const dir = await mkdtemp(path.join(os.tmpdir(), "relato-meeting-audio-"));
-  try {
-    const inputs = [];
-    for (const item of originals) {
-      const role = String(item.role || "audio").replace(/[^a-z0-9_-]/gi, "");
-      const ext = String(item.path || "").toLowerCase().endsWith(".wav") ? ".wav" : String(item.path || "").toLowerCase().endsWith(".ogg") ? ".ogg" : ".webm";
-      const file = path.join(dir, role + ext);
-      const response = await fetch(String(item.signed_url || ""));
-      if (!response.ok) throw new Error(`meeting_audio_download_${role}_${response.status}`);
-      await writeFile(file, Buffer.from(await response.arrayBuffer()));
-      inputs.push({ role, file });
-    }
-    const output = path.join(dir, "meeting.webm");
-    const args = ["-hide_banner", "-loglevel", "error", "-y"];
-    for (const input of inputs) args.push("-i", input.file);
-    if (inputs.length >= 2) {
-      args.push("-filter_complex", `[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0,alimiter=limit=0.95[a]`, "-map", "[a]");
-    } else {
-      args.push("-map", "0:a:0");
-    }
-    args.push("-vn", "-c:a", "libopus", "-b:a", "48k", "-vbr", "on", "-application", "voip", "-ac", "1", "-ar", "48000", "-f", "webm", output);
-    await execFileAsync("ffmpeg", args, { timeout: 30 * 60 * 1000, maxBuffer: 4 * 1024 * 1024 });
-    const bytes = await readFile(output);
-    if (bytes.length < 512) throw new Error("meeting_audio_mixed_empty");
-    const upload = await fetch(String(mixed.signed_url), {
-      method: "PUT",
-      headers: { "content-type": "audio/webm", "x-upsert": "true" },
-      body: bytes,
-    });
-    if (!upload.ok) throw new Error(`meeting_audio_mixed_upload_${upload.status}:${(await upload.text()).slice(0,300)}`);
-    const durationMs = Number(snapshot.session?.audio_duration_ms || 0) || null;
-    return await call("meeting_audio_commit", {
-      session_id: sessionId,
-      mixed_path: mixed.path,
-      bytes: bytes.length,
-      duration_ms: durationMs,
-      mime_type: "audio/webm",
-    }, 120000);
-  } catch (error) {
-    await call("meeting_audio_failed", { session_id: sessionId, error: String(error?.message || error) }, 120000).catch(() => {});
-    throw error;
-  } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
-  }
-}
 async function handleQueueJob(job) {
   const type = String(job.job_type || "").toUpperCase();
   if (type === "SELF_TEST") {
@@ -703,9 +748,6 @@ async function handleQueueJob(job) {
   }
   if (type === "MEETING_POSTPROCESS") {
     return await processMeetingJob(job);
-  }
-  if (type === "MEETING_AUDIO_PROCESS") {
-    return await processMeetingAudioJob(job);
   }
   if (type === "CALL_TRANSCRIBE") {
     return await processCallJob(job);

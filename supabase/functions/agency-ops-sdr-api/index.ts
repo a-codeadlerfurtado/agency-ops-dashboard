@@ -144,11 +144,7 @@ Deno.serve(async(req:Request)=>{
       : (transcript?.transcript_text&&!likelyWhisperHallucination(transcript.transcript_text)?transcript.transcript_text:null);
 
     const storage=db.storage.from("relato-call-audio");
-    const audioPaths:Row={
-      mixed:sessionRow.audio_mixed_path||null,
-      local:sessionRow.audio_local_path||sessionRow.metadata?.audio_paths?.local||null,
-      remote:sessionRow.audio_remote_path||sessionRow.metadata?.audio_paths?.remote||null,
-    };
+    const audioPaths:Row={ mixed:sessionRow.audio_mixed_path||null };
     const audio:Row[]=[];
     for(const [role,path] of Object.entries(audioPaths)){
       if(!path) continue;
