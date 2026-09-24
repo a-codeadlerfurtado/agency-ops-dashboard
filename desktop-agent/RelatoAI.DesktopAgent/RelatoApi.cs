@@ -55,7 +55,7 @@ internal sealed partial class RelatoApi
             action = "pair_redeem",
             code = code.Trim().ToUpperInvariant(),
             device_name = Environment.MachineName + " · Relato AI Desktop Agent",
-            extension_version = "desktop-0.4.5"
+            extension_version = "desktop-0.4.6"
         }, withToken: false);
         var root = doc.RootElement;
         return new PairResult(
@@ -83,7 +83,7 @@ internal sealed partial class RelatoApi
                 identity_source = identitySource,
                 duration_ms = durationMs,
                 finish_reason = "desktop_audio_session_ended",
-                extension_version = "desktop-0.4.5",
+                extension_version = "desktop-0.4.6",
                 source = "WHATSAPP_DESKTOP",
                 audio_ext = "wav"
             },
