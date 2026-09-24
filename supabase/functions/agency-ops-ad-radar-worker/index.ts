@@ -6,6 +6,7 @@ const j=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,hea
 const clean=(v:unknown,n=4000)=>String(v??"").trim().slice(0,n);
 const fold=(v:unknown)=>clean(v,10000).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLocaleLowerCase("pt-BR").replace(/\s+/g," ").trim();
 const uniq=<T>(xs:T[])=>[...new Set(xs)];
+const searchTerm=(v:unknown)=>{const raw=clean(v,300).replace(/\s+/g," ").trim();const withoutCode=raw.replace(/^[A-Z]{1,5}\s*[-_]?\d{3,8}\s*(?:[-|:–—]\s*)?/i,"").trim();const withoutAsset=withoutCode.replace(/\s+(?:[-|:–—])\s*(?:IMAGEM(?:\s*\/\s*V[IÍ]DEO)?|V[IÍ]DEO|FEED|STOR(?:Y|IES))\s*$/i,"").trim();return withoutAsset||withoutCode||raw};
 const safeHttp=(v:unknown)=>{try{const u=new URL(clean(v,3000));return ["http:","https:"].includes(u.protocol)?u.toString():""}catch{return ""}};
 const epochDate=(v:unknown)=>{const raw=clean(v,200);if(!raw)return null;const n=Number(raw),d=Number.isFinite(n)&&n>0?new Date(n>1e12?n:n*1000):new Date(raw);return Number.isNaN(d.getTime())?null:d.toISOString()};
 const jwtRole=(v:string)=>{try{const token=v.replace(/^Bearer\s+/i,"");const p=token.split(".")[1];if(!p)return "";const b64=p.replace(/-/g,"+").replace(/_/g,"/").padEnd(Math.ceil(p.length/4)*4,"=");return clean(JSON.parse(atob(b64))?.role,80)}catch{return ""}};
@@ -75,8 +76,14 @@ async function processRun(ops:any,run:any,cfg:any,provider:any){
   if(!provider.configured){await setRun(ops,run.id,{status:"ACTION_REQUIRED",completed_at:new Date().toISOString(),error_code:provider.missingCode,error_detail:provider.missingDetail,elapsed_ms:Date.now()-started});return "ACTION_REQUIRED"}
   if(run.provider!==provider.name)await setRun(ops,run.id,{provider:provider.name});
 
-  const maker=clean(entity.builder||entity.developer,200);
-  const parts=[clean(entity.canonical_name,300),...(Array.isArray(entity.aliases)?entity.aliases:[]).map((x:any)=>clean(x,300)),entity.city?`${clean(entity.canonical_name,300)} ${clean(entity.city,200)}`:"",maker?`${clean(entity.canonical_name,300)} ${maker}`:""].filter(Boolean);
+  const base=searchTerm(entity.canonical_name),city=clean(entity.city,200),maker=clean(entity.builder||entity.developer,200);
+  const genericBase=fold(base).split(/\s+/).filter(Boolean).length<=1&&fold(base).length<12;
+  const makerDistinct=maker&&fold(maker)!==fold(base)&&!fold(base).includes(fold(maker));
+  let officialDomain="";try{officialDomain=entity?.official_site_url?new URL(entity.official_site_url).hostname.replace(/^www\./,""):""}catch{}
+  if(genericBase&&!city&&!makerDistinct&&!officialDomain){await setRun(ops,run.id,{status:"ACTION_REQUIRED",completed_at:new Date().toISOString(),error_code:"IDENTITY_INSUFFICIENT_FOR_SEARCH",error_detail:"Nome do produto é genérico e falta cidade, construtora/incorporadora ou site oficial para uma busca precisa.",elapsed_ms:Date.now()-started});return "ACTION_REQUIRED"}
+  const aliases=(Array.isArray(entity.aliases)?entity.aliases:[]).map((x:any)=>searchTerm(x)).filter(Boolean);
+  const primary=genericBase&&city?`${base} ${city}`:genericBase&&makerDistinct?`${base} ${maker}`:base;
+  const parts=[primary,...aliases,city&&!genericBase?`${base} ${city}`:"",makerDistinct&&!genericBase?`${base} ${maker}`:""].filter(Boolean);
   const queries=uniq(parts).slice(0,Number(cfg.max_queries_per_run||4));
   let total=0,media=0,credits=0,failed=0,blockedCode="",blockedDetail="";
   const brandIds=new Set<string>();
