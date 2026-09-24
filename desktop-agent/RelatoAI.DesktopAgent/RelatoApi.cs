@@ -8,9 +8,15 @@ internal sealed record UploadTarget(string Role, string Path, string SignedUrl);
 internal sealed record PreparedCall(string SessionId, IReadOnlyList<UploadTarget> Uploads);
 internal sealed record PreparedMeetingAudio(string SessionId, IReadOnlyList<UploadTarget> Uploads, string State);
 internal sealed record ClientOption(string Id, string Name);
+internal sealed record ProspectPrefill(
+    string? Name, string? Company, string? Email, string? Phone, string? City, string? Instagram,
+    string? MarketingInvestment, int? BrokerCount, IReadOnlyList<string> PainPoints,
+    IReadOnlyList<string> ServicesInterest, IReadOnlyList<string> Objections,
+    string? NextStep, string? NextStepAt);
 internal sealed record FeedbackContext(
     bool Pending, bool RequiresSelection, string? RemotePhone, string? RemoteName, string? RemoteRole,
-    string? ClientId, string? ClientName, string? ResolutionStatus, IReadOnlyList<ClientOption> Clients);
+    string? ClientId, string? ClientName, string? ResolutionStatus, IReadOnlyList<ClientOption> Clients,
+    string Workflow, bool TranscriptReady, ProspectPrefill? ProspectPrefill);
 
 internal sealed partial class RelatoApi
 {
@@ -49,7 +55,7 @@ internal sealed partial class RelatoApi
             action = "pair_redeem",
             code = code.Trim().ToUpperInvariant(),
             device_name = Environment.MachineName + " · Relato AI Desktop Agent",
-            extension_version = "desktop-0.3.1"
+            extension_version = "desktop-0.4.5"
         }, withToken: false);
         var root = doc.RootElement;
         return new PairResult(
@@ -77,7 +83,7 @@ internal sealed partial class RelatoApi
                 identity_source = identitySource,
                 duration_ms = durationMs,
                 finish_reason = "desktop_audio_session_ended",
-                extension_version = "desktop-0.3.1",
+                extension_version = "desktop-0.4.5",
                 source = "WHATSAPP_DESKTOP",
                 audio_ext = "wav"
             },
@@ -98,16 +104,41 @@ internal sealed partial class RelatoApi
         using var doc = await SendAsync(new { action = "call_feedback_context", local_session_id = localSessionId });
         var root = doc.RootElement;
         if (root.TryGetProperty("pending", out var pendingEl) && pendingEl.GetBoolean())
-            return new FeedbackContext(true, false, null, null, null, null, null, null, Array.Empty<ClientOption>());
+            return new FeedbackContext(true, false, null, null, null, null, null, null, Array.Empty<ClientOption>(), "PENDING", false, null);
         var clients = new List<ClientOption>();
         if (root.TryGetProperty("clients", out var clientEl) && clientEl.ValueKind == JsonValueKind.Array)
             foreach (var item in clientEl.EnumerateArray())
                 clients.Add(new ClientOption(item.GetProperty("id").GetString() ?? "", item.GetProperty("name").GetString() ?? ""));
         string? Read(string name) => root.TryGetProperty(name, out var el) && el.ValueKind != JsonValueKind.Null ? el.GetString() : null;
+        string? ReadFrom(JsonElement parent, string name) => parent.TryGetProperty(name, out var el) && el.ValueKind != JsonValueKind.Null ? el.GetString() : null;
+        string[] ReadArray(JsonElement parent, string name)
+        {
+            if (!parent.TryGetProperty(name, out var el) || el.ValueKind != JsonValueKind.Array) return [];
+            return el.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String)
+                .Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToArray();
+        }
+
+        ProspectPrefill? prefill = null;
+        if (root.TryGetProperty("prospect_prefill", out var p) && p.ValueKind == JsonValueKind.Object)
+        {
+            int? brokerCount = null;
+            if (p.TryGetProperty("broker_count", out var brokerEl) && brokerEl.ValueKind == JsonValueKind.Number && brokerEl.TryGetInt32(out var brokerValue))
+                brokerCount = brokerValue;
+            prefill = new ProspectPrefill(
+                ReadFrom(p, "name"), ReadFrom(p, "company"), ReadFrom(p, "email"), ReadFrom(p, "phone"),
+                ReadFrom(p, "city"), ReadFrom(p, "instagram"), ReadFrom(p, "marketing_investment"), brokerCount,
+                ReadArray(p, "pain_points"), ReadArray(p, "services_interest"), ReadArray(p, "objections"),
+                ReadFrom(p, "next_step"), ReadFrom(p, "next_step_at"));
+        }
+
+        var transcriptReady = root.TryGetProperty("transcript_ready", out var tr)
+            && (tr.ValueKind is JsonValueKind.True or JsonValueKind.False)
+            && tr.GetBoolean();
         return new FeedbackContext(
             false, root.GetProperty("requires_selection").GetBoolean(),
             Read("remote_phone"), Read("remote_name"), Read("remote_role"),
-            Read("client_id"), Read("client_name"), Read("resolution_status"), clients);
+            Read("client_id"), Read("client_name"), Read("resolution_status"), clients,
+            Read("workflow") ?? "CLIENT_REVIEW", transcriptReady, prefill);
     }
 
     public async Task UploadAsync(string signedUrl, string filePath, string mimeType = "audio/wav")

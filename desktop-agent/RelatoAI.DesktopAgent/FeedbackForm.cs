@@ -88,7 +88,7 @@ internal sealed class FeedbackForm : Form
             if (feedbackContext?.RequiresSelection == true)
                 saveButton.Enabled = HasRequiredBinding();
         };
-        prospectName.TextChanged += (_, _) => { if (feedbackContext?.RequiresSelection == true) saveButton.Enabled = HasRequiredBinding(); };
+        prospectName.TextChanged += (_, _) => { if (contextReady) saveButton.Enabled = HasRequiredBinding(); };
         Shown += async (_, _) => { Activate(); BringToFront(); await LoadContextAsync(); };
     }
 
@@ -345,7 +345,7 @@ internal sealed class FeedbackForm : Form
         if (config is null) return;
         var api = new RelatoApi(config);
         Exception? last = null;
-        for (var attempt = 0; attempt < 30; attempt++)
+        for (var attempt = 0; attempt < 40; attempt++)
         {
             try
             {
@@ -358,6 +358,8 @@ internal sealed class FeedbackForm : Form
                 feedbackContext = context;
                 contextReady = true;
                 ApplyContext(context);
+                if (string.Equals(context.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase) && !context.TranscriptReady)
+                    _ = RefreshProspectSuggestionsAsync(api);
                 return;
             }
             catch (Exception ex)
@@ -373,11 +375,81 @@ internal sealed class FeedbackForm : Form
             : "Não consegui carregar a identificação da ligação ainda.";
     }
 
+    private async Task RefreshProspectSuggestionsAsync(RelatoApi api)
+    {
+        for (var attempt = 0; attempt < 30 && !IsDisposed; attempt++)
+        {
+            await Task.Delay(1000);
+            try
+            {
+                var context = await api.GetFeedbackContextAsync(sessionId);
+                if (context.Pending) continue;
+                if (!string.Equals(context.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase)) return;
+                feedbackContext = context;
+                ApplyProspectPrefill(context.ProspectPrefill);
+                if (!string.IsNullOrWhiteSpace(context.RemoteName) && string.IsNullOrWhiteSpace(prospectName.Text))
+                    prospectName.Text = context.RemoteName;
+                if (!string.IsNullOrWhiteSpace(context.RemotePhone) && string.IsNullOrWhiteSpace(prospectPhone.Text))
+                    prospectPhone.Text = $"+{context.RemotePhone}";
+                saveButton.Enabled = HasRequiredBinding();
+                if (context.TranscriptReady) return;
+            }
+            catch { }
+        }
+    }
+
+    private void ApplyProspectPrefill(ProspectPrefill? value)
+    {
+        if (value is null) return;
+        void Fill(TextBox box, string? text) { if (string.IsNullOrWhiteSpace(box.Text) && !string.IsNullOrWhiteSpace(text)) box.Text = text; }
+        Fill(prospectName, value.Name);
+        Fill(prospectCompany, value.Company);
+        Fill(prospectEmail, value.Email);
+        Fill(prospectPhone, string.IsNullOrWhiteSpace(value.Phone) ? null : $"+{value.Phone.TrimStart('+')}");
+        Fill(prospectCity, value.City);
+        Fill(prospectInstagram, value.Instagram);
+        Fill(prospectMarketing, value.MarketingInvestment);
+        if (prospectBrokers.Value == 0 && value.BrokerCount is > 0 && value.BrokerCount <= prospectBrokers.Maximum)
+            prospectBrokers.Value = value.BrokerCount.Value;
+        Fill(prospectPain, string.Join("; ", value.PainPoints));
+        Fill(prospectInterest, string.Join("; ", value.ServicesInterest));
+        Fill(prospectObjections, string.Join("; ", value.Objections));
+        Fill(prospectNextStep, value.NextStep);
+        if (!prospectNextStepAt.Checked && !string.IsNullOrWhiteSpace(value.NextStepAt) && DateTimeOffset.TryParse(value.NextStepAt, out var nextAt))
+        {
+            prospectNextStepAt.Value = nextAt.LocalDateTime;
+            prospectNextStepAt.Checked = true;
+        }
+    }
+
     private void ApplyContext(FeedbackContext context)
     {
+        ApplyProspectPrefill(context.ProspectPrefill);
         var phone = string.IsNullOrWhiteSpace(context.RemotePhone) ? null : $"+{context.RemotePhone}";
         var person = string.IsNullOrWhiteSpace(context.RemoteName) ? phone ?? "Contato não identificado" : context.RemoteName;
         var identity = string.Join(" · ", new[] { person, phone }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct());
+
+        if (string.Equals(context.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase))
+        {
+            contactStatus.Text = "Prospect comercial · SDR";
+            contactStatus.ForeColor = Accent;
+            contactDetail.Text = string.IsNullOrWhiteSpace(context.RemoteName)
+                ? $"{identity}\nO Relato vai completar os dados disponíveis enquanto a transcrição processa."
+                : $"{identity}\nProspect selecionado automaticamente pelo perfil SDR.";
+            clientBinding.Items.Clear();
+            clientBinding.Items.Add(new BindingOption(null, "Prospect comercial / possível cliente", false, true));
+            clientBinding.Items.Add(new BindingOption(null, "Sem vínculo com cliente ou prospect", true));
+            clientBinding.SelectedIndex = 0;
+            clientBinding.Visible = true;
+            prospectCard.Visible = true;
+            if (string.IsNullOrWhiteSpace(prospectName.Text) && !string.IsNullOrWhiteSpace(context.RemoteName))
+                prospectName.Text = context.RemoteName;
+            if (string.IsNullOrWhiteSpace(prospectPhone.Text) && !string.IsNullOrWhiteSpace(context.RemotePhone))
+                prospectPhone.Text = $"+{context.RemotePhone}";
+            saveButton.Enabled = HasRequiredBinding();
+            return;
+        }
+
         if (!context.RequiresSelection)
         {
             contactStatus.Text = "Identificado automaticamente";
@@ -385,6 +457,7 @@ internal sealed class FeedbackForm : Form
             var relation = string.Join(" • ", new[] { context.RemoteRole, context.ClientName }.Where(x => !string.IsNullOrWhiteSpace(x)));
             contactDetail.Text = string.IsNullOrWhiteSpace(relation) ? identity : $"{identity}\n{relation}";
             clientBinding.Visible = false;
+            prospectCard.Visible = false;
             saveButton.Enabled = true;
             return;
         }
@@ -406,6 +479,11 @@ internal sealed class FeedbackForm : Form
     private bool HasRequiredBinding()
     {
         if (!contextReady) return false;
+        if (string.Equals(feedbackContext?.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase))
+        {
+            var selected = clientBinding.SelectedItem as BindingOption;
+            return selected?.NoClient == true || !string.IsNullOrWhiteSpace(prospectName.Text);
+        }
         if (feedbackContext?.RequiresSelection != true) return true;
         return clientBinding.SelectedItem is BindingOption option &&
             (option.Id is not null || option.NoClient || (option.Prospect && !string.IsNullOrWhiteSpace(prospectName.Text)));
@@ -458,7 +536,9 @@ internal sealed class FeedbackForm : Form
             throw new InvalidOperationException("Selecione um cliente, marque como prospect comercial ou escolha 'Sem vínculo'.");
         var selected = clientBinding.SelectedItem as BindingOption;
         var manual = feedbackContext?.RequiresSelection == true;
-        var isProspect = manual && selected?.Prospect == true;
+        var sdrWorkflow = string.Equals(feedbackContext?.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase);
+        var autoSdrProspect = sdrWorkflow && selected?.NoClient != true;
+        var isProspect = autoSdrProspect || (manual && selected?.Prospect == true);
         var clientId = isProspect ? null : manual ? selected?.Id : feedbackContext?.ClientId;
         var noClient = !isProspect && (manual ? selected?.NoClient == true : string.IsNullOrWhiteSpace(feedbackContext?.ClientId));
         var prospect = isProspect ? new

@@ -6,6 +6,7 @@ namespace RelatoAI.DesktopAgent;
 internal sealed record WhatsAppCallIdentity(
     string? LocalPhone,
     string? RemotePhone,
+    string? RemoteName,
     string? Source);
 
 internal static class WhatsAppCallIdentityResolver
@@ -21,18 +22,24 @@ internal static class WhatsAppCallIdentityResolver
         string? contactName = null)
     {
         var knownLocal = NormalizePhone(knownLocalPhone);
-        WhatsAppCallIdentity best = new(knownLocal, null, null);
+        var visibleName = IsGenericName(contactName) ? null : contactName?.Trim();
+        WhatsAppCallIdentity best = new(knownLocal, PhoneFromVisibleText(contactName), visibleName, null);
         for (var attempt = 0; attempt < 8; attempt++)
         {
             var current = ResolveOnce(started, ended, best.LocalPhone, contactName);
             if (!string.IsNullOrWhiteSpace(current.LocalPhone))
                 best = best with { LocalPhone = current.LocalPhone };
             if (!string.IsNullOrWhiteSpace(current.RemotePhone))
-                return current with { LocalPhone = current.LocalPhone ?? best.LocalPhone };
+            {
+                var resolvedName = current.RemoteName ?? ResolveNameForPhone(current.RemotePhone) ?? visibleName;
+                return current with { LocalPhone = current.LocalPhone ?? best.LocalPhone, RemoteName = resolvedName };
+            }
 
             if (attempt < 7)
                 await Task.Delay(attempt == 0 ? 100 : 250);
         }
+        if (!string.IsNullOrWhiteSpace(best.RemotePhone) && string.IsNullOrWhiteSpace(best.RemoteName))
+            best = best with { RemoteName = ResolveNameForPhone(best.RemotePhone) };
         return best;
     }
 
@@ -45,7 +52,7 @@ internal static class WhatsAppCallIdentityResolver
         try
         {
             var dir = ResolveLevelDbDirectory();
-            if (dir is null) return new(knownLocalPhone, null, null);
+            if (dir is null) return new(knownLocalPhone, PhoneFromVisibleText(contactName), IsGenericName(contactName) ? null : contactName?.Trim(), null);
             var minWrite = started.UtcDateTime.AddMinutes(-3);
             var files = Directory.EnumerateFiles(dir)
                 .Where(path => path.EndsWith(".log", StringComparison.OrdinalIgnoreCase)
@@ -87,11 +94,15 @@ internal static class WhatsAppCallIdentityResolver
                 source = "WHATSAPP_LEVELDB_CONTACT_WINDOW";
             }
 
-            return new(NormalizePhone(knownLocalPhone), NormalizePhone(remote), source);
+            var normalizedRemote = NormalizePhone(remote);
+            return new(NormalizePhone(knownLocalPhone), normalizedRemote,
+                normalizedRemote is null ? (IsGenericName(contactName) ? null : contactName?.Trim()) : ResolveNameForPhone(normalizedRemote),
+                source);
         }
         catch
         {
-            return new(NormalizePhone(knownLocalPhone), null, null);
+            return new(NormalizePhone(knownLocalPhone), PhoneFromVisibleText(contactName),
+                IsGenericName(contactName) ? null : contactName?.Trim(), null);
         }
     }
 
@@ -194,6 +205,86 @@ internal static class WhatsAppCallIdentityResolver
     {
         if (score <= 0) return;
         scores[phone] = scores.TryGetValue(phone, out var current) ? Math.Max(current, score) : score;
+    }
+
+    private static bool IsGenericName(string? value)
+    {
+        var text = value?.Trim();
+        if (string.IsNullOrWhiteSpace(text)) return true;
+        return text.Equals("WhatsApp", StringComparison.OrdinalIgnoreCase)
+            || text.Equals("Contato", StringComparison.OrdinalIgnoreCase)
+            || text.Equals("Contato WhatsApp", StringComparison.OrdinalIgnoreCase)
+            || text.Equals("Contato WhatsApp Desktop", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string? ResolveNameForPhone(string? phone)
+    {
+        var normalized = NormalizePhone(phone);
+        var dir = ResolveLevelDbDirectory();
+        if (normalized is null || dir is null) return null;
+        try
+        {
+            var files = Directory.EnumerateFiles(dir)
+                .Where(path => path.EndsWith(".log", StringComparison.OrdinalIgnoreCase)
+                    || path.EndsWith(".ldb", StringComparison.OrdinalIgnoreCase))
+                .Select(path => new FileInfo(path))
+                .OrderByDescending(info => info.LastWriteTimeUtc)
+                .ThenByDescending(info => info.Length)
+                .Take(40)
+                .ToArray();
+
+            var best = new List<(int score, string name)>();
+            foreach (var file in files)
+            {
+                var text = ReadTailLatin1(file.FullName, 6 * 1024 * 1024);
+                if (string.IsNullOrEmpty(text)) continue;
+                var search = normalized;
+                var offset = 0;
+                while ((offset = text.IndexOf(search, offset, StringComparison.Ordinal)) >= 0)
+                {
+                    var start = Math.Max(0, offset - 1400);
+                    var length = Math.Min(text.Length - start, 2800);
+                    var window = text.Substring(start, length);
+                    foreach (var field in new[] { "pushname", "name" })
+                    {
+                        var fieldPos = window.IndexOf(field, StringComparison.OrdinalIgnoreCase);
+                        while (fieldPos >= 0)
+                        {
+                            var absoluteField = start + fieldPos;
+                            var distance = Math.Abs(absoluteField - offset);
+                            if (distance <= 1200)
+                            {
+                                var quote = window.IndexOf('"', fieldPos + field.Length);
+                                if (quote >= 0)
+                                {
+                                    var end = window.IndexOf('"', quote + 1);
+                                    if (end > quote + 1 && end - quote <= 180)
+                                    {
+                                        var candidate = window.Substring(quote + 1, end - quote - 1)
+                                            .Replace("\0", " ").Trim();
+                                        candidate = Regex.Replace(candidate, @"\s+", " ");
+                                        if (candidate.Length >= 2 && candidate.Length <= 100
+                                            && !candidate.All(char.IsDigit)
+                                            && !candidate.Contains("@c.us", StringComparison.OrdinalIgnoreCase)
+                                            && !candidate.Contains("@lid", StringComparison.OrdinalIgnoreCase)
+                                            && !candidate.Equals("true", StringComparison.OrdinalIgnoreCase)
+                                            && !candidate.Equals("false", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            var fieldBoost = field.Equals("pushname", StringComparison.OrdinalIgnoreCase) ? 400 : 250;
+                                            best.Add((fieldBoost + Math.Max(0, 1200 - distance), candidate));
+                                        }
+                                    }
+                                }
+                            }
+                            fieldPos = window.IndexOf(field, fieldPos + field.Length, StringComparison.OrdinalIgnoreCase);
+                        }
+                    }
+                    offset += search.Length;
+                }
+            }
+            return best.OrderByDescending(x => x.score).Select(x => x.name).FirstOrDefault();
+        }
+        catch { return null; }
     }
 
     public static string? PhoneFromVisibleText(string? value)

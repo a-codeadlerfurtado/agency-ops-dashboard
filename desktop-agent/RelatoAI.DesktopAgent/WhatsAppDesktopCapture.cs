@@ -323,10 +323,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         try
         {
             var cfg = AgentConfig.Load() ?? configProvider() ?? throw new InvalidOperationException("Desktop Agent não pareado");
-            var visiblePhone = WhatsAppCallIdentityResolver.PhoneFromVisibleText(contact);
-            var identity = visiblePhone is not null
-                ? new WhatsAppCallIdentity(cfg.LocalPhone, visiblePhone, "WHATSAPP_DESKTOP_UI")
-                : await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone, contact);
+            var identity = await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone, contact);
+            var resolvedContact = string.IsNullOrWhiteSpace(identity.RemoteName) ? contact : identity.RemoteName.Trim();
             if (!string.IsNullOrWhiteSpace(identity.LocalPhone) && identity.LocalPhone != cfg.LocalPhone)
             {
                 cfg = cfg with { LocalPhone = identity.LocalPhone };
@@ -354,7 +352,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             }
 
             var prepared = await api.PrepareCallAsync(
-                id, started, ended, contact, roles, durationMs,
+                id, started, ended, resolvedContact, roles, durationMs,
                 identity.LocalPhone, identity.RemotePhone, identity.Source);
             var uploaded = new List<object>();
             foreach (var targetUpload in prepared.Uploads)

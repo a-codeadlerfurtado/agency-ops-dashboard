@@ -347,8 +347,7 @@ Deno.serve(async (req: Request) => {
     if (existingError) return respond({ error: "session_heartbeat_lookup_failed", detail: existingError.message }, 500);
     const validAudioStatuses = ["RECORDING","RECORDED_LOCAL","UPLOADING","STORED","PROCESSING","READY","UPLOAD_FAILED"];
     const validAudioSources = ["DESKTOP_AGENT","EXTENSION_WEBRTC","FALLBACK_EXTENSION"];
-    const nextAudioStatus = validAudioStatuses.includes(requestedAudioStatus) ? requestedAudioStatus : (!existingSession && inferredAudioStatus ? inferredAudioStatus : null);
-    const nextAudioSource = validAudioSources.includes(requestedAudioSource) ? requestedAudioSource : (!existingSession && inferredAudioSource ? inferredAudioSource : null);
+    const nextAudioStatus = validAudioStatuses.includes(requestedAudioStatus) ? requestedAudioStatus : (!existingSession && inferredAudioStatus ? inferredAudioStatus : null);    const nextAudioSource = validAudioSources.includes(requestedAudioSource) ? requestedAudioSource : (!existingSession && inferredAudioSource ? inferredAudioSource : null);
     if (nextAudioStatus) payload.audio_status = nextAudioStatus;
     if (nextAudioSource) payload.audio_source = nextAudioSource;
     if (nextAudioStatus || nextAudioSource) payload.audio_updated_at = new Date().toISOString();
@@ -573,13 +572,99 @@ Deno.serve(async (req: Request) => {
     const localSessionId = clean(body?.local_session_id, 180);
     if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
     const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
-      .select("id,metadata").eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
+      .select("id,transcript_id,owner_person,metadata").eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
     if (sessionError) return respond({ error: "feedback_context_failed", detail: sessionError.message }, 500);
     if (!session) return respond({ ok: true, pending: true });
+
     const remotePhone = normalizePhone(session.metadata?.remote_phone);
     const identity = session.metadata?.identity_resolution?.auto === true
       ? session.metadata.identity_resolution
       : await resolveCallIdentity(ops, remotePhone);
+    const genericNames = new Set(["contato","contato whatsapp","contato whatsapp desktop","whatsapp"]);
+    const rawName = clean(identity?.name || session.metadata?.remote_name || session.metadata?.contact_name, 160);
+    const remoteName = rawName && !genericNames.has(rawName.toLowerCase()) ? rawName : null;
+
+    const { data: roster } = await ops.from("team_roster")
+      .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
+    const isSdr = String(roster?.role || "").toUpperCase() === "SDR";
+    let prospectPrefill: Row | null = null;
+    let transcriptReady = Boolean(session.transcript_id);
+
+    if (isSdr) {
+      const crm = db.schema("crm");
+      let leadId = clean(session.metadata?.commercial_prospect?.lead_id, 80) || null;
+      let profile: Row | null = null;
+
+      if (!leadId) {
+        const { data: callRow } = await ops.from("commercial_call_records")
+          .select("lead_id").eq("capture_session_id", session.id).maybeSingle();
+        leadId = clean(callRow?.lead_id, 80) || null;
+      }
+      if (!leadId) {
+        const { data: profiles } = await ops.from("commercial_prospect_profiles")
+          .select("lead_id,city,website,broker_count,marketing_investment,pain_points,services_interest,objections,next_step,next_step_at,metadata,updated_at")
+          .contains("metadata", { capture_session_id: session.id })
+          .order("updated_at", { ascending: false }).limit(1);
+        profile = profiles?.[0] || null;
+        leadId = clean(profile?.lead_id, 80) || null;
+      }
+
+      let lead: Row | null = null;
+      if (leadId) {
+        const { data } = await crm.from("leads")
+          .select("id,name,company,email,phone,instagram,orcamento_mkt,atuacao,notes")
+          .eq("id", leadId).maybeSingle();
+        lead = data || null;
+      }
+      if (!lead && remotePhone) {
+        const variants = [remotePhone, "+" + remotePhone];
+        const { data } = await crm.from("leads")
+          .select("id,name,company,email,phone,instagram,orcamento_mkt,atuacao,notes")
+          .in("phone", variants).is("archived_at", null)
+          .order("updated_at", { ascending: false }).limit(1).maybeSingle();
+        lead = data || null;
+      }
+      if (lead?.id && !profile) {
+        const { data } = await ops.from("commercial_prospect_profiles")
+          .select("lead_id,city,website,broker_count,marketing_investment,pain_points,services_interest,objections,next_step,next_step_at,metadata,updated_at")
+          .eq("lead_id", lead.id).maybeSingle();
+        profile = data || null;
+      }
+
+      let transcriptText = "";
+      if (session.transcript_id) {
+        const { data: transcript } = await ops.from("meeting_transcripts")
+          .select("transcript_text").eq("id", session.transcript_id).maybeSingle();
+        transcriptText = clean(transcript?.transcript_text, 30000);
+      }
+      const emailMatch = transcriptText.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+      const instagramMatch = transcriptText.match(/(?:instagram(?:\.com\/)?|@)([A-Z0-9._]{3,40})/i);
+      const brokersMatch = transcriptText.match(/\b(\d{1,4})\s+(?:corretores?|vendedores?)\b/i);
+      const investmentMatch = transcriptText.match(/(?:investe|investimento|verba)[^\n]{0,40}?(R\$\s*[\d.,]+|\d[\d.,]*\s*(?:mil|k))/i);
+
+      prospectPrefill = {
+        name: clean(lead?.name || remoteName, 200) || null,
+        company: clean(lead?.company, 240) || null,
+        email: clean(lead?.email || emailMatch?.[0], 240).toLowerCase() || null,
+        phone: normalizePhone(lead?.phone || remotePhone) || null,
+        city: clean(profile?.city || lead?.atuacao, 200) || null,
+        instagram: clean(lead?.instagram || profile?.website || (instagramMatch ? "@" + instagramMatch[1] : null), 500) || null,
+        marketing_investment: clean(profile?.marketing_investment || lead?.orcamento_mkt || investmentMatch?.[1], 240) || null,
+        broker_count: Number(profile?.broker_count || brokersMatch?.[1] || 0) || null,
+        pain_points: Array.isArray(profile?.pain_points) ? profile.pain_points : [],
+        services_interest: Array.isArray(profile?.services_interest) ? profile.services_interest : [],
+        objections: Array.isArray(profile?.objections) ? profile.objections : [],
+        next_step: clean(profile?.next_step, 2000) || null,
+        next_step_at: profile?.next_step_at || null,
+      };
+      return respond({
+        ok: true, pending: false, workflow: "SDR_PROSPECT", transcript_ready: transcriptReady,
+        requires_selection: false, remote_phone: remotePhone, remote_name: remoteName,
+        remote_role: "PROSPECT", client_id: null, client_name: null,
+        resolution_status: identity?.status || "UNRESOLVED", clients: [], prospect_prefill: prospectPrefill
+      });
+    }
+
     const requiresSelection = !Boolean(identity?.auto) || (!identity?.client_id && String(identity?.side || "").toUpperCase() !== "TEAM");
     let clients: Row[] = [];
     if (requiresSelection) {
@@ -588,11 +673,11 @@ Deno.serve(async (req: Request) => {
       if (error) return respond({ error: "feedback_clients_failed", detail: error.message }, 500);
       clients = data || [];
     }
-    return respond({ ok: true, pending: false, requires_selection: requiresSelection,
-      remote_phone: remotePhone, remote_name: clean(identity?.name || session.metadata?.remote_name, 160) || null,
+    return respond({ ok: true, pending: false, workflow: "CLIENT_REVIEW", transcript_ready: transcriptReady,
+      requires_selection: requiresSelection, remote_phone: remotePhone, remote_name: remoteName,
       remote_role: clean(identity?.role || session.metadata?.remote_role, 80) || null,
       client_id: identity?.client_id || null, client_name: identity?.client_name || null,
-      resolution_status: identity?.status || "UNRESOLVED",
+      resolution_status: identity?.status || "UNRESOLVED", prospect_prefill: null,
       clients: clients.map((c: Row) => ({ id: c.id, name: c.display_name })) });
   }
 
@@ -697,8 +782,7 @@ Deno.serve(async (req: Request) => {
       const prospectInstagram = clean(prospectInput.instagram, 500) || null;
       const marketingInvestment = clean(prospectInput.marketing_investment, 240) || null;
       const brokerCountRaw = Number(prospectInput.broker_count);
-      const brokerCount = Number.isFinite(brokerCountRaw) && brokerCountRaw > 0 ? Math.round(brokerCountRaw) : null;
-      const painPoints = Array.isArray(prospectInput.pain_points) ? prospectInput.pain_points.map((v: unknown) => clean(v, 400)).filter(Boolean).slice(0, 30) : [];
+      const brokerCount = Number.isFinite(brokerCountRaw) && brokerCountRaw > 0 ? Math.round(brokerCountRaw) : null;      const painPoints = Array.isArray(prospectInput.pain_points) ? prospectInput.pain_points.map((v: unknown) => clean(v, 400)).filter(Boolean).slice(0, 30) : [];
       const servicesInterest = Array.isArray(prospectInput.services_interest) ? prospectInput.services_interest.map((v: unknown) => clean(v, 400)).filter(Boolean).slice(0, 30) : [];
       const objections = Array.isArray(prospectInput.objections) ? prospectInput.objections.map((v: unknown) => clean(v, 400)).filter(Boolean).slice(0, 30) : [];
       const nextStep = clean(prospectInput.next_step, 2000) || null;
@@ -710,19 +794,45 @@ Deno.serve(async (req: Request) => {
       if (closerError || !closerProfile?.id) return respond({ error: "commercial_closer_not_configured", detail: closerError?.message }, 500);
 
       let existingLead: Row | null = null;
-      if (prospectEmail) {
+      const relatoExternalId = `relato-call:${session.id}`;
+
+      const { data: sessionLead } = await crm.from("leads")
+        .select("id,owner_id,stage").eq("source", "RELATO_AI_SDR").eq("external_id", relatoExternalId).maybeSingle();
+      existingLead = sessionLead || null;
+
+      if (!existingLead) {
+        const { data: callRows } = await ops.from("commercial_call_records")
+          .select("lead_id").eq("capture_session_id", session.id).limit(1);
+        const priorLeadId = clean(callRows?.[0]?.lead_id, 80);
+        if (priorLeadId) {
+          const { data } = await crm.from("leads").select("id,owner_id,stage").eq("id", priorLeadId).maybeSingle();
+          existingLead = data || null;
+        }
+      }
+      if (!existingLead) {
+        const { data: priorProfiles } = await ops.from("commercial_prospect_profiles")
+          .select("lead_id,updated_at").contains("metadata", { capture_session_id: session.id })
+          .order("updated_at", { ascending: false }).limit(1);
+        const priorLeadId = clean(priorProfiles?.[0]?.lead_id, 80);
+        if (priorLeadId) {
+          const { data } = await crm.from("leads").select("id,owner_id,stage").eq("id", priorLeadId).maybeSingle();
+          existingLead = data || null;
+        }
+      }
+      if (!existingLead && prospectEmail) {
         const { data } = await crm.from("leads").select("id,owner_id,stage").eq("owner_id", closerProfile.id).eq("email", prospectEmail).is("archived_at", null).order("updated_at", { ascending: false }).limit(1).maybeSingle();
         existingLead = data || null;
       }
       if (!existingLead && prospectPhone) {
-        const { data } = await crm.from("leads").select("id,owner_id,stage").eq("owner_id", closerProfile.id).eq("phone", prospectPhone).is("archived_at", null).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+        const variants = [prospectPhone, "+" + prospectPhone];
+        const { data } = await crm.from("leads").select("id,owner_id,stage").eq("owner_id", closerProfile.id).in("phone", variants).is("archived_at", null).order("updated_at", { ascending: false }).limit(1).maybeSingle();
         existingLead = data || null;
       }
 
       const leadPatch: Row = {
         owner_id: closerProfile.id, name: prospectName, company: prospectCompany,
         email: prospectEmail, phone: prospectPhone, instagram: prospectInstagram,
-        orcamento_mkt: marketingInvestment, source: "RELATO_AI_SDR", updated_at: now,
+        orcamento_mkt: marketingInvestment, source: "RELATO_AI_SDR", external_id: relatoExternalId, updated_at: now,
       };
       let leadError: any = null;
       if (existingLead?.id) {
@@ -731,6 +841,12 @@ Deno.serve(async (req: Request) => {
       } else {
         const result = await crm.from("leads").insert({ ...leadPatch, stage: "qualificacao", created_at: now }).select("id,owner_id,name,company,stage,email,phone").single();
         commercialLead = result.data || null; leadError = result.error;
+        if (leadError?.code === "23505") {
+          const retry = await crm.from("leads").select("id,owner_id,name,company,stage,email,phone")
+            .eq("source", "RELATO_AI_SDR").eq("external_id", relatoExternalId).maybeSingle();
+          commercialLead = retry.data || null;
+          leadError = retry.error;
+        }
       }
       if (leadError || !commercialLead?.id) return respond({ error: "commercial_lead_save_failed", detail: leadError?.message }, 500);
 
