@@ -4,8 +4,8 @@ import { rodarRondas } from "./jarvis/routines";
 
 const SUPABASE = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const OLD_IMG_SRC = "img-src 'self' data:";
-const NEW_IMG_SRC = `img-src 'self' data: ${SUPABASE}`;
-const MEDIA_SRC = "media-src 'self' blob:";
+const NEW_IMG_SRC = `img-src 'self' data: ${SUPABASE} https://*.fbcdn.net https://*.facebook.com`;
+const MEDIA_SRC = "media-src 'self' blob: https://*.fbcdn.net https://*.facebook.com";
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 const RADAR_TEXT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const VISION_BULK_KEY = "cvi_20260829_5b1d73f04c784898";

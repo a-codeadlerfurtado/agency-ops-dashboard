@@ -21,20 +21,20 @@ function RefCard({m,a,adv,media,analyses,onFeedback,onSave,onCompare,onAnalyze}:
   const ordered=useMemo(()=>[...media].sort((x,y)=>Number(x.position||0)-Number(y.position||0)||String(x.media_key||"").localeCompare(String(y.media_key||""))),[media]);
   const [mediaIndex,setMediaIndex]=useState(0);
   useEffect(()=>setMediaIndex(0),[a.id]);
-  const current=ordered[Math.min(mediaIndex,Math.max(0,ordered.length-1))],src=current?.signed_url||current?.provider_url;
+  const current=ordered[Math.min(mediaIndex,Math.max(0,ordered.length-1))],src=current?.signed_url||current?.provider_url,libraryUrl=a.source_url||null;
   const analysis=analyses.find((x:Row)=>String(x.media_id)===String(current?.id)&&x.status==="COMPLETED")||analyses.find((x:Row)=>x.status==="COMPLETED");
   const out=analysis?.output||{};
   const move=(delta:number)=>setMediaIndex(i=>ordered.length?((i+delta+ordered.length)%ordered.length):0);
   const summary=[out.primary_visual,out.composition,out.hierarchy].filter(Boolean).join(" · ");
   const visibleText=Array.isArray(out.visible_text)?out.visible_text.filter(Boolean).slice(0,6).join(" | "):"";
   return <article className="radar-card"><div className="radar-media">
-    {current?.media_type==="VIDEO"&&src?<video src={src} controls preload="metadata"/>:src?<img src={src} alt={a.ad_name||"Referência"} loading="lazy"/>:<div className="radar-muted">Mídia indisponível nesta coleta</div>}
+    {current?.media_type==="VIDEO"&&src?<video src={src} controls preload="metadata"/>:src?(libraryUrl?<a href={libraryUrl} target="_blank" rel="noreferrer" title="Abrir este anúncio na Biblioteca de Anúncios da Meta"><img src={src} alt={a.ad_name||"Referência"} loading="lazy" referrerPolicy="no-referrer"/></a>:<img src={src} alt={a.ad_name||"Referência"} loading="lazy" referrerPolicy="no-referrer"/>):<div className="radar-muted">Mídia indisponível nesta coleta</div>}
     {ordered.length>1&&<><span className="radar-media-index">{mediaIndex+1}/{ordered.length}</span><div className="radar-media-nav"><button type="button" aria-label="Mídia anterior" onClick={()=>move(-1)}>‹</button><button type="button" aria-label="Próxima mídia" onClick={()=>move(1)}>›</button></div></>}
   </div><div className="radar-card-body"><div className="radar-actions"><span className="radar-pill">{String(m.category||"").replaceAll("_"," ")}</span><span className="radar-pill">{a.display_format||"n/d"}</span></div>
     <h3>{a.headline||a.ad_name||"Anúncio sem título"}</h3><div className="radar-copy">{a.primary_text||a.description||"Texto não disponível."}</div>
     <div className="radar-meta">Anunciante: {adv?.name||adv?.external_id||"não identificado"}<br/>Observado: {dt(a.first_seen_at)} → {dt(a.last_seen_at)}<br/>Evidência: {(m.evidence||[]).map((x:Row)=>x.type).join(", ")||"não estruturada"}</div>
     {analysis&&<div className="radar-analysis"><b>Análise IA · {analysis.source_scope}</b>{summary||String(out.raw_text||"Análise visual registrada.").slice(0,520)}{visibleText&&<><br/>Texto visível: {visibleText}</>}{analysis.limitations&&<><br/>Limite: {analysis.limitations}</>}</div>}
-    <div className="radar-actions">{a.source_url&&<a href={a.source_url} target="_blank" rel="noreferrer">Origem ↗</a>}<button onClick={()=>onFeedback("CONFIRMED")}>Confirmar</button><button onClick={()=>onFeedback("POSSIBLE")}>Possível</button><button onClick={()=>onFeedback("REJECTED")}>Não é este</button><button onClick={onSave}>Salvar</button><button onClick={onAnalyze}>Analisar mídia</button>{onCompare&&<button onClick={onCompare}>Comparar</button>}</div>
+    <div className="radar-actions">{a.source_url&&<a href={a.source_url} target="_blank" rel="noreferrer">{String(a.source_url).includes("/ads/library/")?"Abrir na Biblioteca ↗":"Origem ↗"}</a>}<button onClick={()=>onFeedback("CONFIRMED")}>Confirmar</button><button onClick={()=>onFeedback("POSSIBLE")}>Possível</button><button onClick={()=>onFeedback("REJECTED")}>Não é este</button><button onClick={onSave}>Salvar</button><button onClick={onAnalyze}>Analisar mídia</button>{onCompare&&<button onClick={onCompare}>Comparar</button>}</div>
   </div></article>
 }
 export default function AdRadarBridge(){
