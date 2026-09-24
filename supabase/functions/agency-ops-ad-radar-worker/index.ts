@@ -30,7 +30,11 @@ function classify(ad:any,entity:any){
   const genericName=name.split(/\s+/).filter(Boolean).length<=1&&name.length<12;
   if(identityHit&&(!genericName||corroborated))return {category:"POSSIBLE",label:corroborated?"STRONG_EVIDENCE":"NAME_EVIDENCE",evidence};
   if(identityHit&&genericName&&!corroborated)return {category:"EXECUTION_REFERENCE",label:"AMBIGUOUS_NAME_ONLY",evidence:[...evidence,{type:"IDENTITY_NEEDS_CORROBORATION",value:true}]};
-  if(city&&hay.includes(city))return {category:"REGIONAL_COMPETITOR",label:"REGIONAL_EVIDENCE",evidence};
+  const pageCats=fold([...(Array.isArray(ad?.provider_payload?.page_categories)?ad.provider_payload.page_categories:[]),...(Array.isArray(ad?.page_categories)?ad.page_categories:[])].join(" | "));
+  const realEstatePage=/(real estate|property|imobili|construt|incorpor|realtor|broker|corretor)/.test(pageCats);
+  const realEstateText=/(apartamento|im[oó]vel|residencial|condom[ií]nio|empreendimento|lan[cç]amento|casa\b|lote\b|terreno|su[ií]te|dormit[oó]rio|\bm²\b|\bm2\b|\bcreci\b|financiamento imobili)/.test(hay);
+  if(city&&hay.includes(city)&&(realEstatePage||realEstateText))return {category:"REGIONAL_COMPETITOR",label:"REGIONAL_EVIDENCE",evidence:[...evidence,{type:"REAL_ESTATE_SIGNAL",value:realEstatePage?"PAGE_CATEGORY":"TEXT"}]};
+  if(city&&hay.includes(city))return {category:"EXECUTION_REFERENCE",label:"REGIONAL_NON_REAL_ESTATE",evidence:[...evidence,{type:"REAL_ESTATE_SIGNAL_MISSING",value:true}]};
   return {category:"EXECUTION_REFERENCE",label:"EXECUTION_ONLY",evidence:[{type:"QUERY_RETURNED",value:true}]};
 }
 
