@@ -15,6 +15,29 @@ async function sha256Hex(value: string) {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function likelyWhisperHallucination(value: unknown) {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (!raw) return false;
+  const words = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
+  if (words.length < 12) return false;
+  const uniqueRatio = new Set(words).size / words.length;
+  if (words.length >= 20 && uniqueRatio <= 0.20) return true;
+  for (const size of [2, 3, 4]) {
+    if (words.length < size * 4) continue;
+    const counts = new Map<string, number>();
+    let max = 0;
+    for (let i = 0; i <= words.length - size; i++) {
+      const key = words.slice(i, i + size).join(" ");
+      const next = (counts.get(key) || 0) + 1;
+      counts.set(key, next);
+      if (next > max) max = next;
+    }
+    if (max >= 4 && (max * size) / words.length >= 0.45) return true;
+  }
+  return false;
+}
+
 async function workerTokenSha256() {
   if (authCache.value && authCache.expires > Date.now()) return authCache.value;
   const sb = client("agency_ops");
@@ -176,7 +199,7 @@ async function getControl() {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 11 });
+  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 12 });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   if (!(await authorized(req))) return json({ error: "unauthorized" }, 401);
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return json({ error: "server_not_configured" }, 500);
@@ -214,12 +237,67 @@ Deno.serve(async (req) => {
       }) });
     }
 
+    if (action === "meeting_audio_snapshot") {
+      const sessionId = String(body.session_id || "").trim();
+      if (!sessionId) return json({ error: "session_id_required" }, 400);
+      const sb = client("agency_ops");
+      const { data: session, error } = await sb.from("meeting_capture_sessions")
+        .select("id,device_id,owner_person,local_session_id,started_at,ended_at,audio_local_path,audio_remote_path,audio_mixed_path,audio_status,audio_source,audio_duration_ms,audio_retention_until,metadata")
+        .eq("id", sessionId).maybeSingle();
+      if (error) throw error;
+      if (!session) return json({ error: "meeting_audio_session_not_found" }, 404);
+      const paths = [["local", session.audio_local_path], ["remote", session.audio_remote_path]].filter((row) => Boolean(row[1]));
+      if (!paths.length) return json({ error: "meeting_audio_originals_not_found" }, 404);
+      const storage = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } }).storage.from("relato-call-audio");
+      const originals: Record<string, unknown>[] = [];
+      for (const [role, path] of paths) {
+        const { data: signed, error: signedError } = await storage.createSignedUrl(String(path), 3600);
+        if (signedError || !signed?.signedUrl) throw signedError || new Error("meeting_audio_signed_url_failed");
+        originals.push({ role, path, signed_url: signed.signedUrl });
+      }
+      const safeLocal = String(session.local_session_id || "session").replace(/[^a-zA-Z0-9._-]/g, "_");
+      const mixedPath = String(session.audio_mixed_path || ("meetings/" + session.device_id + "/" + safeLocal + "/meeting.webm"));
+      const { data: upload, error: uploadError } = await storage.createSignedUploadUrl(mixedPath, { upsert: true });
+      if (uploadError || !upload?.signedUrl) throw uploadError || new Error("meeting_audio_mixed_upload_url_failed");
+      return json({ ok: true, session: { ...session, audio_mixed_path: mixedPath }, originals, mixed_upload: { path: mixedPath, signed_url: upload.signedUrl, mime_type: "audio/webm" } });
+    }
+
+    if (action === "meeting_audio_commit") {
+      const sessionId = String(body.session_id || "").trim();
+      const mixedPath = String(body.mixed_path || "").trim();
+      const bytes = Math.max(0, Math.round(Number(body.bytes || 0)));
+      if (!sessionId || !mixedPath || !bytes) return json({ error: "meeting_audio_commit_data_required" }, 400);
+      const sb = client("agency_ops");
+      const { data: session, error } = await sb.from("meeting_capture_sessions").select("id,audio_mixed_path,audio_status,metadata").eq("id", sessionId).maybeSingle();
+      if (error) throw error;
+      if (!session) return json({ error: "meeting_audio_session_not_found" }, 404);
+      if (session.audio_status === "READY" && session.audio_mixed_path === mixedPath) return json({ ok: true, session_id: sessionId, state: "READY", idempotent: true });
+      if (session.audio_mixed_path && String(session.audio_mixed_path) !== mixedPath) return json({ error: "meeting_audio_mixed_path_mismatch" }, 400);
+      const durationMs = Number.isFinite(Number(body.duration_ms)) ? Math.max(0, Math.round(Number(body.duration_ms))) : null;
+      const metadata = { ...(session.metadata || {}), audio_player: { path: mixedPath, bytes, mime_type: "audio/webm", codec: "opus", bitrate_kbps: 48, generated_at: new Date().toISOString() } };
+      const { error: updateError } = await sb.from("meeting_capture_sessions").update({
+        audio_status: "READY", audio_mixed_path: mixedPath, audio_size_bytes: bytes, audio_mime_type: "audio/webm",
+        ...(durationMs != null ? { audio_duration_ms: durationMs } : {}), audio_last_error: null, audio_updated_at: new Date().toISOString(), metadata, updated_at: new Date().toISOString(),
+      }).eq("id", sessionId);
+      if (updateError) throw updateError;
+      return json({ ok: true, session_id: sessionId, state: "READY", mixed_path: mixedPath, bytes });
+    }
+
+    if (action === "meeting_audio_failed") {
+      const sessionId = String(body.session_id || "").trim();
+      if (!sessionId) return json({ error: "session_id_required" }, 400);
+      const sb = client("agency_ops");
+      const message = String(body.error || "meeting_audio_processing_failed").slice(0, 4000);
+      const { error } = await sb.from("meeting_capture_sessions").update({ audio_status: "STORED", audio_last_error: message, audio_updated_at: new Date().toISOString(), updated_at: new Date().toISOString() }).eq("id", sessionId);
+      if (error) throw error;
+      return json({ ok: true, session_id: sessionId, state: "STORED", retryable: true });
+    }
     if (action === "call_snapshot") {
       const sessionId = String(body.session_id || "").trim();
       if (!sessionId) return json({ error: "session_id_required" }, 400);
       const sb = client("agency_ops");
       const { data: session, error } = await sb.from("meeting_capture_sessions")
-        .select("id,device_id,owner_person,local_session_id,title,started_at,ended_at,state,capture_mode,transcript_id,metadata")
+        .select("id,device_id,owner_person,local_session_id,title,started_at,ended_at,state,capture_mode,transcript_id,metadata,audio_mixed_path,audio_mime_type,audio_status")
         .eq("id", sessionId).maybeSingle();
       if (error) throw error;
       if (!session) return json({ error: "call_session_not_found" }, 404);
@@ -234,7 +312,49 @@ Deno.serve(async (req) => {
         if (signedError || !signed?.signedUrl) throw signedError || new Error("call_audio_signed_url_failed");
         audio.push({ role, path, signed_url: signed.signedUrl });
       }
-      return json({ ok: true, session, audio });
+      let mixed_upload: Record<string, unknown> | null = null;
+      if (!session.audio_mixed_path) {
+        const safeLocal = String(session.local_session_id || "session").replace(/[^a-zA-Z0-9._-]/g, "_");
+        const mixedPath = `calls/${session.device_id}/${safeLocal}/mixed.mp3`;
+        const storage = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } }).storage.from("relato-call-audio");
+        const { data: upload, error: uploadError } = await storage.createSignedUploadUrl(mixedPath, { upsert: true });
+        if (!uploadError && upload?.signedUrl) mixed_upload = { path: mixedPath, signed_url: upload.signedUrl };
+      }
+      return json({ ok: true, session, audio, mixed_upload });
+    }
+
+    if (action === "call_audio_commit") {
+      const sessionId = String(body.session_id || "").trim();
+      const suppliedPath = String(body.path || "").trim();
+      const suppliedBytes = Math.max(0, Math.round(Number(body.bytes || 0)));
+      if (!sessionId || !suppliedPath || suppliedBytes < 1000) return json({ error: "call_audio_commit_data_required" }, 400);
+      const sb = client("agency_ops");
+      const { data: session, error } = await sb.from("meeting_capture_sessions")
+        .select("id,device_id,local_session_id,metadata").eq("id", sessionId).maybeSingle();
+      if (error) throw error;
+      if (!session) return json({ error: "call_session_not_found" }, 404);
+      const safeLocal = String(session.local_session_id || "session").replace(/[^a-zA-Z0-9._-]/g, "_");
+      const expectedPath = `calls/${session.device_id}/${safeLocal}/mixed.mp3`;
+      if (suppliedPath !== expectedPath) return json({ error: "call_audio_path_mismatch" }, 400);
+      const folder = suppliedPath.slice(0, suppliedPath.lastIndexOf("/"));
+      const filename = suppliedPath.slice(suppliedPath.lastIndexOf("/") + 1);
+      const storage = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } }).storage.from("relato-call-audio");
+      const { data: objects, error: listError } = await storage.list(folder, { limit: 20, search: filename });
+      if (listError) throw listError;
+      const object = (objects || []).find((row: Record<string, unknown>) => String(row.name) === filename);
+      const bytes = Math.max(suppliedBytes, Math.round(Number((object as any)?.metadata?.size || 0)));
+      if (!object || bytes < 1000) return json({ error: "call_audio_object_missing" }, 400);
+      const now = new Date().toISOString();
+      const metadata = {
+        ...(session.metadata || {}),
+        audio_player: { path: suppliedPath, bytes, mime_type: "audio/mpeg", codec: "mp3", generated_at: now, source: "HEAVY_WORKER" }
+      };
+      const { error: updateError } = await sb.from("meeting_capture_sessions").update({
+        audio_mixed_path: suppliedPath, audio_mime_type: "audio/mpeg", audio_size_bytes: bytes,
+        audio_status: "READY", audio_last_error: null, audio_updated_at: now, metadata, updated_at: now
+      }).eq("id", sessionId);
+      if (updateError) throw updateError;
+      return json({ ok: true, session_id: sessionId, path: suppliedPath, bytes });
     }
 
     if (action === "call_commit") {
@@ -271,10 +391,15 @@ Deno.serve(async (req) => {
           speaker_key: isLocal ? (localPhone || rawKey || ownerName) : (remotePhone || rawKey || remoteBase),
           speaker_name: isLocal ? localLabel : remoteLabel,
           text: String(seg.text || "").trim().slice(0,8000),
-          confidence: Number.isFinite(Number(seg.confidence)) ? Math.max(0, Math.min(1, Number(seg.confidence))) : null,
+          confidence: seg.confidence == null || seg.confidence === ""
+            ? null
+            : (Number.isFinite(Number(seg.confidence)) ? Math.max(0, Math.min(1, Number(seg.confidence))) : null),
           source: transcriptSource,
         };
-      }).filter((seg: Record<string, unknown>) => String(seg.text || "").length > 0);
+      }).filter((seg: Record<string, unknown>) => {
+        const text = String(seg.text || "").trim();
+        return text.length > 0 && !likelyWhisperHallucination(text);
+      });
       const durationSeconds = session.started_at && session.ended_at
         ? Math.max(0, Math.round((Date.parse(String(session.ended_at)) - Date.parse(String(session.started_at))) / 1000)) : null;
       const clock = (value: unknown) => {
@@ -286,7 +411,26 @@ Deno.serve(async (req) => {
       };
       const canonicalTranscriptText = segments.length
         ? segments.map((seg: Record<string, unknown>) => `[${clock(seg.started_ms)}] ${String(seg.speaker_name || "Participante")}: ${String(seg.text || "")}`).join("\n\n")
-        : transcriptText;
+        : rawSegments.length ? "" : (likelyWhisperHallucination(transcriptText) ? "" : transcriptText);
+
+      if (!canonicalTranscriptText.trim()) {
+        const now = new Date().toISOString();
+        if (session.transcript_id) {
+          await sb.from("meeting_transcript_segments").delete().eq("session_id", session.id);
+          await sb.from("meeting_transcripts").update({
+            processing_status: "REJECTED",
+            metadata: { ...(session.metadata || {}), transcript_quality: { status: "REJECTED", reason: "WHISPER_PATHOLOGICAL_REPETITION", rejected_at: now } },
+            updated_at: now,
+          }).eq("id", session.transcript_id);
+        }
+        await sb.from("meeting_capture_sessions").update({
+          state: "NEEDS_REVIEW",
+          metadata: { ...(session.metadata || {}), transcript_quality: { status: "REJECTED", reason: "WHISPER_PATHOLOGICAL_REPETITION", rejected_at: now } },
+          updated_at: now,
+        }).eq("id", session.id);
+        return json({ ok: true, rejected: true, reason: "WHISPER_PATHOLOGICAL_REPETITION", transcript_id: session.transcript_id || null, segments: 0 });
+      }
+
       const contentHash = await sha256Hex(canonicalTranscriptText);
       const participants = [...new Set([localLabel, remoteLabel].filter(Boolean))];
       const transcriptPayload = {
@@ -321,23 +465,74 @@ Deno.serve(async (req) => {
       }
       const transcriptId = Number(transcript?.id || session.transcript_id || 0);
       if (!transcriptId) return json({ error: "call_transcript_missing" }, 500);
+      const { error: clearSegmentsError } = await sb.from("meeting_transcript_segments").delete().eq("session_id", session.id);
+      if (clearSegmentsError) throw clearSegmentsError;
       if (segments.length) {
         const rows = segments.map((seg: Record<string, unknown>) => ({ ...seg, transcript_id: transcriptId, session_id: session.id }));
         const { error } = await sb.from("meeting_transcript_segments").upsert(rows, { onConflict: "session_id,sequence_no" });
         if (error) throw error;
       }
-      await sb.from("meeting_capture_sessions").update({ transcript_id: transcriptId, state: "PROCESSING", updated_at: new Date().toISOString() }).eq("id", session.id);
-      await sb.from("meeting_human_feedback").update({ transcript_id: transcriptId, updated_at: new Date().toISOString() })
+      const now = new Date().toISOString();
+      await sb.from("meeting_capture_sessions").update({ transcript_id: transcriptId, state: "PROCESSING", updated_at: now }).eq("id", session.id);
+      await sb.from("meeting_human_feedback").update({ transcript_id: transcriptId, updated_at: now })
         .eq("capture_session_id", session.id).is("transcript_id", null);
+
+      const { data: roster } = await sb.from("team_roster")
+        .select("role").eq("person", session.owner_person).eq("is_former", false).maybeSingle();
+      if (String(roster?.role || "").toUpperCase() === "SDR") {
+        const confidenceValues = segments
+          .map((seg: Record<string, unknown>) => seg.confidence == null ? null : Number(seg.confidence))
+          .filter((value: number | null): value is number => value != null && Number.isFinite(value));
+        const avgConfidence = confidenceValues.length
+          ? confidenceValues.reduce((sum: number, value: number) => sum + value, 0) / confidenceValues.length
+          : null;
+        const lowConfidence = avgConfidence != null && avgConfidence < 0.60;
+        const extractiveSummary = canonicalTranscriptText.replace(/\s+/g, " ").trim().slice(0, 1200);
+        const transcriptMetadata = {
+          ...(session.metadata || {}),
+          postprocess_mode: "SDR_EXTRACTIVE",
+          postprocess_model: "none",
+          transcript_quality: {
+            status: lowConfidence ? "NEEDS_REVIEW" : "ACCEPTED",
+            average_confidence: avgConfidence,
+            threshold: 0.60,
+            evaluated_at: now,
+          },
+        };
+        const { error: readyError } = await sb.from("meeting_transcripts").update({
+          summary: lowConfidence ? null : (extractiveSummary || null),
+          processing_status: lowConfidence ? "REJECTED" : "READY",
+          transcript_quality: avgConfidence,
+          processed_at: now,
+          metadata: transcriptMetadata,
+          updated_at: now,
+        }).eq("id", transcriptId);
+        if (readyError) throw readyError;
+        const { error: sessionReadyError } = await sb.from("meeting_capture_sessions").update({
+          state: lowConfidence ? "NEEDS_REVIEW" : "READY",
+          metadata: transcriptMetadata,
+          updated_at: now
+        }).eq("id", session.id);
+        if (sessionReadyError) throw sessionReadyError;
+        return json({
+          ok: true,
+          transcript_id: transcriptId,
+          segments: segments.length,
+          job_id: null,
+          postprocess: lowConfidence ? "SDR_LOW_CONFIDENCE_REVIEW" : "SDR_EXTRACTIVE_READY",
+          transcript_quality: avgConfidence,
+        });
+      }
+
       const { data: jobId, error: jobError } = await sb.rpc("enqueue_heavy_job", {
         p_job_type: "MEETING_POSTPROCESS",
         p_payload: { transcript_id: transcriptId, session_id: session.id, mode: "execute" },
         p_dedupe_key: `meeting:${transcriptId}`,
         p_max_attempts: 5,
-        p_available_at: new Date().toISOString(),
+        p_available_at: now,
       });
       if (jobError) throw jobError;
-      await sb.from("meeting_capture_sessions").update({ state: "PROCESSING", updated_at: new Date().toISOString() }).eq("id", session.id);
+      await sb.from("meeting_capture_sessions").update({ state: "PROCESSING", updated_at: now }).eq("id", session.id);
       return json({ ok: true, transcript_id: transcriptId, segments: segments.length, job_id: jobId || null });
     }
 
@@ -658,5 +853,3 @@ Deno.serve(async (req) => {
     return json({ error: "worker_api_failed", detail: String((error as Error)?.message ?? error).slice(0, 700) }, 500);
   }
 });
-
-
