@@ -24,7 +24,9 @@ internal static class WhatsAppCallIdentityResolver
         var knownLocal = NormalizePhone(knownLocalPhone);
         var visibleName = IsGenericName(contactName) ? null : contactName?.Trim();
         WhatsAppCallIdentity best = new(knownLocal, PhoneFromVisibleText(contactName), visibleName, null);
-        for (var attempt = 0; attempt < 8; attempt++)
+        // IndexedDB/LevelDB do WhatsApp pode persistir o contato alguns segundos depois do fim da call.
+        // Mantemos uma janela maior para evitar sessões sem prospect por uma escrita tardia do app.
+        for (var attempt = 0; attempt < 24; attempt++)
         {
             var current = ResolveOnce(started, ended, best.LocalPhone, contactName);
             if (!string.IsNullOrWhiteSpace(current.LocalPhone))
@@ -35,8 +37,8 @@ internal static class WhatsAppCallIdentityResolver
                 return current with { LocalPhone = current.LocalPhone ?? best.LocalPhone, RemoteName = resolvedName };
             }
 
-            if (attempt < 7)
-                await Task.Delay(attempt == 0 ? 100 : 250);
+            if (attempt < 23)
+                await Task.Delay(attempt < 2 ? 150 : 500);
         }
         if (!string.IsNullOrWhiteSpace(best.RemotePhone) && string.IsNullOrWhiteSpace(best.RemoteName))
             best = best with { RemoteName = ResolveNameForPhone(best.RemotePhone) };

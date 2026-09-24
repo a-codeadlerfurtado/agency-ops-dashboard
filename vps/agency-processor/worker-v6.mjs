@@ -249,7 +249,7 @@ const meetingModel = process.env.MEETING_MODEL || "qwen3:1.7b";
 const meetingChunkChars = Math.max(6000, Math.min(Number(process.env.MEETING_CHUNK_CHARS || 10000), 18000));
 
 const whisperUrl = String(process.env.WHISPER_URL || "http://agency-whisper:8000/v1").replace(/\/$/, "");
-const whisperModel = process.env.WHISPER_MODEL || "Systran/faster-whisper-small";
+const whisperModel = process.env.RELATO_WHISPER_MODEL || "deepdml/faster-whisper-large-v3-turbo-ct2";
 const whisperApiKey = process.env.WHISPER_API_KEY || "local-relato";
 
 function segmentClock(ms) {
@@ -299,7 +299,9 @@ async function whisperTranscribe(audio, speakerName, transcriptSource = "WHATSAP
     await writeFile(input, bytes);
     await execFileAsync("ffmpeg", [
       "-hide_banner","-loglevel","error","-y",
-      "-i",input,"-vn","-ac","1","-ar","16000","-c:a","pcm_s16le",normalized
+      "-i",input,"-vn",
+      "-af","highpass=f=80,lowpass=f=7800,dynaudnorm=f=150:g=15:p=0.9",
+      "-ac","1","-ar","16000","-c:a","pcm_s16le",normalized
     ], { timeout: 120000 });
     const normalizedBytes = await readFile(normalized);
     const blob = new Blob([normalizedBytes], { type: "audio/wav" });
@@ -309,6 +311,8 @@ async function whisperTranscribe(audio, speakerName, transcriptSource = "WHATSAP
     form.append("language", "pt");
     form.append("response_format", "verbose_json");
     form.append("temperature", "0");
+    form.append("vad_filter", "false");
+    form.append("prompt", "Conversa telefônica em português do Brasil. Preserve nomes próprios, empresas, cidades, valores e termos do mercado imobiliário quando realmente forem ditos. Transcreva literalmente. Não complete frases, não adivinhe palavras e não invente conteúdo.");
     const response = await fetch(`${whisperUrl}/audio/transcriptions`, {
       method: "POST",
       headers: whisperApiKey ? { Authorization: `Bearer ${whisperApiKey}` } : {},
