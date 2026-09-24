@@ -1,5 +1,5 @@
 import { supabase } from "./supabase";
-import type { Activity, Opportunity, Profile, Stage, Task } from "./types";
+import type { Activity, Opportunity, Profile, Stage, StageKind, Task, WhatsAppHistoryMessage } from "./types";
 
 const OPP_COLS =
   "id, tenant_id, contact_id, assigned_user_id, stage_id, status, source, source_detail," +
@@ -19,6 +19,39 @@ export async function etapas(tenantId: string): Promise<Stage[]> {
     .order("sort_order");
   if (error) throw error;
   return (data ?? []) as unknown as Stage[];
+}
+
+export async function criarEtapaPipeline(tenantId: string, name: string, kind: StageKind) {
+  const { error } = await supabase.rpc("criar_etapa_pipeline", {
+    p_tenant_id: tenantId,
+    p_name: name,
+    p_kind: kind,
+  });
+  if (error) throw error;
+}
+
+export async function atualizarEtapaPipeline(stageId: string, name: string, kind: StageKind) {
+  const { error } = await supabase.rpc("atualizar_etapa_pipeline", {
+    p_stage_id: stageId,
+    p_name: name,
+    p_kind: kind,
+  });
+  if (error) throw error;
+}
+
+export async function moverEtapaPipeline(stageId: string, direction: -1 | 1) {
+  const { error } = await supabase.rpc("mover_etapa_pipeline", {
+    p_stage_id: stageId,
+    p_direction: direction,
+  });
+  if (error) throw error;
+}
+
+export async function excluirEtapaPipeline(stageId: string) {
+  const { error } = await supabase.rpc("excluir_etapa_pipeline", {
+    p_stage_id: stageId,
+  });
+  if (error) throw error;
 }
 
 export async function corretores(tenantId: string): Promise<Profile[]> {
@@ -175,6 +208,28 @@ export async function atividades(oppId: string): Promise<Activity[]> {
     .limit(60);
   if (error) throw error;
   return (data ?? []) as Activity[];
+}
+
+export async function integracaoWhatsappAtiva(tenantId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("renata_fiel_whatsapp_config")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("active", true)
+    .limit(1);
+  if (error) throw error;
+  return (data?.length ?? 0) > 0;
+}
+
+export async function historicoWhatsapp(oppId: string): Promise<WhatsAppHistoryMessage[]> {
+  const { data, error } = await supabase
+    .from("renata_fiel_whatsapp_messages")
+    .select("id, opportunity_id, message_id, lead_phone_normalized, sender_name, sender_phone, from_me, message_type, body, status, event_at, received_at")
+    .eq("opportunity_id", oppId)
+    .order("event_at", { ascending: true, nullsFirst: false })
+    .limit(500);
+  if (error) throw error;
+  return (data ?? []) as WhatsAppHistoryMessage[];
 }
 
 export async function registrarAtividade(

@@ -2,7 +2,8 @@ import { useState } from "react";
 import { irPara } from "../App";
 import { dataHora, linkWhatsapp, relativo, rotuloOrigem } from "../lib/format";
 import {
-  atividades, corretores, criarTarefa, etapas, moverEtapa, oportunidade, registrarAtividade,
+  atividades, corretores, criarTarefa, etapas, historicoWhatsapp, integracaoWhatsappAtiva,
+  moverEtapa, oportunidade, registrarAtividade,
 } from "../lib/queries";
 import { mensagemDeErro } from "../lib/supabase";
 import {
@@ -11,7 +12,7 @@ import {
 import {
   AcoesComerciais, AvisoDeAceite, PainelInteresse, PainelMatching,
 } from "./LeadComercial";
-import type { Activity, ActivityType, Match, Sessao } from "../lib/types";
+import type { Activity, ActivityType, Match, Sessao, WhatsAppHistoryMessage } from "../lib/types";
 
 const ICONE_ATIVIDADE: Record<ActivityType, () => React.ReactNode> = {
   NOTE: () => Ico.note({ size: 13 }),
@@ -42,6 +43,8 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
     async () => ({
       opp: await oportunidade(oppId),
       hist: await atividades(oppId),
+      whats: await historicoWhatsapp(oppId),
+      whatsAtivo: await integracaoWhatsappAtiva(sessao.tenant.id),
       etapas: await etapas(sessao.tenant.id),
       pessoas: await corretores(sessao.tenant.id),
     }),
@@ -59,7 +62,7 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
     );
   }
 
-  const { opp, hist, etapas: listaEtapas, pessoas } = dados.dado;
+  const { opp, hist, whats, whatsAtivo, etapas: listaEtapas, pessoas } = dados.dado;
   const etapaAtual = listaEtapas.find((e) => e.id === opp.stage_id);
   const nomePorId = new Map(pessoas.map((p) => [p.id, p.full_name ?? "--"]));
   const wa = linkWhatsapp(opp.contact?.phone_normalized ?? opp.contact?.phone);
@@ -174,6 +177,10 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
             aoRegistrar={() => dados.recarregar()}
           />
 
+          {(whatsAtivo || whats.length > 0) && (
+            <HistoricoWhatsapp mensagens={whats} />
+          )}
+
           <Card>
             <div className="card-head"><h2>Historico</h2></div>
             <div className="card-body">
@@ -242,6 +249,63 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
         </div>
       </div>
     </>
+  );
+}
+
+function HistoricoWhatsapp({ mensagens }: { mensagens: WhatsAppHistoryMessage[] }) {
+  return (
+    <Card>
+      <div className="card-head">
+        <h2>WhatsApp</h2>
+        <span className="badge">{mensagens.length} mensagem{mensagens.length === 1 ? "" : "s"}</span>
+      </div>
+      <div className="card-body">
+        {mensagens.length === 0 ? (
+          <div style={{ color: "var(--text-subtle)", fontSize: 13 }}>
+            Integracao conectada. As novas conversas deste lead aparecerao aqui automaticamente.
+          </div>
+        ) : (
+          <div className="col" style={{ gap: 8, maxHeight: 430, overflowY: "auto", paddingRight: 4 }}>
+            {mensagens.map((m) => {
+              const quando = m.event_at ?? m.received_at;
+              return (
+                <div
+                  key={m.id}
+                  style={{
+                    alignSelf: m.from_me ? "flex-end" : "flex-start",
+                    maxWidth: "84%",
+                    padding: "9px 11px",
+                    borderRadius: 12,
+                    border: "1px solid var(--line-soft)",
+                    background: m.from_me ? "var(--blue-soft)" : "var(--panel-2)",
+                  }}
+                >
+                  <div className="row" style={{ gap: 7, marginBottom: m.body ? 4 : 0 }}>
+                    <strong style={{ fontSize: 11.5 }}>
+                      {m.from_me ? "Equipe" : (m.sender_name || "Lead")}
+                    </strong>
+                    <span className="spacer" />
+                    <span style={{ fontSize: 10.5, color: "var(--text-subtle)" }}>{dataHora(quando)}</span>
+                  </div>
+                  {m.body ? (
+                    <div style={{ whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.45 }}>{m.body}</div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: "var(--text-subtle)" }}>
+                      {m.message_type ? "Mensagem " + m.message_type : "Midia recebida"}
+                    </div>
+                  )}
+                  {m.from_me && m.status && (
+                    <div style={{ marginTop: 4, textAlign: "right", fontSize: 10.5, color: "var(--text-subtle)" }}>
+                      {m.status}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </Card>
   );
 }
 

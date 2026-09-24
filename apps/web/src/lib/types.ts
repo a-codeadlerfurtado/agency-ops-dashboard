@@ -86,6 +86,21 @@ export interface Activity {
   created_at: string;
 }
 
+export interface WhatsAppHistoryMessage {
+  id: number;
+  opportunity_id: string | null;
+  message_id: string;
+  lead_phone_normalized: string | null;
+  sender_name: string | null;
+  sender_phone: string | null;
+  from_me: boolean;
+  message_type: string | null;
+  body: string | null;
+  status: string | null;
+  event_at: string | null;
+  received_at: string;
+}
+
 export interface Task {
   id: string;
   opportunity_id: string | null;
