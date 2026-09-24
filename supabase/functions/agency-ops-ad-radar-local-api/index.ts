@@ -78,6 +78,10 @@ Deno.serve(async(req:Request)=>{
     }
     const runId=clean(body?.run_id,80);if(!runId)return j({ok:false,error:"run_required"},400);
     const {data:run,error:re}=await ops.from("ad_radar_runs").select("*").eq("id",runId).single();if(re)throw re;
+    if(action==="retry"){
+      await setRun(ops,runId,{status:"WAITING",available_at:new Date().toISOString(),started_at:null,completed_at:null,locked_at:null,error_code:null,error_detail:null,is_partial:false});
+      return j({ok:true,status:"WAITING"});
+    }
     if(action==="fail"){
       const terminal=Number(run.attempts||0)>=Number(run.max_attempts||4);
       await setRun(ops,runId,{status:terminal?"ACTION_REQUIRED":"FAILED_RECOVERABLE",available_at:terminal?run.available_at:new Date(Date.now()+Math.min(60,5*Math.max(1,Number(run.attempts||1)))*60000).toISOString(),locked_at:null,error_code:clean(body?.error_code,100)||"LOCAL_COLLECTOR_FAILURE",error_detail:clean(body?.error_detail,500)||"Falha no coletor local.",elapsed_ms:Number(body?.elapsed_ms||0)||null});
