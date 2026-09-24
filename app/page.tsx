@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import NativeDashboard from "./dashboard-native";
 import LeonardoNativeDashboard from "./leonardo-native-dashboard";
+import CommercialProfileShell from "./commercial-profile-shell";
+import SdrProfileShell from "./sdr-profile-shell";
 import LeonardoClientFinancialStatusBridge from "./leonardo-client-financial-status-bridge";
 import WorkReassignmentBridge from "./work-reassignment-bridge";
 import WorkReassignmentAwayBridge from "./work-reassignment-away-bridge";
@@ -12,7 +14,7 @@ import MaterialTriageBridge from "./material-triage-bridge";
 import JarvisVoice from "./jarvis-voice";
 import { getSessionBounded, limparPerfilEmCache, loadProfileLite, perfilEmCache, supabase } from "./shared";
 
-type RouteState = "loading" | "native" | "leonardo" | "error";
+type RouteState = "loading" | "native" | "leonardo" | "commercial" | "sdr" | "error";
 
 export default function DashboardRouter() {
   const [session, setSession] = useState<Session | null>(null);
@@ -65,7 +67,7 @@ export default function DashboardRouter() {
       const papelCache = String(cache.role || "").toUpperCase();
       resolvedKeyRef.current = chaveDaSessao(current);
       setJarvisAllowed(papelCache === "MGMT");
-      setRoute(papelCache === "COMMERCIAL" && String(cache.person || "") === "Leonardo Augusto" ? "leonardo" : "native");
+      setRoute(papelCache === "COMMERCIAL" && String(cache.person || "") === "Leonardo Augusto" ? "leonardo" : papelCache === "CLOSER" ? "commercial" : papelCache === "SDR" ? "sdr" : "native");
       setAuthReady(true);
     } else {
       setRoute("loading");
@@ -82,7 +84,7 @@ export default function DashboardRouter() {
       const person = String(body?.profile?.person || "");
       resolvedKeyRef.current = chaveDaSessao(current);
       setJarvisAllowed(role === "MGMT");
-      setRoute(role === "COMMERCIAL" && person === "Leonardo Augusto" ? "leonardo" : "native");
+      setRoute(role === "COMMERCIAL" && person === "Leonardo Augusto" ? "leonardo" : role === "CLOSER" ? "commercial" : role === "SDR" ? "sdr" : "native");
     } catch {
       if (requestId !== routeRequest.current) return;
 
@@ -206,6 +208,10 @@ export default function DashboardRouter() {
     <LeonardoNativeDashboard session={session} />
     <LeonardoClientFinancialStatusBridge session={session} />
   </>;
+
+  if (route === "commercial" && session) return <CommercialProfileShell />;
+
+  if (route === "sdr" && session) return <SdrProfileShell />;
 
   return <>
     <NativeDashboard />
