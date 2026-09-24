@@ -86,7 +86,7 @@ async function processRun(ops:any,run:any,cfg:any,provider:any){
   let officialDomain="";try{officialDomain=entity?.official_site_url?new URL(entity.official_site_url).hostname.replace(/^www\./,""):""}catch{}
   if(genericBase&&!city&&!makerDistinct&&!officialDomain){await setRun(ops,run.id,{status:"ACTION_REQUIRED",completed_at:new Date().toISOString(),error_code:"IDENTITY_INSUFFICIENT_FOR_SEARCH",error_detail:"Nome do produto é genérico e falta cidade, construtora/incorporadora ou site oficial para uma busca precisa.",elapsed_ms:Date.now()-started});return "ACTION_REQUIRED"}
   const aliases=(Array.isArray(entity.aliases)?entity.aliases:[]).map((x:any)=>searchTerm(x)).filter(Boolean);
-  const primary=city?`${searchBase} ${city}`:makerDistinct?`${searchBase} ${maker}`:searchBase;
+  const primary=city?`${searchBase} ${city}`:searchBase;
   const parts=[primary,...aliases,searchBase,makerDistinct?`${searchBase} ${maker}`:""].filter(Boolean);
   const queries=uniq(parts).slice(0,Number(cfg.max_queries_per_run||4));
   let total=0,media=0,credits=0,failed=0,blockedCode="",blockedDetail="";
