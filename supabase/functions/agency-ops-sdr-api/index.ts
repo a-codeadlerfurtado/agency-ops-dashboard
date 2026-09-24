@@ -295,11 +295,42 @@ Deno.serve(async(req:Request)=>{
       if(key&&!directChatIdentityMap.has(key)&&(clean(row.chat_name)||clean(row.sender_name))) directChatIdentityMap.set(key,row);
     }
   }
+  const nearCallIdentityMap=new Map<string,Row>();
+  const unresolvedRecent=callSessions
+    .filter((session:Row)=>!phoneDigits(session.metadata?.remote_phone)
+      && !clean(session.metadata?.remote_name)
+      && !clean(session.metadata?.commercial_prospect?.name))
+    .slice(0,20);
+  await Promise.all(unresolvedRecent.map(async(session:Row)=>{
+    const started=new Date(String(session.started_at||""));
+    const ended=new Date(String(session.ended_at||session.started_at||""));
+    if(Number.isNaN(started.getTime())||Number.isNaN(ended.getTime())) return;
+    const from=new Date(started.getTime()-90_000).toISOString();
+    const to=new Date(ended.getTime()+90_000).toISOString();
+    const {data:nearRows,error:nearError}=await ops.from("whatsapp_messages")
+      .select("chat_id,chat_name,sender_name,event_at")
+      .eq("is_group",false)
+      .gte("event_at",from)
+      .lte("event_at",to)
+      .order("event_at",{ascending:true})
+      .limit(50);
+    if(nearError) return;
+    const byChat=new Map<string,Row>();
+    for(const row of nearRows||[]){
+      const key=phoneDigits(row.chat_id);
+      if(key&&!byChat.has(key)) byChat.set(key,row);
+    }
+    if(byChat.size===1){
+      const only=[...byChat.values()][0];
+      if(clean(only.chat_name)||clean(only.sender_name)) nearCallIdentityMap.set(String(session.id),only);
+    }
+  }));
   const enrichedCalls=callSessions.map((session:Row)=>{
     const record:any=callBySession.get(String(session.id))||callByTranscript.get(String(session.transcript_id||""))||null;
     const transcript:any=session.transcript_id?transcriptMap.get(String(session.transcript_id)):null;
     const recordLead:any=record?.lead_id?leadMap.get(String(record.lead_id))||null:null;
-    const remotePhone=record?.remote_phone||session.metadata?.remote_phone||null;
+    const nearIdentity:any=nearCallIdentityMap.get(String(session.id))||null;
+    const remotePhone=record?.remote_phone||session.metadata?.remote_phone||nearIdentity?.chat_id||null;
     const phoneLead:any=phoneLeadMap.get(phoneDigits(remotePhone))||null;
     const metadataLeadId=clean(session.metadata?.commercial_prospect?.lead_id);
     const lead:any=recordLead||phoneLead||null;
@@ -311,6 +342,7 @@ Deno.serve(async(req:Request)=>{
       participantIdentity?.canonical_name||
       directChatIdentityMap.get(phoneDigits(remotePhone))?.chat_name||
       directChatIdentityMap.get(phoneDigits(remotePhone))?.sender_name||
+      nearIdentity?.chat_name||nearIdentity?.sender_name||
       session.metadata?.contact_name
     );
     const genericName=["Contato","Contato WhatsApp","Contato WhatsApp Desktop","WhatsApp"].includes(candidateName)?"":candidateName;
@@ -328,7 +360,7 @@ Deno.serve(async(req:Request)=>{
       channel:record?.channel||"WHATSAPP_DESKTOP_CALL",
       capture_mode:session.capture_mode||null,
       remote_phone:remotePhone,
-      remote_name:record?.remote_name||session.metadata?.remote_name||session.metadata?.contact_name||null,
+      remote_name:record?.remote_name||session.metadata?.remote_name||nearIdentity?.chat_name||nearIdentity?.sender_name||session.metadata?.contact_name||null,
       prospect_name:genericName||null,
       prospect_lead_id:lead?.id||metadataLeadId||null,
       stage:lead?.stage||null,
