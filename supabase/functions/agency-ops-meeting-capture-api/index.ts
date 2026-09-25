@@ -707,15 +707,28 @@ Deno.serve(async (req: Request) => {
     const durationMs = Number.isFinite(Number(body?.duration_ms))
       ? Math.max(0, Math.round(Number(body.duration_ms)))
       : Math.max(0, Math.round(Number(session.audio_duration_ms || 0)));
+    const expectedMixedBytes = durationMs > 0 ? Math.round((durationMs / 1000) * 16000) : 0;
+    const partialMixedAudio = mixedBytes > 0 && durationMs >= 15000 && expectedMixedBytes > 0 && mixedBytes < expectedMixedBytes * 0.50;
+    const now = new Date().toISOString();
     await ops.from("meeting_capture_sessions").update({
       state: "PROCESSING",
-      audio_status: mixedBytes > 0 ? "READY" : "STORED",
+      audio_status: mixedBytes > 0 ? (partialMixedAudio ? "PARTIAL" : "READY") : "STORED",
       audio_size_bytes: mixedBytes > 0 ? mixedBytes : totalBytes || null,
       audio_duration_ms: durationMs || null,
       audio_mime_type: mixedBytes > 0 ? "audio/mpeg" : "audio/wav",
-      audio_last_error: null,
-      audio_updated_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      audio_last_error: partialMixedAudio ? "audio_capture_shorter_than_call" : null,
+      metadata: {
+        ...(session.metadata || {}),
+        audio_integrity: mixedBytes > 0 ? {
+          status: partialMixedAudio ? "PARTIAL" : "OK",
+          expected_min_bytes: expectedMixedBytes,
+          mixed_bytes: mixedBytes,
+          duration_ms: durationMs,
+          checked_at: now
+        } : null
+      },
+      audio_updated_at: now,
+      updated_at: now
     }).eq("id", session.id);
     const { data: jobId, error: jobError } = await ops.rpc("enqueue_heavy_job", {
       p_job_type: "CALL_TRANSCRIBE", p_payload: { session_id: session.id }, p_dedupe_key: `call:${session.id}`, p_max_attempts: 5, p_available_at: new Date().toISOString(),
@@ -745,6 +758,8 @@ Deno.serve(async (req: Request) => {
     let commercialLead: Row | null = null;
     const prospectInput = (feedback.prospect || {}) as Row;
     const isProspect = !dismissed && Boolean(feedback.is_prospect);
+    const feedbackProspectName = clean(prospectInput.name, 200) || null;
+    const feedbackProspectPhone = normalizePhone(prospectInput.phone) || null;
     const requestedBindingSource = clean(feedback.binding_source, 40).toUpperCase();
 
     if (isProspect) {
@@ -773,11 +788,11 @@ Deno.serve(async (req: Request) => {
 
     if (isProspect) {
       const crm = db.schema("crm");
-      const prospectName = clean(prospectInput.name || remoteName, 200);
+      const prospectName = clean(feedbackProspectName || remoteName, 200);
       if (!prospectName) return respond({ error: "prospect_name_required" }, 400);
       const prospectCompany = clean(prospectInput.company, 240) || null;
       const prospectEmail = clean(prospectInput.email, 240).toLowerCase() || null;
-      const prospectPhone = normalizePhone(prospectInput.phone || remotePhone) || null;
+      const prospectPhone = normalizePhone(feedbackProspectPhone || remotePhone) || null;
       const prospectCity = clean(prospectInput.city, 200) || null;
       const prospectInstagram = clean(prospectInput.instagram, 500) || null;
       const marketingInvestment = clean(prospectInput.marketing_investment, 240) || null;
@@ -877,7 +892,7 @@ Deno.serve(async (req: Request) => {
       const { error: callRecordError } = await ops.from("commercial_call_records").upsert({
         lead_id: commercialLead.id, capture_session_id: session.id, transcript_id: session.transcript_id || null,
         sdr_person: device.owner_person, closer_person: "Vitor Feitoza", channel: clean(feedback.channel, 40) || "WHATSAPP_DESKTOP",
-        remote_phone: prospectPhone, remote_name: remoteName, outcome: clean(feedback.relationship_direction, 80) || null,
+        remote_phone: prospectPhone, remote_name: prospectName, outcome: clean(feedback.relationship_direction, 80) || null,
         notes: clean(feedback.note, 3000) || null, pain_points: painPoints, objections,
         next_step: nextStep, next_step_at: nextStepAt,
         metadata: { source: "RELATO_AI", tags: Array.isArray(feedback.tags) ? feedback.tags : [], prospect_company: prospectCompany },
@@ -929,7 +944,9 @@ Deno.serve(async (req: Request) => {
     };
     if (!dismissed) {
       const nextMetadata = { ...(session.metadata || {}),
-        remote_name: remoteName, remote_role: isProspect ? "PROSPECT" : remoteRole,
+        remote_name: isProspect ? (feedbackProspectName || remoteName) : remoteName,
+        remote_phone: isProspect ? (feedbackProspectPhone || remotePhone) : remotePhone,
+        remote_role: isProspect ? "PROSPECT" : remoteRole,
         resolved_client_id: selectedClientId, resolved_client_name: selectedClientName,
         identity_resolution: resolvedIdentity,
         ...(isProspect && commercialLead ? { commercial_prospect: {
