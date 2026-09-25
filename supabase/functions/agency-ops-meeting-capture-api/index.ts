@@ -4,9 +4,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 type Row = Record<string, any>;
 
 const VERSION = "meeting-capture-v1.1-audio";
-const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.4.9";
-const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.25.4/RelatoAI-Desktop-SDR.exe";
-const SDR_DESKTOP_SHA256 = "7e394e1475bbf01165273a516a2ca5e69fda996a565bf28dfc0eca3ac89d50c5";
+const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.0";
+const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.25.5/RelatoAI-Desktop-SDR.exe";
+const SDR_DESKTOP_SHA256 = "fe9a80d4820a59e14c2c7b9b9ea48ac3675efff81fcda4d7a829cce546634b38";
 const DASHBOARD_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
   "http://localhost:3000",
@@ -147,6 +147,12 @@ const GENERIC_CONTACT_NAMES = new Set(["contato","contato whatsapp","contato wha
 function safeContactName(value: unknown) {
   const name = clean(value, 160);
   return name && !GENERIC_CONTACT_NAMES.has(name.toLowerCase()) && !/@(?:lid|c\.us)$/i.test(name) ? name : null;
+}
+function isWhatsappIdentitySource(value: unknown) {
+  const source = clean(value, 120).toUpperCase();
+  return source.startsWith("WHATSAPP_")
+    || source.includes("PARTICIPANT_IDENTITY")
+    || ["GROUP_PARTICIPANT_IDENTITY","CLIENT_PHONE_REGISTRY","CONTACT_SYNC","WHATSAPP_MESSAGES","ZAPI_HISTORY"].includes(source);
 }
 function personNameKey(value: unknown) {
   return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
@@ -624,14 +630,42 @@ Deno.serve(async (req: Request) => {
       : (remotePhoneCandidate || directHint?.phone || null);
     const identity = await resolveCallIdentity(ops, remotePhone);
     const phoneName = remotePhone ? await bestWhatsappName(ops, remotePhone) : { name: null, role: null, source: null };
-    const resolvedName = safeContactName(identity.name) || rawContactName || safeContactName(directHint?.name) || safeContactName(phoneName.name);
+    const identityWhatsappName = isWhatsappIdentitySource(identity?.source) ? safeContactName(identity?.name) : null;
+    const uiWhatsappName = ["WHATSAPP_DESKTOP_UI","WHATSAPP_LEVELDB_EXACT_CALL_WINDOW","WHATSAPP_LEVELDB_CONTACT_WINDOW","RELATO_USER_CONFIRMED"].includes(identitySource || "")
+      ? rawContactName
+      : null;
+    const whatsappName = uiWhatsappName
+      || safeContactName(directHint?.name)
+      || safeContactName(phoneName.name)
+      || identityWhatsappName;
+    const whatsappNameSource = uiWhatsappName
+      ? identitySource
+      : safeContactName(directHint?.name)
+        ? directHint?.source
+        : safeContactName(phoneName.name)
+          ? phoneName.source
+          : identityWhatsappName
+            ? identity?.source
+            : null;
+    const resolvedName = whatsappName || safeContactName(identity.name) || rawContactName;
     const resolvedContactName = resolvedName || (remotePhone ? `WhatsApp +${remotePhone}` : "Contato WhatsApp");
     const resolvedIdentity = {
       ...identity,
       phone: remotePhone || identity.phone || null,
       name: resolvedName || identity.name || null,
       role: identity.role || phoneName.role || null,
-      source: identity.source || directHint?.source || phoneName.source || identitySource || null,
+      source: identity.source || whatsappNameSource || identitySource || null,
+    };
+    const observedAt = new Date().toISOString();
+    const existingNameEvidence = {};
+    const nameEvidence = {
+      ...existingNameEvidence,
+      ...(whatsappName ? { whatsapp: {
+        name: whatsappName,
+        source: whatsappNameSource || "WHATSAPP",
+        observed_at: observedAt,
+        phone: remotePhone,
+      }} : {}),
     };
     if (!Number.isFinite(Date.parse(startedAt)) || !Number.isFinite(Date.parse(endedAt))) return respond({ error: "invalid_timestamps" }, 400);
     const roles = Array.isArray(body?.roles) ? body.roles.map((v: unknown) => clean(v, 20)).filter((v: string) => ["local", "remote", "mixed"].includes(v)) : [];
@@ -659,6 +693,8 @@ Deno.serve(async (req: Request) => {
       audio_updated_at: new Date().toISOString(),
       metadata: { source, contact_name: resolvedContactName, local_phone: localPhone, remote_phone: remotePhone, identity_source: resolvedIdentity.source,
         identity_candidate_rejected: Boolean(remotePhoneCandidate && !remotePhone),
+        whatsapp_name: whatsappName,
+        name_evidence: nameEvidence,
         remote_name: resolvedIdentity.name, remote_role: resolvedIdentity.role, resolved_client_id: resolvedIdentity.client_id, resolved_client_name: resolvedIdentity.client_name,
         identity_resolution: resolvedIdentity, audio_paths: audioPaths, finish_reason: clean(call.finish_reason, 80) || null, extension_version: clean(call.extension_version, 40) || null },
       updated_at: new Date().toISOString(),
@@ -958,7 +994,13 @@ Deno.serve(async (req: Request) => {
       }
     }
     const remotePhone = normalizePhone(session.metadata?.remote_phone);
-    const remoteName = clean(session.metadata?.remote_name || currentIdentity?.name, 160) || null;
+    const remoteName = safeContactName(session.metadata?.remote_name || currentIdentity?.name);
+    const whatsappName = safeContactName(
+      session.metadata?.name_evidence?.whatsapp?.name
+      || session.metadata?.whatsapp_name
+      || (isWhatsappIdentitySource(currentIdentity?.source) ? currentIdentity?.name : null)
+    );
+    const postCallName = safeContactName(feedbackProspectName || feedback.prospect_name);
     const remoteRole = clean(session.metadata?.remote_role || currentIdentity?.role, 80) || null;
     const interactionChannel = clean(session.capture_mode, 60).toUpperCase().includes("MEET")
       ? "MEET"
@@ -1224,29 +1266,56 @@ Deno.serve(async (req: Request) => {
       if (identityError) return respond({ error: "identity_learning_failed", detail: identityError.message }, 500);
     }
 
+    const confirmedAt = new Date().toISOString();
     const resolvedIdentity = dismissed ? currentIdentity : isProspect ? {
       ...(currentIdentity || {}), status: "COMMERCIAL_PROSPECT", auto: false,
-      phone: remotePhone, name: clean(prospectInput.name || remoteName, 160) || remoteName, role: "PROSPECT",
-      client_id: null, client_name: null, side: "EXTERNAL", source: "RELATO_COMMERCIAL",
+      phone: remotePhone, name: postCallName || whatsappName || remoteName, role: "PROSPECT",
+      client_id: null, client_name: null, side: "EXTERNAL", source: postCallName ? "RELATO_COMMERCIAL" : (currentIdentity?.source || "RELATO_COMMERCIAL"),
       commercial_lead_id: commercialLead?.id || null,
     } : {
-      ...(currentIdentity || {}), status: selectedClientId ? "AUTO_CLIENT" : "AUTO_NON_CLIENT", auto: true,
+      ...(currentIdentity || {}), status: selectedClientId ? "AUTO_CLIENT" : "AUTO_NON_CLIENT", auto: Boolean(currentIdentity?.auto),
       phone: remotePhone, name: remoteName, role: remoteRole, client_id: selectedClientId,
       client_name: selectedClientName, side: selectedClientId ? "CLIENT_SIDE" : (currentIdentity?.side || "EXTERNAL"),
       source: bindingSource === "MANUAL" ? "RELATO_MANUAL" : (currentIdentity?.source || "AUTO"),
     };
     if (!dismissed) {
+      const previousEvidence = session.metadata?.name_evidence || {};
+      const nextEvidence = {
+        ...previousEvidence,
+        ...(whatsappName ? { whatsapp: {
+          ...(previousEvidence?.whatsapp || {}),
+          name: whatsappName,
+          source: previousEvidence?.whatsapp?.source || currentIdentity?.source || "WHATSAPP",
+        }} : {}),
+        ...(postCallName ? { post_call: {
+          name: postCallName,
+          source: "SDR_POST_CALL",
+          confirmed_by: device.owner_person,
+          confirmed_at: confirmedAt,
+        }} : {}),
+        ...(commercialLead?.name ? { crm: {
+          name: commercialLead.name,
+          lead_id: commercialLead.id,
+          source: "CRM",
+          observed_at: confirmedAt,
+        }} : {}),
+      };
       const nextMetadata = { ...(session.metadata || {}),
-        remote_name: isProspect ? (feedbackProspectName || remoteName) : remoteName,
+        remote_name: remoteName,
+        whatsapp_name: whatsappName || session.metadata?.whatsapp_name || null,
+        post_call_name: postCallName || session.metadata?.post_call_name || null,
+        crm_name: commercialLead?.name || session.metadata?.crm_name || null,
+        name_evidence: nextEvidence,
         remote_phone: isProspect ? (feedbackProspectPhone || remotePhone) : remotePhone,
         remote_role: isProspect ? "PROSPECT" : remoteRole,
         resolved_client_id: selectedClientId, resolved_client_name: selectedClientName,
         identity_resolution: resolvedIdentity,
         ...(isProspect && commercialLead ? { commercial_prospect: {
           lead_id: commercialLead.id, name: commercialLead.name, company: commercialLead.company,
+          name_source: postCallName ? "POST_CALL" : (whatsappName ? "WHATSAPP" : "CRM"),
           closer_person: "Vitor Feitoza", sdr_person: device.owner_person,
         }} : {}),
-        feedback_binding: { source: bindingSource, confirmed_by: device.owner_person, confirmed_at: new Date().toISOString() },
+        feedback_binding: { source: bindingSource, prospect_name: postCallName, confirmed_by: device.owner_person, confirmed_at: confirmedAt },
       };
       await ops.from("meeting_capture_sessions").update({ metadata: nextMetadata, updated_at: new Date().toISOString() }).eq("id", session.id);
       session.metadata = nextMetadata;
@@ -1273,7 +1342,7 @@ Deno.serve(async (req: Request) => {
     };
     const { data, error } = await ops.from("meeting_human_feedback").upsert(payload, { onConflict: "owner_person,local_session_id" }).select("id,transcript_id,client_id,submitted_at,dismissed").single();
     if (error) return respond({ error: "feedback_save_failed", detail: error.message }, 500);
-    return respond({ ok: true, feedback: data, binding: { source: bindingSource, client_id: selectedClientId, client_name: selectedClientName, no_client: noClient, is_prospect: isProspect, commercial_lead_id: commercialLead?.id || null } });
+    return respond({ ok: true, feedback: data, binding: { source: bindingSource, client_id: selectedClientId, client_name: selectedClientName, prospect_name: postCallName, no_client: noClient, is_prospect: isProspect, commercial_lead_id: commercialLead?.id || null } });
   }
 
   if (action === "finalize") {
