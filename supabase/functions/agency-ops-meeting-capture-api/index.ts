@@ -634,8 +634,26 @@ Deno.serve(async (req: Request) => {
     const remotePhone = source === "WHATSAPP_DESKTOP" && !trustedDesktopIdentity
       ? (directHint?.phone || null)
       : (remotePhoneCandidate || directHint?.phone || null);
-    const identity = await resolveCallIdentity(ops, remotePhone);
-    const phoneName = remotePhone ? await bestWhatsappName(ops, remotePhone) : { name: null, role: null, source: null };
+    const candidateIdentity = await resolveCallIdentity(ops, remotePhone);
+    const weakLevelDbTeamCandidate = Boolean(
+      remotePhone
+      && (identitySource || "").startsWith("WHATSAPP_LEVELDB_")
+      && !rawContactName
+      && (
+        String(candidateIdentity?.status || "").toUpperCase() === "AUTO_TEAM"
+        || String(candidateIdentity?.side || "").toUpperCase() === "TEAM"
+        || String(candidateIdentity?.role || "").toUpperCase() === "SYSTEM"
+      )
+    );
+    const systemCandidate = Boolean(
+      remotePhone && String(candidateIdentity?.role || "").toUpperCase() === "SYSTEM"
+    );
+    const rejectedDesktopCandidate = weakLevelDbTeamCandidate || systemCandidate;
+    const acceptedRemotePhone = rejectedDesktopCandidate ? null : remotePhone;
+    const identity = rejectedDesktopCandidate
+      ? await resolveCallIdentity(ops, null)
+      : candidateIdentity;
+    const phoneName = acceptedRemotePhone ? await bestWhatsappName(ops, acceptedRemotePhone) : { name: null, role: null, source: null };
     const identityWhatsappName = isWhatsappIdentitySource(identity?.source) ? safeContactName(identity?.name) : null;
     const uiWhatsappName = ["WHATSAPP_DESKTOP_UI","WHATSAPP_LEVELDB_EXACT_CALL_WINDOW","WHATSAPP_LEVELDB_CONTACT_WINDOW","RELATO_USER_CONFIRMED"].includes(identitySource || "")
       ? rawContactName
@@ -657,7 +675,7 @@ Deno.serve(async (req: Request) => {
     const resolvedContactName = resolvedName || (remotePhone ? `WhatsApp +${remotePhone}` : "Contato WhatsApp");
     const resolvedIdentity = {
       ...identity,
-      phone: remotePhone || identity.phone || null,
+      phone: acceptedRemotePhone || identity.phone || null,
       name: resolvedName || identity.name || null,
       role: identity.role || phoneName.role || null,
       source: identity.source || whatsappNameSource || identitySource || null,
@@ -670,7 +688,7 @@ Deno.serve(async (req: Request) => {
         name: whatsappName,
         source: whatsappNameSource || "WHATSAPP",
         observed_at: observedAt,
-        phone: remotePhone,
+        phone: acceptedRemotePhone,
       }} : {}),
     };
     if (!Number.isFinite(Date.parse(startedAt)) || !Number.isFinite(Date.parse(endedAt))) return respond({ error: "invalid_timestamps" }, 400);
@@ -697,8 +715,16 @@ Deno.serve(async (req: Request) => {
       audio_duration_ms: durationMs,
       audio_mime_type: audioPaths.mixed ? "audio/mpeg" : "audio/wav",
       audio_updated_at: new Date().toISOString(),
-      metadata: { source, contact_name: resolvedContactName, local_phone: localPhone, remote_phone: remotePhone, identity_source: resolvedIdentity.source,
-        identity_candidate_rejected: Boolean(remotePhoneCandidate && !remotePhone),
+      metadata: { source, contact_name: resolvedContactName, local_phone: localPhone, remote_phone: acceptedRemotePhone, identity_source: resolvedIdentity.source,
+        identity_candidate_rejected: Boolean(remotePhoneCandidate && !acceptedRemotePhone),
+        rejected_remote_candidate: rejectedDesktopCandidate ? {
+          phone: remotePhone,
+          source: identitySource,
+          resolved_status: candidateIdentity?.status || null,
+          resolved_role: candidateIdentity?.role || null,
+          resolved_name: candidateIdentity?.name || null,
+          reason: systemCandidate ? "SYSTEM_IDENTITY_NOT_VALID_AS_SDR_PROSPECT" : "WEAK_LEVELDB_TEAM_CANDIDATE"
+        } : null,
         whatsapp_name: whatsappName,
         name_evidence: nameEvidence,
         remote_name: resolvedIdentity.name, remote_role: resolvedIdentity.role, resolved_client_id: resolvedIdentity.client_id, resolved_client_name: resolvedIdentity.client_name,
@@ -839,7 +865,9 @@ Deno.serve(async (req: Request) => {
         next_step_at: profile?.next_step_at || null,
       };
       return respond({
-        ok: true, pending: false, workflow: "SDR_PROSPECT", transcript_ready: transcriptReady,
+        ok: true, pending: false, workflow: "SDR_PROSPECT",
+        transcript_ready: true,
+        transcript_ready_actual: transcriptReady,
         commercial_analysis_ready: commercialAnalysisReady,
         requires_selection: false, remote_phone: remotePhone, remote_name: remoteName,
         remote_role: "PROSPECT", client_id: null, client_name: null,
