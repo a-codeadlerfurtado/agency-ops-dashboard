@@ -48,11 +48,18 @@ function Empty({children}:{children:React.ReactNode}) {
   return <div className="sdr-empty">{children}</div>;
 }
 
-function CallAudioPlayer({audio}:{audio:Row}) {
+function CallAudioPlayer({audio,onPositionChange}:{audio:Row;onPositionChange?:(ms:number)=>void}) {
   const ref=useRef<HTMLAudioElement|null>(null);
   const [playing,setPlaying]=useState(false);
   const [error,setError]=useState("");
+  const [current,setCurrent]=useState(0);
+  const [total,setTotal]=useState(0);
   const src=String(audio.play_url||"").trim();
+  const updatePosition=(seconds:number)=>{
+    const safe=Number.isFinite(seconds)?Math.max(0,seconds):0;
+    setCurrent(safe);
+    onPositionChange?.(safe*1000);
+  };
   const toggle=async()=>{
     const player=ref.current;
     if(!player||!src)return;
@@ -64,11 +71,44 @@ function CallAudioPlayer({audio}:{audio:Row}) {
       setError(err instanceof Error?err.message:"Não foi possível reproduzir o áudio.");
     }
   };
+  const seek=(seconds:number)=>{
+    const player=ref.current;
+    if(!player)return;
+    const next=Math.max(0,Math.min(Number.isFinite(player.duration)?player.duration:total,seconds));
+    player.currentTime=next;
+    updatePosition(next);
+  };
   return <article>
     <div><b>Gravação completa</b><span>{text(audio.mime_type)}</span></div>
-    <audio ref={ref} preload="metadata" src={src} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)} onError={()=>setError("Falha ao carregar a gravação. Atualize e tente novamente.")}/>
+    <audio
+      ref={ref}
+      preload="metadata"
+      src={src}
+      onLoadedMetadata={e=>setTotal(Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0)}
+      onDurationChange={e=>setTotal(Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0)}
+      onTimeUpdate={e=>updatePosition(e.currentTarget.currentTime)}
+      onPlay={()=>setPlaying(true)}
+      onPause={()=>setPlaying(false)}
+      onEnded={e=>{setPlaying(false);updatePosition(e.currentTarget.duration||0);}}
+      onError={()=>setError("Falha ao carregar a gravação. Atualize e tente novamente.")}
+    />
+    <div className="sdr-audio-timeline">
+      <div className="sdr-audio-time"><b>{timestamp(current*1000)}</b><span>{timestamp(total*1000)}</span></div>
+      <input
+        type="range"
+        min="0"
+        max={Math.max(total,0.1)}
+        step="0.1"
+        value={Math.min(current,Math.max(total,0.1))}
+        onChange={e=>seek(Number(e.target.value))}
+        aria-label="Posição da gravação"
+        disabled={!src||!total}
+      />
+    </div>
     <div className="sdr-audio-actions">
       <button type="button" onClick={toggle} disabled={!src}>{playing?"Pausar":"Ouvir gravação"}</button>
+      <button type="button" onClick={()=>seek(Math.max(0,current-10))} disabled={!src||!total}>−10s</button>
+      <button type="button" onClick={()=>seek(current+10)} disabled={!src||!total}>+10s</button>
       {src&&<a href={String(audio.download_url||src)} target="_blank" rel="noreferrer">Abrir áudio</a>}
     </div>
     {error&&<small className="sdr-audio-error">{error}</small>}
@@ -89,6 +129,8 @@ function CallsView({data}:{data:Row}) {
   const [detail,setDetail]=useState<Row|null>(null);
   const [detailLoading,setDetailLoading]=useState(false);
   const [detailError,setDetailError]=useState("");
+  const [playbackMs,setPlaybackMs]=useState(0);
+  const transcriptRef=useRef<HTMLDivElement|null>(null);
   const calls:Row[]=data.calls||[];
 
   const visible=useMemo(()=>calls.filter(row=>{
@@ -150,9 +192,33 @@ function CallsView({data}:{data:Row}) {
     };
   },[visible]);
 
+  const activeSegmentIndex=useMemo(()=>{
+    const segments:Array<Row>=Array.isArray(detail?.segments)?detail.segments:[];
+    let best=-1,bestStart=-1;
+    segments.forEach((segment,index)=>{
+      const start=Math.max(0,Number(segment.started_ms||0));
+      const end=Math.max(start,Number(segment.ended_ms||start));
+      if(playbackMs>=start&&playbackMs<=end&&start>=bestStart){best=index;bestStart=start;}
+    });
+    if(best<0){
+      segments.forEach((segment,index)=>{
+        const start=Math.max(0,Number(segment.started_ms||0));
+        if(start<=playbackMs&&start>=bestStart){best=index;bestStart=start;}
+      });
+    }
+    return best;
+  },[detail,playbackMs]);
+
+  useEffect(()=>{
+    if(activeSegmentIndex<0)return;
+    const node=transcriptRef.current?.querySelector(`[data-segment-index="${activeSegmentIndex}"]`);
+    if(node instanceof HTMLElement)node.scrollIntoView({block:"nearest"});
+  },[activeSegmentIndex]);
+
   const clearFilters=()=>{setQuery("");setPeriod("30d");setDateFrom("");setDateTo("");setStatus("all");setIdentity("all");setTranscript("all");setRecording("all");setDurationBand("all");setChannel("all");};
 
   const openDetail=async(row:Row)=>{
+    setPlaybackMs(0);
     setDetailLoading(true);setDetailError("");
     try{
       const response=await authenticatedFetch(API+"?session_id="+encodeURIComponent(String(row.session_id||row.id)),{cache:"no-store"});
@@ -231,11 +297,15 @@ function CallsView({data}:{data:Row}) {
         </div>
         <div className="sdr-detail-section"><h3>Gravação</h3>
           {Array.isArray(detail.audio)&&detail.audio.some((audio:Row)=>audio.role==="mixed"&&audio.play_url)
-            ?<div className="sdr-audio-list">{detail.audio.filter((audio:Row)=>audio.role==="mixed"&&audio.play_url).map((audio:Row)=><CallAudioPlayer key={String(audio.role)} audio={audio}/>)}</div>
+            ?<div className="sdr-audio-list">{detail.audio.filter((audio:Row)=>audio.role==="mixed"&&audio.play_url).map((audio:Row)=><CallAudioPlayer key={String(audio.role)} audio={audio} onPositionChange={setPlaybackMs}/>)}</div>
             :<p>{detail.audio_status?("Áudio: "+detail.audio_status+" · arquivo de reprodução indisponível; atualize esta ligação."):"Nenhuma gravação disponível ainda."}</p>}
         </div>
         <div className="sdr-detail-section"><h3>Transcrição</h3>
-          {Array.isArray(detail.segments)&&detail.segments.length>0?<div className="sdr-transcript-list">{detail.segments.map((segment:Row,index:number)=><article key={String(segment.sequence_no??index)}>
+          {Array.isArray(detail.segments)&&detail.segments.length>0?<div className="sdr-transcript-list" ref={transcriptRef}>{detail.segments.map((segment:Row,index:number)=><article
+            key={String(segment.sequence_no??index)}
+            data-segment-index={index}
+            className={index===activeSegmentIndex?"active":""}
+          >
             <time>{timestamp(segment.started_ms)}</time><div><b>{text(segment.speaker_name,"Participante")}</b><p>{text(segment.text,"")}</p></div>
           </article>)}</div>:<div className="sdr-transcript-raw">{text(detail.transcript_text,"Transcrição ainda indisponível.")}</div>}
         </div>
@@ -340,6 +410,6 @@ const styles = [
 ".sdr-content{padding:22px 26px 60px;max-width:1250px;margin:auto}.sdr-kpis{display:grid;grid-template-columns:repeat(2,minmax(0,220px));gap:9px;margin-bottom:12px}.sdr-kpis article,.sdr-card{border:1px solid #203338;background:#0b171b;border-radius:14px}.sdr-kpis article{padding:14px}.sdr-kpis span{display:block;font-size:8px;color:#738b86;text-transform:uppercase}.sdr-kpis b{display:block;font-size:24px;margin-top:6px}.sdr-card{padding:17px}.sdr-section-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px}.sdr-section-head h2{margin:4px 0;font-size:22px}.sdr-section-head>b{font-size:11px;color:#a8c7be}.sdr-filter{margin:14px 0}.sdr-filter input{width:min(430px,100%);border:1px solid #263a3f;background:#081317;color:#cfe0dc;border-radius:9px;padding:10px;font:600 10px Inter}",
 ".sdr-list{display:grid;gap:9px}.sdr-item{border:1px solid #1d3135;background:#091519;border-radius:12px;padding:14px}.sdr-item-top{display:flex;justify-content:space-between;gap:12px}.sdr-item-top span{font-size:8px;color:#62cca0;font-weight:800}.sdr-item h3{font-size:13px;margin:4px 0}.sdr-item time{font-size:9px;color:#6f8882}.sdr-item p{font-size:10px;color:#8ca49e;line-height:1.55}.sdr-item footer{display:flex;flex-wrap:wrap;gap:8px;border-top:1px solid #182b2e;padding-top:9px}.sdr-item footer>*{font-size:9px;color:#76908a}.sdr-note{display:grid;gap:4px;margin-top:10px;border-top:1px solid #182b2e;padding-top:9px}.sdr-note b{font-size:9px}.sdr-note span{font-size:9px;color:#8ca49e}.sdr-empty{padding:24px;text-align:center;color:#657f79;font-size:10px}.sdr-error{margin:14px 26px 0;border:1px solid #663b37;background:#2a1514;color:#ef9b90;border-radius:10px;padding:10px 12px;font-size:10px}",
 ".sdr-call-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}.sdr-call-kpis article{border:1px solid #203338;background:#091519;border-radius:10px;padding:11px}.sdr-call-kpis span{display:block;font-size:7px;color:#6e8882;text-transform:uppercase;letter-spacing:.08em}.sdr-call-kpis b{display:block;margin-top:5px;font-size:17px}.sdr-call-kpis small{display:block;margin-top:3px;font-size:7px;color:#58716c}.sdr-filter-panel{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:14px 0;padding:12px;border:1px solid #203338;background:#081317;border-radius:11px}.sdr-filter-panel label{display:grid;gap:4px}.sdr-filter-panel label>span{font-size:7px;color:#6f8983;text-transform:uppercase;font-weight:800;letter-spacing:.08em}.sdr-filter-panel input,.sdr-filter-panel select{height:34px;border:1px solid #263a3f;background:#0a171b;color:#cfe0dc;border-radius:8px;padding:0 9px;font:600 9px Inter}.sdr-filter-search{flex:1 1 260px}.sdr-filter-search input{width:100%}.sdr-clear-filters{height:34px;border:1px solid #32494b;background:transparent;color:#8fa7a1;border-radius:8px;padding:0 10px;font:800 8px Inter;cursor:pointer}",
-".sdr-call-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}.sdr-call-facts>span{display:flex;flex-direction:column;gap:3px;padding:8px;border:1px solid #1c3034;border-radius:8px;background:#081216;font-size:9px;color:#9ab0aa}.sdr-call-facts b{font-size:7px;color:#607b75;text-transform:uppercase;letter-spacing:.08em}.sdr-detail-btn{border:1px solid #285043;background:#10231f;color:#bdf4d8;border-radius:8px;padding:7px 9px;font:800 9px Inter;cursor:pointer}.sdr-modal-backdrop{position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.72);display:grid;place-items:center;padding:24px}.sdr-modal{width:min(920px,96vw);max-height:90vh;overflow:auto;border:1px solid #28413f;background:#081216;border-radius:16px;padding:18px;box-shadow:0 30px 100px rgba(0,0,0,.55)}.sdr-modal>header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-bottom:1px solid #1d3034;padding-bottom:12px}.sdr-modal>header span{font-size:8px;color:#62cca0;font-weight:900;letter-spacing:.12em}.sdr-modal>header h2{margin:4px 0 0;font-size:21px}.sdr-modal>header button{border:1px solid #33484b;background:#101c20;color:#dbe7e3;border-radius:8px;padding:8px 10px;font:700 9px Inter;cursor:pointer}.sdr-detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}.sdr-detail-grid article{border:1px solid #1d3034;background:#0b171b;border-radius:9px;padding:10px}.sdr-detail-grid span{display:block;font-size:7px;color:#637c76;text-transform:uppercase}.sdr-detail-grid b{display:block;margin-top:5px;font-size:10px}.sdr-detail-section{margin-top:14px}.sdr-detail-section h3{font-size:11px;margin:0 0 8px;color:#b9d6ce}.sdr-audio-list{display:grid;gap:8px}.sdr-audio-list article{border:1px solid #1d3034;background:#0b171b;border-radius:10px;padding:10px;display:grid;gap:8px}.sdr-audio-list article>div{display:flex;justify-content:space-between}.sdr-audio-list b{font-size:10px}.sdr-audio-list span{font-size:8px;color:#6f8983}.sdr-audio-list audio{display:none}.sdr-audio-actions{display:flex!important;justify-content:flex-start!important;gap:8px;align-items:center}.sdr-audio-actions button{border:1px solid #2d6b57;background:#123328;color:#c8f6e4;border-radius:8px;padding:8px 11px;font:800 9px Inter;cursor:pointer}.sdr-audio-actions button:disabled{opacity:.45;cursor:not-allowed}.sdr-audio-list a{width:max-content;color:#82d8b3;font-size:9px;font-weight:800;text-decoration:none}.sdr-audio-error{color:#ff9a9a;font-size:8px}.sdr-transcript-list{display:grid;gap:6px;max-height:42vh;overflow:auto}.sdr-transcript-list article{display:grid;grid-template-columns:50px minmax(0,1fr);gap:8px;border:1px solid #1a2c30;background:#091519;border-radius:8px;padding:8px}.sdr-transcript-list time{font:800 9px ui-monospace,SFMono-Regular,Menlo,monospace;color:#63cca1}.sdr-transcript-list b{font-size:9px;color:#e0eee9}.sdr-transcript-list p{margin:3px 0 0;font-size:10px;color:#94aaa4}.sdr-transcript-raw{white-space:pre-wrap;border:1px solid #1a2c30;background:#091519;border-radius:8px;padding:10px;font-size:10px;line-height:1.55;color:#94aaa4}",
+".sdr-call-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}.sdr-call-facts>span{display:flex;flex-direction:column;gap:3px;padding:8px;border:1px solid #1c3034;border-radius:8px;background:#081216;font-size:9px;color:#9ab0aa}.sdr-call-facts b{font-size:7px;color:#607b75;text-transform:uppercase;letter-spacing:.08em}.sdr-detail-btn{border:1px solid #285043;background:#10231f;color:#bdf4d8;border-radius:8px;padding:7px 9px;font:800 9px Inter;cursor:pointer}.sdr-modal-backdrop{position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.72);display:grid;place-items:center;padding:24px}.sdr-modal{width:min(920px,96vw);max-height:90vh;overflow:auto;border:1px solid #28413f;background:#081216;border-radius:16px;padding:18px;box-shadow:0 30px 100px rgba(0,0,0,.55)}.sdr-modal>header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-bottom:1px solid #1d3034;padding-bottom:12px}.sdr-modal>header span{font-size:8px;color:#62cca0;font-weight:900;letter-spacing:.12em}.sdr-modal>header h2{margin:4px 0 0;font-size:21px}.sdr-modal>header button{border:1px solid #33484b;background:#101c20;color:#dbe7e3;border-radius:8px;padding:8px 10px;font:700 9px Inter;cursor:pointer}.sdr-detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}.sdr-detail-grid article{border:1px solid #1d3034;background:#0b171b;border-radius:9px;padding:10px}.sdr-detail-grid span{display:block;font-size:7px;color:#637c76;text-transform:uppercase}.sdr-detail-grid b{display:block;margin-top:5px;font-size:10px}.sdr-detail-section{margin-top:14px}.sdr-detail-section h3{font-size:11px;margin:0 0 8px;color:#b9d6ce}.sdr-audio-list{display:grid;gap:8px}.sdr-audio-list article{border:1px solid #1d3034;background:#0b171b;border-radius:10px;padding:10px;display:grid;gap:10px}.sdr-audio-list article>div{display:flex;justify-content:space-between}.sdr-audio-list b{font-size:10px}.sdr-audio-list span{font-size:8px;color:#6f8983}.sdr-audio-list audio{display:none}.sdr-audio-timeline{display:grid!important;gap:6px}.sdr-audio-time{display:flex!important;justify-content:space-between!important;align-items:center}.sdr-audio-time b,.sdr-audio-time span{font:800 9px ui-monospace,SFMono-Regular,Menlo,monospace;color:#9fdcc4}.sdr-audio-timeline input[type=range]{width:100%;accent-color:#63cca1;cursor:pointer}.sdr-audio-actions{display:flex!important;justify-content:flex-start!important;gap:8px;align-items:center;flex-wrap:wrap}.sdr-audio-actions button{border:1px solid #2d6b57;background:#123328;color:#c8f6e4;border-radius:8px;padding:8px 11px;font:800 9px Inter;cursor:pointer}.sdr-audio-actions button:disabled{opacity:.45;cursor:not-allowed}.sdr-audio-list a{width:max-content;color:#82d8b3;font-size:9px;font-weight:800;text-decoration:none}.sdr-audio-error{color:#ff9a9a;font-size:8px}.sdr-transcript-list{display:grid;gap:6px;max-height:42vh;overflow:auto;scroll-behavior:smooth}.sdr-transcript-list article{display:grid;grid-template-columns:50px minmax(0,1fr);gap:8px;border:1px solid #1a2c30;background:#091519;border-radius:8px;padding:8px;transition:border-color .15s ease,background .15s ease,transform .15s ease}.sdr-transcript-list article.active{border-color:#4f9d82;background:#102a22;transform:translateX(2px)}.sdr-transcript-list article.active time{color:#c9ffe9}.sdr-transcript-list time{font:800 9px ui-monospace,SFMono-Regular,Menlo,monospace;color:#63cca1}.sdr-transcript-list b{font-size:9px;color:#e0eee9}.sdr-transcript-list p{margin:3px 0 0;font-size:10px;color:#94aaa4}.sdr-transcript-list article.active p{color:#d3e9e1}.sdr-transcript-raw{white-space:pre-wrap;border:1px solid #1a2c30;background:#091519;border-radius:8px;padding:10px;font-size:10px;line-height:1.55;color:#94aaa4}",
 "@media(max-width:760px){.sdr-call-kpis{grid-template-columns:1fr 1fr}.sdr-filter-panel{display:grid;grid-template-columns:1fr 1fr}.sdr-filter-search{grid-column:1/-1}.sdr-call-facts,.sdr-detail-grid{grid-template-columns:1fr 1fr}.sdr-modal-backdrop{padding:8px}.sdr-modal{max-height:95vh;padding:12px}.sdr-root{display:block;overflow:auto}.sdr-sidebar{height:auto;position:sticky;top:0;z-index:8}.sdr-brand,.sdr-profile{display:none}.sdr-sidebar nav{display:flex}.sdr-sidebar nav button{white-space:nowrap}.sdr-main{height:auto}.sdr-top{position:relative;align-items:flex-start;flex-direction:column;padding:16px}.sdr-content{padding:14px 12px 70px}.sdr-kpis{grid-template-columns:1fr 1fr}.sdr-actions{flex-wrap:wrap}}"
 ].join("");

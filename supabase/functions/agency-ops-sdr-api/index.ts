@@ -195,6 +195,20 @@ Deno.serve(async(req:Request)=>{
       detailLead=data||null;
     }
     const resolvedDetailName=safeContactName(detailLead?.company||detailLead?.name||sessionRow.metadata?.commercial_prospect?.name||sessionRow.metadata?.remote_name||sessionRow.metadata?.contact_name);
+    const displaySegments=safeSegments.map((row:Row)=>{
+      const rawSpeaker=clean(row.speaker_name||row.speaker_key||"");
+      const normalized=rawSpeaker.toLowerCase();
+      const isGenericRemote=normalized==="contato whatsapp"
+        || normalized==="contato whatsapp desktop"
+        || normalized==="contato"
+        || normalized==="participante";
+      return isGenericRemote&&resolvedDetailName
+        ? {...row,speaker_name:resolvedDetailName,speaker_key:resolvedDetailName}
+        : row;
+    });
+    const displayTranscriptText=(segments||[]).length
+      ? (displaySegments.length?displaySegments.map((row:Row)=>`[${clock(row.started_ms)}] ${clean(row.speaker_name||"Participante")}: ${clean(row.text)}`).join("\n\n"):null)
+      : safeTranscriptText;
 
     return reply({
       call:{
@@ -210,10 +224,10 @@ Deno.serve(async(req:Request)=>{
         identity_status:sessionRow.metadata?.identity_resolution?.status||"UNRESOLVED",
         duration_seconds:durationSeconds,
         transcript_id:sessionRow.transcript_id||null,
-        transcript_text:safeTranscriptText,
+        transcript_text:displayTranscriptText,
         transcript_summary:transcript?.metadata?.donnah_summary||transcript?.summary||null,
         participants:Array.isArray(transcript?.participants)?transcript.participants:[],
-        segments:safeSegments,
+        segments:displaySegments,
         audio,
         audio_status:sessionRow.audio_status||null,
         audio_last_error:sessionRow.audio_last_error||null,
