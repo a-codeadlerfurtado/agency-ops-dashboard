@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Text.RegularExpressions;
-using System.Windows.Automation;
+using FlaUI.Core.AutomationElements;
+using FlaUI.UIA3;
 
 namespace RelatoAI.DesktopAgent;
 
@@ -26,7 +27,8 @@ internal static class WhatsAppDesktopUiIdentityResolver
         "WhatsApp","Chamadas","Ligações","Chamada de voz","Chamada de vídeo","Encerrar","Desligar",
         "Silenciar","Mudo","Microfone","Câmera","Camera","Adicionar participante","Participantes",
         "Voltar","Pesquisar","Search","Menu","Mais opções","Minimizar","Maximizar","Fechar",
-        "Atender","Recusar","Em chamada","Ligação em andamento","Chamada em andamento"
+        "Atender","Recusar","Em chamada","Ligação em andamento","Chamada em andamento",
+        "Conversas","Chats","Status","Comunidades","Configurações","Settings"
     };
 
     public static WhatsAppDesktopUiIdentity? TryResolve()
@@ -39,11 +41,12 @@ internal static class WhatsAppDesktopUiIdentityResolver
                 .ToHashSet();
             if (whatsappPids.Count == 0) return null;
 
-            var roots = AutomationElement.RootElement.FindAll(TreeScope.Children, Condition.TrueCondition)
-                .Cast<AutomationElement>()
+            using var automation = new UIA3Automation();
+            var desktop = automation.GetDesktop();
+            var roots = desktop.FindAllChildren()
                 .Where(el =>
                 {
-                    try { return whatsappPids.Contains(el.Current.ProcessId) && !el.Current.BoundingRectangle.IsEmpty; }
+                    try { return whatsappPids.Contains(el.Properties.ProcessId.Value); }
                     catch { return false; }
                 })
                 .ToArray();
@@ -52,38 +55,35 @@ internal static class WhatsAppDesktopUiIdentityResolver
             foreach (var root in roots)
             {
                 var windowName = SafeName(root);
-                var rect = SafeRect(root);
+                var rect = root.BoundingRectangle;
                 if (!string.IsNullOrWhiteSpace(windowName) && !windowName.Equals("WhatsApp", StringComparison.OrdinalIgnoreCase))
-                    ScoreText(windowName, 120, best, "window_title");
+                    ScoreText(windowName, 130, best, "window_title");
 
-                AutomationElementCollection nodes;
-                try { nodes = root.FindAll(TreeScope.Descendants, Condition.TrueCondition); }
+                AutomationElement[] nodes;
+                try { nodes = root.FindAllDescendants(); }
                 catch { continue; }
 
-                var take = Math.Min(nodes.Count, 900);
-                for (var i = 0; i < take; i++)
+                foreach (var node in nodes.Take(1200))
                 {
-                    AutomationElement node;
-                    try { node = nodes[i]; } catch { continue; }
                     var name = SafeName(node);
                     if (string.IsNullOrWhiteSpace(name) || name.Length > 180) continue;
-                    var bounds = SafeRect(node);
+                    var bounds = node.BoundingRectangle;
                     if (bounds.IsEmpty) continue;
 
                     var score = 0;
                     if (!rect.IsEmpty)
                     {
                         var relativeY = (bounds.Top - rect.Top) / Math.Max(1, rect.Height);
-                        if (relativeY >= 0 && relativeY <= .38) score += 70;
+                        if (relativeY >= 0 && relativeY <= .38) score += 80;
                         else if (relativeY <= .62) score += 25;
-                        else score -= 25;
+                        else score -= 35;
                     }
 
                     try
                     {
-                        var type = node.Current.ControlType;
-                        if (type == ControlType.Text) score += 30;
-                        if (type == ControlType.Button) score += 5;
+                        var type = node.ControlType;
+                        if (type == FlaUI.Core.Definitions.ControlType.Text) score += 30;
+                        if (type == FlaUI.Core.Definitions.ControlType.Button) score += 5;
                     }
                     catch { }
 
@@ -92,12 +92,12 @@ internal static class WhatsAppDesktopUiIdentityResolver
             }
 
             var winner = best.OrderByDescending(x => x.score).FirstOrDefault();
-            if (winner.score < 80) return null;
+            if (winner.score < 90) return null;
             return new WhatsAppDesktopUiIdentity(
                 winner.name,
                 winner.phone,
                 "WHATSAPP_DESKTOP_UIA",
-                Math.Min(0.99, 0.70 + Math.Max(0, winner.score - 80) / 500.0),
+                Math.Min(0.99, 0.72 + Math.Max(0, winner.score - 90) / 500.0),
                 winner.evidence);
         }
         catch
@@ -121,13 +121,13 @@ internal static class WhatsAppDesktopUiIdentityResolver
             var callName = CleanName(callMatch.Groups["name"].Value);
             var callPhone = NormalizePhone(text);
             if (callName is not null || callPhone is not null)
-                output.Add((baseScore + 180, callName, callPhone, source + ":call_label:" + text[..Math.Min(text.Length, 120)]));
+                output.Add((baseScore + 200, callName, callPhone, source + ":call_label:" + text[..Math.Min(text.Length, 120)]));
         }
 
         var phone = NormalizePhone(text);
         var name = CleanName(text);
         if (phone is not null)
-            output.Add((baseScore + 130, name, phone, source + ":phone:" + text[..Math.Min(text.Length, 120)]));
+            output.Add((baseScore + 150, name, phone, source + ":phone:" + text[..Math.Min(text.Length, 120)]));
         else if (name is not null)
             output.Add((baseScore + 35, name, null, source + ":name:" + text[..Math.Min(text.Length, 120)]));
     }
@@ -139,7 +139,7 @@ internal static class WhatsAppDesktopUiIdentityResolver
         if (Ignore.Contains(text)) return null;
         if (PhoneRegex.IsMatch(text) && text.Count(char.IsLetter) < 2) return null;
         if (text.Contains("WhatsApp", StringComparison.OrdinalIgnoreCase) && text.Length < 35) return null;
-        if (text.Any(ch => char.IsControl(ch))) return null;
+        if (text.Any(char.IsControl)) return null;
         var letters = text.Count(char.IsLetter);
         if (letters < 2) return null;
         if (text.Count(char.IsDigit) > Math.Max(3, text.Length / 2)) return null;
@@ -158,13 +158,7 @@ internal static class WhatsAppDesktopUiIdentityResolver
 
     private static string SafeName(AutomationElement element)
     {
-        try { return element.Current.Name?.Trim() ?? ""; }
+        try { return element.Name?.Trim() ?? ""; }
         catch { return ""; }
-    }
-
-    private static System.Windows.Rect SafeRect(AutomationElement element)
-    {
-        try { return element.Current.BoundingRectangle; }
-        catch { return System.Windows.Rect.Empty; }
     }
 }
