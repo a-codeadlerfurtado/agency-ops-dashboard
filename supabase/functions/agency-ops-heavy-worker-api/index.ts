@@ -756,11 +756,139 @@ Deno.serve(async (req) => {
     if (action === "meeting_commit") {
       const transcriptId = Number(body.transcript_id || 0);
       if (!Number.isInteger(transcriptId) || transcriptId <= 0) return json({ error: "transcript_id_required" }, 400);
-      const analysis = body.analysis && typeof body.analysis === "object" && !Array.isArray(body.analysis) ? body.analysis as Record<string, unknown> : {};
-      const summary = String(analysis.summary ?? "").trim().slice(0, 20000);
+      let analysis = body.analysis && typeof body.analysis === "object" && !Array.isArray(body.analysis)
+        ? body.analysis as Record<string, unknown>
+        : {};
+
+      // The VPS keeps a tiny local model as a resilience fallback. If that model
+      // times out, enrich the same transcript with OpenAI here before touching CRM.
+      // This keeps automatic CRM handoff useful even when Ollama is cold/slow.
+      const fallbackModel = String(analysis.model || "").toLowerCase();
+      const needsReliableCommercialAnalysis = fallbackModel.includes("fallback") || Boolean(analysis.fallback_reason);
+      if (needsReliableCommercialAnalysis) {
+        try {
+          const analysisDb = client("agency_ops");
+          const { data: transcriptForAi } = await analysisDb.from("meeting_transcripts")
+            .select("id,source_file_name,client_name_raw,owner_person,transcript_text,transcript_source")
+            .eq("id", transcriptId).maybeSingle();
+          const [openaiKey, relatoModel, taskModel] = await Promise.all([
+            secret("OPENAI_API_KEY"), secret("RELATO_AI_MODEL"), secret("TASK_ENGINE_MODEL")
+          ]);
+          if (openaiKey && transcriptForAi?.transcript_text) {
+            const model = relatoModel || taskModel || "gpt-5-mini";
+            const expected = {
+              summary: "", decisions: [], commitments: [], action_items: [], summary_topics: [],
+              highlights: { opportunities: [], insights: [], ideas: [], objectives: [], problems: [], lessons: [] },
+              keywords: [], rewritten_notes: [], objections: [], pain_points: [],
+              primary_pain: "", secondary_pains: [], goals: [], urgency: "", decision_role: "",
+              current_structure: "", marketing_investment: "", broker_count: 0, services_interest: [],
+              buying_signals: [], closing_risks: [], closer_briefing: "", opportunities: [], follow_up: ""
+            };
+            const system = [
+              "Você analisa ligações e reuniões comerciais de SDR em português do Brasil.",
+              "Use somente fatos presentes na transcrição. Nunca invente.",
+              "Retorne APENAS JSON válido.",
+              "Separe dor primária e secundárias, objetivos, urgência, decisor, estrutura atual, investimento, equipe, serviços de interesse, objeções, sinais de compra, riscos e próximo passo.",
+              "closer_briefing deve preparar o closer: contexto, o que explorar, o que validar e o que evitar prometer.",
+              "Se um dado não existir, use string vazia, 0 ou array vazio."
+            ].join("\n");
+            const user = [
+              `SDR/RESPONSÁVEL: ${String(transcriptForAi.owner_person || "")}`,
+              `PROSPECT/CLIENTE: ${String(transcriptForAi.client_name_raw || "")}`,
+              `FONTE: ${String(transcriptForAi.transcript_source || "")}`,
+              `FORMATO JSON OBRIGATÓRIO: ${JSON.stringify(expected)}`,
+              "",
+              "TRANSCRIÇÃO:",
+              String(transcriptForAi.transcript_text).slice(0, 50000)
+            ].join("\n");
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 90_000);
+            try {
+              const response = await fetch("https://api.openai.com/v1/chat/completions", {
+                method: "POST",
+                headers: { authorization: `Bearer ${openaiKey}`, "content-type": "application/json" },
+                body: JSON.stringify({
+                  model,
+                  response_format: { type: "json_object" },
+                  messages: [{ role: "system", content: system }, { role: "user", content: user }],
+                }),
+                signal: controller.signal,
+              });
+              const raw = await response.text();
+              if (!response.ok) throw new Error(`openai_${response.status}:${raw.slice(0,500)}`);
+              const envelope = JSON.parse(raw || "{}");
+              const enriched = parseJsonObject(envelope?.choices?.[0]?.message?.content || "{}");
+              if (String(enriched.summary || "").trim())
+                analysis = { ...enriched, model, provider: "OPENAI_FALLBACK" };
+            } finally {
+              clearTimeout(timeout);
+            }
+          }
+        } catch (error) {
+          console.error("commercial_openai_fallback_failed", String(error instanceof Error ? error.message : error));
+        }
+      }
+
+      let summary = String(analysis.summary ?? "").trim().slice(0, 20000);
       if (!summary) return json({ error: "summary_required" }, 400);
       const arr = (value: unknown, max = 100) => Array.isArray(value) ? value.slice(0, max) : [];
       const sb = client("agency_ops");
+
+      // Commercial AI is allowed to summarize, but not to manufacture qualification.
+      // Every structured field below needs explicit evidence in the transcript.
+      const { data: evidenceTranscript } = await sb.from("meeting_transcripts")
+        .select("transcript_text,owner_person,transcript_source")
+        .eq("id", transcriptId).maybeSingle();
+      const evidence = String(evidenceTranscript?.transcript_text || "").normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      const hasBrokerEvidence = /\b\d{1,4}\s+(?:corretores?|vendedores?|consultores?)\b/i.test(evidence);
+      const hasInvestmentEvidence = /\b(?:investe|investimento|verba|orcamento|midia|trafego|meta)[^\n]{0,80}(?:r\$\s*[\d.,]+|\d[\d.,]*\s*(?:mil|k))\b/i.test(evidence)
+        || /\b(?:r\$\s*[\d.,]+|\d[\d.,]*\s*(?:mil|k))[^\n]{0,80}(?:investe|investimento|verba|orcamento|midia|trafego|meta)\b/i.test(evidence);
+      const hasDecisionEvidence = /\b(?:quem decide|decis(?:ao|or)|socio|socia|dono|dona|proprietario|proprietaria|diretor|diretora|responsavel pela decisao)\b/i.test(evidence);
+      const hasStructureEvidence = /\b(?:equipe|corretores?|vendedores?|consultores?|crm|agencia|gestor(?:a)?|time comercial|time de vendas)\b/i.test(evidence);
+      const hasServiceEvidence = /\b(?:trafego|marketing|anuncios?|meta ads|google ads|criativos?|crm|automacao|site|landing page|captacao|gestao de trafego|social media|conteudo|leads?)\b/i.test(evidence);
+      const hasPainEvidence = /\b(?:problema|dificuldade|dor|insatisfeit|nao funciona|nao vende|nao converte|lead(?:s)? (?:ruins?|fracos?|desqualificados?)|sem leads?|falta de leads?|cpl|custo por lead|retorno baixo|resultado ruim|vendas? baixas?)\b/i.test(evidence);
+      const hasGoalEvidence = /\b(?:quero|queremos|preciso|precisamos|objetivo|meta)\b[^\n]{0,100}\b(?:vender|vendas|captar|captacao|lead|crescer|aumentar|melhorar|reduzir|escalar|faturar|resultado|conversao)\b/i.test(evidence)
+        || /\b(?:aumentar|melhorar|reduzir|escalar|crescer|gerar)\b[^\n]{0,80}\b(?:vendas?|leads?|conversao|faturamento|resultado)\b/i.test(evidence);
+      const hasUrgencyEvidence = /\b(?:urgente|urgencia|o quanto antes|quanto antes|preciso resolver|precisamos resolver|ainda este mes|ate o fim do mes|para ontem)\b/i.test(evidence);
+      const hasBuyingEvidence = /\b(?:quero contratar|queremos contratar|vamos fechar|fechar contrato|mandar proposta|envia a proposta|gostei da proposta|podemos comecar|vamos comecar|qual o valor|quanto custa)\b/i.test(evidence);
+      const schedulingEvidence = /\b(?:reuniao marcada|agendar|marcar|horario|disponibilidade|reagendar|remarcar|antecipar a reuniao)\b/i.test(evidence);
+      const substantiveCommercialEvidence = hasPainEvidence || hasGoalEvidence || hasInvestmentEvidence || hasBrokerEvidence
+        || hasDecisionEvidence || hasServiceEvidence || hasBuyingEvidence;
+
+      if (!hasBrokerEvidence) analysis.broker_count = 0;
+      if (!hasInvestmentEvidence) analysis.marketing_investment = "";
+      if (!hasDecisionEvidence) analysis.decision_role = "";
+      if (!hasStructureEvidence) analysis.current_structure = "";
+      if (!hasServiceEvidence) analysis.services_interest = [];
+      if (!hasPainEvidence) {
+        analysis.primary_pain = "";
+        analysis.secondary_pains = [];
+        analysis.pain_points = [];
+      }
+      if (!hasGoalEvidence) analysis.goals = [];
+      if (!hasUrgencyEvidence) analysis.urgency = "";
+      if (!hasBuyingEvidence) analysis.buying_signals = [];
+
+      if (schedulingEvidence && !substantiveCommercialEvidence) {
+        summary = "Ligação de agendamento, confirmação ou reagendamento. Não houve qualificação comercial suficiente nesta interação; manter a reunião como próximo passo e validar dores, cenário atual, orçamento, decisor e objetivos na conversa de fechamento.";
+        analysis.primary_pain = "";
+        analysis.secondary_pains = [];
+        analysis.pain_points = [];
+        analysis.goals = [];
+        analysis.urgency = "";
+        analysis.decision_role = "";
+        analysis.current_structure = "";
+        analysis.marketing_investment = "";
+        analysis.broker_count = 0;
+        analysis.services_interest = [];
+        analysis.objections = [];
+        analysis.buying_signals = [];
+        analysis.closing_risks = [];
+        analysis.follow_up = "Confirmar ou realizar a reunião comercial já combinada.";
+        analysis.closer_briefing = "Contato usado apenas para agendamento/confirmação. Não tratar disponibilidade de agenda como dor comercial. Na reunião, validar dores primárias e secundárias, cenário atual, objetivos, investimento, decisor, objeções e urgência antes de avançar para proposta.";
+      }
+
       const highlights = analysis.highlights && typeof analysis.highlights === "object" && !Array.isArray(analysis.highlights) ? analysis.highlights as Record<string, unknown> : {};
       const signals = {
         action_items: arr(analysis.action_items),
@@ -899,17 +1027,24 @@ Deno.serve(async (req) => {
         if (leadId) {
           const { data: existingProfile } = await sb.from("commercial_prospect_profiles")
             .select("*").eq("lead_id", leadId).maybeSingle();
-          const mergedPain = uniq(existingProfile?.pain_points || [], painPoints);
-          const mergedSecondary = uniq(existingProfile?.secondary_pains || [], secondaryPains);
-          const mergedGoals = uniq(existingProfile?.goals || [], goals);
-          const mergedObjections = uniq(existingProfile?.objections || [], objections);
-          const mergedServices = uniq(existingProfile?.services_interest || [], servicesInterest);
-          const mergedBuying = uniq(existingProfile?.buying_signals || [], buyingSignals);
-          const mergedRisks = uniq(existingProfile?.closing_risks || [], closingRisks);
+          const sameAutoTranscript = Number(existingProfile?.last_transcript_id || 0) === transcriptId
+            && existingProfile?.metadata?.human_confirmed !== true;
+          const mergedPain = sameAutoTranscript ? painPoints : uniq(existingProfile?.pain_points || [], painPoints);
+          const mergedSecondary = sameAutoTranscript ? secondaryPains : uniq(existingProfile?.secondary_pains || [], secondaryPains);
+          const mergedGoals = sameAutoTranscript ? goals : uniq(existingProfile?.goals || [], goals);
+          const mergedObjections = sameAutoTranscript ? objections : uniq(existingProfile?.objections || [], objections);
+          const mergedServices = sameAutoTranscript ? servicesInterest : uniq(existingProfile?.services_interest || [], servicesInterest);
+          const mergedBuying = sameAutoTranscript ? buyingSignals : uniq(existingProfile?.buying_signals || [], buyingSignals);
+          const mergedRisks = sameAutoTranscript ? closingRisks : uniq(existingProfile?.closing_risks || [], closingRisks);
+          const currentUrgency = String(signals.urgency || "").trim() || null;
+          const currentDecisionRole = String(signals.decision_role || "").trim() || null;
+          const currentStructure = String(signals.current_structure || "").trim() || null;
+          const currentInvestment = String(signals.marketing_investment || "").trim() || null;
+          const currentBrokerCount = signals.broker_count || null;
 
           const { error: profileError } = await sb.from("commercial_prospect_profiles").upsert({
             lead_id: leadId,
-            primary_pain: primaryPain || existingProfile?.primary_pain || null,
+            primary_pain: sameAutoTranscript ? primaryPain : (primaryPain || existingProfile?.primary_pain || null),
             secondary_pains: mergedSecondary,
             pain_points: mergedPain,
             goals: mergedGoals,
@@ -917,11 +1052,11 @@ Deno.serve(async (req) => {
             services_interest: mergedServices,
             buying_signals: mergedBuying,
             closing_risks: mergedRisks,
-            urgency: String(signals.urgency || "").trim() || existingProfile?.urgency || null,
-            decision_role: String(signals.decision_role || "").trim() || existingProfile?.decision_role || null,
-            current_structure: String(signals.current_structure || "").trim() || existingProfile?.current_structure || null,
-            marketing_investment: String(signals.marketing_investment || "").trim() || existingProfile?.marketing_investment || null,
-            broker_count: signals.broker_count || existingProfile?.broker_count || null,
+            urgency: sameAutoTranscript ? currentUrgency : (currentUrgency || existingProfile?.urgency || null),
+            decision_role: sameAutoTranscript ? currentDecisionRole : (currentDecisionRole || existingProfile?.decision_role || null),
+            current_structure: sameAutoTranscript ? currentStructure : (currentStructure || existingProfile?.current_structure || null),
+            marketing_investment: sameAutoTranscript ? currentInvestment : (currentInvestment || existingProfile?.marketing_investment || null),
+            broker_count: sameAutoTranscript ? currentBrokerCount : (currentBrokerCount || existingProfile?.broker_count || null),
             qualification_summary: summary,
             closer_briefing: closerBriefing,
             next_step: followUp || existingProfile?.next_step || null,

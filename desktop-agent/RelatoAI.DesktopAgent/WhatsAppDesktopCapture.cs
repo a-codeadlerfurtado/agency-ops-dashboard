@@ -365,41 +365,31 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             if (localPath is not null && File.Exists(localPath) && new FileInfo(localPath).Length > 1000) roles.Add("local");
             if (roles.Count == 0) throw new InvalidOperationException("Nenhum áudio capturado");
 
-            string? mixedPath = null;
-            var dir = Path.GetDirectoryName(localPath ?? remotePath ?? "");
-            if (!string.IsNullOrWhiteSpace(dir))
-            {
-                mixedPath = Path.Combine(dir, "meeting.mp3");
-                var mixItem = new MeetingAudioOutboxItem(
-                    id, started, ended, localPath ?? "", remotePath ?? "", mixedPath,
-                    "RECORDED_LOCAL", 0, null, DateTimeOffset.Now);
-                if (MeetingAudioMixer.TryCreateMixedMp3(mixItem, out _)
-                    && File.Exists(mixedPath) && new FileInfo(mixedPath).Length > 1000)
-                    roles.Add("mixed");
-                else mixedPath = null;
-            }
-
+            // Do not block finalization on local MP3 encoding. Upload the two raw
+            // channels immediately; the heavy worker mixes them with ffmpeg before STT.
             var prepared = await api.PrepareCallAsync(
                 id, started, ended, resolvedContact, roles, durationMs,
                 identity.LocalPhone, identity.RemotePhone, identity.Source);
-            var uploaded = new List<object>();
-            foreach (var targetUpload in prepared.Uploads.OrderBy(x => x.Role == "mixed" ? 0 : 1))
+
+            var uploadTasks = prepared.Uploads.Select(async targetUpload =>
             {
                 string? file = targetUpload.Role switch
                 {
                     "local" => localPath,
                     "remote" => remotePath,
-                    "mixed" => mixedPath,
                     _ => null
                 };
-                if (file is null || !File.Exists(file)) continue;
-                var mime = targetUpload.Role == "mixed" ? "audio/mpeg" : "audio/wav";
+                if (file is null || !File.Exists(file)) return (object?)null;
+                const string mime = "audio/wav";
                 await api.UploadAsync(targetUpload.SignedUrl, file, mime);
                 var fileBytes = new FileInfo(file).Length;
-                uploaded.Add(new { role = targetUpload.Role, path = targetUpload.Path, bytes = fileBytes, mime_type = mime });
-                if (targetUpload.Role == "mixed")
-                    await api.MarkMixedAudioReadyAsync(id, targetUpload.Path, fileBytes, durationMs);
-            }
+                return (object)new { role = targetUpload.Role, path = targetUpload.Path, bytes = fileBytes, mime_type = mime };
+            }).ToArray();
+
+            var uploaded = (await Task.WhenAll(uploadTasks))
+                .Where(item => item is not null)
+                .Cast<object>()
+                .ToList();
             await api.FinalizeCallAsync(id, uploaded, durationMs);
             success = true;
             CallFinished?.Invoke(id, true, null);

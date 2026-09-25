@@ -117,6 +117,21 @@ Deno.serve(async(req:Request)=>{
     if(sessionError) return reply({error:"detail_session_failed",detail:sessionError.message},500);
     if(!sessionRow||!String(sessionRow.capture_mode||"").toUpperCase().includes("WHATSAPP")) return reply({error:"call_not_found"},404);
 
+    if(requestUrl.searchParams.get("audio")==="1"){
+      if(!sessionRow.audio_mixed_path) return reply({error:"audio_not_ready"},404);
+      const storage=db.storage.from("relato-call-audio");
+      const {data:signed,error:signedError}=await storage.createSignedUrl(String(sessionRow.audio_mixed_path),120);
+      if(signedError||!signed?.signedUrl) return reply({error:"audio_sign_failed",detail:signedError?.message},500);
+      const upstream=await fetch(signed.signedUrl,{headers:{accept:"audio/mpeg"}});
+      if(!upstream.ok||!upstream.body) return reply({error:"audio_fetch_failed",status:upstream.status},502);
+      const headers=new Headers(CORS);
+      headers.set("content-type",sessionRow.audio_mime_type||"audio/mpeg");
+      headers.set("cache-control","private, no-store");
+      const length=upstream.headers.get("content-length");
+      if(length) headers.set("content-length",length);
+      return new Response(upstream.body,{status:200,headers});
+    }
+
     let transcript:Row|null=null;
     if(sessionRow.transcript_id){
       const {data,error}=await ops.from("meeting_transcripts")

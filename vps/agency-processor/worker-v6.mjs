@@ -7,8 +7,8 @@ const execFileAsync = promisify(execFile);
 const api = process.env.WORKER_API_URL;
 const token = process.env.AGENCY_WORKER_TOKEN;
 const worker = process.env.WORKER_ID || "leonardoimobi-primary-1";
-const pollMinMs = Number(process.env.POLL_MIN_MS || 5000);
-const pollMaxMs = Number(process.env.POLL_MAX_MS || 60000);
+const pollMinMs = Math.max(1000, Math.min(Number(process.env.POLL_MIN_MS || 3000), 5000));
+const pollMaxMs = Math.max(pollMinMs, Math.min(Number(process.env.POLL_MAX_MS || 10000), 10000));
 const overdueDefaultIntervalMs = Number(process.env.OVERDUE_DEFAULT_INTERVAL_MS || 120000);
 const apiTimeoutMs = Number(process.env.API_TIMEOUT_MS || 90000);
 const calendarApi = process.env.GOOGLE_CALENDAR_API_URL || "https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-google-calendar-api";
@@ -500,7 +500,7 @@ const analysisSchema = {
   required: ["summary","decisions","commitments","action_items","summary_topics","highlights","keywords","rewritten_notes","objections","pain_points","primary_pain","secondary_pains","goals","urgency","decision_role","current_structure","marketing_investment","broker_count","services_interest","buying_signals","closing_risks","closer_briefing","opportunities","follow_up"]
 };
 
-async function ollamaJson(prompt, timeoutMs = 120000) {
+async function ollamaJson(prompt, timeoutMs = 120000, schema = analysisSchema, numPredict = 2048) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -512,8 +512,9 @@ async function ollamaJson(prompt, timeoutMs = 120000) {
         messages: [{ role: "system", content: "Responda somente com JSON vÃ¡lido em portuguÃªs do Brasil. NÃ£o invente fatos." }, { role: "user", content: prompt }],
         stream: false,
         think: false,
-        format: analysisSchema,
-        options: { temperature: 0.1, num_ctx: 8192, num_predict: 2048 },
+        keep_alive: "30m",
+        format: schema,
+        options: { temperature: 0.1, num_ctx: 8192, num_predict: numPredict },
       }),
       signal: controller.signal,
     });
@@ -528,35 +529,108 @@ async function ollamaJson(prompt, timeoutMs = 120000) {
 
 const analysisShape = `Preencha todos os campos do schema sem inventar. summary deve resumir fatos concretos. Para contexto comercial, identifique a dor primária mais determinante, dores secundárias, objetivos, urgência/timing, papel de decisão, estrutura atual, investimento em marketing, quantidade de corretores quando explicitamente dita, serviços de interesse, sinais de compra, riscos de fechamento e objeções. closer_briefing deve ser um briefing curto e acionável para o closer: contexto, o que explorar, o que evitar prometer e pontos que precisam ser validados na reunião de fechamento. decisions e commitments devem conter apenas itens explicitamente presentes. action_items precisa preservar responsável, prazo e evidência quando existirem. Se não houver dado, use array vazio, string vazia ou 0.`;
 
-async function analyzeMeeting(snapshot) {
+const commercialAnalysisSchema = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    primary_pain: { type: "string" },
+    secondary_pains: { type: "array", items: { type: "string" } },
+    goals: { type: "array", items: { type: "string" } },
+    urgency: { type: "string" },
+    decision_role: { type: "string" },
+    current_structure: { type: "string" },
+    marketing_investment: { type: "string" },
+    broker_count: { type: "integer" },
+    services_interest: { type: "array", items: { type: "string" } },
+    objections: { type: "array", items: { type: "string" } },
+    buying_signals: { type: "array", items: { type: "string" } },
+    closing_risks: { type: "array", items: { type: "string" } },
+    closer_briefing: { type: "string" },
+    follow_up: { type: "string" }
+  },
+  required: ["summary","primary_pain","secondary_pains","goals","urgency","decision_role","current_structure","marketing_investment","broker_count","services_interest","objections","buying_signals","closing_risks","closer_briefing","follow_up"]
+};
+
+async function analyzeMeeting(snapshot, commercial = false) {
   const transcript = snapshot.transcript || {};
   const text = meetingText(snapshot);
   if (text.trim().length < 20) throw new Error("meeting_transcript_too_short");
-  const chunks = chunkText(text);
+  const chunks = chunkText(text, commercial ? 14000 : meetingChunkChars);
   const partials = [];
+  const commercialShape = `Resuma somente o que importa para a passagem SDR -> closer. Não transcreva a call inteira no resumo. Separe dor principal, dores secundárias, objetivos, urgência, decisor, estrutura atual, investimento, equipe, interesses, objeções, sinais de compra, riscos e próximo passo. closer_briefing deve ter no máximo 8 linhas e dizer ao closer o que explorar, o que validar e o que evitar prometer. Se a call for apenas agendamento/reagendamento, diga isso claramente e não invente dores.`;
   for (let i = 0; i < chunks.length; i++) {
-    const prompt = `VocÃª analisa uma reuniÃ£o em portuguÃªs do Brasil. Preserve nomes, nÃºmeros, datas, promessas e responsÃ¡veis exatamente como aparecem. ${analysisShape}\n\nContexto: tÃ­tulo=${transcript.source_file_name || "ReuniÃ£o"}; cliente=${transcript.client_name_raw || "nÃ£o vinculado"}; responsÃ¡vel=${transcript.owner_person || "nÃ£o definido"}.\n\nTrecho ${i + 1}/${chunks.length}:\n${chunks[i]}`;
-    partials.push(await ollamaJson(prompt));
+    const prompt = commercial
+      ? `Você analisa uma ligação comercial de SDR em português do Brasil. Preserve nomes, números, datas e compromissos exatamente como aparecem. ${commercialShape}\n\nResponsável=${transcript.owner_person || "não definido"}.\n\nTrecho ${i + 1}/${chunks.length}:\n${chunks[i]}`
+      : `VocÃª analisa uma reuniÃ£o em portuguÃªs do Brasil. Preserve nomes, nÃºmeros, datas, promessas e responsÃ¡veis exatamente como aparecem. ${analysisShape}\n\nContexto: tÃ­tulo=${transcript.source_file_name || "ReuniÃ£o"}; cliente=${transcript.client_name_raw || "nÃ£o vinculado"}; responsÃ¡vel=${transcript.owner_person || "nÃ£o definido"}.\n\nTrecho ${i + 1}/${chunks.length}:\n${chunks[i]}`;
+    partials.push(await ollamaJson(prompt, commercial ? 180000 : 120000, commercial ? commercialAnalysisSchema : analysisSchema, commercial ? 900 : 2048));
   }
   if (partials.length === 1) return { ...partials[0], model: meetingModel };
   const packed = JSON.stringify(partials).slice(0, 30000);
-  const finalPrompt = `Consolide anÃ¡lises parciais da MESMA reuniÃ£o. Remova duplicatas, preserve divergÃªncias relevantes e nÃ£o invente nada. ${analysisShape}\n\nAnÃ¡lises parciais:\n${packed}`;
-  const final = await ollamaJson(finalPrompt);
+  const finalPrompt = commercial
+    ? `Consolide as análises parciais da mesma ligação comercial. Remova duplicatas e não invente fatos. ${commercialShape}\n\nAnálises parciais:\n${packed}`
+    : `Consolide anÃ¡lises parciais da MESMA reuniÃ£o. Remova duplicatas, preserve divergÃªncias relevantes e nÃ£o invente nada. ${analysisShape}\n\nAnÃ¡lises parciais:\n${packed}`;
+  const final = await ollamaJson(finalPrompt, commercial ? 180000 : 120000, commercial ? commercialAnalysisSchema : analysisSchema, commercial ? 900 : 2048);
   return { ...final, model: meetingModel };
 }
 
-function fallbackMeetingAnalysis(snapshot, error) {
-  const raw = meetingText(snapshot).replace(/\s+/g, " ").trim();
-  const summary = raw.length > 1200 ? raw.slice(0, 1197) + "..." : raw;
+function fallbackMeetingAnalysis(snapshot, error, commercial = false) {
+  const full = meetingText(snapshot).trim();
+  const raw = full.replace(/\s+/g, " ").trim();
+  if (!commercial) {
+    const summary = raw.length > 1200 ? raw.slice(0, 1197) + "..." : raw;
+    return {
+      summary: summary || "Transcrição capturada; resumo automático indisponível.",
+      decisions: [], commitments: [], action_items: [], summary_topics: [],
+      highlights: { opportunities: [], insights: [], ideas: [], objectives: [], problems: [], lessons: [] },
+      keywords: [], rewritten_notes: [], objections: [], pain_points: [],
+      primary_pain: "", secondary_pains: [], goals: [], urgency: "", decision_role: "",
+      current_structure: "", marketing_investment: "", broker_count: 0, services_interest: [],
+      buying_signals: [], closing_risks: [], closer_briefing: "", opportunities: [], follow_up: "",
+      model: "extractive-fallback",
+      fallback_reason: String(error?.message || error || "analysis_failed").slice(0, 500),
+    };
+  }
+
+  const plainLines = full.split(/\n+/).map((line) => line.replace(/^\[[^\]]+\]\s*[^:]{1,80}:\s*/,"").trim()).filter(Boolean);
+  const pick = (rx, max = 4) => plainLines.filter((line) => rx.test(line)).slice(0, max);
+  const pains = pick(/\b(problema|dificuldade|dor|ruim|fraco|baixa|pouco|falta|sem |lead|venda|vender|capta|tr[aá]fego|retorno|resultado)\b/i, 5);
+  const objections = pick(/\b(caro|pre[cç]o|valor|contrato|n[aã]o posso|n[aã]o vai dar|sem tempo|agora n[aã]o|pensar|s[oó]cio)\b/i, 4);
+  const buying = pick(/\b(interess|quero|preciso|vamos|reuni[aã]o|disponibilidade|pode marcar|fechar|proposta)\b/i, 4);
+  const urgencyLines = pick(/\b(hoje|amanh[aã]|segunda|ter[cç]a|quarta|quinta|sexta|urgente|essa semana|este m[eê]s|agora)\b/i, 3);
+  const decision = pick(/\b(s[oó]cio|decide|decis[aã]o|dono|propriet[aá]rio|diretor|esposa|marido)\b/i, 2);
+  const structure = pick(/\b(corretor|corretores|equipe|imobili[aá]ria|ag[eê]ncia|crm|gestor|vendedor|vendedores)\b/i, 3);
+  const investMatch = raw.match(/(?:investe|investimento|verba|or[cç]amento)[^\n]{0,50}?(R\$\s*[\d.,]+|\d[\d.,]*\s*(?:mil|k))/i);
+  const brokerMatch = raw.match(/\b(\d{1,4})\s+(?:corretores?|vendedores?)\b/i);
+  const scheduling = /reuni[aã]o marcada|marcar|hor[aá]rio|disponibilidade/i.test(raw);
+  const unavailable = /n[aã]o posso|n[aã]o vai dar|n[aã]o tenho|sem disponibilidade|estou com cliente|t[oô] com cliente/i.test(raw);
+  let summary = "";
+  if (scheduling && unavailable) {
+    summary = "Ligação de confirmação/reagendamento. O prospect não teve disponibilidade para antecipar o encontro; manter ou reconfirmar a reunião já combinada no horário adequado.";
+  } else if (scheduling) {
+    summary = "Ligação comercial focada em agendamento/confirmação de reunião. Confirmar data, horário e participantes antes da reunião de fechamento.";
+  } else {
+    const salient = [...new Set([...pains, ...objections, ...buying])].slice(0, 4);
+    summary = salient.length ? salient.join(" ") : "Ligação comercial registrada; não houve informação suficiente para uma qualificação comercial completa.";
+  }
+  const closerBriefing = [
+    summary,
+    pains.length ? `Pontos para explorar: ${pains.slice(0,3).join(" | ")}` : null,
+    objections.length ? `Objeções/riscos: ${objections.slice(0,3).join(" | ")}` : null,
+    urgencyLines.length ? `Timing citado: ${urgencyLines.slice(0,2).join(" | ")}` : null,
+    "Validar na reunião tudo que não foi explicitamente confirmado pelo prospect."
+  ].filter(Boolean).join("\n");
   return {
-    summary: summary || "Transcrição capturada; resumo automático indisponível.",
+    summary,
     decisions: [], commitments: [], action_items: [], summary_topics: [],
-    highlights: { opportunities: [], insights: [], ideas: [], objectives: [], problems: [], lessons: [] },
-    keywords: [], rewritten_notes: [], objections: [], pain_points: [],
-    primary_pain: "", secondary_pains: [], goals: [], urgency: "", decision_role: "",
-    current_structure: "", marketing_investment: "", broker_count: 0, services_interest: [],
-    buying_signals: [], closing_risks: [], closer_briefing: "", opportunities: [], follow_up: "",
-    model: "extractive-fallback",
+    highlights: { opportunities: [], insights: [], ideas: [], objectives: [], problems: pains, lessons: [] },
+    keywords: [], rewritten_notes: [], objections,
+    pain_points: pains, primary_pain: pains[0] || "", secondary_pains: pains.slice(1),
+    goals: [], urgency: urgencyLines.join(" | "), decision_role: decision.join(" | "),
+    current_structure: structure.join(" | "), marketing_investment: investMatch?.[1] || "",
+    broker_count: Number(brokerMatch?.[1] || 0), services_interest: [],
+    buying_signals: buying, closing_risks: objections, closer_briefing,
+    opportunities: buying, follow_up: scheduling ? "Confirmar/realizar a reunião comercial já combinada." : "",
+    model: "commercial-extractive-fallback",
     fallback_reason: String(error?.message || error || "analysis_failed").slice(0, 500),
   };
 }
@@ -566,11 +640,12 @@ async function processMeetingJob(job) {
   if (!Number.isInteger(transcriptId) || transcriptId <= 0) throw new Error("meeting_job_missing_transcript_id");
   const snapshot = await call("meeting_snapshot", { transcript_id: transcriptId }, 120000);
   let analysis;
+  const commercial = Boolean(job?.payload?.commercial);
   try {
-    analysis = await analyzeMeeting(snapshot);
+    analysis = await analyzeMeeting(snapshot, commercial);
   } catch (error) {
     console.error(JSON.stringify({ event: "meeting_analysis_fallback", transcript_id: transcriptId, error: String(error?.message || error) }));
-    analysis = fallbackMeetingAnalysis(snapshot, error);
+    analysis = fallbackMeetingAnalysis(snapshot, error, commercial);
   }
   if (String(job?.payload?.mode || "execute") === "shadow") return { ok: true, shadow: true, transcript_id: transcriptId, analysis };
   const committed = await call("meeting_commit", { transcript_id: transcriptId, analysis }, 120000);
@@ -814,6 +889,14 @@ async function queueLoop() {
       // when Whisper is busy transcribing a previous call.
       const claimed = await call("claim", { limit: 3, visibility_timeout: 900 });
       const jobs = Array.isArray(claimed.jobs) ? claimed.jobs : [];
+      const priority = (job) => {
+        const type = String(job?.job_type || "").toUpperCase();
+        if (type === "CALL_TRANSCRIBE") return 0;
+        if (type === "MEETING_AUDIO_PROCESS") return 1;
+        if (type === "MEETING_POSTPROCESS") return 2;
+        return 3;
+      };
+      jobs.sort((a,b) => priority(a) - priority(b));
       if (!jobs.length) {
         await sleep(idleMs);
         idleMs = Math.min(Math.round(idleMs * 1.6), pollMaxMs);
