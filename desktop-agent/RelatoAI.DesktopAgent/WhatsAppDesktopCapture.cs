@@ -29,6 +29,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     private bool disposed;
     private volatile bool captureRestartRequested;
     private bool stoppingCaptureEngines;
+    private DateTimeOffset? uiIdentityLastProbe;
+    private WhatsAppDesktopUiIdentity? uiIdentity;
     private int ticking;
     public event Action<string>? StatusChanged;
     public event Action<string, string>? CallStarted;
@@ -88,6 +90,18 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             if ((localHot && age > TimeSpan.FromSeconds(1)) || age > TimeSpan.FromSeconds(12))
                 StartCall(process);
             return;
+        }
+
+        if (IsRecording && (uiIdentityLastProbe is null || now - uiIdentityLastProbe.Value > TimeSpan.FromSeconds(1.5)))
+        {
+            uiIdentityLastProbe = now;
+            var direct = WhatsAppDesktopUiIdentityResolver.TryResolve();
+            if (direct is not null && (uiIdentity is null || direct.Confidence >= uiIdentity.Confidence))
+            {
+                uiIdentity = direct;
+                if (!string.IsNullOrWhiteSpace(direct.Name) || !string.IsNullOrWhiteSpace(direct.Phone))
+                    StatusChanged?.Invoke("REC · contato identificado direto no WhatsApp Desktop");
+            }
         }
 
         if (micUsage.Available && micUsage.Active)
@@ -304,6 +318,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         callStarted = detectedStart;
         callPrivacyObservedActive = privacyStart > 0;
         callPrivacyStart = privacyStart;
+        uiIdentityLastProbe = null;
+        uiIdentity = WhatsAppDesktopUiIdentityResolver.TryResolve();
         var dir = Path.Combine(Path.GetTempPath(), "RelatoAI", sessionId);
         Directory.CreateDirectory(dir);
         remotePath = Path.Combine(dir, "remote.wav");
@@ -334,7 +350,10 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         var now = DateTimeOffset.Now;
         var ended = ResolvePrivacyTime(privacyStop, now);
         if (ended <= started || ended - started > TimeSpan.FromHours(12)) ended = now;
-        var contact = ResolveContactName(target);
+        var finalUiIdentity = WhatsAppDesktopUiIdentityResolver.TryResolve();
+        if (finalUiIdentity is not null && (uiIdentity is null || finalUiIdentity.Confidence >= uiIdentity.Confidence))
+            uiIdentity = finalUiIdentity;
+        var contact = !string.IsNullOrWhiteSpace(uiIdentity?.Name) ? uiIdentity!.Name! : ResolveContactName(target);
         lock (gate)
         {
             remoteWriter?.Dispose(); remoteWriter = null;
@@ -351,7 +370,16 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         try
         {
             var cfg = AgentConfig.Load() ?? configProvider() ?? throw new InvalidOperationException("Desktop Agent não pareado");
-            var identity = await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone, contact);
+            var fallbackIdentity = await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone, contact);
+            var directName = uiIdentity?.Name?.Trim();
+            var directPhone = uiIdentity?.Phone?.Trim();
+            var identity = new WhatsAppCallIdentity(
+                fallbackIdentity.LocalPhone,
+                string.IsNullOrWhiteSpace(directPhone) ? fallbackIdentity.RemotePhone : directPhone,
+                string.IsNullOrWhiteSpace(directName) ? fallbackIdentity.RemoteName : directName,
+                (!string.IsNullOrWhiteSpace(directName) || !string.IsNullOrWhiteSpace(directPhone))
+                    ? "WHATSAPP_DESKTOP_UIA"
+                    : fallbackIdentity.Source);
             var resolvedContact = string.IsNullOrWhiteSpace(identity.RemoteName) ? contact : identity.RemoteName.Trim();
             if (!string.IsNullOrWhiteSpace(identity.LocalPhone) && identity.LocalPhone != cfg.LocalPhone)
             {
@@ -404,6 +432,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         {
             StatusChanged?.Invoke(success ? "Ligação enviada ao Relato AI" : "Falha ao enviar ligação");
             remotePath = null; localPath = null;
+            uiIdentity = null;
+            uiIdentityLastProbe = null;
         }
     }
 
