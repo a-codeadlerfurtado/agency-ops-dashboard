@@ -27,6 +27,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     private string? remotePath;
     private string? localPath;
     private bool disposed;
+    private volatile bool captureRestartRequested;
+    private bool stoppingCaptureEngines;
     private int ticking;
     public event Action<string>? StatusChanged;
     public event Action<string, string>? CallStarted;
@@ -61,8 +63,11 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             StatusChanged?.Invoke("Aguardando WhatsApp Desktop");
             return;
         }
-        if (target?.Id != process.Id || remoteRecorder is null || localRecorder is null)
+        if (target?.Id != process.Id || remoteRecorder is null || localRecorder is null || captureRestartRequested)
+        {
+            captureRestartRequested = false;
             await StartCaptureEnginesAsync(process);
+        }
 
         var now = DateTimeOffset.Now;
         var remoteHot = now - lastRemoteActive < TimeSpan.FromSeconds(2.5);
@@ -224,26 +229,49 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     {
         StopCaptureEngines();
         target = process;
-        remoteRecorder = await new WasapiRecorderBuilder()
-            .WithProcessLoopback((uint)process.Id, ProcessLoopbackMode.IncludeTargetProcessTree)
-            .BuildAsync();
+
+        using var devices = new MMDeviceEnumerator();
+        var render = devices.GetDefaultAudioEndpoint(DataFlow.Render, Role.Communications);
+        var mic = devices.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+
+        // Capturar o dispositivo de saída inteiro é mais estável no WhatsApp da Microsoft Store
+        // do que prender o loopback ao PID, que pode trocar de processo durante a call.
+        remoteRecorder = new WasapiRecorderBuilder().WithDevice(render).WithLoopbackCapture().Build();
         remoteRecorder.DataAvailable += (buffer, _, _, _) =>
         {
             var bytes = buffer.ToArray();
             OnAudio("remote", bytes, remoteRecorder.WaveFormat);
         };
+        remoteRecorder.RecordingStopped += (_, e) =>
+        {
+            if (!stoppingCaptureEngines && !disposed)
+            {
+                captureRestartRequested = true;
+                StatusChanged?.Invoke("Reconectando áudio remoto do WhatsApp...");
+            }
+            if (e.Exception is not null) StatusChanged?.Invoke("Erro no áudio remoto: " + e.Exception.Message);
+        };
 
-        using var devices = new MMDeviceEnumerator();
-        var mic = devices.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
-        localRecorder = new WasapiRecorderBuilder().WithDevice(mic).Build();
+        localRecorder = new WasapiRecorderBuilder().WithDevice(mic).WithCommunicationsMode().Build();
         localRecorder.DataAvailable += (buffer, _, _, _) =>
         {
             var bytes = buffer.ToArray();
             OnAudio("local", bytes, localRecorder.WaveFormat);
         };
+        localRecorder.RecordingStopped += (_, e) =>
+        {
+            if (!stoppingCaptureEngines && !disposed)
+            {
+                captureRestartRequested = true;
+                StatusChanged?.Invoke("Reconectando microfone do WhatsApp...");
+            }
+            if (e.Exception is not null) StatusChanged?.Invoke("Erro no microfone: " + e.Exception.Message);
+        };
+
         remoteRecorder.StartRecording();
         localRecorder.StartRecording();
-        StatusChanged?.Invoke("WhatsApp Desktop monitorado");
+        await Task.CompletedTask;
+        StatusChanged?.Invoke(IsRecording ? "REC · captura de áudio reconectada" : "WhatsApp Desktop monitorado");
     }
 
     private void OnAudio(string role, byte[] bytes, WaveFormat format)
@@ -416,10 +444,18 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
 
     private void StopCaptureEngines()
     {
-        try { remoteRecorder?.StopRecording(); } catch { }
-        try { localRecorder?.StopRecording(); } catch { }
-        remoteRecorder?.Dispose(); remoteRecorder = null;
-        localRecorder?.Dispose(); localRecorder = null;
+        stoppingCaptureEngines = true;
+        try
+        {
+            try { remoteRecorder?.StopRecording(); } catch { }
+            try { localRecorder?.StopRecording(); } catch { }
+            remoteRecorder?.Dispose(); remoteRecorder = null;
+            localRecorder?.Dispose(); localRecorder = null;
+        }
+        finally
+        {
+            stoppingCaptureEngines = false;
+        }
         target = null;
         candidateAt = null;
         remoteRing.Clear(); localRing.Clear();
