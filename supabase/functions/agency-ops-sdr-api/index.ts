@@ -393,7 +393,7 @@ Deno.serve(async(req:Request)=>{
     source_url:r.source_url||null
   }));
 
-  const requiredAgentVersion="desktop-0.5.1";
+  const requiredAgentVersion="desktop-0.5.2";
   const {data:latestDevice}=await ops.from("meeting_capture_devices")
     .select("extension_version,last_seen_at,device_name,status")
     .eq("owner_person",person)
