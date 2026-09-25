@@ -421,11 +421,30 @@ async function processMeetingJob(job) {
   const transcriptId = Number(job?.payload?.transcript_id || 0);
   if (!Number.isInteger(transcriptId) || transcriptId <= 0) throw new Error("meeting_job_missing_transcript_id");
   const snapshot = await call("meeting_snapshot", { transcript_id: transcriptId }, 120000);
-  const analysis = await analyzeMeeting(snapshot);
+  const commercial = job?.payload?.commercial === true;
+  let analysis;
+  if (commercial) {
+    try {
+      const response = await call("meeting_ai_analyze", { transcript_id: transcriptId }, 120000);
+      analysis = response?.analysis;
+      if (!analysis || !String(analysis.summary || "").trim()) throw new Error("commercial_ai_empty_analysis");
+      analysis = { ...analysis, model: String(analysis.model || response?.model || "openai-commercial"), provider: response?.provider || "OPENAI" };
+    } catch (error) {
+      console.error("[meeting-commercial-ai-fallback]", transcriptId, String(error?.message || error));
+      const local = await analyzeMeeting(snapshot);
+      analysis = {
+        ...local,
+        model: String(local?.model || meetingModel) + "-commercial-local-fallback",
+        fallback_reason: "commercial_openai_failed:" + String(error?.message || error).slice(0, 240),
+      };
+    }
+  } else {
+    analysis = await analyzeMeeting(snapshot);
+  }
   if (String(job?.payload?.mode || "execute") === "shadow") return { ok: true, shadow: true, transcript_id: transcriptId, analysis };
   const committed = await call("meeting_commit", { transcript_id: transcriptId, analysis }, 120000);
   const notification = await call("meeting_ready_notify", { transcript_id: transcriptId }, 120000).catch((error) => ({ ok: false, error: String(error?.message || error) }));
-  return { ok: true, transcript_id: transcriptId, committed, notification, model: meetingModel };
+  return { ok: true, transcript_id: transcriptId, committed, notification, model: String(analysis?.model || meetingModel), commercial };
 }
 const agendaSchema = {
   type: "object",
