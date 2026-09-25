@@ -395,7 +395,12 @@ async function processCallJob(job) {
   await ensureMixedAudio(snapshot, sessionId).catch((error) => {
     console.error(JSON.stringify({ event: "call_audio_mix_failed", session_id: sessionId, error: String(error?.message || error) }));
   });
-  const contactName = String(session.metadata?.contact_name || "Contato WhatsApp").trim() || "Contato WhatsApp";
+  const genericContactNames = new Set(["contato whatsapp","contato whatsapp desktop","contato","participante"]);
+  const rawRemoteName = String(session.metadata?.remote_name || "").trim();
+  const rawContactName = String(session.metadata?.contact_name || "").trim();
+  const safeRemoteName = rawRemoteName && !genericContactNames.has(rawRemoteName.toLowerCase()) ? rawRemoteName : "";
+  const safeContactName = rawContactName && !genericContactNames.has(rawContactName.toLowerCase()) ? rawContactName : "";
+  const contactName = safeRemoteName || safeContactName || "Contato WhatsApp";
   const ownerName = String(session.owner_person || "Colaborador").trim() || "Colaborador";
   const audio = Array.isArray(snapshot.audio) ? snapshot.audio : [];
   if (!audio.length) throw new Error("call_audio_not_found");
