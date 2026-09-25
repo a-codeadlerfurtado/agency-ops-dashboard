@@ -1,0 +1,50 @@
+name: Relato Desktop Release
+
+on:
+  push:
+    branches:
+      - relato-release-20260925-6
+    paths:
+      - "desktop-agent/RelatoAI.DesktopAgent/**"
+      - ".github/workflows/relato-desktop-release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Publish single-file executable
+        shell: pwsh
+        run: |
+          dotnet publish desktop-agent/RelatoAI.DesktopAgent/RelatoAI.DesktopAgent.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -o publish
+          Copy-Item publish/RelatoAI.DesktopAgent.exe publish/RelatoAI-Desktop-SDR.exe
+          (Get-FileHash publish/RelatoAI-Desktop-SDR.exe -Algorithm SHA256).Hash.ToLower() |
+            Out-File -Encoding ascii publish/RelatoAI-Desktop-SDR.exe.sha256
+
+      - name: Create or update release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "relato-package-v2026.09.25.6"
+          gh release delete $tag --yes 2>$null
+          git push origin ":refs/tags/$tag" 2>$null
+          gh release create $tag `
+            publish/RelatoAI-Desktop-SDR.exe `
+            publish/RelatoAI-Desktop-SDR.exe.sha256 `
+            --target "${{ github.sha }}" `
+            --title "Relato AI Desktop 0.5.1" `
+            --notes "Captura direta de nome/número pela interface do WhatsApp Desktop, fallback seguro e pós-call sem bloqueio pela transcrição."
