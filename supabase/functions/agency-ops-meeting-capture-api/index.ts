@@ -655,17 +655,19 @@ Deno.serve(async (req: Request) => {
     const remotePhoneCandidate = normalizePhone(call.remote_phone);
     const identitySource = clean(call.identity_source, 80) || null;
     const source = clean(call.source, 40).toUpperCase() === "WHATSAPP_DESKTOP" ? "WHATSAPP_DESKTOP" : "WHATSAPP_WEB";
-    const trustedDesktopIdentity = ["WHATSAPP_LEVELDB_EXACT_CALL_WINDOW", "WHATSAPP_LEVELDB_CONTACT_WINDOW", "WHATSAPP_DESKTOP_UI", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
+    const directDesktopIdentity = ["WHATSAPP_DESKTOP_UI", "WHATSAPP_DESKTOP_UIA", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
     if (!localSessionId || !startedAt || !endedAt) return respond({ error: "missing_call_data" }, 400);
+    // The message-window heuristic is useful only for audit/corroboration. It must never
+    // label a Desktop call by itself: an unrelated chat message can occur in the same window.
     const directHint = source === "WHATSAPP_DESKTOP"
       ? await inferDirectChatIdentityByWindow(ops, startedAt, endedAt)
       : null;
-    const uiNameHint = source === "WHATSAPP_DESKTOP" && identitySource === "WHATSAPP_DESKTOP_UI" && rawContactName
+    const uiNameHint = source === "WHATSAPP_DESKTOP" && directDesktopIdentity && rawContactName
       ? await resolveUniquePhoneByExactWhatsappName(ops, rawContactName)
       : null;
-    const remotePhone = source === "WHATSAPP_DESKTOP" && !trustedDesktopIdentity
-      ? (directHint?.phone || null)
-      : (remotePhoneCandidate || uiNameHint?.phone || directHint?.phone || null);
+    const remotePhone = source === "WHATSAPP_DESKTOP"
+      ? (directDesktopIdentity ? (remotePhoneCandidate || uiNameHint?.phone || null) : null)
+      : (remotePhoneCandidate || null);
     const candidateIdentity = await resolveCallIdentity(ops, remotePhone);
     const weakLevelDbTeamCandidate = Boolean(
       remotePhone
@@ -689,23 +691,19 @@ Deno.serve(async (req: Request) => {
       : candidateIdentity;
     const phoneName = acceptedRemotePhone ? await bestWhatsappName(ops, acceptedRemotePhone) : { name: null, role: null, source: null };
     const identityWhatsappName = isWhatsappIdentitySource(identity?.source) ? safeContactName(identity?.name) : null;
-    const uiWhatsappName = ["WHATSAPP_DESKTOP_UI","WHATSAPP_LEVELDB_EXACT_CALL_WINDOW","WHATSAPP_LEVELDB_CONTACT_WINDOW","RELATO_USER_CONFIRMED"].includes(identitySource || "")
-      ? rawContactName
-      : null;
+    const uiWhatsappName = directDesktopIdentity ? rawContactName : null;
     const whatsappName = uiWhatsappName
-      || safeContactName(directHint?.name)
       || safeContactName(phoneName.name)
       || identityWhatsappName;
     const whatsappNameSource = uiWhatsappName
       ? identitySource
-      : safeContactName(directHint?.name)
-        ? directHint?.source
-        : safeContactName(phoneName.name)
-          ? phoneName.source
-          : identityWhatsappName
-            ? identity?.source
-            : null;
-    const resolvedName = whatsappName || safeContactName(uiNameHint?.name) || safeContactName(identity.name) || rawContactName;
+      : safeContactName(phoneName.name)
+        ? phoneName.source
+        : identityWhatsappName
+          ? identity?.source
+          : null;
+    const rawNameAllowed = source !== "WHATSAPP_DESKTOP" || directDesktopIdentity;
+    const resolvedName = whatsappName || safeContactName(uiNameHint?.name) || safeContactName(identity.name) || (rawNameAllowed ? rawContactName : null);
     const resolvedContactName = resolvedName || (remotePhone ? `WhatsApp +${remotePhone}` : "Contato WhatsApp");
     const resolvedIdentity = {
       ...identity,
@@ -750,7 +748,8 @@ Deno.serve(async (req: Request) => {
       audio_mime_type: audioPaths.mixed ? "audio/mpeg" : "audio/wav",
       audio_updated_at: new Date().toISOString(),
       metadata: { source, contact_name: resolvedContactName, local_phone: localPhone, remote_phone: acceptedRemotePhone, identity_source: resolvedIdentity.source,
-        identity_candidate_rejected: Boolean(remotePhoneCandidate && !acceptedRemotePhone),
+        identity_candidate_rejected: Boolean((remotePhoneCandidate && !acceptedRemotePhone) || (source === "WHATSAPP_DESKTOP" && !directDesktopIdentity && directHint)),
+        untrusted_direct_chat_candidate: directHint || null,
         rejected_remote_candidate: rejectedDesktopCandidate ? {
           phone: remotePhone,
           source: identitySource,
@@ -758,7 +757,14 @@ Deno.serve(async (req: Request) => {
           resolved_role: candidateIdentity?.role || null,
           resolved_name: candidateIdentity?.name || null,
           reason: systemCandidate ? "SYSTEM_IDENTITY_NOT_VALID_AS_SDR_PROSPECT" : "WEAK_LEVELDB_TEAM_CANDIDATE"
-        } : null,
+        } : (source === "WHATSAPP_DESKTOP" && !directDesktopIdentity && (remotePhoneCandidate || directHint) ? {
+          phone: remotePhoneCandidate || directHint?.phone || null,
+          source: identitySource || directHint?.source || "DESKTOP_FALLBACK",
+          resolved_status: null,
+          resolved_role: null,
+          resolved_name: directHint?.name || rawContactName || null,
+          reason: "UNTRUSTED_DESKTOP_IDENTITY_NOT_USED"
+        } : null),
         whatsapp_name: whatsappName,
         name_evidence: nameEvidence,
         remote_name: resolvedIdentity.name, remote_role: resolvedIdentity.role, resolved_client_id: resolvedIdentity.client_id, resolved_client_name: resolvedIdentity.client_name,
@@ -797,10 +803,16 @@ Deno.serve(async (req: Request) => {
     const { data: roster } = await ops.from("team_roster")
       .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
     const isSdr = String(roster?.role || "").toUpperCase() === "SDR";
+    const identitySide = String(identity?.side || "").toUpperCase();
+    const identityStatus = String(identity?.status || "").toUpperCase();
+    const knownNonProspect = identitySide === "TEAM"
+      || identitySide === "CLIENT_SIDE"
+      || identityStatus === "AUTO_TEAM"
+      || Boolean(identity?.client_id);
     let prospectPrefill: Row | null = null;
     let transcriptReady = Boolean(session.transcript_id);
 
-    if (isSdr) {
+    if (isSdr && !knownNonProspect) {
       const crm = db.schema("crm");
       let leadId = clean(session.metadata?.commercial_prospect?.lead_id, 80) || null;
       let profile: Row | null = null;
