@@ -58,6 +58,14 @@ async function authorized(req: Request) {
   return (await sha256Hex(token)) === await workerTokenSha256();
 }
 
+async function authorizedCommercial(req: Request) {
+  const token = req.headers.get("x-relato-commercial-secret") ?? "";
+  if (!token || token.length < 32) return false;
+  const expected = await secret("RELATO_COMMERCIAL_EDGE_SECRET");
+  if (!expected) return false;
+  return (await sha256Hex(token)) === (await sha256Hex(expected));
+}
+
 function client(schema: string) {
   return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
@@ -258,15 +266,18 @@ async function getControl() {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 12 });
+  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 13 });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
-  if (!(await authorized(req))) return json({ error: "unauthorized" }, 401);
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return json({ error: "server_not_configured" }, 500);
 
+  const body = await req.json().catch(() => ({}));
+  const action = String(body.action ?? "").toLowerCase();
+  const commercialActions = new Set(["meeting_commercial_process","meeting_ai_analyze","meeting_commit"]);
+  const commercialAuthorized = commercialActions.has(action) && await authorizedCommercial(req);
+  if (!commercialAuthorized && !(await authorized(req))) return json({ error: "unauthorized" }, 401);
+
   try {
-    const body = await req.json().catch(() => ({}));
-    const action = String(body.action ?? "").toLowerCase();
-    const worker = String(body.worker ?? "").trim().slice(0, 120);
+    const worker = String(body.worker ?? (commercialAuthorized ? "relato-commercial-edge" : "")).trim().slice(0, 120);
     if (!worker) return json({ error: "worker_required" }, 400);
 
     if (action === "claim") {
@@ -637,23 +648,63 @@ Deno.serve(async (req) => {
           updated_at: now,
         }).eq("id", transcriptId);
         if (readyError) throw readyError;
-        const { data: commercialJobId, error: commercialJobError } = await sb.rpc("enqueue_heavy_job", {
-          p_job_type: "MEETING_POSTPROCESS",
-          p_payload: { transcript_id: transcriptId, session_id: session.id, mode: "execute", commercial: true },
-          p_dedupe_key: `meeting:${transcriptId}`,
-          p_max_attempts: 5,
-          p_available_at: now,
+        const commercialSecret = await secret("RELATO_COMMERCIAL_EDGE_SECRET");
+        if (!commercialSecret) throw new Error("relato_commercial_edge_secret_missing");
+        const commercialEndpoint = `${SUPABASE_URL}/functions/v1/agency-ops-heavy-worker-api`;
+        const commercialTask = fetch(commercialEndpoint, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-relato-commercial-secret": commercialSecret,
+          },
+          body: JSON.stringify({
+            action: "meeting_commercial_process",
+            worker: "relato-commercial-edge",
+            transcript_id: transcriptId,
+            session_id: session.id,
+          }),
+        }).then(async (response) => {
+          const raw = await response.text();
+          if (!response.ok) throw new Error(`commercial_edge_${response.status}:${raw.slice(0,500)}`);
+          return raw;
+        }).catch(async (error) => {
+          const failedAt = new Date().toISOString();
+          const failure = {
+            ...readyMetadata,
+            commercial_analysis_status: "FALLBACK_QUEUED",
+            commercial_analysis_error: String(error instanceof Error ? error.message : error).slice(0,1000),
+            commercial_analysis_updated_at: failedAt,
+          };
+          await sb.from("meeting_transcripts").update({ metadata: failure, updated_at: failedAt }).eq("id", transcriptId);
+          await sb.from("meeting_capture_sessions").update({ metadata: failure, updated_at: failedAt }).eq("id", session.id);
+          const { error: fallbackQueueError } = await sb.rpc("enqueue_heavy_job", {
+            p_job_type: "MEETING_POSTPROCESS",
+            p_payload: { transcript_id: transcriptId, session_id: session.id, mode: "execute", commercial: true, fallback_from: "EDGE_BACKGROUND_OPENAI" },
+            p_dedupe_key: `meeting:fallback:${transcriptId}`,
+            p_max_attempts: 3,
+            p_available_at: failedAt,
+          });
+          console.error("commercial_edge_background_failed", transcriptId, failure.commercial_analysis_error, fallbackQueueError?.message || "");
         });
-        if (commercialJobError) throw commercialJobError;
+        const runtime = (globalThis as any).EdgeRuntime;
+        if (runtime?.waitUntil) runtime.waitUntil(commercialTask);
+        else await commercialTask;
+        const queuedMetadata = {
+          ...readyMetadata,
+          commercial_processing_route: "EDGE_BACKGROUND_OPENAI",
+        };
         await sb.from("meeting_capture_sessions").update({
-          state: "READY", metadata: readyMetadata, updated_at: now
+          state: "READY", metadata: queuedMetadata, updated_at: now
         }).eq("id", session.id);
+        await sb.from("meeting_transcripts").update({
+          metadata: queuedMetadata, updated_at: now
+        }).eq("id", transcriptId);
         return json({
           ok: true,
           transcript_id: transcriptId,
           segments: segments.length,
-          job_id: commercialJobId || null,
-          postprocess: "SDR_TRANSCRIPT_READY_COMMERCIAL_AI_QUEUED",
+          job_id: null,
+          postprocess: "SDR_TRANSCRIPT_READY_COMMERCIAL_EDGE_QUEUED",
           transcript_quality: avgConfidence,
         });
       }
@@ -670,6 +721,57 @@ Deno.serve(async (req) => {
       return json({ ok: true, transcript_id: transcriptId, segments: segments.length, job_id: jobId || null });
     }
 
+    if (action === "meeting_commercial_process") {
+      const transcriptId = Number(body.transcript_id || 0);
+      if (!Number.isInteger(transcriptId) || transcriptId <= 0) return json({ error: "transcript_id_required" }, 400);
+      const commercialSecret = await secret("RELATO_COMMERCIAL_EDGE_SECRET");
+      if (!commercialSecret) return json({ error: "relato_commercial_edge_secret_missing" }, 500);
+      const endpoint = `${SUPABASE_URL}/functions/v1/agency-ops-heavy-worker-api`;
+      const callCommercial = async (payload: Record<string, unknown>) => {
+        const response = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-relato-commercial-secret": commercialSecret,
+          },
+          body: JSON.stringify({ worker: "relato-commercial-edge", ...payload }),
+        });
+        const raw = await response.text();
+        let parsed: Record<string, any> = {};
+        try { parsed = raw ? JSON.parse(raw) : {}; } catch { parsed = { raw }; }
+        if (!response.ok) throw new Error(`commercial_internal_${response.status}:${raw.slice(0,500)}`);
+        return parsed;
+      };
+      try {
+        const analyzed = await callCommercial({ action: "meeting_ai_analyze", transcript_id: transcriptId });
+        const committed = await callCommercial({ action: "meeting_commit", transcript_id: transcriptId, analysis: analyzed.analysis || {} });
+        return json({
+          ok: true,
+          transcript_id: transcriptId,
+          route: "EDGE_BACKGROUND_OPENAI",
+          provider: analyzed.provider || "OPENAI",
+          model: analyzed.model || analyzed.analysis?.model || null,
+          committed,
+        });
+      } catch (error) {
+        const message = String(error instanceof Error ? error.message : error).slice(0,1000);
+        const failedAt = new Date().toISOString();
+        const sb = client("agency_ops");
+        const { data: transcriptRow } = await sb.from("meeting_transcripts").select("metadata,capture_session_id").eq("id", transcriptId).maybeSingle();
+        const failedMetadata = {
+          ...(transcriptRow?.metadata || {}),
+          commercial_analysis_status: "ERROR",
+          commercial_analysis_error: message,
+          commercial_analysis_updated_at: failedAt,
+        };
+        await sb.from("meeting_transcripts").update({ metadata: failedMetadata, updated_at: failedAt }).eq("id", transcriptId);
+        if (transcriptRow?.capture_session_id) {
+          await sb.from("meeting_capture_sessions").update({ metadata: failedMetadata, updated_at: failedAt }).eq("id", transcriptRow.capture_session_id);
+        }
+        throw error;
+      }
+    }
+
     if (action === "meeting_ai_analyze") {
       const transcriptId = Number(body.transcript_id || 0);
       if (!Number.isInteger(transcriptId) || transcriptId <= 0) return json({ error: "transcript_id_required" }, 400);
@@ -683,7 +785,45 @@ Deno.serve(async (req) => {
       const [openaiKey, relatoModel, taskModel] = await Promise.all([
         secret("OPENAI_API_KEY"), secret("RELATO_AI_MODEL"), secret("TASK_ENGINE_MODEL")
       ]);
-      if (!openaiKey) return json({ error: "openai_not_configured" }, 428);
+      if (!openaiKey) {
+        const commercialSecret = await secret("RELATO_COMMERCIAL_EDGE_SECRET");
+        if (!commercialSecret) return json({ error: "commercial_ai_not_configured" }, 428);
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 45_000);
+        try {
+          const response = await fetch("https://relato-commercial-ai.lakassessoriadigital.workers.dev", {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-relato-commercial-secret": commercialSecret,
+            },
+            body: JSON.stringify({
+              transcript: String(transcript.transcript_text).slice(0,50000),
+              owner_person: String(transcript.owner_person || ""),
+              client_name_raw: String(transcript.client_name_raw || ""),
+              transcript_source: String(transcript.transcript_source || ""),
+            }),
+            signal: controller.signal,
+          });
+          const raw = await response.text();
+          let envelope: Record<string, any> = {};
+          try { envelope = raw ? JSON.parse(raw) : {}; } catch { envelope = { raw }; }
+          if (!response.ok || !envelope?.ok) throw new Error(`cloudflare_ai_${response.status}:${raw.slice(0,500)}`);
+          const analysis = envelope.analysis && typeof envelope.analysis === "object" ? envelope.analysis : {};
+          if (!String(analysis.summary || "").trim()) throw new Error("cloudflare_ai_empty_summary");
+          const model = String(envelope.model || "@cf/meta/llama-3.3-70b-instruct-fp8-fast");
+          return json({
+            ok: true,
+            transcript_id: transcriptId,
+            model,
+            provider: "CLOUDFLARE_WORKERS_AI",
+            latency_ms: envelope.latency_ms || null,
+            analysis: { ...analysis, model, provider: "CLOUDFLARE_WORKERS_AI" },
+          });
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
       const model = relatoModel || taskModel || "gpt-5-mini";
       const system = [
         "Você analisa ligações e reuniões comerciais de SDR em português do Brasil.",
