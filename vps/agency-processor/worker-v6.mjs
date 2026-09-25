@@ -264,7 +264,7 @@ function likelyWhisperHallucination(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return false;
   const normalized = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  if (/legenda(s)? por|legendas pela comunidade|amara\.org|obrigado por assistir|inscreva-se no canal|subscribe|subtitles by/i.test(normalized)) return true;
+  if (/legenda(s)? por|legendas pela comunidade|amara\.org|obrigado por assistir|inscreva-se no canal|subscribe|subtitles by|transcreva literalmente|não complete frases|nao complete frases/i.test(normalized)) return true;
   const words = normalized.replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
   if (words.length < 12) return false;
   const uniqueRatio = new Set(words).size / words.length;
@@ -313,7 +313,8 @@ async function whisperTranscribe(audio, speakerName, transcriptSource = "WHATSAP
     form.append("response_format", "verbose_json");
     form.append("temperature", "0");
     form.append("vad_filter", "false");
-    form.append("prompt", "Conversa telefônica em português do Brasil. Preserve nomes próprios, empresas, cidades, valores e termos do mercado imobiliário quando realmente forem ditos. Transcreva literalmente. Não complete frases, não adivinhe palavras e não invente conteúdo.");
+    // Não enviar prompt textual ao Whisper: em áudio curto/silencioso alguns backends
+    // podem ecoar o prompt como se fosse fala real.
     const response = await fetch(`${whisperUrl}/audio/transcriptions`, {
       method: "POST",
       headers: whisperApiKey ? { Authorization: `Bearer ${whisperApiKey}` } : {},
