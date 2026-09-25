@@ -4,6 +4,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 type Row = Record<string, any>;
 
 const VERSION = "meeting-capture-v1.1-audio";
+const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.4.8";
+const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.25.3/RelatoAI-Desktop-SDR.exe";
+const SDR_DESKTOP_SHA256 = "7e394e1475bbf01165273a516a2ca5e69fda996a565bf28dfc0eca3ac89d50c5";
 const DASHBOARD_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
   "http://localhost:3000",
@@ -293,6 +296,20 @@ Deno.serve(async (req: Request) => {
     return respond({ ok: true, device_id: device.id, owner_person: device.owner_person, version: VERSION });
   }
 
+  if (action === "agent_update_check") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const currentVersion = clean(body?.current_version, 40) || "";
+    return respond({
+      ok: true,
+      current_version: currentVersion,
+      required_version: REQUIRED_SDR_DESKTOP_VERSION,
+      update_required: currentVersion !== REQUIRED_SDR_DESKTOP_VERSION,
+      download_url: SDR_DESKTOP_DOWNLOAD_URL,
+      sha256: SDR_DESKTOP_SHA256,
+    });
+  }
+
   if (action === "integrations_status") {
     const device = await resolveDevice(req, ops);
     if (!device) return respond({ error: "invalid_device" }, 401);
@@ -512,6 +529,19 @@ Deno.serve(async (req: Request) => {
     const device = await resolveDevice(req, ops);
     if (!device) return respond({ error: "invalid_device" }, 401);
     const call = (body?.call || {}) as Row;
+    const extensionVersion = clean(call.extension_version, 40) || "";
+    const { data: roster } = await ops.from("team_roster")
+      .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
+    if (String(roster?.role || "").toUpperCase() === "SDR" && extensionVersion !== REQUIRED_SDR_DESKTOP_VERSION) {
+      return respond({
+        error: "desktop_agent_upgrade_required",
+        message: "Atualize o Relato AI Desktop antes de gravar novas ligações.",
+        current_version: extensionVersion || null,
+        required_version: REQUIRED_SDR_DESKTOP_VERSION,
+        download_url: SDR_DESKTOP_DOWNLOAD_URL,
+        sha256: SDR_DESKTOP_SHA256,
+      }, 426);
+    }
     const localSessionId = clean(call.local_session_id, 180);
     const startedAt = clean(call.started_at, 80);
     const endedAt = clean(call.ended_at, 80);
