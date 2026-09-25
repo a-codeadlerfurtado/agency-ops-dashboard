@@ -109,10 +109,13 @@ export async function convites(tenantId: string): Promise<Convite[]> {
 }
 
 /** Devolve o token UMA vez: ele nao e legivel por policy depois disso. */
-export async function convidarMembro(email: string, role: "ADMIN" | "BROKER") {
+export async function convidarMembro(
+  tenantId: string, email: string, role: "ADMIN" | "BROKER"
+) {
   const { data, error } = await supabase.rpc("convidar_membro", {
     p_email: email,
     p_role: role,
+    p_tenant_id: tenantId,
   });
   if (error) throw error;
   return data as { token: string; email: string; role: string };

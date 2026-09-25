@@ -361,19 +361,21 @@ export interface FonteDeLead {
   leads: number;
 }
 
-export async function fontesDeLead(): Promise<FonteDeLead[]> {
-  const { data, error } = await supabase.rpc("fontes_de_lead");
+export async function fontesDeLead(tenantId: string): Promise<FonteDeLead[]> {
+  const { data, error } = await supabase.rpc("fontes_de_lead", { p_tenant_id: tenantId });
   if (error) throw error;
   return (data ?? []) as FonteDeLead[];
 }
 
 /** Devolve o token EM CLARO uma unica vez. Depois so o hash existe. */
 export async function criarFonte(
+  tenantId: string,
   integration: "META_ADS" | "GOOGLE_ADS" | "SITE" | "WEBHOOK",
   label: string,
   queueId: string | null
 ) {
   const { data, error } = await supabase.rpc("criar_fonte", {
+    p_tenant_id: tenantId,
     p_integration: integration,
     p_label: label,
     p_queue_id: queueId,
@@ -430,8 +432,9 @@ export interface PaginaDaMeta {
 }
 
 /** Passo 1: pede um state de uso unico antes de mandar a pessoa para a Meta. */
-export async function iniciarConexaoMeta(): Promise<string> {
+export async function iniciarConexaoMeta(tenantId: string): Promise<string> {
   const { data, error } = await supabase.rpc("iniciar_conexao_meta", {
+    p_tenant_id: tenantId,
     p_finalidade: "CONECTAR",
     p_ref_id: null,
   });
@@ -440,8 +443,8 @@ export async function iniciarConexaoMeta(): Promise<string> {
 }
 
 /** Passo 4: paginas que a Meta devolveu. Nunca traz token. */
-export async function paginasDaMeta(): Promise<PaginaDaMeta[]> {
-  const { data, error } = await supabase.rpc("paginas_da_meta");
+export async function paginasDaMeta(tenantId: string): Promise<PaginaDaMeta[]> {
+  const { data, error } = await supabase.rpc("paginas_da_meta", { p_tenant_id: tenantId });
   if (error) throw error;
   return (data ?? []) as PaginaDaMeta[];
 }
@@ -450,8 +453,11 @@ export async function paginasDaMeta(): Promise<PaginaDaMeta[]> {
  * Passo 5: promove a pagina a fonte de lead e devolve o nonce que autoriza o
  * worker a inscrever a pagina no webhook.
  */
-export async function conectarPagina(pageId: string, label: string, queueId: string | null) {
+export async function conectarPagina(
+  tenantId: string, pageId: string, label: string, queueId: string | null
+) {
   const { data, error } = await supabase.rpc("conectar_pagina", {
+    p_tenant_id: tenantId,
     p_page_id: pageId,
     p_label: label || null,
     p_queue_id: queueId,
@@ -461,14 +467,18 @@ export async function conectarPagina(pageId: string, label: string, queueId: str
 }
 
 /** Token de usuario de sistema da BM: caminho que dispensa App Review. */
-export async function salvarTokenDeSistema(token: string): Promise<string> {
-  const { data, error } = await supabase.rpc("salvar_token_de_sistema", { p_token: token });
+export async function salvarTokenDeSistema(tenantId: string, token: string): Promise<string> {
+  const { data, error } = await supabase.rpc("salvar_token_de_sistema", {
+    p_tenant_id: tenantId, p_token: token,
+  });
   if (error) throw error;
   return data as string;
 }
 
-export async function situacaoDoTokenDeSistema(): Promise<{ tem: boolean; atualizado_em?: string }> {
-  const { data, error } = await supabase.rpc("situacao_do_token_de_sistema");
+export async function situacaoDoTokenDeSistema(tenantId: string): Promise<{ tem: boolean; atualizado_em?: string }> {
+  const { data, error } = await supabase.rpc("situacao_do_token_de_sistema", {
+    p_tenant_id: tenantId,
+  });
   if (error) throw error;
   return data as { tem: boolean; atualizado_em?: string };
 }

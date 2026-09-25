@@ -44,8 +44,8 @@ const linkDoConvite = (token: string) =>
  * frontend, e ela nunca entra no bundle.
  */
 function FormularioDeConvite({
-  aberto, aoFechar, aoCriar,
-}: { aberto: boolean; aoFechar: () => void; aoCriar: () => void }) {
+  tenantId, aberto, aoFechar, aoCriar,
+}: { tenantId: string; aberto: boolean; aoFechar: () => void; aoCriar: () => void }) {
   const avisar = useToast();
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"ADMIN" | "BROKER">("BROKER");
@@ -66,7 +66,7 @@ function FormularioDeConvite({
     setEnviando(true);
     setErro(null);
     try {
-      const r = await convidarMembro(email.trim().toLowerCase(), role);
+      const r = await convidarMembro(tenantId, email.trim().toLowerCase(), role);
       setLink(linkDoConvite(r.token));
       aoCriar();
     } catch (err) {
@@ -359,6 +359,7 @@ export default function Corretores({ sessao }: { sessao: Sessao }) {
       <Pendentes lista={pendentes} aoMudar={() => dados.recarregar()} />
 
       <FormularioDeConvite
+        tenantId={sessao.tenant.id}
         aberto={convidando}
         aoFechar={() => setConvidando(false)}
         aoCriar={() => dados.recarregar()}

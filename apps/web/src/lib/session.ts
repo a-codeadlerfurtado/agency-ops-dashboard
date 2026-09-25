@@ -58,9 +58,7 @@ async function resolverSessao(userId: string, email: string): Promise<Estado> {
 
   const data = vinculo.data;
   if (!data?.tenant) {
-    return ehOperador
-      ? { fase: "operador", userId, email, nome: email, isMaster: false }
-      : { fase: "sem-tenant", email };
+    return { fase: "sem-tenant", email };
   }
 
   const tenant = data.tenant as unknown as Tenant;

@@ -87,7 +87,7 @@ function Nav({ sessao, rota, aoNavegar }: {
 
   /* Operacao nao entra em NAV_GESTAO porque nao e mais permissao dentro da
      imobiliaria: e outro nivel, e quem o tem normalmente nem pertence a uma. */
-  const operacao: ItemNav[] = sessao.ehOperador
+  const operacao: ItemNav[] = sessao.modoMestre
     ? [{ rota: "/operacao", rotulo: "Imobiliarias", icone: () => Ico.building() }]
     : [];
 
@@ -179,13 +179,13 @@ function Shell({
         pagina = sessao.isAdmin ? <Integracoes sessao={sessao} /> : <SemPermissao />;
         break;
       case "/operacao":
-        titulo = sessao.modoMestre ? "Imobiliarias" : "Operacao";
-        pagina = sessao.ehOperador ? (
+        titulo = "Imobiliarias";
+        pagina = sessao.modoMestre ? (
           <Operacao
-            aoAcessar={sessao.modoMestre ? async (t) => {
+            aoAcessar={async (t) => {
               await entrarComoMestre({ id: t.id, name: t.nome, slug: t.slug });
               irPara("/");
-            } : undefined}
+            }}
           />
         ) : <SemPermissao />;
         break;
@@ -295,12 +295,14 @@ function ConsoleDaOperacao({
           </button>
         </header>
         <main className="content">
-          <Operacao
-            aoAcessar={isMaster ? async (t) => {
-              await entrarComoMestre({ id: t.id, name: t.nome, slug: t.slug });
-              irPara("/");
-            } : undefined}
-          />
+          {isMaster ? (
+            <Operacao
+              aoAcessar={async (t) => {
+                await entrarComoMestre({ id: t.id, name: t.nome, slug: t.slug });
+                irPara("/");
+              }}
+            />
+          ) : <SemPermissao />}
         </main>
       </div>
     </div>

@@ -145,10 +145,10 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
 
   const dados = useAsync(
     async () => ({
-      fontes: await fontesDeLead(),
+      fontes: await fontesDeLead(sessao.tenant.id),
       listaDeFilas: await filas(sessao.tenant.id),
-      paginas: await paginasDaMeta(),
-      sistema: await situacaoDoTokenDeSistema(),
+      paginas: await paginasDaMeta(sessao.tenant.id),
+      sistema: await situacaoDoTokenDeSistema(sessao.tenant.id),
     }),
     [sessao.tenant.id]
   );
@@ -182,7 +182,7 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
    */
   async function entrarComFacebook() {
     try {
-      const state = await iniciarConexaoMeta();
+      const state = await iniciarConexaoMeta(sessao.tenant.id);
       const redirect = `${BASE}/v1/meta/oauth`;
       location.href =
         "https://www.facebook.com/v21.0/dialog/oauth" +
@@ -198,7 +198,7 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
 
   async function conectar(canal: Canal, nome: string, queueId: string | null) {
     try {
-      const r = await criarFonte(canal, nome, queueId);
+      const r = await criarFonte(sessao.tenant.id, canal, nome, queueId);
       setNovo(null);
       setTokenNovo({ id: r.id, token: r.token });
       setAberta(r.id);
@@ -233,6 +233,7 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
       )}
 
       <TokenDeSistema
+        tenantId={sessao.tenant.id}
         situacao={sistema}
         aoImportar={() => { dados.recarregar(); setEscolhendo(true); }}
       />
@@ -350,7 +351,7 @@ export default function Integracoes({ sessao }: { sessao: Sessao }) {
         filas={listaDeFilas}
         aoFechar={() => setEscolhendo(false)}
         aoConectar={async (pageId, nome, queueId) => {
-          const r = await conectarPagina(pageId, nome, queueId);
+          const r = await conectarPagina(sessao.tenant.id, pageId, nome, queueId);
           // o worker inscreve a pagina no webhook usando o nonce de uso unico
           const resp = await fetch(`${BASE}/v1/meta/assinar?n=${encodeURIComponent(r.nonce)}`, {
             method: "POST",
@@ -899,8 +900,9 @@ function EscolherPagina({
  * a tela so sabe que existe e de quando e.
  */
 function TokenDeSistema({
-  situacao, aoImportar,
+  tenantId, situacao, aoImportar,
 }: {
+  tenantId: string;
   situacao: { tem: boolean; atualizado_em?: string };
   aoImportar: () => void;
 }) {
@@ -913,7 +915,7 @@ function TokenDeSistema({
   async function importar() {
     setOcupado(true);
     try {
-      const state = await salvarTokenDeSistema(token.trim());
+      const state = await salvarTokenDeSistema(tenantId, token.trim());
       const r = await fetch(
         `${BASE}/v1/meta/paginas?n=${encodeURIComponent(state)}` +
         `&page_id=${encodeURIComponent(pageId.trim())}`,
