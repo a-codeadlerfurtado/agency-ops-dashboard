@@ -56,8 +56,8 @@ const nameEvidence=(metadata:Row={},lead:Row|null=null,record:Row|null=null)=>{
     metadata?.crm_name
   );
   const legacyName=safeContactName(record?.remote_name);
-  const primaryName=whatsappName||crmName||postCallName||autoName||legacyName||null;
-  const primarySource=whatsappName?"WHATSAPP":crmName?"CRM":postCallName?"POST_CALL":autoName?"TRANSCRIPT":legacyName?"LEGACY":null;
+  const primaryName=whatsappName||postCallName||crmName||autoName||legacyName||null;
+  const primarySource=whatsappName?"WHATSAPP":postCallName?"POST_CALL":crmName?"CRM":autoName?"TRANSCRIPT":legacyName?"LEGACY":null;
   return {
     whatsapp_name:whatsappName,
     post_call_name:postCallName,
