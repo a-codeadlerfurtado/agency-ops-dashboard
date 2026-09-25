@@ -401,7 +401,7 @@ Deno.serve(async(req:Request)=>{
     source_url:r.source_url||null
   }));
 
-  const requiredAgentVersion="desktop-0.4.6";
+  const requiredAgentVersion="desktop-0.4.7";
   const currentAgentVersion=clean(callSessions[0]?.metadata?.extension_version)||null;
   return reply({
     profile:{person,role:"SDR",display_role:"SDR",access_level:"OWN_ACTIVITY_ONLY"},
@@ -409,7 +409,7 @@ Deno.serve(async(req:Request)=>{
       current_version:currentAgentVersion,
       required_version:requiredAgentVersion,
       update_required:currentAgentVersion!==requiredAgentVersion,
-      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.25.1/RelatoAI-Desktop-SDR.exe"
+      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.25.2/RelatoAI-Desktop-SDR.exe"
     },
     summary:{meetings:meetings.length,calls:enrichedCalls.length},
     meetings,calls:enrichedCalls,sessions,
