@@ -437,7 +437,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         lastUiProbe = now;
 
         var cfg = AgentConfig.Load() ?? configProvider();
-        var observed = WhatsAppDesktopUiIdentityResolver.Resolve(cfg?.LocalPhone);
+        var observed = WhatsAppDesktopUiIdentityResolver.Resolve(cfg?.LocalPhone, cfg?.OwnerPerson);
         if (observed is null || observed.Confidence < 0.94) return;
 
         var sameCandidate = uiCandidate is not null
