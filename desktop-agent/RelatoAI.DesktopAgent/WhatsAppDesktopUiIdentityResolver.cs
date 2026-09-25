@@ -89,11 +89,11 @@ internal static class WhatsAppDesktopUiIdentityResolver
                 }
                 catch { continue; }
 
-                var windowRect = TryRect(window);
-                var windowNames = ReadNamedElements(window, trueCondition, 3000);
+                var windowRect = TryRect((object)window);
+                var windowNames = ReadNamedElements((object)window, (object)trueCondition, 3000);
                 if (windowNames.Count == 0) continue;
 
-                var rootName = Clean(SafeCurrentName(window));
+                var rootName = Clean(SafeCurrentName((object)window));
                 if (!string.IsNullOrWhiteSpace(rootName))
                 {
                     var explicitRoot = ExtractExplicitContactName(rootName, localOwnerName);
@@ -136,7 +136,7 @@ internal static class WhatsAppDesktopUiIdentityResolver
                             }
                             catch { break; }
 
-                            var localNodes = ReadNamedElements(current, trueCondition, 520);
+                            var localNodes = ReadNamedElements((object)current, (object)trueCondition, 520);
                             if (localNodes.Count == 0) continue;
                             if (localNodes.Count > 360 && depth >= 2) break;
 
@@ -264,8 +264,10 @@ internal static class WhatsAppDesktopUiIdentityResolver
         }
     }
 
-    private static List<NamedElement> ReadNamedElements(dynamic root, dynamic condition, int limit)
+    private static List<NamedElement> ReadNamedElements(object rootObject, object conditionObject, int limit)
     {
+        dynamic root = rootObject;
+        dynamic condition = conditionObject;
         var result = new List<NamedElement>();
         try
         {
@@ -285,7 +287,7 @@ internal static class WhatsAppDesktopUiIdentityResolver
 
                     var controlType = 0;
                     try { controlType = Convert.ToInt32(element.CurrentControlType); } catch { }
-                    result.Add(new NamedElement(element, name, TryRect(element), controlType));
+                    result.Add(new NamedElement(element, name, TryRect((object)element), controlType));
                 }
                 catch { }
             }
@@ -294,8 +296,9 @@ internal static class WhatsAppDesktopUiIdentityResolver
         return result;
     }
 
-    private static UiRect? TryRect(dynamic element)
+    private static UiRect? TryRect(object elementObject)
     {
+        dynamic element = elementObject;
         try
         {
             object raw = element.GetCurrentPropertyValue(30001); // UIA_BoundingRectanglePropertyId
@@ -324,8 +327,9 @@ internal static class WhatsAppDesktopUiIdentityResolver
         catch { return null; }
     }
 
-    private static string SafeCurrentName(dynamic element)
+    private static string SafeCurrentName(object elementObject)
     {
+        dynamic element = elementObject;
         try { return Convert.ToString(element.CurrentName) ?? ""; }
         catch { return ""; }
     }
