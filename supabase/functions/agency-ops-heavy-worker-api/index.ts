@@ -108,7 +108,7 @@ function normalizedNameKey(value: unknown) {
 
 function inferProspectNameFromSegments(segments: any[], ownerName: string) {
   const ownerKey = normalizedNameKey(ownerName);
-  const stop = new Set(["tudo","bem","aqui","quem","gente","sim","claro","hoje","agora","voce","você","senhor","senhora","amigo","cara","bom","boa"]);
+  const stop = new Set(["tudo","bem","aqui","quem","gente","sim","claro","hoje","agora","voce","você","senhor","senhora","amigo","amiga","cara","bom","boa"]);
   const scores = new Map<string, { score: number; name: string }>();
   const add = (raw: string, score: number) => {
     const name = safeProspectName(raw);
@@ -125,11 +125,49 @@ function inferProspectNameFromSegments(segments: any[], ownerName: string) {
     if (!text) continue;
     for (const m of text.matchAll(/(?:^|\b)(?:al[oô]|oi|ol[aá]|bom dia|boa tarde|boa noite)\s*[,!:\-]?\s+([\p{L}][\p{L}'’\-]{1,30})\b/giu))
       add(m[1], 5);
-    for (const m of text.matchAll(/\b([\p{L}][\p{L}'’\-]{1,30})\s*[,!?]\s*(?:o motivo|tudo bem|voc[eê]|lembra|tem disponibilidade|a gente|eu falei)/giu))
-      add(m[1], 4);
+    for (const m of text.matchAll(/\b([\p{L}][\p{L}'’\-]{1,30})\s*[,!?]\s*(?:o motivo|tudo bem|voc[eê]|lembra|tem disponibilidade|a gente|eu falei|meu amigo|minha amiga|amigo|amiga)/giu))
+      add(m[1], 5);
+    for (const m of text.matchAll(/\b(?:t[aá]\s+ok|ok|beleza|valeu|obrigado|obrigada|at[eé]\s+logo)\s*[,!:\-]?\s+([\p{L}][\p{L}'’\-]{1,30})\b/giu))
+      add(m[1], 5);
   }
   const ranked = [...scores.values()].sort((a,b) => b.score - a.score);
   return ranked[0] && ranked[0].score >= 4 ? ranked[0].name : null;
+}
+
+async function resolveTeamMentionIdentity(sb: any, rawName: string | null) {
+  const name = safeProspectName(rawName);
+  const mentionKey = normalizedNameKey(name || "").replace(/-/g, "");
+  if (!name || mentionKey.length < 4) return null;
+  const firstToken = String(name).trim().split(/\s+/)[0].replace(/[^\p{L}0-9'’\-]/gu, "");
+  if (firstToken.length < 4) return null;
+
+  const { data: roster } = await sb.from("team_roster")
+    .select("person,role")
+    .eq("is_former", false)
+    .ilike("person", `${firstToken}%`)
+    .limit(5);
+  const candidates = (roster || []).filter((row: any) => {
+    const personFirst = normalizedNameKey(String(row?.person || "").split(/\s+/)[0]).replace(/-/g, "");
+    return personFirst.startsWith(mentionKey) || mentionKey.startsWith(personFirst);
+  });
+  if (candidates.length !== 1) return null;
+
+  const person = String(candidates[0].person || "").trim();
+  const { data: ids } = await sb.from("whatsapp_team_identities")
+    .select("identity_value,canonical_name,role")
+    .eq("identity_type", "PHONE")
+    .eq("active", true)
+    .eq("canonical_name", person)
+    .limit(5);
+  const phones = [...new Set((ids || []).map((row: any) => normalizePhone(row?.identity_value)).filter(Boolean))] as string[];
+  if (phones.length !== 1) return null;
+  return { name: person, role: String(candidates[0].role || ids?.[0]?.role || "TEAM"), phone: phones[0] };
+}
+
+async function mergeCaptureSessionMetadata(sb: any, sessionId: string, patch: Record<string, unknown>, fields: Record<string, unknown> = {}) {
+  const { data: current } = await sb.from("meeting_capture_sessions").select("metadata").eq("id", sessionId).maybeSingle();
+  const metadata = { ...(current?.metadata || {}), ...patch };
+  return sb.from("meeting_capture_sessions").update({ ...fields, metadata, updated_at: new Date().toISOString() }).eq("id", sessionId);
 }
 
 async function rpc(name: string, args: Record<string, unknown>) {
@@ -445,26 +483,44 @@ Deno.serve(async (req) => {
       const channel = isDesktop ? "WHATSAPP_DESKTOP_CALL" : "WHATSAPP_WEB_CALL";
       const phone = (value: unknown) => { const digits = String(value || "").replace(/\D/g, ""); return digits.length >= 10 && digits.length <= 15 ? digits : null; };
       const localPhone = phone(session.metadata?.local_phone);
-      const remotePhone = phone(session.metadata?.remote_phone);
+      let remotePhone = phone(session.metadata?.remote_phone);
       const contactName = String(session.metadata?.contact_name || "Contato WhatsApp").slice(0,160);
       const ownerName = String(session.owner_person || "Colaborador").slice(0,160);
       const rawSegments = Array.isArray(body.segments) ? body.segments.slice(0, 20000) : [];
       const inferredName = inferProspectNameFromSegments(rawSegments as any[], ownerName);
-      const whatsappName = safeProspectName(session.metadata?.name_evidence?.whatsapp?.name || session.metadata?.whatsapp_name);
+      const teamMention = await resolveTeamMentionIdentity(sb, inferredName);
+      const existingRole = String(session.metadata?.remote_role || session.metadata?.identity_resolution?.role || "").toUpperCase();
+      const existingStatus = String(session.metadata?.identity_resolution?.status || "").toUpperCase();
+      const staleSystemCandidate = existingRole === "SYSTEM"
+        || String(session.metadata?.rejected_remote_candidate?.resolved_role || "").toUpperCase() === "SYSTEM";
+      const weakTeamCandidate = existingStatus === "AUTO_TEAM"
+        && String(session.metadata?.identity_source || "").toUpperCase().includes("LEVELDB");
+
+      if (teamMention && (staleSystemCandidate || weakTeamCandidate || !remotePhone)) remotePhone = teamMention.phone;
+      else if ((staleSystemCandidate || weakTeamCandidate) && !teamMention) remotePhone = null;
+
+      const whatsappName = (staleSystemCandidate || weakTeamCandidate)
+        ? null
+        : safeProspectName(session.metadata?.name_evidence?.whatsapp?.name || session.metadata?.whatsapp_name);
       const postCallName = safeProspectName(session.metadata?.name_evidence?.post_call?.name || session.metadata?.post_call_name);
-      const existingRemoteName = safeProspectName(session.metadata?.remote_name);
-      const resolvedRemoteName = whatsappName
-        || existingRemoteName
+      const existingRemoteName = (staleSystemCandidate || weakTeamCandidate)
+        ? null
+        : safeProspectName(session.metadata?.remote_name);
+      const resolvedRemoteName = teamMention?.name
+        || whatsappName
         || postCallName
+        || existingRemoteName
         || safeProspectName(contactName)
         || inferredName;
-      const resolvedNameSource = whatsappName
-        ? "WHATSAPP_NAME"
-        : existingRemoteName
-          ? (session.metadata?.identity_resolution?.source || session.metadata?.identity_source || "RELATO_AI")
+      const resolvedNameSource = teamMention
+        ? "TRANSCRIPT_TEAM_MENTION"
+        : whatsappName
+          ? "WHATSAPP_NAME"
           : postCallName
             ? "RELATO_POST_CALL"
-            : (inferredName ? "TRANSCRIPT_DIRECT_ADDRESS" : "RELATO_AI");
+            : existingRemoteName
+              ? (session.metadata?.identity_resolution?.source || session.metadata?.identity_source || "RELATO_AI")
+              : (inferredName ? "TRANSCRIPT_DIRECT_ADDRESS" : "RELATO_AI");
       const formatPhone = (value: string | null) => value ? `+${value}` : "";
       const localLabel = localPhone ? `${ownerName} · ${formatPhone(localPhone)}` : ownerName;
       const remoteBase = resolvedRemoteName || "Contato WhatsApp";
@@ -527,23 +583,43 @@ Deno.serve(async (req) => {
         auto: true,
         name: resolvedRemoteName,
         phone: remotePhone,
-        role: session.metadata?.remote_role || "PROSPECT",
-        side: "EXTERNAL",
-        status: inferredName && !whatsappName && !existingRemoteName && !postCallName ? "AUTO_TRANSCRIPT_NAME" : (session.metadata?.identity_resolution?.status || "AUTO_NAME"),
+        role: teamMention?.role || session.metadata?.remote_role || "PROSPECT",
+        side: teamMention ? "TEAM" : "EXTERNAL",
+        status: teamMention
+          ? "AUTO_TEAM"
+          : (inferredName && !whatsappName && !existingRemoteName && !postCallName ? "AUTO_TRANSCRIPT_NAME" : (session.metadata?.identity_resolution?.status || "AUTO_NAME")),
         source: resolvedNameSource,
-        confidence: inferredName && !whatsappName && !existingRemoteName && !postCallName ? 0.86 : (session.metadata?.identity_resolution?.confidence || null),
+        confidence: teamMention ? 0.98 : (inferredName && !whatsappName && !existingRemoteName && !postCallName ? 0.86 : (session.metadata?.identity_resolution?.confidence || null)),
       } : (session.metadata?.identity_resolution || null);
+      const nextNameEvidence = { ...(session.metadata?.name_evidence || {}) } as Record<string, any>;
+      if ((staleSystemCandidate || weakTeamCandidate) && nextNameEvidence.whatsapp) {
+        nextNameEvidence.rejected_whatsapp_candidate = {
+          ...nextNameEvidence.whatsapp,
+          rejected_reason: "CONFLICTING_INTERNAL_OR_SYSTEM_CANDIDATE",
+          rejected_at: new Date().toISOString(),
+        };
+        delete nextNameEvidence.whatsapp;
+      }
+      if (inferredName) {
+        nextNameEvidence.transcript = {
+          name: inferredName,
+          source: teamMention ? "TRANSCRIPT_TEAM_MENTION" : "TRANSCRIPT_DIRECT_ADDRESS",
+          canonical_name: teamMention?.name || null,
+          canonical_phone: teamMention?.phone || null,
+          confidence: teamMention ? 0.98 : 0.86,
+          observed_at: new Date().toISOString(),
+        };
+      }
       const resolvedMetadata = {
         ...(session.metadata || {}),
-        ...(resolvedRemoteName ? { remote_name: resolvedRemoteName } : {}),
+        remote_phone: remotePhone,
+        remote_name: resolvedRemoteName || null,
+        remote_role: teamMention?.role || ((staleSystemCandidate || weakTeamCandidate) ? null : session.metadata?.remote_role || null),
+        whatsapp_name: (staleSystemCandidate || weakTeamCandidate) ? null : (whatsappName || session.metadata?.whatsapp_name || null),
+        name_evidence: nextNameEvidence,
         ...(identityResolution ? { identity_resolution: identityResolution } : {}),
-        ...(inferredName ? {
-          transcript_inferred_name: inferredName,
-          name_evidence: {
-            ...(session.metadata?.name_evidence || {}),
-            transcript: { name: inferredName, source: "TRANSCRIPT_DIRECT_ADDRESS", confidence: 0.86, observed_at: new Date().toISOString() },
-          },
-        } : {}),
+        ...(inferredName ? { transcript_inferred_name: inferredName } : {}),
+        ...(teamMention ? { transcript_team_identity: teamMention } : {}),
         capture_mode: session.capture_mode,
         channel,
       };
@@ -588,13 +664,11 @@ Deno.serve(async (req) => {
         if (error) throw error;
       }
       const now = new Date().toISOString();
-      await sb.from("meeting_capture_sessions").update({
+      await mergeCaptureSessionMetadata(sb, String(session.id), resolvedMetadata, {
         transcript_id: transcriptId,
         state: "PROCESSING",
-        metadata: resolvedMetadata,
-        updated_at: now
-      }).eq("id", session.id);
-      if (remotePhone && inferredName && !safeProspectName(session.metadata?.remote_name)) {
+      });
+      if (remotePhone && inferredName && !teamMention && !safeProspectName(session.metadata?.remote_name)) {
         await sb.from("whatsapp_participant_identity").upsert({
           chat_id: "relato-transcript",
           identity_key: `phone:${remotePhone}`,
@@ -646,9 +720,7 @@ Deno.serve(async (req) => {
             updated_at: now,
           }).eq("id", transcriptId);
           if (rejectedError) throw rejectedError;
-          await sb.from("meeting_capture_sessions").update({
-            state: "NEEDS_REVIEW", metadata: transcriptMetadata, updated_at: now
-          }).eq("id", session.id);
+          await mergeCaptureSessionMetadata(sb, String(session.id), transcriptMetadata, { state: "NEEDS_REVIEW" });
           return json({
             ok: true, transcript_id: transcriptId, segments: segments.length, job_id: null,
             postprocess: "SDR_LOW_CONFIDENCE_REVIEW", transcript_quality: avgConfidence,
@@ -697,7 +769,7 @@ Deno.serve(async (req) => {
             commercial_analysis_updated_at: failedAt,
           };
           await sb.from("meeting_transcripts").update({ metadata: failure, updated_at: failedAt }).eq("id", transcriptId);
-          await sb.from("meeting_capture_sessions").update({ metadata: failure, updated_at: failedAt }).eq("id", session.id);
+          await mergeCaptureSessionMetadata(sb, String(session.id), failure);
           const { error: fallbackQueueError } = await sb.rpc("enqueue_heavy_job", {
             p_job_type: "MEETING_POSTPROCESS",
             p_payload: { transcript_id: transcriptId, session_id: session.id, mode: "execute", commercial: true, fallback_from: "EDGE_BACKGROUND_OPENAI" },
@@ -714,9 +786,7 @@ Deno.serve(async (req) => {
           ...readyMetadata,
           commercial_processing_route: "EDGE_BACKGROUND_OPENAI",
         };
-        await sb.from("meeting_capture_sessions").update({
-          state: "READY", metadata: queuedMetadata, updated_at: now
-        }).eq("id", session.id);
+        await mergeCaptureSessionMetadata(sb, String(session.id), queuedMetadata, { state: "READY" });
         await sb.from("meeting_transcripts").update({
           metadata: queuedMetadata, updated_at: now
         }).eq("id", transcriptId);
@@ -787,7 +857,7 @@ Deno.serve(async (req) => {
         };
         await sb.from("meeting_transcripts").update({ metadata: failedMetadata, updated_at: failedAt }).eq("id", transcriptId);
         if (transcriptRow?.capture_session_id) {
-          await sb.from("meeting_capture_sessions").update({ metadata: failedMetadata, updated_at: failedAt }).eq("id", transcriptRow.capture_session_id);
+          await mergeCaptureSessionMetadata(sb, String(transcriptRow.capture_session_id), failedMetadata);
         }
         throw error;
       }
@@ -1372,16 +1442,13 @@ Deno.serve(async (req) => {
         };
         await sb.from("meeting_transcripts").update({ metadata: commercialMetadata, updated_at: now }).eq("id", transcriptId);
         if (captureSessionId) {
-          await sb.from("meeting_capture_sessions").update({
-            metadata: {
-              ...(session?.metadata || {}),
-              commercial_analysis: signals,
-              commercial_sync: commercialSync,
-              ...(commercialProspect ? { commercial_prospect: commercialProspect } : {}),
-              commercial_analysis_status: "READY",
-            },
-            updated_at: now,
-          }).eq("id", captureSessionId);
+          await mergeCaptureSessionMetadata(sb, String(captureSessionId), {
+            commercial_analysis: signals,
+            commercial_sync: commercialSync,
+            ...(commercialProspect ? { commercial_prospect: commercialProspect } : {}),
+            commercial_analysis_status: "READY",
+            commercial_analysis_updated_at: now,
+          });
         }
       }
 
