@@ -158,6 +158,28 @@ function isWhatsappIdentitySource(value: unknown) {
     || source.includes("PARTICIPANT_IDENTITY")
     || ["GROUP_PARTICIPANT_IDENTITY","CLIENT_PHONE_REGISTRY","CONTACT_SYNC","WHATSAPP_MESSAGES","ZAPI_HISTORY"].includes(source);
 }
+
+async function resolveUniquePhoneByExactWhatsappName(ops: any, value: unknown) {
+  const name = safeContactName(value);
+  if (!name) return null;
+  const [{ data: team }, { data: participants }] = await Promise.all([
+    ops.from("whatsapp_team_identities")
+      .select("identity_value,canonical_name,role")
+      .eq("identity_type","PHONE").eq("active",true).eq("canonical_name",name).limit(10),
+    ops.from("whatsapp_participant_identity")
+      .select("phone,canonical_name,role_hint,source,confidence,last_seen_at")
+      .eq("canonical_name",name).not("phone","is",null)
+      .order("confidence",{ascending:false}).order("last_seen_at",{ascending:false}).limit(20)
+  ]);
+  const candidates = [
+    ...(team||[]).map((row:Row)=>({phone:normalizePhone(row.identity_value),name:row.canonical_name,role:row.role,source:"TEAM_REGISTRY"})),
+    ...(participants||[]).map((row:Row)=>({phone:normalizePhone(row.phone),name:row.canonical_name,role:row.role_hint,source:row.source||"PARTICIPANT_IDENTITY"}))
+  ].filter((row:Row)=>row.phone);
+  const phones=[...new Set(candidates.map((row:Row)=>String(row.phone)))];
+  if(phones.length!==1)return null;
+  const best=candidates.find((row:Row)=>String(row.phone)===phones[0])||candidates[0];
+  return {phone:phones[0],name:safeContactName(best?.name)||name,role:best?.role||null,source:best?.source||"NAME_EXACT_MATCH"};
+}
 function personNameKey(value: unknown) {
   return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
     .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -631,9 +653,12 @@ Deno.serve(async (req: Request) => {
     const directHint = source === "WHATSAPP_DESKTOP"
       ? await inferDirectChatIdentityByWindow(ops, startedAt, endedAt)
       : null;
+    const uiNameHint = source === "WHATSAPP_DESKTOP" && identitySource === "WHATSAPP_DESKTOP_UI" && rawContactName
+      ? await resolveUniquePhoneByExactWhatsappName(ops, rawContactName)
+      : null;
     const remotePhone = source === "WHATSAPP_DESKTOP" && !trustedDesktopIdentity
       ? (directHint?.phone || null)
-      : (remotePhoneCandidate || directHint?.phone || null);
+      : (remotePhoneCandidate || uiNameHint?.phone || directHint?.phone || null);
     const candidateIdentity = await resolveCallIdentity(ops, remotePhone);
     const weakLevelDbTeamCandidate = Boolean(
       remotePhone
@@ -646,7 +671,9 @@ Deno.serve(async (req: Request) => {
       )
     );
     const systemCandidate = Boolean(
-      remotePhone && String(candidateIdentity?.role || "").toUpperCase() === "SYSTEM"
+      remotePhone
+      && String(candidateIdentity?.role || "").toUpperCase() === "SYSTEM"
+      && identitySource !== "WHATSAPP_DESKTOP_UI"
     );
     const rejectedDesktopCandidate = weakLevelDbTeamCandidate || systemCandidate;
     const acceptedRemotePhone = rejectedDesktopCandidate ? null : remotePhone;
@@ -671,13 +698,13 @@ Deno.serve(async (req: Request) => {
           : identityWhatsappName
             ? identity?.source
             : null;
-    const resolvedName = whatsappName || safeContactName(identity.name) || rawContactName;
+    const resolvedName = whatsappName || safeContactName(uiNameHint?.name) || safeContactName(identity.name) || rawContactName;
     const resolvedContactName = resolvedName || (remotePhone ? `WhatsApp +${remotePhone}` : "Contato WhatsApp");
     const resolvedIdentity = {
       ...identity,
       phone: acceptedRemotePhone || identity.phone || null,
       name: resolvedName || identity.name || null,
-      role: identity.role || phoneName.role || null,
+      role: identity.role || uiNameHint?.role || phoneName.role || null,
       source: identity.source || whatsappNameSource || identitySource || null,
     };
     const observedAt = new Date().toISOString();
