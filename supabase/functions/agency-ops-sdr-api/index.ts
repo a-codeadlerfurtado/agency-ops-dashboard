@@ -17,6 +17,56 @@ const safeContactName=(v:unknown)=>{
   const name=clean(v);
   return name&&!GENERIC_CONTACT_NAMES.has(name.toLowerCase())?name:null;
 };
+const nameEvidence=(metadata:Row={},lead:Row|null=null,record:Row|null=null)=>{
+  const identity:Row=metadata?.identity_resolution||{};
+  const source=clean(identity?.source||metadata?.identity_source).toUpperCase();
+  const explicit=metadata?.name_evidence||{};
+  const whatsappSource =
+    source.startsWith("WHATSAPP_") ||
+    source.includes("PARTICIPANT_IDENTITY") ||
+    source==="GROUP_PARTICIPANT_IDENTITY" ||
+    source==="CLIENT_PHONE_REGISTRY";
+  const postCallSource =
+    source==="RELATO_MANUAL" ||
+    source==="RELATO_MANUAL_FEEDBACK" ||
+    source==="RELATO_COMMERCIAL" ||
+    source==="RELATO_POST_CALL" ||
+    clean(metadata?.feedback_binding?.source).toUpperCase()==="MANUAL";
+  const transcriptSource=source==="TRANSCRIPT_DIRECT_ADDRESS";
+  const whatsappName=safeContactName(
+    explicit?.whatsapp?.name ||
+    metadata?.whatsapp_name ||
+    (whatsappSource?identity?.name:null) ||
+    ((clean(metadata?.source).toUpperCase()==="WHATSAPP_WEB" || clean(metadata?.identity_source).toUpperCase()==="WHATSAPP_DESKTOP_UI")
+      ? metadata?.contact_name : null)
+  );
+  const postCallName=safeContactName(
+    explicit?.post_call?.name ||
+    metadata?.post_call_name ||
+    (postCallSource?identity?.name:null)
+  );
+  const autoName=safeContactName(
+    explicit?.transcript?.name ||
+    metadata?.transcript_inferred_name ||
+    (transcriptSource?identity?.name:null)
+  );
+  const crmName=safeContactName(
+    lead?.company || lead?.name ||
+    explicit?.crm?.name ||
+    metadata?.crm_name
+  );
+  const legacyName=safeContactName(record?.remote_name);
+  const primaryName=whatsappName||crmName||postCallName||autoName||legacyName||null;
+  const primarySource=whatsappName?"WHATSAPP":crmName?"CRM":postCallName?"POST_CALL":autoName?"TRANSCRIPT":legacyName?"LEGACY":null;
+  return {
+    whatsapp_name:whatsappName,
+    post_call_name:postCallName,
+    crm_name:crmName,
+    auto_identified_name:autoName,
+    prospect_name:primaryName,
+    prospect_name_source:primarySource,
+  };
+};
 const likelyWhisperHallucination=(value:unknown)=>{
   const raw=clean(value).toLowerCase();
   if(!raw) return false;
@@ -194,7 +244,7 @@ Deno.serve(async(req:Request)=>{
       const {data}=await crm.from("leads").select("id,name,company,stage,phone").in("phone",variants).is("archived_at",null).order("updated_at",{ascending:false}).limit(1).maybeSingle();
       detailLead=data||null;
     }
-    const resolvedDetailName=safeContactName(detailLead?.company||detailLead?.name||sessionRow.metadata?.commercial_prospect?.name||sessionRow.metadata?.remote_name||sessionRow.metadata?.contact_name);
+    const detailNames=nameEvidence(sessionRow.metadata||{},detailLead,null);
 
     return reply({
       call:{
@@ -202,8 +252,13 @@ Deno.serve(async(req:Request)=>{
         title:sessionRow.title,started_at:sessionRow.started_at,ended_at:sessionRow.ended_at,
         state:sessionRow.state,capture_mode:sessionRow.capture_mode,
         remote_phone:sessionRow.metadata?.remote_phone||null,
-        remote_name:safeContactName(sessionRow.metadata?.remote_name||sessionRow.metadata?.contact_name),
-        prospect_name:resolvedDetailName,
+        remote_name:safeContactName(sessionRow.metadata?.remote_name),
+        whatsapp_name:detailNames.whatsapp_name,
+        post_call_name:detailNames.post_call_name,
+        crm_name:detailNames.crm_name,
+        auto_identified_name:detailNames.auto_identified_name,
+        prospect_name:detailNames.prospect_name,
+        prospect_name_source:detailNames.prospect_name_source,
         prospect_lead_id:detailLead?.id||commercialLeadId||null,
         prospect_stage:detailLead?.stage||null,
         contact_name:sessionRow.metadata?.contact_name||null,
@@ -278,12 +333,7 @@ Deno.serve(async(req:Request)=>{
     const phoneLead:any=phoneLeadMap.get(phoneDigits(remotePhone))||null;
     const metadataLeadId=clean(session.metadata?.commercial_prospect?.lead_id);
     const lead:any=recordLead||phoneLead||null;
-    const candidateName=clean(
-      lead?.company||lead?.name||
-      session.metadata?.commercial_prospect?.company||session.metadata?.commercial_prospect?.name||
-      record?.remote_name||session.metadata?.remote_name||session.metadata?.contact_name
-    );
-    const genericName=["Contato","Contato WhatsApp","Contato WhatsApp Desktop","WhatsApp"].includes(candidateName)?"":candidateName;
+    const names=nameEvidence(session.metadata||{},lead,record);
     const startedMs=Date.parse(String(session.started_at||""));
     const endedMs=Date.parse(String(session.ended_at||""));
     const durationSeconds=Number(transcript?.duration_seconds||0)
@@ -298,8 +348,13 @@ Deno.serve(async(req:Request)=>{
       channel:record?.channel||"WHATSAPP_DESKTOP_CALL",
       capture_mode:session.capture_mode||null,
       remote_phone:remotePhone,
-      remote_name:record?.remote_name||session.metadata?.remote_name||session.metadata?.contact_name||null,
-      prospect_name:genericName||null,
+      remote_name:safeContactName(session.metadata?.remote_name)||null,
+      whatsapp_name:names.whatsapp_name,
+      post_call_name:names.post_call_name,
+      crm_name:names.crm_name,
+      auto_identified_name:names.auto_identified_name,
+      prospect_name:names.prospect_name,
+      prospect_name_source:names.prospect_name_source,
       prospect_lead_id:lead?.id||metadataLeadId||null,
       stage:lead?.stage||null,
       notes:record?.notes||null,
@@ -312,7 +367,7 @@ Deno.serve(async(req:Request)=>{
       audio_status:session.audio_status||null,
       has_audio:Boolean(session.audio_mixed_path||session.audio_local_path||session.audio_remote_path||session.metadata?.audio_paths?.local||session.metadata?.audio_paths?.remote),
       has_transcript:Boolean(session.transcript_id||record?.transcript_id),
-      prospect_identified:Boolean(genericName),
+      prospect_identified:Boolean(names.prospect_name),
       identity_status:session.metadata?.identity_resolution?.status||"UNRESOLVED",
       review_classification:session.metadata?.backfill_review?.classification||null,
       review_reason:session.metadata?.backfill_review?.reason||null,
