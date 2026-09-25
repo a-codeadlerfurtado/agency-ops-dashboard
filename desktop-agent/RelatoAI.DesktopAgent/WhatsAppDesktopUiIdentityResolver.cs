@@ -87,10 +87,21 @@ internal static class WhatsAppDesktopUiIdentityResolver
                         candidates.Add(new Candidate(220, explicitName, PhoneFromText(node.Name, knownLocalPhone), "explicit:" + node.Name));
                 }
 
-                var anchors = windowNames
-                    .Where(node => CallAnchorTerms.Any(term => node.Name.Contains(term, StringComparison.OrdinalIgnoreCase)))
-                    .Take(12)
-                    .ToArray();
+                var anchorList = new List<NamedElement>();
+                foreach (var node in windowNames)
+                {
+                    var anchorMatch = false;
+                    foreach (var term in CallAnchorTerms)
+                    {
+                        if (!node.Name.Contains(term, StringComparison.OrdinalIgnoreCase)) continue;
+                        anchorMatch = true;
+                        break;
+                    }
+                    if (!anchorMatch) continue;
+                    anchorList.Add(node);
+                    if (anchorList.Count >= 12) break;
+                }
+                var anchors = anchorList.ToArray();
                 if (anchors.Length == 0) continue;
 
                 dynamic walker = automation.ControlViewWalker;
