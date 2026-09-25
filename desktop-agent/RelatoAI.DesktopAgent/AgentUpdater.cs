@@ -4,6 +4,8 @@ using Microsoft.Win32;
 
 namespace RelatoAI.DesktopAgent;
 
+// release: relato-package-v2026.09.25.6
+
 internal sealed class AgentUpdater : IDisposable
 {
     public const string CurrentVersion = "desktop-0.5.1";
