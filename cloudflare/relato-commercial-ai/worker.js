@@ -108,7 +108,14 @@ export default {
     const analysis=parseCandidate(result);
     if(!analysis || !String(analysis.summary||"").trim()){
       const candidate=result?.response ?? result?.result?.response ?? result?.result?.text ?? result?.text ?? null;
-      return out({ok:false,error:"empty_analysis",shape:Object.keys(result||{}),candidate_type:typeof candidate},502);
+      return out({
+        ok:false,error:"empty_analysis",
+        shape:Object.keys(result||{}),
+        candidate_type:typeof candidate,
+        candidate_keys:candidate&&typeof candidate==="object"?Object.keys(candidate):null,
+        candidate_response_type:candidate&&typeof candidate==="object"?typeof candidate.response:null,
+        candidate_response_keys:candidate&&typeof candidate==="object"&&candidate.response&&typeof candidate.response==="object"?Object.keys(candidate.response):null
+      },502);
     }
     return out({ok:true,provider:"CLOUDFLARE_WORKERS_AI",model:MODEL,latency_ms:Date.now()-started,analysis});
   }
