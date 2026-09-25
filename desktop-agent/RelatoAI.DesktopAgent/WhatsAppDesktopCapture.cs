@@ -29,6 +29,10 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     private bool disposed;
     private volatile bool captureRestartRequested;
     private bool stoppingCaptureEngines;
+    private WhatsAppDesktopUiIdentity? uiIdentity;
+    private WhatsAppDesktopUiIdentity? uiCandidate;
+    private int uiCandidateHits;
+    private DateTimeOffset lastUiProbe = DateTimeOffset.MinValue;
     private int ticking;
     public event Action<string>? StatusChanged;
     public event Action<string, string>? CallStarted;
@@ -89,6 +93,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
                 StartCall(process);
             return;
         }
+
+        ProbeUiIdentity(now);
 
         if (micUsage.Available && micUsage.Active)
         {
@@ -317,7 +323,12 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             foreach (var row in localRing.Where(row => row.at >= keepFrom)) localWriter.Write(row.data, 0, row.data.Length);
         }
         candidateAt = null;
-        var contact = ResolveContactName(process);
+        uiIdentity = null;
+        uiCandidate = null;
+        uiCandidateHits = 0;
+        lastUiProbe = DateTimeOffset.MinValue;
+        ProbeUiIdentity(now, force: true);
+        var contact = uiIdentity?.Name ?? uiIdentity?.Phone ?? ResolveContactName(process);
         CallStarted?.Invoke(sessionId, contact);
         StatusChanged?.Invoke(callPrivacyObservedActive
             ? "REC · chamada WhatsApp Desktop · Windows confirmou call ativa"
@@ -334,7 +345,9 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         var now = DateTimeOffset.Now;
         var ended = ResolvePrivacyTime(privacyStop, now);
         if (ended <= started || ended - started > TimeSpan.FromHours(12)) ended = now;
-        var contact = ResolveContactName(target);
+        ProbeUiIdentity(now, force: true);
+        var directUiIdentity = uiIdentity;
+        var contact = directUiIdentity?.Name ?? directUiIdentity?.Phone ?? ResolveContactName(target);
         lock (gate)
         {
             remoteWriter?.Dispose(); remoteWriter = null;
@@ -351,7 +364,13 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         try
         {
             var cfg = AgentConfig.Load() ?? configProvider() ?? throw new InvalidOperationException("Desktop Agent não pareado");
-            var identity = await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone, contact);
+            var identity = directUiIdentity is not null
+                ? new WhatsAppCallIdentity(
+                    cfg.LocalPhone,
+                    directUiIdentity.Phone,
+                    directUiIdentity.Name,
+                    "WHATSAPP_DESKTOP_UI")
+                : await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone, contact);
             var resolvedContact = string.IsNullOrWhiteSpace(identity.RemoteName) ? contact : identity.RemoteName.Trim();
             if (!string.IsNullOrWhiteSpace(identity.LocalPhone) && identity.LocalPhone != cfg.LocalPhone)
             {
@@ -404,6 +423,48 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         {
             StatusChanged?.Invoke(success ? "Ligação enviada ao Relato AI" : "Falha ao enviar ligação");
             remotePath = null; localPath = null;
+            uiIdentity = null;
+            uiCandidate = null;
+            uiCandidateHits = 0;
+            lastUiProbe = DateTimeOffset.MinValue;
+        }
+    }
+
+    private void ProbeUiIdentity(DateTimeOffset now, bool force = false)
+    {
+        if (!IsRecording) return;
+        if (!force && now - lastUiProbe < TimeSpan.FromMilliseconds(700)) return;
+        lastUiProbe = now;
+
+        var cfg = AgentConfig.Load() ?? configProvider();
+        var observed = WhatsAppDesktopUiIdentityResolver.Resolve(cfg?.LocalPhone);
+        if (observed is null || observed.Confidence < 0.94) return;
+
+        var sameCandidate = uiCandidate is not null
+            && string.Equals(uiCandidate.Name ?? "", observed.Name ?? "", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(uiCandidate.Phone ?? "", observed.Phone ?? "", StringComparison.Ordinal);
+
+        if (sameCandidate)
+            uiCandidateHits++;
+        else
+        {
+            uiCandidate = observed;
+            uiCandidateHits = 1;
+        }
+
+        // Fail closed: a single UI snapshot is never enough to label a call.
+        // The same contact must be visible in at least two independent probes.
+        if (uiCandidateHits < 2 || uiCandidate is null) return;
+
+        var changed = uiIdentity is null
+            || !string.Equals(uiIdentity.Name ?? "", uiCandidate.Name ?? "", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(uiIdentity.Phone ?? "", uiCandidate.Phone ?? "", StringComparison.Ordinal);
+        uiIdentity = uiCandidate;
+
+        if (changed)
+        {
+            var label = uiIdentity.Name ?? (uiIdentity.Phone is null ? "contato" : "+" + uiIdentity.Phone);
+            StatusChanged?.Invoke($"REC · WhatsApp identificou {label}");
         }
     }
 
