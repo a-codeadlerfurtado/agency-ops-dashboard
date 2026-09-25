@@ -383,7 +383,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
                 id, started, ended, resolvedContact, roles, durationMs,
                 identity.LocalPhone, identity.RemotePhone, identity.Source);
             var uploaded = new List<object>();
-            foreach (var targetUpload in prepared.Uploads)
+            foreach (var targetUpload in prepared.Uploads.OrderBy(x => x.Role == "mixed" ? 0 : 1))
             {
                 string? file = targetUpload.Role switch
                 {
@@ -395,7 +395,10 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
                 if (file is null || !File.Exists(file)) continue;
                 var mime = targetUpload.Role == "mixed" ? "audio/mpeg" : "audio/wav";
                 await api.UploadAsync(targetUpload.SignedUrl, file, mime);
-                uploaded.Add(new { role = targetUpload.Role, path = targetUpload.Path, bytes = new FileInfo(file).Length, mime_type = mime });
+                var fileBytes = new FileInfo(file).Length;
+                uploaded.Add(new { role = targetUpload.Role, path = targetUpload.Path, bytes = fileBytes, mime_type = mime });
+                if (targetUpload.Role == "mixed")
+                    await api.MarkMixedAudioReadyAsync(id, targetUpload.Path, fileBytes, durationMs);
             }
             await api.FinalizeCallAsync(id, uploaded, durationMs);
             success = true;

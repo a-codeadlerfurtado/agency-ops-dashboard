@@ -264,7 +264,8 @@ function likelyWhisperHallucination(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw) return false;
   const normalized = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  if (/legenda(s)? por|legendas pela comunidade|amara\.org|obrigado por assistir|inscreva-se no canal|subscribe|subtitles by|transcreva literalmente|não complete frases|nao complete frases/i.test(normalized)) return true;
+  if (/transcricao e legendas|legenda(s)? por|legendas pela comunidade|amara\.org|obrigado por assistir|inscreva-se no canal|subscribe|subtitles by|transcreva literalmente|não complete frases|nao complete frases/i.test(normalized)) return true;
+  if (/^legenda\s+[a-z]{2,}(?:\s+[a-z]{2,}){0,3}[.!]?$/i.test(normalized)) return true;
   const words = normalized.replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
   if (words.length < 12) return false;
   const uniqueRatio = new Set(words).size / words.length;
@@ -312,7 +313,9 @@ async function whisperTranscribe(audio, speakerName, transcriptSource = "WHATSAP
     form.append("language", "pt");
     form.append("response_format", "verbose_json");
     form.append("temperature", "0");
-    form.append("vad_filter", "false");
+    // VAD padrão do faster-whisper remove pausas longas sem alterar o relógio original
+    // dos segmentos; reduz CPU e evita que silêncio vire texto inventado.
+    form.append("vad_filter", "true");
     // Não enviar prompt textual ao Whisper: em áudio curto/silencioso alguns backends
     // podem ecoar o prompt como se fosse fala real.
     const response = await fetch(`${whisperUrl}/audio/transcriptions`, {
@@ -407,22 +410,27 @@ async function processCallJob(job) {
   const transcriptSource = String(session.capture_mode || "").toUpperCase() === "WHATSAPP_DESKTOP_AUDIO"
     ? "WHATSAPP_DESKTOP_WHISPER"
     : "WHATSAPP_WEB_WHISPER";
-  const collected = [];
-  for (const item of audio) {
+  const channelResults = await Promise.all(audio.map(async (item) => {
     const speaker = item.role === "local" ? ownerName : contactName;
-    const rows = await whisperTranscribe(item, speaker, transcriptSource);
-    for (const row of rows) collected.push(row);
-  }
+    return await whisperTranscribe(item, speaker, transcriptSource);
+  }));
+  const collected = channelResults.flat();
   collected.sort((a,b) => Number(a.started_ms || 0) - Number(b.started_ms || 0));
-  const shortCounts=new Map();
+  const phraseCounts=new Map();
   for(const row of collected){
     const key=String(row.text||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
-    if(key && key.split(/\s+/).length<=2) shortCounts.set(key,(shortCounts.get(key)||0)+1);
+    if(key) phraseCounts.set(key,(phraseCounts.get(key)||0)+1);
   }
   const cleaned=collected.filter((row)=>{
     if(likelyWhisperHallucination(row.text)) return false;
     const key=String(row.text||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
-    if(key && key.split(/\s+/).length<=2 && (shortCounts.get(key)||0)>=8) return false;
+    if(!key) return false;
+    const words=key.split(/\s+/).filter(Boolean).length;
+    const repeats=phraseCounts.get(key)||0;
+    // Whisper tende a entrar em loop no fim de áudio/silêncio. Frases iguais muitas
+    // vezes na mesma call são descartadas por completo, inclusive bordões curtos.
+    if(repeats>=7) return false;
+    if(words>=3 && words<=12 && repeats>=4) return false;
     return true;
   });
   const segments = cleaned.map((row,index) => ({ ...row, sequence_no:index }));
@@ -474,10 +482,22 @@ const analysisSchema = {
     rewritten_notes: { type: "array", items: { type: "object", properties: { speaker: { type: "string" }, timestamp: { type: "string" }, original: { type: "string" }, rewritten: { type: "string" } }, required: ["speaker","timestamp","original","rewritten"] } },
     objections: { type: "array", items: { type: "string" } },
     pain_points: { type: "array", items: { type: "string" } },
+    primary_pain: { type: "string" },
+    secondary_pains: { type: "array", items: { type: "string" } },
+    goals: { type: "array", items: { type: "string" } },
+    urgency: { type: "string" },
+    decision_role: { type: "string" },
+    current_structure: { type: "string" },
+    marketing_investment: { type: "string" },
+    broker_count: { type: "integer" },
+    services_interest: { type: "array", items: { type: "string" } },
+    buying_signals: { type: "array", items: { type: "string" } },
+    closing_risks: { type: "array", items: { type: "string" } },
+    closer_briefing: { type: "string" },
     opportunities: { type: "array", items: { type: "string" } },
     follow_up: { type: "string" }
   },
-  required: ["summary","decisions","commitments","action_items","summary_topics","highlights","keywords","rewritten_notes","objections","pain_points","opportunities","follow_up"]
+  required: ["summary","decisions","commitments","action_items","summary_topics","highlights","keywords","rewritten_notes","objections","pain_points","primary_pain","secondary_pains","goals","urgency","decision_role","current_structure","marketing_investment","broker_count","services_interest","buying_signals","closing_risks","closer_briefing","opportunities","follow_up"]
 };
 
 async function ollamaJson(prompt, timeoutMs = 120000) {
@@ -506,7 +526,7 @@ async function ollamaJson(prompt, timeoutMs = 120000) {
   } finally { clearTimeout(timeout); }
 }
 
-const analysisShape = `Preencha todos os campos do schema. summary deve resumir fatos concretos. decisions e commitments devem conter apenas itens explicitamente presentes. action_items precisa preservar responsÃ¡vel, prazo e evidÃªncia quando existirem. Se nÃ£o houver dado, use array vazio ou string vazia.`;
+const analysisShape = `Preencha todos os campos do schema sem inventar. summary deve resumir fatos concretos. Para contexto comercial, identifique a dor primária mais determinante, dores secundárias, objetivos, urgência/timing, papel de decisão, estrutura atual, investimento em marketing, quantidade de corretores quando explicitamente dita, serviços de interesse, sinais de compra, riscos de fechamento e objeções. closer_briefing deve ser um briefing curto e acionável para o closer: contexto, o que explorar, o que evitar prometer e pontos que precisam ser validados na reunião de fechamento. decisions e commitments devem conter apenas itens explicitamente presentes. action_items precisa preservar responsável, prazo e evidência quando existirem. Se não houver dado, use array vazio, string vazia ou 0.`;
 
 async function analyzeMeeting(snapshot) {
   const transcript = snapshot.transcript || {};
@@ -532,7 +552,10 @@ function fallbackMeetingAnalysis(snapshot, error) {
     summary: summary || "Transcrição capturada; resumo automático indisponível.",
     decisions: [], commitments: [], action_items: [], summary_topics: [],
     highlights: { opportunities: [], insights: [], ideas: [], objectives: [], problems: [], lessons: [] },
-    keywords: [], rewritten_notes: [], objections: [], pain_points: [], opportunities: [], follow_up: "",
+    keywords: [], rewritten_notes: [], objections: [], pain_points: [],
+    primary_pain: "", secondary_pains: [], goals: [], urgency: "", decision_role: "",
+    current_structure: "", marketing_investment: "", broker_count: 0, services_interest: [],
+    buying_signals: [], closing_risks: [], closer_briefing: "", opportunities: [], follow_up: "",
     model: "extractive-fallback",
     fallback_reason: String(error?.message || error || "analysis_failed").slice(0, 500),
   };
@@ -787,7 +810,9 @@ async function queueLoop() {
   let idleMs = Math.max(1000, pollMinMs);
   while (!stopping) {
     try {
-      const claimed = await call("claim", { limit: 1, visibility_timeout: 900 });
+      // Claim a small batch so recordings can be mixed/published immediately even
+      // when Whisper is busy transcribing a previous call.
+      const claimed = await call("claim", { limit: 3, visibility_timeout: 900 });
       const jobs = Array.isArray(claimed.jobs) ? claimed.jobs : [];
       if (!jobs.length) {
         await sleep(idleMs);
@@ -795,6 +820,20 @@ async function queueLoop() {
         continue;
       }
       idleMs = Math.max(1000, pollMinMs);
+      // Audio readiness must not wait for the STT queue. Pre-mix all call jobs in
+      // the claimed batch first; transcription stays sequential to protect the 2-vCPU host.
+      await Promise.all(jobs
+        .filter((job) => String(job?.job_type || "").toUpperCase() === "CALL_TRANSCRIBE")
+        .map(async (job) => {
+          try {
+            const sessionId = String(job?.payload?.session_id || "").trim();
+            if (!sessionId) return;
+            const snapshot = await call("call_snapshot", { session_id: sessionId }, 120000);
+            await ensureMixedAudio(snapshot, sessionId);
+          } catch (error) {
+            console.error(JSON.stringify({ event: "call_audio_prewarm_failed", job_id: job?.job_id, error: String(error?.message || error) }));
+          }
+        }));
       for (const job of jobs) {
         try {
           console.log(JSON.stringify({ event: "job_claimed", job_id: job.job_id, job_type: job.job_type, attempt: job.attempt }));          await call("heartbeat", {

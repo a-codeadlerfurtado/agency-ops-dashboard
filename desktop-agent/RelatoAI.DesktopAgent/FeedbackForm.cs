@@ -13,6 +13,7 @@ internal sealed class FeedbackForm : Form
 
     private readonly AgentConfig? config;
     private readonly string sessionId;
+    private readonly string interactionChannel;
     private readonly ComboBox mood = SelectBox(220);
     private readonly ComboBox tone = SelectBox(220);
     private readonly ComboBox direction = SelectBox(220);
@@ -26,7 +27,7 @@ internal sealed class FeedbackForm : Form
     private readonly Label contactStatus = new();
     private readonly Label contactDetail = new();
     private readonly ComboBox clientBinding = SelectBox(532);
-    private readonly Panel prospectCard = Card(570, 610);
+    private readonly Panel prospectCard = Card(570, 1040);
     private readonly TextBox prospectName = Input(246);
     private readonly TextBox prospectCompany = Input(246);
     private readonly TextBox prospectEmail = Input(246);
@@ -36,8 +37,15 @@ internal sealed class FeedbackForm : Form
     private readonly TextBox prospectMarketing = Input(246);
     private readonly NumericUpDown prospectBrokers = new() { Minimum = 0, Maximum = 10000, Width = 246, BackColor = Panel2, ForeColor = TextMain, BorderStyle = BorderStyle.FixedSingle };
     private readonly TextBox prospectPain = Input(516);
+    private readonly TextBox prospectGoals = Input(516);
     private readonly TextBox prospectInterest = Input(516);
     private readonly TextBox prospectObjections = Input(516);
+    private readonly TextBox prospectUrgency = Input(516);
+    private readonly TextBox prospectDecisionRole = Input(516);
+    private readonly TextBox prospectStructure = Input(516);
+    private readonly TextBox prospectBuyingSignals = Input(516);
+    private readonly TextBox prospectClosingRisks = Input(516);
+    private readonly TextBox prospectBriefing = new() { Width = 516, Height = 86, Multiline = true, ScrollBars = ScrollBars.Vertical, BackColor = Panel2, ForeColor = TextMain, BorderStyle = BorderStyle.FixedSingle };
     private readonly TextBox prospectNextStep = Input(516);
     private readonly DateTimePicker prospectNextStepAt = new() { Width = 246, ShowCheckBox = true, Checked = false, Format = DateTimePickerFormat.Custom, CustomFormat = "dd/MM/yyyy HH:mm", CalendarMonthBackground = Panel2 };
     private FeedbackContext? feedbackContext;
@@ -49,10 +57,11 @@ internal sealed class FeedbackForm : Form
         public override string ToString() => Name;
     }
 
-    public FeedbackForm(AgentConfig? config, string sessionId)
+    public FeedbackForm(AgentConfig? config, string sessionId, string interactionChannel = "WHATSAPP_DESKTOP")
     {
         this.config = config;
         this.sessionId = sessionId;
+        this.interactionChannel = string.IsNullOrWhiteSpace(interactionChannel) ? "WHATSAPP_DESKTOP" : interactionChannel.Trim().ToUpperInvariant();
         Text = "Relato AI · Avaliação da call";
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -86,9 +95,9 @@ internal sealed class FeedbackForm : Form
                 if (string.IsNullOrWhiteSpace(prospectPhone.Text) && !string.IsNullOrWhiteSpace(feedbackContext?.RemotePhone)) prospectPhone.Text = $"+{feedbackContext.RemotePhone}";
             }
             if (feedbackContext?.RequiresSelection == true)
-                saveButton.Enabled = HasRequiredBinding();
+                saveButton.Enabled = CanSaveNow();
         };
-        prospectName.TextChanged += (_, _) => { if (contextReady) saveButton.Enabled = HasRequiredBinding(); };
+        prospectName.TextChanged += (_, _) => { if (contextReady) saveButton.Enabled = CanSaveNow(); };
         Shown += async (_, _) => { Activate(); BringToFront(); await LoadContextAsync(); };
     }
 
@@ -181,11 +190,18 @@ internal sealed class FeedbackForm : Form
         AddProspectField("Instagram / site", prospectInstagram, 306, 182);
         AddProspectField("Investimento em marketing", prospectMarketing, 18, 238);
         AddProspectField("Nº de corretores", prospectBrokers, 306, 238);
-        AddProspectField("Dor principal (separe por ;)", prospectPain, 18, 294);
-        AddProspectField("Interesse / serviço (separe por ;)", prospectInterest, 18, 350);
-        AddProspectField("Objeções (separe por ;)", prospectObjections, 18, 406);
-        AddProspectField("Próximo passo", prospectNextStep, 18, 462);
-        AddProspectField("Data do próximo passo", prospectNextStepAt, 18, 518);
+        AddProspectField("Dores (principal primeiro; separe por ;)", prospectPain, 18, 294);
+        AddProspectField("Objetivos (separe por ;)", prospectGoals, 18, 350);
+        AddProspectField("Interesse / serviço (separe por ;)", prospectInterest, 18, 406);
+        AddProspectField("Objeções (separe por ;)", prospectObjections, 18, 462);
+        AddProspectField("Urgência / timing", prospectUrgency, 18, 518);
+        AddProspectField("Quem decide / papel na decisão", prospectDecisionRole, 18, 574);
+        AddProspectField("Estrutura atual", prospectStructure, 18, 630);
+        AddProspectField("Sinais de compra (separe por ;)", prospectBuyingSignals, 18, 686);
+        AddProspectField("Riscos de fechamento (separe por ;)", prospectClosingRisks, 18, 742);
+        AddProspectField("Briefing IA para o closer", prospectBriefing, 18, 798);
+        AddProspectField("Próximo passo", prospectNextStep, 18, 910);
+        AddProspectField("Data do próximo passo", prospectNextStepAt, 18, 966);
         return prospectCard;
     }
 
@@ -358,7 +374,7 @@ internal sealed class FeedbackForm : Form
                 feedbackContext = context;
                 contextReady = true;
                 ApplyContext(context);
-                if (string.Equals(context.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase) && !context.TranscriptReady)
+                if (string.Equals(context.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase) && !context.CommercialAnalysisReady)
                     _ = RefreshProspectSuggestionsAsync(api);
                 return;
             }
@@ -377,7 +393,7 @@ internal sealed class FeedbackForm : Form
 
     private async Task RefreshProspectSuggestionsAsync(RelatoApi api)
     {
-        for (var attempt = 0; attempt < 30 && !IsDisposed; attempt++)
+        for (var attempt = 0; attempt < 60 && !IsDisposed; attempt++)
         {
             await Task.Delay(1000);
             try
@@ -391,8 +407,13 @@ internal sealed class FeedbackForm : Form
                     prospectName.Text = context.RemoteName;
                 if (!string.IsNullOrWhiteSpace(context.RemotePhone) && string.IsNullOrWhiteSpace(prospectPhone.Text))
                     prospectPhone.Text = $"+{context.RemotePhone}";
-                saveButton.Enabled = HasRequiredBinding();
-                if (context.TranscriptReady) return;
+                saveButton.Enabled = CanSaveNow();
+                if (context.CommercialAnalysisReady)
+                {
+                    contactDetail.Text = "A IA já preencheu o diagnóstico comercial. Revise/corrija e salve para confirmar no CRM do closer.";
+                    return;
+                }
+                if (context.TranscriptReady && attempt >= 45) return;
             }
             catch { }
         }
@@ -412,8 +433,15 @@ internal sealed class FeedbackForm : Form
         if (prospectBrokers.Value == 0 && value.BrokerCount is > 0 && value.BrokerCount <= prospectBrokers.Maximum)
             prospectBrokers.Value = value.BrokerCount.Value;
         Fill(prospectPain, string.Join("; ", value.PainPoints));
+        Fill(prospectGoals, string.Join("; ", value.Goals));
         Fill(prospectInterest, string.Join("; ", value.ServicesInterest));
         Fill(prospectObjections, string.Join("; ", value.Objections));
+        Fill(prospectUrgency, value.Urgency);
+        Fill(prospectDecisionRole, value.DecisionRole);
+        Fill(prospectStructure, value.CurrentStructure);
+        Fill(prospectBuyingSignals, string.Join("; ", value.BuyingSignals));
+        Fill(prospectClosingRisks, string.Join("; ", value.ClosingRisks));
+        Fill(prospectBriefing, value.CloserBriefing ?? value.AiSummary);
         Fill(prospectNextStep, value.NextStep);
         if (!prospectNextStepAt.Checked && !string.IsNullOrWhiteSpace(value.NextStepAt) && DateTimeOffset.TryParse(value.NextStepAt, out var nextAt))
         {
@@ -446,7 +474,7 @@ internal sealed class FeedbackForm : Form
                 prospectName.Text = context.RemoteName;
             if (string.IsNullOrWhiteSpace(prospectPhone.Text) && !string.IsNullOrWhiteSpace(context.RemotePhone))
                 prospectPhone.Text = $"+{context.RemotePhone}";
-            saveButton.Enabled = HasRequiredBinding();
+            saveButton.Enabled = CanSaveNow();
             return;
         }
 
@@ -487,6 +515,14 @@ internal sealed class FeedbackForm : Form
         if (feedbackContext?.RequiresSelection != true) return true;
         return clientBinding.SelectedItem is BindingOption option &&
             (option.Id is not null || option.NoClient || (option.Prospect && !string.IsNullOrWhiteSpace(prospectName.Text)));
+    }
+
+    private bool CanSaveNow()
+    {
+        if (!HasRequiredBinding()) return false;
+        if (string.Equals(feedbackContext?.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase))
+            return feedbackContext?.TranscriptReady == true;
+        return true;
     }
 
     private static string[] SplitEntries(string value) => value
@@ -552,14 +588,21 @@ internal sealed class FeedbackForm : Form
             marketing_investment = prospectMarketing.Text.Trim(),
             broker_count = (int)prospectBrokers.Value,
             pain_points = SplitEntries(prospectPain.Text),
+            goals = SplitEntries(prospectGoals.Text),
             services_interest = SplitEntries(prospectInterest.Text),
             objections = SplitEntries(prospectObjections.Text),
+            urgency = prospectUrgency.Text.Trim(),
+            decision_role = prospectDecisionRole.Text.Trim(),
+            current_structure = prospectStructure.Text.Trim(),
+            buying_signals = SplitEntries(prospectBuyingSignals.Text),
+            closing_risks = SplitEntries(prospectClosingRisks.Text),
+            closer_briefing = prospectBriefing.Text.Trim(),
             next_step = prospectNextStep.Text.Trim(),
             next_step_at = prospectNextStepAt.Checked ? prospectNextStepAt.Value.ToUniversalTime().ToString("O") : null
         } : null;
         var feedback = new
         {
-            channel = "WHATSAPP_DESKTOP",
+            channel = interactionChannel,
             client_id = clientId,
             no_client = noClient,
             is_prospect = isProspect,

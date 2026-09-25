@@ -59,7 +59,7 @@ internal sealed class AgentContext : ApplicationContext
             recordingIndicator.ShowIndicator("Google Meet");
             tray.ShowBalloonTip(1500, "Relato AI", $"Gravando Google Meet · {code}", ToolTipIcon.Info);
         });
-        meetCapture.MeetingFinished += (_, ok, error) => Post(() =>
+        meetCapture.MeetingFinished += (localSessionId, ok, error) => Post(() =>
         {
             finishItem.Enabled = false;
             tray.Text = "Relato AI Desktop Agent";
@@ -67,6 +67,11 @@ internal sealed class AgentContext : ApplicationContext
             tray.ShowBalloonTip(ok ? 1800 : 3500, "Relato AI",
                 ok ? "Meet salvo e transcrito." : (error ?? "Falha ao finalizar Meet."),
                 ok ? ToolTipIcon.Info : ToolTipIcon.Error);
+            if (ok && !string.IsNullOrWhiteSpace(localSessionId))
+            {
+                using var form = new FeedbackForm(config, localSessionId, "MEET");
+                form.ShowDialog();
+            }
         });
         capture.CallStarted += (_, contact) => Post(() =>
         {

@@ -18,7 +18,10 @@ async function sha256Hex(value: string) {
 function likelyWhisperHallucination(value: unknown) {
   const raw = String(value ?? "").trim().toLowerCase();
   if (!raw) return false;
-  const words = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+  const normalizedText = raw.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (/transcricao e legendas|legendas? (?:por|pela comunidade)|amara\.org|obrigado por assistir|inscreva-se no canal|subscribe|subtitles by|transcreva literalmente/i.test(normalizedText)) return true;
+  if (/^legenda\s+[a-z]{2,}(?:\s+[a-z]{2,}){0,3}[.!]?$/i.test(normalizedText)) return true;
+  const words = normalizedText
     .replace(/[^a-z0-9]+/g, " ").trim().split(/\s+/).filter(Boolean);
   if (words.length < 12) return false;
   const uniqueRatio = new Set(words).size / words.length;
@@ -60,6 +63,62 @@ function client(schema: string) {
     auth: { persistSession: false },
     db: { schema },
   });
+}
+
+async function secret(name: string): Promise<string | null> {
+  const sb = client("agency_ops");
+  const { data, error } = await sb.rpc("get_secret", { p_name: name });
+  return error ? null : (String(data || "").trim() || null);
+}
+
+function parseJsonObject(value: unknown): Record<string, unknown> {
+  const raw = String(value ?? "").trim().replace(/^\`\`\`(?:json)?\s*/i, "").replace(/\s*\`\`\`$/i, "");
+  const parsed = JSON.parse(raw || "{}");
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+}
+
+function normalizePhone(value: unknown) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  return digits.length >= 10 && digits.length <= 15 ? digits : null;
+}
+
+function safeProspectName(value: unknown) {
+  const name = String(value ?? "").trim().replace(/\s+/g, " ").slice(0, 200);
+  if (!name) return null;
+  const generic = new Set(["contato","contato whatsapp","contato whatsapp desktop","whatsapp","participante","prospect"]);
+  if (generic.has(name.toLowerCase()) || /@(?:lid|c\.us)$/i.test(name)) return null;
+  return name;
+}
+
+function normalizedNameKey(value: unknown) {
+  return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80);
+}
+
+function inferProspectNameFromSegments(segments: any[], ownerName: string) {
+  const ownerKey = normalizedNameKey(ownerName);
+  const stop = new Set(["tudo","bem","aqui","quem","gente","sim","claro","hoje","agora","voce","você","senhor","senhora","amigo","cara","bom","boa"]);
+  const scores = new Map<string, { score: number; name: string }>();
+  const add = (raw: string, score: number) => {
+    const name = safeProspectName(raw);
+    if (!name) return;
+    const key = normalizedNameKey(name);
+    if (!key || stop.has(key) || key === ownerKey) return;
+    const prev = scores.get(key);
+    scores.set(key, { score: (prev?.score || 0) + score, name });
+  };
+  for (const seg of segments || []) {
+    const speaker = normalizedNameKey(seg?.speaker_name || seg?.speaker_key || "");
+    if (!speaker || (ownerKey && speaker !== ownerKey && !speaker.startsWith(ownerKey))) continue;
+    const text = String(seg?.text || "").trim();
+    if (!text) continue;
+    for (const m of text.matchAll(/(?:^|\b)(?:al[oô]|oi|ol[aá]|bom dia|boa tarde|boa noite)\s*[,!:\-]?\s+([\p{L}][\p{L}'’\-]{1,30})\b/giu))
+      add(m[1], 5);
+    for (const m of text.matchAll(/\b([\p{L}][\p{L}'’\-]{1,30})\s*[,!?]\s*(?:o motivo|tudo bem|voc[eê]|lembra|tem disponibilidade|a gente|eu falei)/giu))
+      add(m[1], 4);
+  }
+  const ranked = [...scores.values()].sort((a,b) => b.score - a.score);
+  return ranked[0] && ranked[0].score >= 4 ? ranked[0].name : null;
 }
 
 async function rpc(name: string, args: Record<string, unknown>) {
@@ -375,11 +434,15 @@ Deno.serve(async (req) => {
       const remotePhone = phone(session.metadata?.remote_phone);
       const contactName = String(session.metadata?.contact_name || "Contato WhatsApp").slice(0,160);
       const ownerName = String(session.owner_person || "Colaborador").slice(0,160);
+      const rawSegments = Array.isArray(body.segments) ? body.segments.slice(0, 20000) : [];
+      const inferredName = inferProspectNameFromSegments(rawSegments as any[], ownerName);
+      const resolvedRemoteName = safeProspectName(session.metadata?.remote_name)
+        || safeProspectName(contactName)
+        || inferredName;
       const formatPhone = (value: string | null) => value ? `+${value}` : "";
       const localLabel = localPhone ? `${ownerName} · ${formatPhone(localPhone)}` : ownerName;
-      const remoteBase = contactName === "Contato WhatsApp Desktop" || contactName === "Contato WhatsApp" ? "Contato WhatsApp" : contactName;
+      const remoteBase = resolvedRemoteName || "Contato WhatsApp";
       const remoteLabel = remotePhone ? `${remoteBase} · ${formatPhone(remotePhone)}` : remoteBase;
-      const rawSegments = Array.isArray(body.segments) ? body.segments.slice(0, 20000) : [];
       const segments = rawSegments.map((seg: Record<string, unknown>, index: number) => {
         const rawKey = String(seg.speaker_key || "").slice(0,180);
         const rawName = String(seg.speaker_name || "Participante").slice(0,160);
@@ -433,6 +496,26 @@ Deno.serve(async (req) => {
 
       const contentHash = await sha256Hex(canonicalTranscriptText);
       const participants = [...new Set([localLabel, remoteLabel].filter(Boolean))];
+      const identityResolution = resolvedRemoteName ? {
+        ...(session.metadata?.identity_resolution || {}),
+        auto: true,
+        name: resolvedRemoteName,
+        phone: remotePhone,
+        role: session.metadata?.remote_role || "PROSPECT",
+        side: "EXTERNAL",
+        status: inferredName && !safeProspectName(session.metadata?.remote_name) ? "AUTO_TRANSCRIPT_NAME" : (session.metadata?.identity_resolution?.status || "AUTO_NAME"),
+        source: inferredName && !safeProspectName(session.metadata?.remote_name) ? "TRANSCRIPT_DIRECT_ADDRESS" : (session.metadata?.identity_resolution?.source || session.metadata?.identity_source || "RELATO_AI"),
+        confidence: inferredName && !safeProspectName(session.metadata?.remote_name) ? 0.86 : (session.metadata?.identity_resolution?.confidence || null),
+      } : (session.metadata?.identity_resolution || null);
+      const resolvedMetadata = {
+        ...(session.metadata || {}),
+        ...(resolvedRemoteName ? { remote_name: resolvedRemoteName } : {}),
+        ...(identityResolution ? { identity_resolution: identityResolution } : {}),
+        ...(inferredName ? { transcript_inferred_name: inferredName } : {}),
+        capture_mode: session.capture_mode,
+        channel,
+      };
+
       const transcriptPayload = {
         source_system: "RELATO_AI",
         source_file_id: session.local_session_id,
@@ -452,7 +535,7 @@ Deno.serve(async (req) => {
         processing_status: "PROCESSING",
         transcript_source: transcriptSource,
         capture_session_id: session.id,
-        metadata: { ...(session.metadata || {}), capture_mode: session.capture_mode, channel },
+        metadata: resolvedMetadata,
         updated_at: new Date().toISOString(),
       };
       let transcript: Record<string, unknown> | null = null;
@@ -473,7 +556,31 @@ Deno.serve(async (req) => {
         if (error) throw error;
       }
       const now = new Date().toISOString();
-      await sb.from("meeting_capture_sessions").update({ transcript_id: transcriptId, state: "PROCESSING", updated_at: now }).eq("id", session.id);
+      await sb.from("meeting_capture_sessions").update({
+        transcript_id: transcriptId,
+        state: "PROCESSING",
+        metadata: resolvedMetadata,
+        updated_at: now
+      }).eq("id", session.id);
+      if (remotePhone && inferredName && !safeProspectName(session.metadata?.remote_name)) {
+        await sb.from("whatsapp_participant_identity").upsert({
+          chat_id: "relato-transcript",
+          identity_key: `phone:${remotePhone}`,
+          phone: remotePhone,
+          sender_lid: null,
+          canonical_name: inferredName,
+          client_id: null,
+          side: "EXTERNAL",
+          role_hint: "PROSPECT",
+          confidence: 0.86,
+          source: "TRANSCRIPT_DIRECT_ADDRESS",
+          first_seen_at: now,
+          last_seen_at: now,
+          last_message_id: null,
+          metadata: { transcript_id: transcriptId, capture_session_id: session.id },
+          updated_at: now,
+        }, { onConflict: "chat_id,identity_key" }).catch(() => {});
+      }
       await sb.from("meeting_human_feedback").update({ transcript_id: transcriptId, updated_at: now })
         .eq("capture_session_id", session.id).is("transcript_id", null);
 
@@ -487,11 +594,9 @@ Deno.serve(async (req) => {
           ? confidenceValues.reduce((sum: number, value: number) => sum + value, 0) / confidenceValues.length
           : null;
         const lowConfidence = avgConfidence != null && avgConfidence < 0.60;
-        const extractiveSummary = canonicalTranscriptText.replace(/\s+/g, " ").trim().slice(0, 1200);
         const transcriptMetadata = {
-          ...(session.metadata || {}),
-          postprocess_mode: "SDR_EXTRACTIVE",
-          postprocess_model: "none",
+          ...resolvedMetadata,
+          postprocess_mode: "SDR_COMMERCIAL_AI",
           transcript_quality: {
             status: lowConfidence ? "NEEDS_REVIEW" : "ACCEPTED",
             average_confidence: avgConfidence,
@@ -499,27 +604,56 @@ Deno.serve(async (req) => {
             evaluated_at: now,
           },
         };
+        if (lowConfidence) {
+          const { error: rejectedError } = await sb.from("meeting_transcripts").update({
+            summary: null,
+            processing_status: "REJECTED",
+            transcript_quality: avgConfidence,
+            processed_at: now,
+            metadata: transcriptMetadata,
+            updated_at: now,
+          }).eq("id", transcriptId);
+          if (rejectedError) throw rejectedError;
+          await sb.from("meeting_capture_sessions").update({
+            state: "NEEDS_REVIEW", metadata: transcriptMetadata, updated_at: now
+          }).eq("id", session.id);
+          return json({
+            ok: true, transcript_id: transcriptId, segments: segments.length, job_id: null,
+            postprocess: "SDR_LOW_CONFIDENCE_REVIEW", transcript_quality: avgConfidence,
+          });
+        }
+        const extractiveSummary = canonicalTranscriptText.replace(/\s+/g, " ").trim().slice(0, 1200);
+        const readyMetadata = {
+          ...transcriptMetadata,
+          commercial_analysis_status: "PENDING",
+          transcript_ready_at: now,
+        };
         const { error: readyError } = await sb.from("meeting_transcripts").update({
-          summary: lowConfidence ? null : (extractiveSummary || null),
-          processing_status: lowConfidence ? "REJECTED" : "READY",
+          summary: extractiveSummary || null,
+          processing_status: "READY",
           transcript_quality: avgConfidence,
           processed_at: now,
-          metadata: transcriptMetadata,
+          metadata: readyMetadata,
           updated_at: now,
         }).eq("id", transcriptId);
         if (readyError) throw readyError;
-        const { error: sessionReadyError } = await sb.from("meeting_capture_sessions").update({
-          state: lowConfidence ? "NEEDS_REVIEW" : "READY",
-          metadata: transcriptMetadata,
-          updated_at: now
+        const { data: commercialJobId, error: commercialJobError } = await sb.rpc("enqueue_heavy_job", {
+          p_job_type: "MEETING_POSTPROCESS",
+          p_payload: { transcript_id: transcriptId, session_id: session.id, mode: "execute", commercial: true },
+          p_dedupe_key: `meeting:${transcriptId}`,
+          p_max_attempts: 5,
+          p_available_at: now,
+        });
+        if (commercialJobError) throw commercialJobError;
+        await sb.from("meeting_capture_sessions").update({
+          state: "READY", metadata: readyMetadata, updated_at: now
         }).eq("id", session.id);
-        if (sessionReadyError) throw sessionReadyError;
         return json({
           ok: true,
           transcript_id: transcriptId,
           segments: segments.length,
-          job_id: null,
-          postprocess: lowConfidence ? "SDR_LOW_CONFIDENCE_REVIEW" : "SDR_EXTRACTIVE_READY",
+          job_id: commercialJobId || null,
+          postprocess: "SDR_TRANSCRIPT_READY_COMMERCIAL_AI_QUEUED",
           transcript_quality: avgConfidence,
         });
       }
@@ -534,6 +668,72 @@ Deno.serve(async (req) => {
       if (jobError) throw jobError;
       await sb.from("meeting_capture_sessions").update({ state: "PROCESSING", updated_at: now }).eq("id", session.id);
       return json({ ok: true, transcript_id: transcriptId, segments: segments.length, job_id: jobId || null });
+    }
+
+    if (action === "meeting_ai_analyze") {
+      const transcriptId = Number(body.transcript_id || 0);
+      if (!Number.isInteger(transcriptId) || transcriptId <= 0) return json({ error: "transcript_id_required" }, 400);
+      const sb = client("agency_ops");
+      const { data: transcript, error: transcriptError } = await sb.from("meeting_transcripts")
+        .select("id,source_file_name,client_name_raw,owner_person,transcript_text,participants,meeting_started_at,meeting_ended_at,transcript_source")
+        .eq("id", transcriptId).maybeSingle();
+      if (transcriptError) throw transcriptError;
+      if (!transcript?.transcript_text) return json({ error: "transcript_not_ready" }, 409);
+
+      const [openaiKey, relatoModel, taskModel] = await Promise.all([
+        secret("OPENAI_API_KEY"), secret("RELATO_AI_MODEL"), secret("TASK_ENGINE_MODEL")
+      ]);
+      if (!openaiKey) return json({ error: "openai_not_configured" }, 428);
+      const model = relatoModel || taskModel || "gpt-5-mini";
+      const system = [
+        "Você analisa ligações e reuniões comerciais de SDR em português do Brasil.",
+        "Use somente fatos presentes na transcrição. Nunca invente.",
+        "Retorne APENAS JSON válido.",
+        "O objetivo é preparar o closer para a reunião de fechamento.",
+        "Separe dor primária de dores secundárias, objetivos, urgência, decisor, estrutura atual, investimento, equipe, serviços de interesse, objeções, sinais de compra, riscos e próximo passo.",
+        "closer_briefing deve ser curto, acionável e dizer o que explorar, o que validar e o que evitar prometer.",
+        "Se um dado não existir, use string vazia, 0 ou array vazio."
+      ].join("\n");
+      const expected = {
+        summary: "", decisions: [], commitments: [], action_items: [], summary_topics: [],
+        highlights: { opportunities: [], insights: [], ideas: [], objectives: [], problems: [], lessons: [] },
+        keywords: [], rewritten_notes: [], objections: [], pain_points: [],
+        primary_pain: "", secondary_pains: [], goals: [], urgency: "", decision_role: "",
+        current_structure: "", marketing_investment: "", broker_count: 0, services_interest: [],
+        buying_signals: [], closing_risks: [], closer_briefing: "", opportunities: [], follow_up: ""
+      };
+      const user = [
+        `SDR/RESPONSÁVEL: ${String(transcript.owner_person || "")}`,
+        `PROSPECT/CLIENTE ATUAL: ${String(transcript.client_name_raw || "")}`,
+        `FONTE: ${String(transcript.transcript_source || "")}`,
+        `FORMATO JSON OBRIGATÓRIO: ${JSON.stringify(expected)}`,
+        "",
+        "TRANSCRIÇÃO:",
+        String(transcript.transcript_text).slice(0, 50000)
+      ].join("\n");
+
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 90_000);
+      try {
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+          method: "POST",
+          headers: { authorization: `Bearer ${openaiKey}`, "content-type": "application/json" },
+          body: JSON.stringify({
+            model,
+            response_format: { type: "json_object" },
+            messages: [{ role: "system", content: system }, { role: "user", content: user }],
+          }),
+          signal: controller.signal,
+        });
+        const raw = await response.text();
+        if (!response.ok) throw new Error(`openai_${response.status}:${raw.slice(0,500)}`);
+        const envelope = JSON.parse(raw || "{}");
+        const analysis = parseJsonObject(envelope?.choices?.[0]?.message?.content || "{}");
+        if (!String(analysis.summary || "").trim()) throw new Error("openai_empty_summary");
+        return json({ ok: true, transcript_id: transcriptId, model, provider: "OPENAI", analysis: { ...analysis, model } });
+      } finally {
+        clearTimeout(timeout);
+      }
     }
 
     if (action === "meeting_snapshot") {
@@ -572,6 +772,18 @@ Deno.serve(async (req) => {
           objectives: arr(highlights.objectives), problems: arr(highlights.problems), lessons: arr(highlights.lessons),
         },
         opportunities: arr(analysis.opportunities), objections: arr(analysis.objections), pain_points: arr(analysis.pain_points),
+        primary_pain: String(analysis.primary_pain ?? "").trim() || null,
+        secondary_pains: arr(analysis.secondary_pains),
+        goals: arr(analysis.goals),
+        urgency: String(analysis.urgency ?? "").trim() || null,
+        decision_role: String(analysis.decision_role ?? "").trim() || null,
+        current_structure: String(analysis.current_structure ?? "").trim() || null,
+        marketing_investment: String(analysis.marketing_investment ?? "").trim() || null,
+        broker_count: Number.isFinite(Number(analysis.broker_count)) && Number(analysis.broker_count) > 0 ? Math.round(Number(analysis.broker_count)) : null,
+        services_interest: arr(analysis.services_interest),
+        buying_signals: arr(analysis.buying_signals),
+        closing_risks: arr(analysis.closing_risks),
+        closer_briefing: String(analysis.closer_briefing ?? "").trim() || null,
         follow_up: analysis.follow_up ?? null, model: String(analysis.model ?? "local"), processed_by: worker,
       };
       const { error: updateError } = await sb.from("meeting_transcripts").update({
@@ -584,8 +796,268 @@ Deno.serve(async (req) => {
         updated_at: new Date().toISOString(),
       }).eq("id", transcriptId);
       if (updateError) throw updateError;
+
+      let commercialSync: Record<string, unknown> = { status: "SKIPPED_NON_SDR" };
+      const { data: transcriptRow } = await sb.from("meeting_transcripts")
+        .select("id,capture_session_id,owner_person,transcript_source,meeting_started_at,metadata,participants,client_name_raw,source_file_name")
+        .eq("id", transcriptId).maybeSingle();
+      const { data: roster } = transcriptRow?.owner_person
+        ? await sb.from("team_roster").select("role").eq("person", transcriptRow.owner_person).eq("is_former", false).maybeSingle()
+        : { data: null };
+      if (String(roster?.role || "").toUpperCase() === "SDR") {
+        const crm = client("crm");
+        const captureSessionId = String(transcriptRow?.capture_session_id || "").trim() || null;
+        let session: Record<string, any> | null = null;
+        if (captureSessionId) {
+          const { data } = await sb.from("meeting_capture_sessions")
+            .select("id,owner_person,metadata,capture_mode,started_at,ended_at")
+            .eq("id", captureSessionId).maybeSingle();
+          session = data || null;
+        }
+        let leadId = String(
+          session?.metadata?.commercial_prospect?.lead_id
+          || transcriptRow?.metadata?.commercial_prospect?.lead_id
+          || ""
+        ).trim() || null;
+        if (!leadId) {
+          const query = sb.from("commercial_call_records").select("lead_id,updated_at").order("updated_at", { ascending: false }).limit(1);
+          const { data } = captureSessionId
+            ? await query.eq("capture_session_id", captureSessionId)
+            : await query.eq("transcript_id", transcriptId);
+          leadId = String(data?.[0]?.lead_id || "").trim() || null;
+        }
+        const remotePhone = normalizePhone(session?.metadata?.remote_phone || transcriptRow?.metadata?.remote_phone);
+        const participantCandidates = (Array.isArray(transcriptRow?.participants) ? transcriptRow.participants : [])
+          .map((v: unknown) => safeProspectName(v))
+          .filter((v: string | null): v is string => Boolean(v))
+          .filter((v: string) => normalizedNameKey(v) !== normalizedNameKey(transcriptRow?.owner_person))
+          .filter((v: string) => !v.includes("+"));
+        const uniqueParticipantNames = [...new Map(participantCandidates.map((v: string) => [normalizedNameKey(v), v])).values()];
+        const remoteName = safeProspectName(
+          session?.metadata?.remote_name
+          || session?.metadata?.contact_name
+          || transcriptRow?.metadata?.remote_name
+          || transcriptRow?.metadata?.contact_name
+          || transcriptRow?.client_name_raw
+        ) || (uniqueParticipantNames.length === 1 ? uniqueParticipantNames[0] : null);
+        const core = client("public");
+        const { data: closerProfile } = await core.from("profiles")
+          .select("id,email").eq("email", "feitozaluizvitor@gmail.com").maybeSingle();
+
+        if (!leadId && remotePhone) {
+          const variants = [remotePhone, "+" + remotePhone];
+          const { data } = await crm.from("leads").select("id").in("phone", variants)
+            .is("archived_at", null).order("updated_at", { ascending: false }).limit(2);
+          if ((data || []).length === 1) leadId = String(data?.[0]?.id || "") || null;
+        }
+        if (!leadId && remoteName && closerProfile?.id) {
+          const { data } = await crm.from("leads").select("id,name")
+            .eq("owner_id", closerProfile.id).ilike("name", remoteName)
+            .is("archived_at", null).order("updated_at", { ascending: false }).limit(2);
+          if ((data || []).length === 1) leadId = String(data?.[0]?.id || "") || null;
+        }
+        if (!leadId && remoteName && closerProfile?.id) {
+          const externalId = remotePhone
+            ? `relato-phone:${remotePhone}`
+            : `relato-name:${normalizedNameKey(remoteName)}`;
+          const insert = await crm.from("leads").insert({
+            owner_id: closerProfile.id,
+            name: remoteName,
+            phone: remotePhone,
+            stage: "qualificacao",
+            source: "RELATO_AI_SDR",
+            external_id: externalId,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }).select("id").single();
+          if (insert.data?.id) leadId = String(insert.data.id);
+          else if (insert.error?.code === "23505") {
+            const { data } = await crm.from("leads").select("id")
+              .eq("source", "RELATO_AI_SDR").eq("external_id", externalId).maybeSingle();
+            leadId = String(data?.id || "") || null;
+          } else if (insert.error) {
+            throw insert.error;
+          }
+        }
+
+        const toStrings = (value: unknown, max = 30) => Array.isArray(value)
+          ? value.map((x) => String(x || "").trim()).filter(Boolean).slice(0, max)
+          : [];
+        const uniq = (...sets: unknown[][]) => [...new Set(sets.flat().map((x) => String(x || "").trim()).filter(Boolean))].slice(0, 50);
+        const primaryPain = String(signals.primary_pain || "").trim() || null;
+        const secondaryPains = toStrings(signals.secondary_pains);
+        const painPoints = uniq(primaryPain ? [primaryPain] : [], secondaryPains, toStrings(signals.pain_points));
+        const goals = toStrings(signals.goals);
+        const objections = toStrings(signals.objections);
+        const servicesInterest = toStrings(signals.services_interest);
+        const buyingSignals = toStrings(signals.buying_signals);
+        const closingRisks = toStrings(signals.closing_risks);
+        const closerBriefing = String(signals.closer_briefing || "").trim() || summary;
+        const followUp = String(signals.follow_up || "").trim() || null;
+        const now = new Date().toISOString();
+
+        if (leadId) {
+          const { data: existingProfile } = await sb.from("commercial_prospect_profiles")
+            .select("*").eq("lead_id", leadId).maybeSingle();
+          const mergedPain = uniq(existingProfile?.pain_points || [], painPoints);
+          const mergedSecondary = uniq(existingProfile?.secondary_pains || [], secondaryPains);
+          const mergedGoals = uniq(existingProfile?.goals || [], goals);
+          const mergedObjections = uniq(existingProfile?.objections || [], objections);
+          const mergedServices = uniq(existingProfile?.services_interest || [], servicesInterest);
+          const mergedBuying = uniq(existingProfile?.buying_signals || [], buyingSignals);
+          const mergedRisks = uniq(existingProfile?.closing_risks || [], closingRisks);
+
+          const { error: profileError } = await sb.from("commercial_prospect_profiles").upsert({
+            lead_id: leadId,
+            primary_pain: primaryPain || existingProfile?.primary_pain || null,
+            secondary_pains: mergedSecondary,
+            pain_points: mergedPain,
+            goals: mergedGoals,
+            objections: mergedObjections,
+            services_interest: mergedServices,
+            buying_signals: mergedBuying,
+            closing_risks: mergedRisks,
+            urgency: String(signals.urgency || "").trim() || existingProfile?.urgency || null,
+            decision_role: String(signals.decision_role || "").trim() || existingProfile?.decision_role || null,
+            current_structure: String(signals.current_structure || "").trim() || existingProfile?.current_structure || null,
+            marketing_investment: String(signals.marketing_investment || "").trim() || existingProfile?.marketing_investment || null,
+            broker_count: signals.broker_count || existingProfile?.broker_count || null,
+            qualification_summary: summary,
+            closer_briefing: closerBriefing,
+            next_step: followUp || existingProfile?.next_step || null,
+            sdr_person: transcriptRow?.owner_person || existingProfile?.sdr_person || null,
+            closer_person: existingProfile?.closer_person || "Vitor Feitoza",
+            last_call_at: transcriptRow?.meeting_started_at || now,
+            last_transcript_id: transcriptId,
+            metadata: {
+              ...(existingProfile?.metadata || {}),
+              last_ai_analysis: signals,
+              last_interaction_type: String(transcriptRow?.transcript_source || "").includes("WHATSAPP") ? "CALL" : "MEETING",
+              capture_session_id: captureSessionId,
+              ai_updated_at: now,
+            },
+            updated_at: now,
+          }, { onConflict: "lead_id" });
+          if (profileError) throw profileError;
+
+          const callPatch = {
+            lead_id: leadId,
+            capture_session_id: captureSessionId,
+            transcript_id: transcriptId,
+            sdr_person: transcriptRow?.owner_person || null,
+            closer_person: "Vitor Feitoza",
+            channel: String(transcriptRow?.transcript_source || "").includes("WHATSAPP") ? "WHATSAPP_DESKTOP" : "MEET",
+            remote_phone: remotePhone || null,
+            remote_name: session?.metadata?.remote_name || null,
+            ai_summary: summary,
+            primary_pain: primaryPain,
+            secondary_pains: secondaryPains,
+            pain_points: painPoints,
+            goals,
+            urgency: String(signals.urgency || "").trim() || null,
+            decision_role: String(signals.decision_role || "").trim() || null,
+            current_structure: String(signals.current_structure || "").trim() || null,
+            services_interest: servicesInterest,
+            objections,
+            buying_signals: buyingSignals,
+            closing_risks: closingRisks,
+            closer_briefing: closerBriefing,
+            next_step: followUp,
+            metadata: {
+              source: "RELATO_AI_AUTO",
+              transcript_id: transcriptId,
+              analysis_model: signals.model || null,
+              human_confirmed: false,
+            },
+            updated_at: now,
+          };
+          if (captureSessionId) {
+            const { error: callError } = await sb.from("commercial_call_records")
+              .upsert(callPatch, { onConflict: "capture_session_id" });
+            if (callError) throw callError;
+          } else {
+            const { data: existingCall } = await sb.from("commercial_call_records")
+              .select("id").eq("transcript_id", transcriptId).limit(1).maybeSingle();
+            const result = existingCall?.id
+              ? await sb.from("commercial_call_records").update(callPatch).eq("id", existingCall.id)
+              : await sb.from("commercial_call_records").insert(callPatch);
+            if (result.error) throw result.error;
+          }
+
+          const activityType = String(transcriptRow?.transcript_source || "").includes("WHATSAPP") ? "ligacao" : "reuniao";
+          const activityExternalId = `relato-transcript:${transcriptId}`;
+          const activityContent = [
+            `[RELATO AI] ${summary}`,
+            primaryPain ? `Dor principal: ${primaryPain}` : null,
+            secondaryPains.length ? `Dores secundárias: ${secondaryPains.join(" · ")}` : null,
+            goals.length ? `Objetivos: ${goals.join(" · ")}` : null,
+            signals.urgency ? `Urgência: ${String(signals.urgency)}` : null,
+            signals.decision_role ? `Decisão: ${String(signals.decision_role)}` : null,
+            objections.length ? `Objeções: ${objections.join(" · ")}` : null,
+            buyingSignals.length ? `Sinais de compra: ${buyingSignals.join(" · ")}` : null,
+            closingRisks.length ? `Riscos: ${closingRisks.join(" · ")}` : null,
+            followUp ? `Próximo passo: ${followUp}` : null,
+            closerBriefing ? `Briefing para closer: ${closerBriefing}` : null,
+          ].filter(Boolean).join("\n");
+          const { data: existingActivity } = await crm.from("lead_activities")
+            .select("id").eq("external_id", activityExternalId).maybeSingle();
+          const activityPatch = {
+            lead_id: leadId,
+            type: activityType,
+            content: activityContent.slice(0, 20000),
+            done: true,
+            external_id: activityExternalId,
+            metadata: {
+              source: "RELATO_AI",
+              transcript_id: transcriptId,
+              capture_session_id: captureSessionId,
+              sdr_person: transcriptRow?.owner_person || null,
+              ai_generated: true,
+              human_confirmed: false,
+            },
+          };
+          const activityResult = existingActivity?.id
+            ? await crm.from("lead_activities").update(activityPatch).eq("id", existingActivity.id)
+            : await crm.from("lead_activities").insert(activityPatch);
+          if (activityResult.error) throw activityResult.error;
+
+          commercialSync = { status: "SYNCED", lead_id: leadId, activity_external_id: activityExternalId };
+        } else {
+          commercialSync = { status: "PENDING_BINDING", reason: "lead_id_not_resolved" };
+        }
+
+        const commercialProspect = leadId ? {
+          lead_id: leadId,
+          name: remoteName,
+          phone: remotePhone,
+          sdr_person: transcriptRow?.owner_person || null,
+          closer_person: "Vitor Feitoza",
+        } : null;
+        const commercialMetadata = {
+          ...(transcriptRow?.metadata || {}),
+          commercial_analysis: signals,
+          commercial_sync: commercialSync,
+          ...(commercialProspect ? { commercial_prospect: commercialProspect } : {}),
+          commercial_analysis_status: "READY",
+          commercial_analysis_updated_at: now,
+        };
+        await sb.from("meeting_transcripts").update({ metadata: commercialMetadata, updated_at: now }).eq("id", transcriptId);
+        if (captureSessionId) {
+          await sb.from("meeting_capture_sessions").update({
+            metadata: {
+              ...(session?.metadata || {}),
+              commercial_analysis: signals,
+              commercial_sync: commercialSync,
+              ...(commercialProspect ? { commercial_prospect: commercialProspect } : {}),
+              commercial_analysis_status: "READY",
+            },
+            updated_at: now,
+          }).eq("id", captureSessionId);
+        }
+      }
+
       await sb.from("meeting_capture_sessions").update({ state: "READY", updated_at: new Date().toISOString() }).eq("transcript_id", transcriptId);
-      return json({ ok: true, transcript_id: transcriptId, status: "READY" });
+      return json({ ok: true, transcript_id: transcriptId, status: "READY", commercial_sync: commercialSync });
     }
     if (action === "meeting_ready_notify") {
       const transcriptId = Number(body.transcript_id || 0);
