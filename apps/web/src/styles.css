@@ -1560,3 +1560,102 @@ body {
   .atualizado { animation: none !important; }
   .btn:active:not(:disabled), .kcard:active, .nav-item:active { transform: none; }
 }
+
+/* ========================================================= mobile app ==== */
+html, body { max-width: 100%; overflow-x: hidden; }
+.mobile-nav { display: none; }
+.native-security-control { display: none; margin-bottom: 6px; }
+.offline-banner {
+  position: fixed; inset: 0 0 auto 0; z-index: 200;
+  padding: calc(7px + env(safe-area-inset-top)) 14px 7px;
+  background: #3a2510; color: #ffd99c; border-bottom: 1px solid #7b5526;
+  text-align: center; font-size: 12px; font-weight: 650;
+}
+.native-lock {
+  position: fixed; inset: 0; z-index: 300;
+  display: grid; place-items: center; padding: 24px;
+  background: var(--bg); background-image: var(--brilho-azul), var(--brilho-laranja);
+}
+.native-lock-card {
+  width: min(360px, 100%); display: flex; flex-direction: column;
+  align-items: center; gap: 14px; text-align: center; padding: 28px 22px;
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  background: var(--panel); box-shadow: var(--shadow-hover);
+}
+.native-lock-card p { margin: 0; color: var(--muted); font-size: 13px; }
+
+@media (max-width: 860px) {
+  .app { min-height: 100dvh; }
+  .main { min-height: 100dvh; padding-bottom: calc(70px + env(safe-area-inset-bottom)); }
+  .content {
+    width: 100%; max-width: 100%; padding: 14px;
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+  }
+  .topbar {
+    height: calc(var(--topbar-h) + env(safe-area-inset-top));
+    padding-top: env(safe-area-inset-top);
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .sidebar {
+    width: min(86vw, 310px);
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .native-security-control { display: block; }
+  .mobile-nav {
+    position: fixed; display: grid; grid-template-columns: repeat(5, 1fr);
+    left: 0; right: 0; bottom: 0; z-index: 55;
+    min-height: calc(62px + env(safe-area-inset-bottom));
+    padding: 6px max(6px, env(safe-area-inset-right)) env(safe-area-inset-bottom)
+      max(6px, env(safe-area-inset-left));
+    border-top: 1px solid var(--line);
+    background: #051220f2; backdrop-filter: blur(16px);
+  }
+  .mobile-nav-item {
+    border: 0; background: transparent; color: var(--text-subtle);
+    min-width: 0; min-height: 50px; border-radius: 10px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 2px; padding: 3px 2px; cursor: pointer; font-size: 9.5px; font-weight: 650;
+  }
+  .mobile-nav-item .ico { flex-shrink: 0; }
+  .mobile-nav-item[aria-current="page"] {
+    color: var(--accent-light); background: var(--accent-soft);
+  }
+  .mobile-nav-item:active { transform: scale(.96); }
+  .scrim { z-index: 50; }
+  .toasts {
+    bottom: calc(74px + env(safe-area-inset-bottom));
+    left: max(12px, env(safe-area-inset-left));
+    right: max(12px, env(safe-area-inset-right));
+  }
+  dialog.mdl.lateral { padding-bottom: env(safe-area-inset-bottom); }
+  .kanban {
+    width: calc(100vw - max(28px, env(safe-area-inset-left) + env(safe-area-inset-right)));
+    margin-inline: 0; overscroll-behavior-x: contain; scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+  }
+  .kcol {
+    flex-basis: min(88vw, 360px);
+    max-height: calc(100dvh - var(--topbar-h) - 170px - env(safe-area-inset-bottom));
+    scroll-snap-stop: always;
+  }
+  .kcol-body { overscroll-behavior: contain; }
+  .btn, .input, .select, .textarea, .ctrl { min-height: 42px; }
+  .btn.sm { min-height: 36px; }
+  .nav-item { min-height: 44px; }
+  input, select, textarea { font-size: 16px; }
+  .table-wrap { max-width: 100%; -webkit-overflow-scrolling: touch; }
+  .detail { min-width: 0; }
+}
+
+@media (max-width: 460px) {
+  .content { padding: 11px; }
+  .topbar-marca { display: none; }
+  .topbar { gap: 8px; }
+  .topbar-ctx { max-width: min(54vw, 220px); }
+  .topbar-ctx .eyebrow, .topbar-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .kcol { flex-basis: calc(100vw - 30px); }
+  dialog.mdl.centro, dialog.mdl.lateral { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+}

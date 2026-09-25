@@ -1,4 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
+import { Capacitor } from "@capacitor/core";
+import { SecureStorage } from "@aparajita/capacitor-secure-storage";
 
 const url = import.meta.env.VITE_SUPABASE_URL;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -8,6 +10,12 @@ if (!url || !anonKey) {
     "VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY sao obrigatorios. Copie .env.example para .env."
   );
 }
+
+const armazenamentoNativo = {
+  getItem: (key: string) => SecureStorage.getItem(key),
+  setItem: (key: string, value: string) => SecureStorage.setItem(key, value),
+  removeItem: (key: string) => SecureStorage.removeItem(key),
+};
 
 /**
  * O Imobi-Board vive num schema proprio, nao em `public`. Toda a API tipada
@@ -22,7 +30,8 @@ export const supabase = createClient(url, anonKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: true,
+    detectSessionInUrl: !Capacitor.isNativePlatform(),
+    storage: Capacitor.isNativePlatform() ? armazenamentoNativo : undefined,
   },
   global: {
     headers: { "x-client-info": "imobi-board-web" },

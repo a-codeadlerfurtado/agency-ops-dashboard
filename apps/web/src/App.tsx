@@ -25,6 +25,9 @@ import Vendas from "./pages/Vendas";
 import Distribuicao from "./pages/Distribuicao";
 import Integracoes from "./pages/Integracoes";
 import Topbar from "./Topbar";
+import MobileNav from "./MobileNav";
+import MobileSecurityControl from "./MobileSecurityControl";
+import { registrarPush } from "./lib/native";
 
 /* Router por hash: sem dependencia, sem servidor de rotas, funciona em
    qualquer host estatico. Para 8 telas, react-router seria peso morto. */
@@ -130,6 +133,7 @@ function Shell({
   const [menuAberto, setMenuAberto] = useState(false);
 
   useEffect(() => { setMenuAberto(false); }, [rota]);
+  useEffect(() => { void registrarPush(sessao); }, [sessao.userId, sessao.tenant.id]);
 
   const partes = rota.split("/").filter(Boolean);
   const leadId = partes[0] === "leads" && partes[1] ? partes[1] : null;
@@ -218,6 +222,7 @@ function Shell({
         <Nav sessao={sessao} rota={rota} aoNavegar={() => setMenuAberto(false)} />
 
         <div className="sidebar-foot">
+          <MobileSecurityControl />
           <div className="row" style={{ padding: "6px 4px" }}>
             <Avatar nome={sessao.nome} />
             <div className="col" style={{ minWidth: 0, gap: 0 }}>
@@ -256,6 +261,7 @@ function Shell({
         )}
         <Topbar sessao={sessao} titulo={titulo} aoAbrirMenu={() => setMenuAberto(true)} />
         <main className="content">{pagina}</main>
+        <MobileNav sessao={sessao} rota={rota} aoAbrirMais={() => setMenuAberto(true)} />
       </div>
     </div>
   );
