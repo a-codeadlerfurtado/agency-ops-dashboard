@@ -329,8 +329,26 @@ Deno.serve(async(req:Request)=>{
     source_url:r.source_url||null
   }));
 
+  const requiredAgentVersion="desktop-0.5.0";
+  const {data:latestDevice}=await ops.from("meeting_capture_devices")
+    .select("extension_version,last_seen_at,device_name,status")
+    .eq("owner_person",person)
+    .eq("status","ACTIVE")
+    .order("last_seen_at",{ascending:false,nullsFirst:false})
+    .limit(1)
+    .maybeSingle();
+  const currentAgentVersion=clean(latestDevice?.extension_version)||null;
+
   return reply({
     profile:{person,role:"SDR",display_role:"SDR",access_level:"OWN_ACTIVITY_ONLY"},
+    agent:{
+      current_version:currentAgentVersion,
+      required_version:requiredAgentVersion,
+      update_required:currentAgentVersion!==requiredAgentVersion,
+      last_seen_at:latestDevice?.last_seen_at||null,
+      device_name:latestDevice?.device_name||null,
+      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.25.5/RelatoAI-Desktop-SDR.exe"
+    },
     summary:{meetings:meetings.length,calls:enrichedCalls.length},
     meetings,calls:enrichedCalls,sessions,
     generated_at:new Date().toISOString()
