@@ -519,10 +519,9 @@ internal sealed class FeedbackForm : Form
 
     private bool CanSaveNow()
     {
-        if (!HasRequiredBinding()) return false;
-        if (string.Equals(feedbackContext?.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase))
-            return feedbackContext?.TranscriptReady == true;
-        return true;
+        // O pós-call é humano e precisa poder ser salvo assim que a ligação termina.
+        // Whisper/IA continuam em segundo plano e fazem merge depois sem bloquear o SDR.
+        return HasRequiredBinding();
     }
 
     private static string[] SplitEntries(string value) => value
