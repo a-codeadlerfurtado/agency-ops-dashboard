@@ -95,6 +95,9 @@ function safeProspectName(value: unknown) {
   if (!name) return null;
   const generic = new Set(["contato","contato whatsapp","contato whatsapp desktop","whatsapp","participante","prospect"]);
   if (generic.has(name.toLowerCase()) || /@(?:lid|c\.us)$/i.test(name)) return null;
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(name)) return null;
+  const letters = name.match(/\p{L}/gu)?.length || 0;
+  if (letters < 2) return null;
   return name;
 }
 
