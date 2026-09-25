@@ -111,6 +111,21 @@ function normalizePhone(value: unknown) {
   return digits.length >= 10 && digits.length <= 15 ? digits : null;
 }
 
+function cleanContactName(value: unknown) {
+  const name = clean(value, 160);
+  if (!name) return null;
+  const generic = new Set(["contato", "contato whatsapp", "contato whatsapp desktop", "whatsapp", "participante", "prospect"]);
+  return generic.has(name.toLowerCase()) ? null : name;
+}
+
+function isWhatsappIdentitySource(value: unknown) {
+  const source = clean(value, 120).toUpperCase();
+  return source.startsWith("WHATSAPP_")
+    || source.includes("PARTICIPANT_IDENTITY")
+    || source === "GROUP_PARTICIPANT_IDENTITY"
+    || source === "CLIENT_PHONE_REGISTRY";
+}
+
 async function clientSummary(ops: any, clientId: string | null) {
   if (!clientId) return null;
   const { data } = await ops.from("clients")
@@ -331,7 +346,8 @@ Deno.serve(async (req: Request) => {
     const localSessionId = clean(call.local_session_id, 180);
     const startedAt = clean(call.started_at, 80);
     const endedAt = clean(call.ended_at, 80);
-    const contactName = clean(call.contact_name, 160) || "Contato WhatsApp";
+    const rawContactName = clean(call.contact_name, 160) || null;
+    const contactName = rawContactName || "Contato WhatsApp";
     const localPhone = normalizePhone(call.local_phone);
     const remotePhoneCandidate = normalizePhone(call.remote_phone);
     const identitySource = clean(call.identity_source, 80) || null;
@@ -339,7 +355,20 @@ Deno.serve(async (req: Request) => {
     const trustedDesktopIdentity = ["WHATSAPP_LEVELDB_EXACT_CALL_WINDOW", "WHATSAPP_DESKTOP_UI", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
     const remotePhone = source === "WHATSAPP_DESKTOP" && !trustedDesktopIdentity ? null : remotePhoneCandidate;
     const identity = await resolveCallIdentity(ops, remotePhone);
-    const resolvedContactName = clean(identity.name, 160) || contactName;
+    const whatsappName =
+      (source === "WHATSAPP_WEB" ? cleanContactName(rawContactName) : null)
+      || (isWhatsappIdentitySource(identity?.source) ? cleanContactName(identity?.name) : null)
+      || (identitySource === "WHATSAPP_DESKTOP_UI" ? cleanContactName(rawContactName) : null);
+    const resolvedContactName = whatsappName || clean(identity.name, 160) || contactName;
+    const observedAt = new Date().toISOString();
+    const nameEvidence = {
+      whatsapp: whatsappName ? {
+        name: whatsappName,
+        source: source === "WHATSAPP_WEB" ? "WHATSAPP_WEB_UI" : (identity?.source || identitySource || "WHATSAPP_DESKTOP_UI"),
+        observed_at: observedAt,
+        phone: remotePhone,
+      } : null,
+    };
     if (!localSessionId || !startedAt || !endedAt) return respond({ error: "missing_call_data" }, 400);
     if (!Number.isFinite(Date.parse(startedAt)) || !Number.isFinite(Date.parse(endedAt))) return respond({ error: "invalid_timestamps" }, 400);
     const roles = Array.isArray(body?.roles) ? body.roles.map((v: unknown) => clean(v, 20)).filter((v: string) => ["local", "remote"].includes(v)) : [];
@@ -355,6 +384,7 @@ Deno.serve(async (req: Request) => {
       native_transcript_available: false, captions_available: false,
       metadata: { source, contact_name: resolvedContactName, local_phone: localPhone, remote_phone: remotePhone, identity_source: identitySource,
         identity_candidate_rejected: Boolean(remotePhoneCandidate && !remotePhone),
+        whatsapp_name: whatsappName, name_evidence: nameEvidence,
         remote_name: identity.name, remote_role: identity.role, resolved_client_id: identity.client_id, resolved_client_name: identity.client_name,
         identity_resolution: identity, audio_paths: audioPaths, finish_reason: clean(call.finish_reason, 80) || null, extension_version: clean(call.extension_version, 40) || null },
       updated_at: new Date().toISOString(),
@@ -451,13 +481,14 @@ Deno.serve(async (req: Request) => {
       }
     }
     const remotePhone = normalizePhone(session.metadata?.remote_phone);
-    const remoteName = clean(session.metadata?.remote_name || currentIdentity?.name, 160) || null;
+    const remoteName = cleanContactName(session.metadata?.remote_name || currentIdentity?.name);
+    const postCallName = cleanContactName(feedback.prospect_name);
     const remoteRole = clean(session.metadata?.remote_role || currentIdentity?.role, 80) || null;
     if (!dismissed && bindingSource === "MANUAL" && remotePhone) {
       const now = new Date().toISOString();
       const manualIdentity = {
         chat_id: "relato-manual", identity_key: `phone:${remotePhone}`, phone: remotePhone,
-        sender_lid: null, canonical_name: remoteName, client_id: selectedClientId,
+        sender_lid: null, canonical_name: isWhatsappIdentitySource(currentIdentity?.source) ? remoteName : null, client_id: selectedClientId,
         side: selectedClientId ? "CLIENT_SIDE" : "EXTERNAL",
         role_hint: selectedClientId ? (remoteRole || "CLIENT_CONTACT") : remoteRole,
         confidence: 1, source: "RELATO_MANUAL_FEEDBACK", first_seen_at: now, last_seen_at: now,
@@ -470,18 +501,28 @@ Deno.serve(async (req: Request) => {
       if (identityError) return respond({ error: "identity_learning_failed", detail: identityError.message }, 500);
     }
 
+    const confirmedAt = new Date().toISOString();
+    const identityName = remoteName || postCallName;
     const resolvedIdentity = dismissed ? currentIdentity : {
-      ...(currentIdentity || {}), status: selectedClientId ? "AUTO_CLIENT" : "AUTO_NON_CLIENT", auto: true,
-      phone: remotePhone, name: remoteName, role: remoteRole, client_id: selectedClientId,
+      ...(currentIdentity || {}), status: selectedClientId ? "AUTO_CLIENT" : "AUTO_NON_CLIENT",
+      auto: Boolean(currentIdentity?.auto && remoteName),
+      phone: remotePhone, name: identityName, role: remoteRole, client_id: selectedClientId,
       client_name: selectedClientName, side: selectedClientId ? "CLIENT_SIDE" : (currentIdentity?.side || "EXTERNAL"),
-      source: bindingSource === "MANUAL" ? "RELATO_MANUAL" : (currentIdentity?.source || "AUTO"),
+      source: remoteName ? (currentIdentity?.source || "AUTO") : (postCallName ? "RELATO_POST_CALL" : (bindingSource === "MANUAL" ? "RELATO_MANUAL" : "AUTO")),
     };
     if (!dismissed) {
+      const previousEvidence = session.metadata?.name_evidence || {};
+      const nextEvidence = {
+        ...previousEvidence,
+        ...(postCallName ? { post_call: { name: postCallName, source: "SDR_POST_CALL", confirmed_by: device.owner_person, confirmed_at: confirmedAt } } : {}),
+      };
       const nextMetadata = { ...(session.metadata || {}),
         remote_name: remoteName, remote_role: remoteRole,
+        post_call_name: postCallName || session.metadata?.post_call_name || null,
+        name_evidence: nextEvidence,
         resolved_client_id: selectedClientId, resolved_client_name: selectedClientName,
         identity_resolution: resolvedIdentity,
-        feedback_binding: { source: bindingSource, confirmed_by: device.owner_person, confirmed_at: new Date().toISOString() },
+        feedback_binding: { source: bindingSource, prospect_name: postCallName, confirmed_by: device.owner_person, confirmed_at: confirmedAt },
       };
       await ops.from("meeting_capture_sessions").update({ metadata: nextMetadata, updated_at: new Date().toISOString() }).eq("id", session.id);
       session.metadata = nextMetadata;
@@ -508,7 +549,7 @@ Deno.serve(async (req: Request) => {
     };
     const { data, error } = await ops.from("meeting_human_feedback").upsert(payload, { onConflict: "owner_person,local_session_id" }).select("id,transcript_id,client_id,submitted_at,dismissed").single();
     if (error) return respond({ error: "feedback_save_failed", detail: error.message }, 500);
-    return respond({ ok: true, feedback: data, binding: { source: bindingSource, client_id: selectedClientId, client_name: selectedClientName, no_client: noClient } });
+    return respond({ ok: true, feedback: data, binding: { source: bindingSource, client_id: selectedClientId, client_name: selectedClientName, prospect_name: postCallName, no_client: noClient } });
   }
 
   if (action === "finalize") {
