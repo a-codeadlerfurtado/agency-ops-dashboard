@@ -13,6 +13,7 @@ internal sealed class FeedbackForm : Form
 
     private readonly AgentConfig? config;
     private readonly string sessionId;
+    private readonly string interactionChannel;
     private readonly ComboBox mood = SelectBox(220);
     private readonly ComboBox tone = SelectBox(220);
     private readonly ComboBox direction = SelectBox(220);
@@ -25,21 +26,42 @@ internal sealed class FeedbackForm : Form
     private readonly Button laterButton = new();
     private readonly Label contactStatus = new();
     private readonly Label contactDetail = new();
-    private readonly TextBox prospectName = new();
     private readonly ComboBox clientBinding = SelectBox(532);
+    private readonly Panel prospectCard = Card(570, 1040);
+    private readonly TextBox prospectName = Input(246);
+    private readonly TextBox prospectCompany = Input(246);
+    private readonly TextBox prospectEmail = Input(246);
+    private readonly TextBox prospectPhone = Input(246);
+    private readonly TextBox prospectCity = Input(246);
+    private readonly TextBox prospectInstagram = Input(246);
+    private readonly TextBox prospectMarketing = Input(246);
+    private readonly NumericUpDown prospectBrokers = new() { Minimum = 0, Maximum = 10000, Width = 246, BackColor = Panel2, ForeColor = TextMain, BorderStyle = BorderStyle.FixedSingle };
+    private readonly TextBox prospectPain = Input(516);
+    private readonly TextBox prospectGoals = Input(516);
+    private readonly TextBox prospectInterest = Input(516);
+    private readonly TextBox prospectObjections = Input(516);
+    private readonly TextBox prospectUrgency = Input(516);
+    private readonly TextBox prospectDecisionRole = Input(516);
+    private readonly TextBox prospectStructure = Input(516);
+    private readonly TextBox prospectBuyingSignals = Input(516);
+    private readonly TextBox prospectClosingRisks = Input(516);
+    private readonly TextBox prospectBriefing = new() { Width = 516, Height = 86, Multiline = true, ScrollBars = ScrollBars.Vertical, BackColor = Panel2, ForeColor = TextMain, BorderStyle = BorderStyle.FixedSingle };
+    private readonly TextBox prospectNextStep = Input(516);
+    private readonly DateTimePicker prospectNextStepAt = new() { Width = 246, ShowCheckBox = true, Checked = false, Format = DateTimePickerFormat.Custom, CustomFormat = "dd/MM/yyyy HH:mm", CalendarMonthBackground = Panel2 };
     private FeedbackContext? feedbackContext;
     private bool contextReady;
     private bool submitted;
 
-    private sealed record BindingOption(string? Id, string Name, bool NoClient = false)
+    private sealed record BindingOption(string? Id, string Name, bool NoClient = false, bool Prospect = false)
     {
         public override string ToString() => Name;
     }
 
-    public FeedbackForm(AgentConfig? config, string sessionId)
+    public FeedbackForm(AgentConfig? config, string sessionId, string interactionChannel = "WHATSAPP_DESKTOP")
     {
         this.config = config;
         this.sessionId = sessionId;
+        this.interactionChannel = string.IsNullOrWhiteSpace(interactionChannel) ? "WHATSAPP_DESKTOP" : interactionChannel.Trim().ToUpperInvariant();
         Text = "Relato AI · Avaliação da call";
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -61,9 +83,21 @@ internal sealed class FeedbackForm : Form
         tone.SelectedIndex = 2;
         direction.SelectedIndex = 1;
         BuildUi();
+        prospectCard.Visible = false;
         saveButton.Enabled = false;
-        clientBinding.SelectedIndexChanged += (_, _) => saveButton.Enabled = HasRequiredBinding();
-        prospectName.TextChanged += (_, _) => saveButton.Enabled = HasRequiredBinding();
+        clientBinding.SelectedIndexChanged += (_, _) =>
+        {
+            var option = clientBinding.SelectedItem as BindingOption;
+            prospectCard.Visible = option?.Prospect == true;
+            if (option?.Prospect == true)
+            {
+                if (string.IsNullOrWhiteSpace(prospectName.Text)) prospectName.Text = feedbackContext?.RemoteName ?? "";
+                if (string.IsNullOrWhiteSpace(prospectPhone.Text) && !string.IsNullOrWhiteSpace(feedbackContext?.RemotePhone)) prospectPhone.Text = $"+{feedbackContext.RemotePhone}";
+            }
+            if (feedbackContext?.RequiresSelection == true)
+                saveButton.Enabled = CanSaveNow();
+        };
+        prospectName.TextChanged += (_, _) => { if (contextReady) saveButton.Enabled = CanSaveNow(); };
         Shown += async (_, _) => { Activate(); BringToFront(); await LoadContextAsync(); };
     }
 
@@ -84,7 +118,7 @@ internal sealed class FeedbackForm : Form
         var header = new Panel { Dock = DockStyle.Fill, BackColor = Panel2, Padding = new Padding(28, 20, 28, 16) };
         header.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 4, BackColor = Accent });
         var brand = new Label { Text = "RELATO AI  •  OPS", ForeColor = Accent, Font = new Font(Font.FontFamily, 9F, FontStyle.Bold), AutoSize = true, Location = new Point(28, 18) };
-        var title = new Label { Text = "Como o cliente saiu dessa call?", ForeColor = TextMain, Font = new Font(Font.FontFamily, 18F, FontStyle.Bold), AutoSize = true, Location = new Point(28, 43) };
+        var title = new Label { Text = "Como essa call terminou?", ForeColor = TextMain, Font = new Font(Font.FontFamily, 18F, FontStyle.Bold), AutoSize = true, Location = new Point(28, 43) };
         var sub = new Label { Text = "Sua leitura humana complementa a transcrição e ajuda a detectar risco, confiança e próximos passos.", ForeColor = Muted, Font = new Font(Font.FontFamily, 9.5F), AutoSize = true, MaximumSize = new Size(570, 40), Location = new Point(30, 78) };
         header.Controls.Add(brand);
         header.Controls.Add(title);
@@ -105,7 +139,8 @@ internal sealed class FeedbackForm : Form
         };
 
         body.Controls.Add(BuildContactCard());
-        body.Controls.Add(SectionTitle("Leitura do cliente", "Percepção geral da conversa"));
+        body.Controls.Add(BuildProspectCard());
+        body.Controls.Add(SectionTitle("Leitura da conversa", "Percepção geral da call"));
         body.Controls.Add(FieldRow("Humor", mood));
         body.Controls.Add(FieldRow("Tom de voz", tone));
         body.Controls.Add(SectionTitle("Sinais da relação", "Notas rápidas de 1 a 5"));
@@ -120,7 +155,7 @@ internal sealed class FeedbackForm : Form
 
     private Control BuildContactCard()
     {
-        var card = Card(570, 205);
+        var card = Card(570, 150);
         card.Margin = new Padding(0, 0, 0, 16);
         contactStatus.Text = "Identificando contato...";
         contactStatus.ForeColor = Blue;
@@ -130,22 +165,51 @@ internal sealed class FeedbackForm : Form
         contactDetail.Text = "Cruzando número, grupos e cadastro de clientes.";
         contactDetail.ForeColor = Muted;
         contactDetail.AutoSize = true;
-        contactDetail.MaximumSize = new Size(532, 38);
+        contactDetail.MaximumSize = new Size(532, 42);
         contactDetail.Location = new Point(18, 42);
-        var nameLabel = new Label { Text = "Nome do contato / prospect", ForeColor = Muted, AutoSize = true, Location = new Point(18, 82) };
-        prospectName.SetBounds(18, 104, 532, 32);
-        prospectName.BackColor = Panel2;
-        prospectName.ForeColor = TextMain;
-        prospectName.BorderStyle = BorderStyle.FixedSingle;
-        prospectName.PlaceholderText = "Nome exibido no WhatsApp ou confirmado por você";
-        clientBinding.Location = new Point(18, 153);
+        clientBinding.Location = new Point(18, 92);
         clientBinding.Visible = false;
         card.Controls.Add(contactStatus);
         card.Controls.Add(contactDetail);
-        card.Controls.Add(nameLabel);
-        card.Controls.Add(prospectName);
         card.Controls.Add(clientBinding);
         return card;
+    }
+
+    private Control BuildProspectCard()
+    {
+        prospectCard.Margin = new Padding(0, 0, 0, 16);
+        prospectCard.Controls.Clear();
+        prospectCard.Controls.Add(new Label { Text = "PROSPECT COMERCIAL", ForeColor = Accent, Font = new Font(Font.FontFamily, 9F, FontStyle.Bold), AutoSize = true, Location = new Point(18, 14) });
+        prospectCard.Controls.Add(new Label { Text = "Preencha o contexto que o closer precisa receber.", ForeColor = Muted, AutoSize = true, Location = new Point(18, 38) });
+
+        AddProspectField("Nome *", prospectName, 18, 70);
+        AddProspectField("Empresa / imobiliária", prospectCompany, 306, 70);
+        AddProspectField("E-mail", prospectEmail, 18, 126);
+        AddProspectField("Telefone", prospectPhone, 306, 126);
+        AddProspectField("Cidade / região", prospectCity, 18, 182);
+        AddProspectField("Instagram / site", prospectInstagram, 306, 182);
+        AddProspectField("Investimento em marketing", prospectMarketing, 18, 238);
+        AddProspectField("Nº de corretores", prospectBrokers, 306, 238);
+        AddProspectField("Dores (principal primeiro; separe por ;)", prospectPain, 18, 294);
+        AddProspectField("Objetivos (separe por ;)", prospectGoals, 18, 350);
+        AddProspectField("Interesse / serviço (separe por ;)", prospectInterest, 18, 406);
+        AddProspectField("Objeções (separe por ;)", prospectObjections, 18, 462);
+        AddProspectField("Urgência / timing", prospectUrgency, 18, 518);
+        AddProspectField("Quem decide / papel na decisão", prospectDecisionRole, 18, 574);
+        AddProspectField("Estrutura atual", prospectStructure, 18, 630);
+        AddProspectField("Sinais de compra (separe por ;)", prospectBuyingSignals, 18, 686);
+        AddProspectField("Riscos de fechamento (separe por ;)", prospectClosingRisks, 18, 742);
+        AddProspectField("Briefing IA para o closer", prospectBriefing, 18, 798);
+        AddProspectField("Próximo passo", prospectNextStep, 18, 910);
+        AddProspectField("Data do próximo passo", prospectNextStepAt, 18, 966);
+        return prospectCard;
+    }
+
+    private void AddProspectField(string label, Control control, int x, int y)
+    {
+        prospectCard.Controls.Add(new Label { Text = label, ForeColor = Muted, AutoSize = true, Location = new Point(x, y) });
+        control.Location = new Point(x, y + 19);
+        prospectCard.Controls.Add(control);
     }
 
     private Control BuildSignalsCard()
@@ -249,6 +313,15 @@ internal sealed class FeedbackForm : Form
         FlatStyle = FlatStyle.Flat
     };
 
+    private static TextBox Input(int width) => new()
+    {
+        Width = width,
+        Height = 30,
+        BackColor = Panel2,
+        ForeColor = TextMain,
+        BorderStyle = BorderStyle.FixedSingle
+    };
+
     private static NumericUpDown Score() => new()
     {
         Minimum = 1,
@@ -288,7 +361,7 @@ internal sealed class FeedbackForm : Form
         if (config is null) return;
         var api = new RelatoApi(config);
         Exception? last = null;
-        for (var attempt = 0; attempt < 30; attempt++)
+        for (var attempt = 0; attempt < 40; attempt++)
         {
             try
             {
@@ -301,6 +374,8 @@ internal sealed class FeedbackForm : Form
                 feedbackContext = context;
                 contextReady = true;
                 ApplyContext(context);
+                if (string.Equals(context.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase) && !context.CommercialAnalysisReady)
+                    _ = RefreshProspectSuggestionsAsync(api);
                 return;
             }
             catch (Exception ex)
@@ -316,12 +391,93 @@ internal sealed class FeedbackForm : Form
             : "Não consegui carregar a identificação da ligação ainda.";
     }
 
+    private async Task RefreshProspectSuggestionsAsync(RelatoApi api)
+    {
+        for (var attempt = 0; attempt < 60 && !IsDisposed; attempt++)
+        {
+            await Task.Delay(1000);
+            try
+            {
+                var context = await api.GetFeedbackContextAsync(sessionId);
+                if (context.Pending) continue;
+                if (!string.Equals(context.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase)) return;
+                feedbackContext = context;
+                ApplyProspectPrefill(context.ProspectPrefill);
+                if (!string.IsNullOrWhiteSpace(context.RemoteName) && string.IsNullOrWhiteSpace(prospectName.Text))
+                    prospectName.Text = context.RemoteName;
+                if (!string.IsNullOrWhiteSpace(context.RemotePhone) && string.IsNullOrWhiteSpace(prospectPhone.Text))
+                    prospectPhone.Text = $"+{context.RemotePhone}";
+                saveButton.Enabled = CanSaveNow();
+                if (context.CommercialAnalysisReady)
+                {
+                    contactDetail.Text = "A IA já preencheu o diagnóstico comercial. Revise/corrija e salve para confirmar no CRM do closer.";
+                    return;
+                }
+                if (context.TranscriptReady && attempt >= 45) return;
+            }
+            catch { }
+        }
+    }
+
+    private void ApplyProspectPrefill(ProspectPrefill? value)
+    {
+        if (value is null) return;
+        void Fill(TextBox box, string? text) { if (string.IsNullOrWhiteSpace(box.Text) && !string.IsNullOrWhiteSpace(text)) box.Text = text; }
+        Fill(prospectName, value.Name);
+        Fill(prospectCompany, value.Company);
+        Fill(prospectEmail, value.Email);
+        Fill(prospectPhone, string.IsNullOrWhiteSpace(value.Phone) ? null : $"+{value.Phone.TrimStart('+')}");
+        Fill(prospectCity, value.City);
+        Fill(prospectInstagram, value.Instagram);
+        Fill(prospectMarketing, value.MarketingInvestment);
+        if (prospectBrokers.Value == 0 && value.BrokerCount is > 0 && value.BrokerCount <= prospectBrokers.Maximum)
+            prospectBrokers.Value = value.BrokerCount.Value;
+        Fill(prospectPain, string.Join("; ", value.PainPoints));
+        Fill(prospectGoals, string.Join("; ", value.Goals));
+        Fill(prospectInterest, string.Join("; ", value.ServicesInterest));
+        Fill(prospectObjections, string.Join("; ", value.Objections));
+        Fill(prospectUrgency, value.Urgency);
+        Fill(prospectDecisionRole, value.DecisionRole);
+        Fill(prospectStructure, value.CurrentStructure);
+        Fill(prospectBuyingSignals, string.Join("; ", value.BuyingSignals));
+        Fill(prospectClosingRisks, string.Join("; ", value.ClosingRisks));
+        Fill(prospectBriefing, value.CloserBriefing ?? value.AiSummary);
+        Fill(prospectNextStep, value.NextStep);
+        if (!prospectNextStepAt.Checked && !string.IsNullOrWhiteSpace(value.NextStepAt) && DateTimeOffset.TryParse(value.NextStepAt, out var nextAt))
+        {
+            prospectNextStepAt.Value = nextAt.LocalDateTime;
+            prospectNextStepAt.Checked = true;
+        }
+    }
+
     private void ApplyContext(FeedbackContext context)
     {
-        prospectName.Text = context.RemoteName ?? "";
+        ApplyProspectPrefill(context.ProspectPrefill);
         var phone = string.IsNullOrWhiteSpace(context.RemotePhone) ? null : $"+{context.RemotePhone}";
         var person = string.IsNullOrWhiteSpace(context.RemoteName) ? phone ?? "Contato não identificado" : context.RemoteName;
         var identity = string.Join(" · ", new[] { person, phone }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct());
+
+        if (string.Equals(context.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase))
+        {
+            contactStatus.Text = "Prospect comercial · SDR";
+            contactStatus.ForeColor = Accent;
+            contactDetail.Text = string.IsNullOrWhiteSpace(context.RemoteName)
+                ? $"{identity}\nO Relato vai completar os dados disponíveis enquanto a transcrição processa."
+                : $"{identity}\nProspect selecionado automaticamente pelo perfil SDR.";
+            clientBinding.Items.Clear();
+            clientBinding.Items.Add(new BindingOption(null, "Prospect comercial / possível cliente", false, true));
+            clientBinding.Items.Add(new BindingOption(null, "Sem vínculo com cliente ou prospect", true));
+            clientBinding.SelectedIndex = 0;
+            clientBinding.Visible = true;
+            prospectCard.Visible = true;
+            if (string.IsNullOrWhiteSpace(prospectName.Text) && !string.IsNullOrWhiteSpace(context.RemoteName))
+                prospectName.Text = context.RemoteName;
+            if (string.IsNullOrWhiteSpace(prospectPhone.Text) && !string.IsNullOrWhiteSpace(context.RemotePhone))
+                prospectPhone.Text = $"+{context.RemotePhone}";
+            saveButton.Enabled = CanSaveNow();
+            return;
+        }
+
         if (!context.RequiresSelection)
         {
             contactStatus.Text = "Identificado automaticamente";
@@ -329,7 +485,8 @@ internal sealed class FeedbackForm : Form
             var relation = string.Join(" • ", new[] { context.RemoteRole, context.ClientName }.Where(x => !string.IsNullOrWhiteSpace(x)));
             contactDetail.Text = string.IsNullOrWhiteSpace(relation) ? identity : $"{identity}\n{relation}";
             clientBinding.Visible = false;
-            saveButton.Enabled = HasRequiredBinding();
+            prospectCard.Visible = false;
+            saveButton.Enabled = true;
             return;
         }
 
@@ -337,10 +494,11 @@ internal sealed class FeedbackForm : Form
         contactStatus.ForeColor = Accent;
         contactDetail.Text = $"{identity}\nNão identifiquei o vínculo com segurança. Selecione abaixo.";
         clientBinding.Items.Clear();
-        clientBinding.Items.Add(new BindingOption(null, "Selecione o cliente..."));
+        clientBinding.Items.Add(new BindingOption(null, "Selecione o vínculo..."));
         foreach (var client in context.Clients)
             clientBinding.Items.Add(new BindingOption(client.Id, client.Name));
-        clientBinding.Items.Add(new BindingOption(null, "Sem vínculo com cliente", true));
+        clientBinding.Items.Add(new BindingOption(null, "Prospect comercial / possível cliente", false, true));
+        clientBinding.Items.Add(new BindingOption(null, "Sem vínculo com cliente ou prospect", true));
         clientBinding.SelectedIndex = 0;
         clientBinding.Visible = true;
         saveButton.Enabled = false;
@@ -349,10 +507,29 @@ internal sealed class FeedbackForm : Form
     private bool HasRequiredBinding()
     {
         if (!contextReady) return false;
-        if (string.IsNullOrWhiteSpace(prospectName.Text)) return false;
+        if (string.Equals(feedbackContext?.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase))
+        {
+            var selected = clientBinding.SelectedItem as BindingOption;
+            return selected?.NoClient == true || !string.IsNullOrWhiteSpace(prospectName.Text);
+        }
         if (feedbackContext?.RequiresSelection != true) return true;
-        return clientBinding.SelectedItem is BindingOption option && (option.Id is not null || option.NoClient);
+        return clientBinding.SelectedItem is BindingOption option &&
+            (option.Id is not null || option.NoClient || (option.Prospect && !string.IsNullOrWhiteSpace(prospectName.Text)));
     }
+
+    private bool CanSaveNow()
+    {
+        // O pós-call é humano e precisa poder ser salvo assim que a ligação termina.
+        // Whisper/IA continuam em segundo plano e fazem merge depois sem bloquear o SDR.
+        return HasRequiredBinding();
+    }
+
+    private static string[] SplitEntries(string value) => value
+        .Split([';', '\n', ','], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Where(x => !string.IsNullOrWhiteSpace(x))
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Take(20)
+        .ToArray();
 
     private async Task SubmitAsync(bool dismissed)
     {
@@ -391,18 +568,45 @@ internal sealed class FeedbackForm : Form
             _ => "STABLE"
         };
         if (!dismissed && !HasRequiredBinding())
-            throw new InvalidOperationException("Informe o nome do contato/prospect e, quando necessário, selecione o cliente relacionado ou 'Sem vínculo com cliente'.");
+            throw new InvalidOperationException("Selecione um cliente, marque como prospect comercial ou escolha 'Sem vínculo'.");
         var selected = clientBinding.SelectedItem as BindingOption;
         var manual = feedbackContext?.RequiresSelection == true;
-        var clientId = manual ? selected?.Id : feedbackContext?.ClientId;
-        var noClient = manual ? selected?.NoClient == true : string.IsNullOrWhiteSpace(feedbackContext?.ClientId);
+        var sdrWorkflow = string.Equals(feedbackContext?.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase);
+        var autoSdrProspect = sdrWorkflow && selected?.NoClient != true;
+        var isProspect = autoSdrProspect || (manual && selected?.Prospect == true);
+        var clientId = isProspect ? null : manual ? selected?.Id : feedbackContext?.ClientId;
+        var noClient = !isProspect && (manual ? selected?.NoClient == true : string.IsNullOrWhiteSpace(feedbackContext?.ClientId));
+        var prospect = isProspect ? new
+        {
+            name = prospectName.Text.Trim(),
+            company = prospectCompany.Text.Trim(),
+            email = prospectEmail.Text.Trim(),
+            phone = prospectPhone.Text.Trim(),
+            city = prospectCity.Text.Trim(),
+            instagram = prospectInstagram.Text.Trim(),
+            marketing_investment = prospectMarketing.Text.Trim(),
+            broker_count = (int)prospectBrokers.Value,
+            pain_points = SplitEntries(prospectPain.Text),
+            goals = SplitEntries(prospectGoals.Text),
+            services_interest = SplitEntries(prospectInterest.Text),
+            objections = SplitEntries(prospectObjections.Text),
+            urgency = prospectUrgency.Text.Trim(),
+            decision_role = prospectDecisionRole.Text.Trim(),
+            current_structure = prospectStructure.Text.Trim(),
+            buying_signals = SplitEntries(prospectBuyingSignals.Text),
+            closing_risks = SplitEntries(prospectClosingRisks.Text),
+            closer_briefing = prospectBriefing.Text.Trim(),
+            next_step = prospectNextStep.Text.Trim(),
+            next_step_at = prospectNextStepAt.Checked ? prospectNextStepAt.Value.ToUniversalTime().ToString("O") : null
+        } : null;
         var feedback = new
         {
-            channel = "WHATSAPP_DESKTOP",
-            prospect_name = prospectName.Text.Trim(),
+            channel = interactionChannel,
             client_id = clientId,
             no_client = noClient,
-            binding_source = manual ? "MANUAL" : "AUTO",
+            is_prospect = isProspect,
+            prospect,
+            binding_source = isProspect ? "RELATO_COMMERCIAL" : manual ? "MANUAL" : "AUTO",
             mood = mood.SelectedItem?.ToString(),
             tone = tone.SelectedItem?.ToString(),
             receptivity = (int)receptivity.Value,

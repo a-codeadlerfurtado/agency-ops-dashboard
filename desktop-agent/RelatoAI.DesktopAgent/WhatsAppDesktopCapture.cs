@@ -27,6 +27,12 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     private string? remotePath;
     private string? localPath;
     private bool disposed;
+    private volatile bool captureRestartRequested;
+    private bool stoppingCaptureEngines;
+    private WhatsAppDesktopUiIdentity? uiIdentity;
+    private WhatsAppDesktopUiIdentity? uiCandidate;
+    private int uiCandidateHits;
+    private DateTimeOffset lastUiProbe = DateTimeOffset.MinValue;
     private int ticking;
     public event Action<string>? StatusChanged;
     public event Action<string, string>? CallStarted;
@@ -61,8 +67,11 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             StatusChanged?.Invoke("Aguardando WhatsApp Desktop");
             return;
         }
-        if (target?.Id != process.Id || remoteRecorder is null || localRecorder is null)
+        if (target?.Id != process.Id || remoteRecorder is null || localRecorder is null || captureRestartRequested)
+        {
+            captureRestartRequested = false;
             await StartCaptureEnginesAsync(process);
+        }
 
         var now = DateTimeOffset.Now;
         var remoteHot = now - lastRemoteActive < TimeSpan.FromSeconds(2.5);
@@ -85,6 +94,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             return;
         }
 
+        ProbeUiIdentity(now);
+
         if (micUsage.Available && micUsage.Active)
         {
             if (!callPrivacyObservedActive || callPrivacyStart != micUsage.Start)
@@ -95,7 +106,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         else if (micUsage.Available && callPrivacyObservedActive
             && callPrivacyStart > 0 && micUsage.Stop >= callPrivacyStart)
         {
-            await FinishCallAsync("windows_mic_released");
+            await FinishCallAsync("windows_mic_released", micUsage.Stop);
             return;
         }
 
@@ -224,26 +235,49 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     {
         StopCaptureEngines();
         target = process;
-        remoteRecorder = await new WasapiRecorderBuilder()
-            .WithProcessLoopback((uint)process.Id, ProcessLoopbackMode.IncludeTargetProcessTree)
-            .BuildAsync();
+
+        using var devices = new MMDeviceEnumerator();
+        var render = devices.GetDefaultAudioEndpoint(DataFlow.Render, Role.Communications);
+        var mic = devices.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+
+        // Capturar o dispositivo de saída inteiro é mais estável no WhatsApp da Microsoft Store
+        // do que prender o loopback ao PID, que pode trocar de processo durante a call.
+        remoteRecorder = new WasapiRecorderBuilder().WithDevice(render).WithLoopbackCapture().Build();
         remoteRecorder.DataAvailable += (buffer, _, _, _) =>
         {
             var bytes = buffer.ToArray();
             OnAudio("remote", bytes, remoteRecorder.WaveFormat);
         };
+        remoteRecorder.RecordingStopped += (_, e) =>
+        {
+            if (!stoppingCaptureEngines && !disposed)
+            {
+                captureRestartRequested = true;
+                StatusChanged?.Invoke("Reconectando áudio remoto do WhatsApp...");
+            }
+            if (e.Exception is not null) StatusChanged?.Invoke("Erro no áudio remoto: " + e.Exception.Message);
+        };
 
-        using var devices = new MMDeviceEnumerator();
-        var mic = devices.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
-        localRecorder = new WasapiRecorderBuilder().WithDevice(mic).Build();
+        localRecorder = new WasapiRecorderBuilder().WithDevice(mic).WithCommunicationsMode().Build();
         localRecorder.DataAvailable += (buffer, _, _, _) =>
         {
             var bytes = buffer.ToArray();
             OnAudio("local", bytes, localRecorder.WaveFormat);
         };
+        localRecorder.RecordingStopped += (_, e) =>
+        {
+            if (!stoppingCaptureEngines && !disposed)
+            {
+                captureRestartRequested = true;
+                StatusChanged?.Invoke("Reconectando microfone do WhatsApp...");
+            }
+            if (e.Exception is not null) StatusChanged?.Invoke("Erro no microfone: " + e.Exception.Message);
+        };
+
         remoteRecorder.StartRecording();
         localRecorder.StartRecording();
-        StatusChanged?.Invoke("WhatsApp Desktop monitorado");
+        await Task.CompletedTask;
+        StatusChanged?.Invoke(IsRecording ? "REC · captura de áudio reconectada" : "WhatsApp Desktop monitorado");
     }
 
     private void OnAudio(string role, byte[] bytes, WaveFormat format)
@@ -253,7 +287,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         {
             var ring = role == "remote" ? remoteRing : localRing;
             ring.Enqueue((now, bytes));
-            while (ring.Count > 0 && now - ring.Peek().at > TimeSpan.FromSeconds(10)) ring.Dequeue();
+            while (ring.Count > 0 && now - ring.Peek().at > TimeSpan.FromSeconds(3)) ring.Dequeue();
             if (AudioLevel.IsActive(bytes, format, role == "remote" ? 0.0025 : 0.015))
             {
                 if (role == "remote") lastRemoteActive = now;
@@ -271,8 +305,9 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     {
         if (remoteRecorder is null || localRecorder is null || IsRecording) return;
         var now = DateTimeOffset.Now;
+        var detectedStart = ResolvePrivacyTime(privacyStart, now);
         sessionId = $"wa-desktop-{now:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
-        callStarted = now;
+        callStarted = detectedStart;
         callPrivacyObservedActive = privacyStart > 0;
         callPrivacyStart = privacyStart;
         var dir = Path.Combine(Path.GetTempPath(), "RelatoAI", sessionId);
@@ -281,13 +316,19 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         localPath = Path.Combine(dir, "local.wav");
         remoteWriter = new WaveFileWriter(remotePath, remoteRecorder.WaveFormat);
         localWriter = new WaveFileWriter(localPath, localRecorder.WaveFormat);
+        var keepFrom = privacyStart > 0 ? detectedStart - TimeSpan.FromMilliseconds(500) : now - TimeSpan.FromSeconds(2);
         lock (gate)
         {
-            foreach (var row in remoteRing) remoteWriter.Write(row.data, 0, row.data.Length);
-            foreach (var row in localRing) localWriter.Write(row.data, 0, row.data.Length);
+            foreach (var row in remoteRing.Where(row => row.at >= keepFrom)) remoteWriter.Write(row.data, 0, row.data.Length);
+            foreach (var row in localRing.Where(row => row.at >= keepFrom)) localWriter.Write(row.data, 0, row.data.Length);
         }
         candidateAt = null;
-        var contact = ResolveContactName(process);
+        uiIdentity = null;
+        uiCandidate = null;
+        uiCandidateHits = 0;
+        lastUiProbe = DateTimeOffset.MinValue;
+        ProbeUiIdentity(now, force: true);
+        var contact = uiIdentity?.Name ?? uiIdentity?.Phone ?? ResolveContactName(process);
         CallStarted?.Invoke(sessionId, contact);
         StatusChanged?.Invoke(callPrivacyObservedActive
             ? "REC · chamada WhatsApp Desktop · Windows confirmou call ativa"
@@ -296,13 +337,17 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
 
     public Task FinishManualAsync() => FinishCallAsync("manual_stop");
 
-    private async Task FinishCallAsync(string reason)
+    private async Task FinishCallAsync(string reason, long privacyStop = 0)
     {
         if (!IsRecording || sessionId is null || callStarted is null) return;
         var id = sessionId;
         var started = callStarted.Value;
-        var ended = DateTimeOffset.Now;
-        var contact = ResolveContactName(target);
+        var now = DateTimeOffset.Now;
+        var ended = ResolvePrivacyTime(privacyStop, now);
+        if (ended <= started || ended - started > TimeSpan.FromHours(12)) ended = now;
+        ProbeUiIdentity(now, force: true);
+        var directUiIdentity = uiIdentity;
+        var contact = directUiIdentity?.Name ?? directUiIdentity?.Phone ?? ResolveContactName(target);
         lock (gate)
         {
             remoteWriter?.Dispose(); remoteWriter = null;
@@ -319,32 +364,55 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         try
         {
             var cfg = AgentConfig.Load() ?? configProvider() ?? throw new InvalidOperationException("Desktop Agent não pareado");
-            var identity = await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone);
+            var identity = directUiIdentity is not null
+                ? new WhatsAppCallIdentity(
+                    cfg.LocalPhone,
+                    directUiIdentity.Phone,
+                    directUiIdentity.Name,
+                    "WHATSAPP_DESKTOP_UI")
+                : await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone, contact);
+            var resolvedContact = string.IsNullOrWhiteSpace(identity.RemoteName) ? contact : identity.RemoteName.Trim();
             if (!string.IsNullOrWhiteSpace(identity.LocalPhone) && identity.LocalPhone != cfg.LocalPhone)
             {
                 cfg = cfg with { LocalPhone = identity.LocalPhone };
                 cfg.Save();
             }
             var api = new RelatoApi(cfg);
+            var durationMs = Math.Max(0L, (long)Math.Round((ended - started).TotalMilliseconds));
             var roles = new List<string>();
             if (remotePath is not null && File.Exists(remotePath) && new FileInfo(remotePath).Length > 1000) roles.Add("remote");
             if (localPath is not null && File.Exists(localPath) && new FileInfo(localPath).Length > 1000) roles.Add("local");
             if (roles.Count == 0) throw new InvalidOperationException("Nenhum áudio capturado");
+
+            // Do not block finalization on local MP3 encoding. Upload the two raw
+            // channels immediately; the heavy worker mixes them with ffmpeg before STT.
             var prepared = await api.PrepareCallAsync(
-                id, started, ended, contact, roles,
+                id, started, ended, resolvedContact, roles, durationMs,
                 identity.LocalPhone, identity.RemotePhone, identity.Source);
-            var uploaded = new List<object>();
-            foreach (var targetUpload in prepared.Uploads)
+
+            var uploadTasks = prepared.Uploads.Select(async targetUpload =>
             {
-                var file = targetUpload.Role == "local" ? localPath : remotePath;
-                if (file is null || !File.Exists(file)) continue;
-                await api.UploadAsync(targetUpload.SignedUrl, file);
-                uploaded.Add(new { role = targetUpload.Role, path = targetUpload.Path, bytes = new FileInfo(file).Length, mime_type = "audio/wav" });
-            }
-            await api.FinalizeCallAsync(id, uploaded);
+                string? file = targetUpload.Role switch
+                {
+                    "local" => localPath,
+                    "remote" => remotePath,
+                    _ => null
+                };
+                if (file is null || !File.Exists(file)) return (object?)null;
+                const string mime = "audio/wav";
+                await api.UploadAsync(targetUpload.SignedUrl, file, mime);
+                var fileBytes = new FileInfo(file).Length;
+                return (object)new { role = targetUpload.Role, path = targetUpload.Path, bytes = fileBytes, mime_type = mime };
+            }).ToArray();
+
+            var uploaded = (await Task.WhenAll(uploadTasks))
+                .Where(item => item is not null)
+                .Cast<object>()
+                .ToList();
+            await api.FinalizeCallAsync(id, uploaded, durationMs);
             success = true;
             CallFinished?.Invoke(id, true, null);
-            _ = Task.Run(() => CleanupFiles(remotePath, localPath));
+            _ = Task.Run(() => CleanupFiles(remotePath, localPath, Path.Combine(Path.GetDirectoryName(localPath ?? remotePath ?? "") ?? "", "meeting.mp3")));
         }
         catch (Exception ex)
         {
@@ -355,7 +423,60 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         {
             StatusChanged?.Invoke(success ? "Ligação enviada ao Relato AI" : "Falha ao enviar ligação");
             remotePath = null; localPath = null;
+            uiIdentity = null;
+            uiCandidate = null;
+            uiCandidateHits = 0;
+            lastUiProbe = DateTimeOffset.MinValue;
         }
+    }
+
+    private void ProbeUiIdentity(DateTimeOffset now, bool force = false)
+    {
+        if (!IsRecording) return;
+        if (!force && now - lastUiProbe < TimeSpan.FromMilliseconds(700)) return;
+        lastUiProbe = now;
+
+        var cfg = AgentConfig.Load() ?? configProvider();
+        var observed = WhatsAppDesktopUiIdentityResolver.Resolve(cfg?.LocalPhone, cfg?.OwnerPerson);
+        if (observed is null || observed.Confidence < 0.94) return;
+
+        var sameCandidate = uiCandidate is not null
+            && string.Equals(uiCandidate.Name ?? "", observed.Name ?? "", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(uiCandidate.Phone ?? "", observed.Phone ?? "", StringComparison.Ordinal);
+
+        if (sameCandidate)
+            uiCandidateHits++;
+        else
+        {
+            uiCandidate = observed;
+            uiCandidateHits = 1;
+        }
+
+        // Fail closed: a single UI snapshot is never enough to label a call.
+        // The same contact must be visible in at least two independent probes.
+        if (uiCandidateHits < 2 || uiCandidate is null) return;
+
+        var changed = uiIdentity is null
+            || !string.Equals(uiIdentity.Name ?? "", uiCandidate.Name ?? "", StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(uiIdentity.Phone ?? "", uiCandidate.Phone ?? "", StringComparison.Ordinal);
+        uiIdentity = uiCandidate;
+
+        if (changed)
+        {
+            var label = uiIdentity.Name ?? (uiIdentity.Phone is null ? "contato" : "+" + uiIdentity.Phone);
+            StatusChanged?.Invoke($"REC · WhatsApp identificou {label}");
+        }
+    }
+
+    private static DateTimeOffset ResolvePrivacyTime(long rawFileTime, DateTimeOffset fallback)
+    {
+        if (rawFileTime <= 0) return fallback;
+        try
+        {
+            var value = new DateTimeOffset(DateTime.FromFileTimeUtc(rawFileTime)).ToLocalTime();
+            return Math.Abs((value - fallback).TotalHours) <= 12 ? value : fallback;
+        }
+        catch { return fallback; }
     }
 
     private static string ResolveContactName(Process? process)
@@ -377,10 +498,18 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
 
     private void StopCaptureEngines()
     {
-        try { remoteRecorder?.StopRecording(); } catch { }
-        try { localRecorder?.StopRecording(); } catch { }
-        remoteRecorder?.Dispose(); remoteRecorder = null;
-        localRecorder?.Dispose(); localRecorder = null;
+        stoppingCaptureEngines = true;
+        try
+        {
+            try { remoteRecorder?.StopRecording(); } catch { }
+            try { localRecorder?.StopRecording(); } catch { }
+            remoteRecorder?.Dispose(); remoteRecorder = null;
+            localRecorder?.Dispose(); localRecorder = null;
+        }
+        finally
+        {
+            stoppingCaptureEngines = false;
+        }
         target = null;
         candidateAt = null;
         remoteRing.Clear(); localRing.Clear();

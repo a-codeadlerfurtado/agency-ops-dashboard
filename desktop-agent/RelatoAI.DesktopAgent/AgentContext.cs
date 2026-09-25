@@ -8,6 +8,9 @@ internal sealed class AgentContext : ApplicationContext
     private readonly ToolStripMenuItem autoItem;
     private readonly ToolStripMenuItem finishItem;
     private readonly WhatsAppDesktopCapture capture;
+    private readonly MeetDesktopCapture meetCapture;
+    private readonly MeetLocalBridge meetBridge;
+    private readonly AgentUpdater updater;
     private readonly Control dispatcher = new();
     private RecordingIndicatorForm? recordingIndicator;
 
@@ -24,9 +27,20 @@ internal sealed class AgentContext : ApplicationContext
         menu.Items.AddRange([statusItem, new ToolStripSeparator(), autoItem, finishItem, pairItem, new ToolStripSeparator(), exitItem]);
         tray = new NotifyIcon { Icon = SystemIcons.Information, Text = "Relato AI Desktop Agent", Visible = true, ContextMenuStrip = menu };
         capture = new WhatsAppDesktopCapture(() => config);
+        meetCapture = new MeetDesktopCapture(() => config);
+        meetBridge = new MeetLocalBridge(meetCapture);
+        meetBridge.Start();
         WireEvents();
+        updater = new AgentUpdater(
+            () => config,
+            text => Post(() => UpdateStatus(text)),
+            () => Post(ExitThread));
         autoItem.CheckedChanged += (_, _) => capture.Enabled = autoItem.Checked;
-        finishItem.Click += async (_, _) => await capture.FinishManualAsync();
+        finishItem.Click += async (_, _) =>
+        {
+            if (meetCapture.IsRecording) await meetCapture.FinishAsync("manual_stop");
+            else await capture.FinishManualAsync();
+        };
         pairItem.Click += async (_, _) => await PairAsync();
         exitItem.Click += (_, _) => ExitThread();
         UpdateStatus(config is null ? "Não pareado" : $"Conectado · {config.OwnerPerson}");
@@ -36,6 +50,29 @@ internal sealed class AgentContext : ApplicationContext
     private void WireEvents()
     {
         capture.StatusChanged += text => Post(() => UpdateStatus(text));
+        meetCapture.StatusChanged += text => Post(() => UpdateStatus(text));
+        meetCapture.MeetingStarted += code => Post(() =>
+        {
+            finishItem.Enabled = true;
+            tray.Text = "Relato AI · REC Meet";
+            recordingIndicator ??= new RecordingIndicatorForm();
+            recordingIndicator.ShowIndicator("Google Meet");
+            tray.ShowBalloonTip(1500, "Relato AI", $"Gravando Google Meet · {code}", ToolTipIcon.Info);
+        });
+        meetCapture.MeetingFinished += (localSessionId, ok, error) => Post(() =>
+        {
+            finishItem.Enabled = false;
+            tray.Text = "Relato AI Desktop Agent";
+            recordingIndicator?.HideIndicator();
+            tray.ShowBalloonTip(ok ? 1800 : 3500, "Relato AI",
+                ok ? "Meet salvo e transcrito." : (error ?? "Falha ao finalizar Meet."),
+                ok ? ToolTipIcon.Info : ToolTipIcon.Error);
+            if (ok && !string.IsNullOrWhiteSpace(localSessionId))
+            {
+                using var form = new FeedbackForm(config, localSessionId, "MEET");
+                form.ShowDialog();
+            }
+        });
         capture.CallStarted += (_, contact) => Post(() =>
         {
             finishItem.Enabled = true;
@@ -68,6 +105,7 @@ internal sealed class AgentContext : ApplicationContext
         timer.Tick += async (_, _) => { timer.Stop(); timer.Dispose(); await PairAsync(); };
         timer.Start();
     }
+
     private async Task PairAsync()
     {
         using var form = new PairingForm();
@@ -113,6 +151,9 @@ internal sealed class AgentContext : ApplicationContext
     protected override void ExitThreadCore()
     {
         recordingIndicator?.Dispose();
+        updater.Dispose();
+        meetBridge.Dispose();
+        meetCapture.Dispose();
         capture.Dispose();
         dispatcher.Dispose();
         tray.Visible = false;
