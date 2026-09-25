@@ -3,7 +3,10 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 type Row = Record<string, any>;
 
-const VERSION = "meeting-capture-v1";
+const VERSION = "meeting-capture-v1.1-audio";
+const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.0";
+const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.25.5/RelatoAI-Desktop-SDR.exe";
+const SDR_DESKTOP_SHA256 = "fe9a80d4820a59e14c2c7b9b9ea48ac3675efff81fcda4d7a829cce546634b38";
 const DASHBOARD_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
   "http://localhost:3000",
@@ -44,6 +47,25 @@ function randomToken() {
 async function sha256(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function safeObjectPart(value: unknown) {
+  return clean(value, 180).replace(/[^a-zA-Z0-9._-]/g, "_") || "session";
+}
+
+function normalizedAudioFile(raw: Row) {
+  const role = clean(raw?.role, 20).toLowerCase();
+  const extRaw = clean(raw?.ext, 12).toLowerCase();
+  const mimeRaw = clean(raw?.mime_type, 120).toLowerCase();
+  if (!["local", "remote", "mixed"].includes(role)) return null;
+  const ext = ["wav", "webm", "ogg", "mp3"].includes(extRaw)
+    ? extRaw
+    : mimeRaw.includes("wav") ? "wav"
+      : mimeRaw.includes("ogg") ? "ogg"
+        : mimeRaw.includes("mpeg") || mimeRaw.includes("mp3") ? "mp3"
+          : "webm";
+  const mime = ext === "wav" ? "audio/wav" : ext === "ogg" ? "audio/ogg" : ext === "mp3" ? "audio/mpeg" : "audio/webm";
+  return { role, ext, mime };
 }
 
 function normalizeSegments(input: unknown) {
@@ -111,21 +133,6 @@ function normalizePhone(value: unknown) {
   return digits.length >= 10 && digits.length <= 15 ? digits : null;
 }
 
-function cleanContactName(value: unknown) {
-  const name = clean(value, 160);
-  if (!name) return null;
-  const generic = new Set(["contato", "contato whatsapp", "contato whatsapp desktop", "whatsapp", "participante", "prospect"]);
-  return generic.has(name.toLowerCase()) ? null : name;
-}
-
-function isWhatsappIdentitySource(value: unknown) {
-  const source = clean(value, 120).toUpperCase();
-  return source.startsWith("WHATSAPP_")
-    || source.includes("PARTICIPANT_IDENTITY")
-    || source === "GROUP_PARTICIPANT_IDENTITY"
-    || source === "CLIENT_PHONE_REGISTRY";
-}
-
 async function clientSummary(ops: any, clientId: string | null) {
   if (!clientId) return null;
   const { data } = await ops.from("clients")
@@ -136,23 +143,93 @@ async function clientSummary(ops: any, clientId: string | null) {
   return data || null;
 }
 
-async function bestWhatsappName(ops: any, phone: string) {
+const GENERIC_CONTACT_NAMES = new Set(["contato","contato whatsapp","contato whatsapp desktop","whatsapp","participante","prospect"]);
+function safeContactName(value: unknown) {
+  const name = clean(value, 160);
+  return name && !GENERIC_CONTACT_NAMES.has(name.toLowerCase()) && !/@(?:lid|c\.us)$/i.test(name) ? name : null;
+}
+function isWhatsappIdentitySource(value: unknown) {
+  const source = clean(value, 120).toUpperCase();
+  return source.startsWith("WHATSAPP_")
+    || source.includes("PARTICIPANT_IDENTITY")
+    || ["GROUP_PARTICIPANT_IDENTITY","CLIENT_PHONE_REGISTRY","CONTACT_SYNC","WHATSAPP_MESSAGES","ZAPI_HISTORY"].includes(source);
+}
+function personNameKey(value: unknown) {
+  return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+async function bestWhatsappName(ops: any, phoneValue: string) {
+  const phone = normalizePhone(phoneValue);
+  if (!phone) return { name: null, role: null, source: null };
+
   const { data: identities } = await ops.from("whatsapp_participant_identity")
     .select("canonical_name,role_hint,confidence,last_seen_at")
     .eq("phone", phone)
     .not("canonical_name", "is", null)
     .order("confidence", { ascending: false })
     .order("last_seen_at", { ascending: false })
-    .limit(1);
-  const row = identities?.[0];
-  if (row?.canonical_name) return { name: clean(row.canonical_name, 160), role: clean(row.role_hint, 80) || null };
+    .limit(8);
+  for (const row of identities || []) {
+    const name = safeContactName(row?.canonical_name);
+    if (name) return { name, role: clean(row.role_hint, 80) || null, source: "PARTICIPANT_IDENTITY" };
+  }
+
+  const { data: synced } = await ops.from("whatsapp_contact_identity_sync_state")
+    .select("whatsapp_name,last_synced_at")
+    .eq("phone", phone)
+    .order("last_synced_at", { ascending: false })
+    .limit(3);
+  for (const row of synced || []) {
+    const name = safeContactName(row?.whatsapp_name);
+    if (name) return { name, role: null, source: "CONTACT_SYNC" };
+  }
+
+  const phoneOr = [
+    `sender_phone.eq.${phone}`, `participant_phone.eq.${phone}`,
+    `chat_id.eq.${phone}`, `chat_id.eq.${phone}@c.us`
+  ].join(",");
+  const { data: messages } = await ops.from("whatsapp_messages")
+    .select("chat_name,sender_name,from_me,is_group,event_at")
+    .or(phoneOr).eq("is_group", false)
+    .order("event_at", { ascending: false }).limit(20);
+  for (const row of messages || []) {
+    const name = safeContactName(row?.chat_name) || (!row?.from_me ? safeContactName(row?.sender_name) : null);
+    if (name) return { name, role: null, source: "WHATSAPP_MESSAGES" };
+  }
+
   const { data: raw } = await ops.from("whatsapp_zapi_raw")
-    .select("sender_name,event_at")
-    .eq("sender_phone", phone)
-    .not("sender_name", "is", null)
-    .order("event_at", { ascending: false })
-    .limit(1);
-  return { name: clean(raw?.[0]?.sender_name, 160) || null, role: null };
+    .select("chat_name,sender_name,from_me,is_group,event_at")
+    .or(phoneOr).eq("is_group", false)
+    .order("event_at", { ascending: false }).limit(20);
+  for (const row of raw || []) {
+    const name = safeContactName(row?.chat_name) || (!row?.from_me ? safeContactName(row?.sender_name) : null);
+    if (name) return { name, role: null, source: "ZAPI_HISTORY" };
+  }
+  return { name: null, role: null, source: null };
+}
+
+async function inferDirectChatIdentityByWindow(ops: any, startedAt: string, endedAt: string) {
+  const startMs = Date.parse(startedAt);
+  const endMs = Date.parse(endedAt);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null;
+  const from = new Date(startMs - 45_000).toISOString();
+  const to = new Date(endMs + 45_000).toISOString();
+  const { data } = await ops.from("whatsapp_messages")
+    .select("chat_id,chat_name,sender_name,sender_phone,participant_phone,from_me,event_at")
+    .eq("is_group", false).gte("event_at", from).lte("event_at", to)
+    .order("event_at", { ascending: false }).limit(80);
+  const candidates = new Map<string, { name: string; phone: string | null; at: string }>();
+  for (const row of data || []) {
+    const name = safeContactName(row?.chat_name) || (!row?.from_me ? safeContactName(row?.sender_name) : null);
+    if (!name) continue;
+    const key = clean(row?.chat_id, 220) || name.toLowerCase();
+    const phone = normalizePhone(row?.participant_phone || (!row?.from_me ? row?.sender_phone : null) || row?.chat_id);
+    if (!candidates.has(key)) candidates.set(key, { name, phone, at: row?.event_at || "" });
+  }
+  if (candidates.size !== 1) return null;
+  const only = [...candidates.values()][0];
+  return { name: only.name, phone: only.phone, source: "WHATSAPP_DIRECT_CHAT_WINDOW" };
 }
 
 async function resolveCallIdentity(ops: any, remotePhoneValue: unknown) {
@@ -289,6 +366,20 @@ Deno.serve(async (req: Request) => {
     return respond({ ok: true, device_id: device.id, owner_person: device.owner_person, version: VERSION });
   }
 
+  if (action === "agent_update_check") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const currentVersion = clean(body?.current_version, 40) || "";
+    return respond({
+      ok: true,
+      current_version: currentVersion,
+      required_version: REQUIRED_SDR_DESKTOP_VERSION,
+      update_required: currentVersion !== REQUIRED_SDR_DESKTOP_VERSION,
+      download_url: SDR_DESKTOP_DOWNLOAD_URL,
+      sha256: SDR_DESKTOP_SHA256,
+    });
+  }
+
   if (action === "integrations_status") {
     const device = await resolveDevice(req, ops);
     if (!device) return respond({ error: "invalid_device" }, 401);
@@ -324,7 +415,11 @@ Deno.serve(async (req: Request) => {
     if (!localSessionId || !Number.isFinite(Date.parse(startedAt))) return respond({ error: "invalid_session_heartbeat" }, 400);
     const requestedState = clean(raw.state, 40).toUpperCase();
     const allowedState = ["CAPTURING","NEEDS_REVIEW","FINISHING"].includes(requestedState) ? requestedState : "CAPTURING";
-    const payload = {
+    const requestedAudioStatus = clean(raw.audio_status,40).toUpperCase();
+    const requestedAudioSource = clean(raw.audio_source,40).toUpperCase();
+    const inferredAudioStatus = (clean(raw.metadata?.recorder,40).toUpperCase() === "DESKTOP_AGENT" || clean(raw.capture_mode,40).toUpperCase() === "MEET_RTC_AUDIO") ? "RECORDING" : null;
+    const inferredAudioSource = clean(raw.metadata?.recorder,40).toUpperCase() === "DESKTOP_AGENT" ? "DESKTOP_AGENT" : clean(raw.capture_mode,40).toUpperCase() === "MEET_RTC_AUDIO" ? "EXTENSION_WEBRTC" : null;
+    const payload: Row = {
       device_id: device.id, owner_person: device.owner_person, local_session_id: localSessionId,
       meeting_code: clean(raw.meeting_code, 80) || null, meeting_url: clean(raw.meeting_url, 1000) || null,
       title: clean(raw.title, 500) || "Reunião Google Meet", started_at: startedAt,
@@ -334,59 +429,274 @@ Deno.serve(async (req: Request) => {
       metadata: { ...(raw.metadata || {}), extension_version: clean(raw.extension_version,40) || null, heartbeat_at: new Date().toISOString(), last_error: clean(raw.last_error,500) || null },
       updated_at: new Date().toISOString(),
     };
-    const { data, error } = await ops.from("meeting_capture_sessions").upsert(payload, { onConflict: "device_id,local_session_id" }).select("id,state,meeting_code,owner_person").single();
-    if (error) return respond({ error: "session_heartbeat_failed", detail: error.message }, 500);
-    return respond({ ok: true, session: data });
+    const { data: existingSession, error: existingError } = await ops.from("meeting_capture_sessions")
+      .select("id,metadata").eq("owner_person", device.owner_person).eq("local_session_id", localSessionId).maybeSingle();
+    if (existingError) return respond({ error: "session_heartbeat_lookup_failed", detail: existingError.message }, 500);
+    const validAudioStatuses = ["RECORDING","RECORDED_LOCAL","UPLOADING","STORED","PROCESSING","READY","UPLOAD_FAILED"];
+    const validAudioSources = ["DESKTOP_AGENT","EXTENSION_WEBRTC","FALLBACK_EXTENSION"];
+    const nextAudioStatus = validAudioStatuses.includes(requestedAudioStatus) ? requestedAudioStatus : (!existingSession && inferredAudioStatus ? inferredAudioStatus : null);    const nextAudioSource = validAudioSources.includes(requestedAudioSource) ? requestedAudioSource : (!existingSession && inferredAudioSource ? inferredAudioSource : null);
+    if (nextAudioStatus) payload.audio_status = nextAudioStatus;
+    if (nextAudioSource) payload.audio_source = nextAudioSource;
+    if (nextAudioStatus || nextAudioSource) payload.audio_updated_at = new Date().toISOString();
+    let saved: Row | null = null;
+    let saveError: any = null;
+    if (existingSession?.id) {
+      const updatePayload: Row = { ...payload };
+      delete updatePayload.device_id;
+      delete updatePayload.owner_person;
+      delete updatePayload.local_session_id;
+      updatePayload.metadata = { ...(existingSession.metadata || {}), ...(payload.metadata || {}) };
+      const result = await ops.from("meeting_capture_sessions").update(updatePayload).eq("id", existingSession.id).select("id,state,meeting_code,owner_person").single();
+      saved = result.data; saveError = result.error;
+    } else {
+      const result = await ops.from("meeting_capture_sessions").insert(payload).select("id,state,meeting_code,owner_person").single();
+      saved = result.data; saveError = result.error;
+    }
+    if (saveError) return respond({ error: "session_heartbeat_failed", detail: saveError.message }, 500);
+    return respond({ ok: true, session: saved });
+  }
+
+  if (action === "meeting_audio_prepare") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const audio = (body?.audio || {}) as Row;
+    const localSessionId = clean(audio.local_session_id || body?.local_session_id, 180);
+    if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
+    const requestedSource = clean(audio.audio_source || body?.audio_source, 40).toUpperCase();
+    const audioSource = ["DESKTOP_AGENT","EXTENSION_WEBRTC","FALLBACK_EXTENSION"].includes(requestedSource)
+      ? requestedSource : "DESKTOP_AGENT";
+    const files = (Array.isArray(body?.files) ? body.files : []).map((row: Row) => normalizedAudioFile(row)).filter(Boolean) as Array<{role:string;ext:string;mime:string}>;
+    if (!files.length) return respond({ error: "audio_files_required" }, 400);
+    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
+      .select("id,device_id,started_at,ended_at,audio_status,audio_local_path,audio_remote_path,audio_mixed_path,metadata")
+      .eq("owner_person", device.owner_person).eq("local_session_id", localSessionId).maybeSingle();
+    if (sessionError || !session) return respond({ error: "meeting_session_not_found", detail: sessionError?.message }, 404);
+    if (session.audio_status === "READY" && session.audio_mixed_path) {
+      return respond({ ok: true, session_id: session.id, state: "READY", uploads: [], audio_source: audioSource, idempotent: true });
+    }
+    const safeLocal = safeObjectPart(localSessionId);
+    const paths: Row = {};
+    for (const file of files) paths[file.role] = "meetings/" + session.device_id + "/" + safeLocal + "/" + file.role + "." + file.ext;
+    const durationMs = Number.isFinite(Number(audio.duration_ms))
+      ? Math.max(0, Math.round(Number(audio.duration_ms)))
+      : (session.ended_at && session.started_at ? Math.max(0, Date.parse(session.ended_at) - Date.parse(session.started_at)) : null);
+    const patch: Row = {
+      audio_status: "UPLOADING", audio_source: audioSource, audio_duration_ms: durationMs,
+      audio_last_error: null, audio_updated_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      metadata: { ...(session.metadata || {}), audio_recorded: true, audio_source: audioSource },
+    };
+    if (paths.local) patch.audio_local_path = paths.local;
+    if (paths.remote) patch.audio_remote_path = paths.remote;
+    if (paths.mixed) {
+      patch.audio_mixed_path = paths.mixed;
+      patch.audio_mime_type = files.find((file) => file.role === "mixed")?.mime || "audio/mpeg";
+    }
+    const { error: updateError } = await ops.from("meeting_capture_sessions").update(patch).eq("id", session.id);
+    if (updateError) return respond({ error: "meeting_audio_prepare_state_failed", detail: updateError.message }, 500);
+    const uploads: Row[] = [];
+    for (const file of files) {
+      const path = paths[file.role];
+      const { data, error } = await db.storage.from("relato-call-audio").createSignedUploadUrl(String(path), { upsert: true });
+      if (error || !data?.signedUrl) {
+        await ops.from("meeting_capture_sessions").update({
+          audio_status: "UPLOAD_FAILED", audio_last_error: error?.message || "signed_upload_url_failed",
+          audio_updated_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+        }).eq("id", session.id);
+        return respond({ error: "meeting_audio_upload_url_failed", role: file.role, detail: error?.message }, 500);
+      }
+      uploads.push({ role: file.role, path, mime_type: file.mime, signed_url: data.signedUrl, token: data.token || null });
+    }
+    return respond({ ok: true, session_id: session.id, owner_person: device.owner_person, uploads, audio_source: audioSource, state: "UPLOADING" });
+  }
+
+  if (action === "meeting_audio_finalize") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const localSessionId = clean(body?.local_session_id, 180);
+    if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
+    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
+      .select("id,device_id,started_at,ended_at,audio_status,audio_source,audio_local_path,audio_remote_path,audio_mixed_path,metadata")
+      .eq("owner_person", device.owner_person).eq("local_session_id", localSessionId).maybeSingle();
+    if (sessionError || !session) return respond({ error: "meeting_session_not_found", detail: sessionError?.message }, 404);
+    if (session.audio_status === "READY" && session.audio_mixed_path) {
+      return respond({ ok: true, session_id: session.id, state: "READY", idempotent: true });
+    }
+    const uploaded = Array.isArray(body?.uploaded) ? body.uploaded : [];
+    let totalBytes = 0;
+    let mixedBytes = 0;
+    let mixedMime = "audio/mpeg";
+    const verified: Row[] = [];
+    for (const raw of uploaded) {
+      const role = clean(raw?.role,20).toLowerCase();
+      if (!["local","remote","mixed"].includes(role)) continue;
+      const expected = role === "local"
+        ? session.audio_local_path
+        : role === "remote" ? session.audio_remote_path : session.audio_mixed_path;
+      const path = clean(raw?.path,1000);
+      if (!expected || path !== expected) return respond({ error: "meeting_audio_path_mismatch", role }, 400);
+      const bytes = Math.max(0, Math.round(Number(raw?.bytes || 0)));
+      if (!bytes) return respond({ error: "meeting_audio_empty_upload", role }, 400);
+      const mimeType = clean(raw?.mime_type,120) || (role === "mixed" ? "audio/mpeg" : null);
+      totalBytes += bytes;
+      if (role === "mixed") {
+        mixedBytes = bytes;
+        mixedMime = mimeType || "audio/mpeg";
+      }
+      verified.push({ role, path, bytes, mime_type: mimeType });
+    }
+    if (!verified.length) {
+      await ops.from("meeting_capture_sessions").update({
+        audio_status: "UPLOAD_FAILED", audio_last_error: "no_verified_uploads",
+        audio_updated_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq("id", session.id);
+      return respond({ error: "meeting_audio_uploads_required" }, 400);
+    }
+    const durationMs = Number.isFinite(Number(body?.duration_ms))
+      ? Math.max(0, Math.round(Number(body.duration_ms)))
+      : (session.ended_at && session.started_at ? Math.max(0, Date.parse(session.ended_at) - Date.parse(session.started_at)) : null);
+    const directMixed = mixedBytes > 0 && Boolean(session.audio_mixed_path);
+    const mixedPath = directMixed
+      ? session.audio_mixed_path
+      : "meetings/" + session.device_id + "/" + safeObjectPart(localSessionId) + "/meeting.webm";
+    const nextMetadata = {
+      ...(session.metadata || {}),
+      audio_recorded: true,
+      audio_uploads: verified,
+      audio_source: session.audio_source || "DESKTOP_AGENT",
+      player_ready_direct: directMixed,
+    };
+    const { error: storedError } = await ops.from("meeting_capture_sessions").update({
+      audio_status: directMixed ? "READY" : "STORED",
+      audio_size_bytes: directMixed ? mixedBytes : totalBytes,
+      audio_duration_ms: durationMs,
+      audio_mixed_path: mixedPath,
+      audio_mime_type: directMixed ? mixedMime : "audio/webm",
+      audio_last_error: null,
+      audio_updated_at: new Date().toISOString(),
+      metadata: nextMetadata,
+      updated_at: new Date().toISOString(),
+    }).eq("id", session.id);
+    if (storedError) return respond({ error: "meeting_audio_finalize_state_failed", detail: storedError.message }, 500);
+    if (directMixed) {
+      return respond({ ok: true, session_id: session.id, state: "READY", direct_mixed: true, job_id: null });
+    }
+    const { data: jobId, error: jobError } = await ops.rpc("enqueue_heavy_job", {
+      p_job_type: "MEETING_AUDIO_PROCESS",
+      p_payload: { session_id: session.id },
+      p_dedupe_key: "meeting-audio:" + session.id,
+      p_max_attempts: 8,
+      p_available_at: new Date().toISOString(),
+    });
+    if (!jobError) {
+      await ops.from("meeting_capture_sessions").update({
+        audio_status: "PROCESSING", audio_updated_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }).eq("id", session.id);
+    }
+    return respond({ ok: true, session_id: session.id, state: jobError ? "STORED" : "PROCESSING", job_id: jobId || null, processing_error: jobError?.message || null });
   }
 
   if (action === "call_prepare") {
     const device = await resolveDevice(req, ops);
     if (!device) return respond({ error: "invalid_device" }, 401);
     const call = (body?.call || {}) as Row;
+    const extensionVersion = clean(call.extension_version, 40) || "";
+    const { data: roster } = await ops.from("team_roster")
+      .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
+    if (String(roster?.role || "").toUpperCase() === "SDR" && extensionVersion !== REQUIRED_SDR_DESKTOP_VERSION) {
+      return respond({
+        error: "desktop_agent_upgrade_required",
+        message: "Atualize o Relato AI Desktop antes de gravar novas ligações.",
+        current_version: extensionVersion || null,
+        required_version: REQUIRED_SDR_DESKTOP_VERSION,
+        download_url: SDR_DESKTOP_DOWNLOAD_URL,
+        sha256: SDR_DESKTOP_SHA256,
+      }, 426);
+    }
     const localSessionId = clean(call.local_session_id, 180);
     const startedAt = clean(call.started_at, 80);
     const endedAt = clean(call.ended_at, 80);
-    const rawContactName = clean(call.contact_name, 160) || null;
-    const contactName = rawContactName || "Contato WhatsApp";
+    const rawContactName = safeContactName(call.contact_name);
     const localPhone = normalizePhone(call.local_phone);
     const remotePhoneCandidate = normalizePhone(call.remote_phone);
     const identitySource = clean(call.identity_source, 80) || null;
     const source = clean(call.source, 40).toUpperCase() === "WHATSAPP_DESKTOP" ? "WHATSAPP_DESKTOP" : "WHATSAPP_WEB";
-    const trustedDesktopIdentity = ["WHATSAPP_LEVELDB_EXACT_CALL_WINDOW", "WHATSAPP_DESKTOP_UI", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
-    const remotePhone = source === "WHATSAPP_DESKTOP" && !trustedDesktopIdentity ? null : remotePhoneCandidate;
+    const trustedDesktopIdentity = ["WHATSAPP_LEVELDB_EXACT_CALL_WINDOW", "WHATSAPP_LEVELDB_CONTACT_WINDOW", "WHATSAPP_DESKTOP_UI", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
+    if (!localSessionId || !startedAt || !endedAt) return respond({ error: "missing_call_data" }, 400);
+    const directHint = source === "WHATSAPP_DESKTOP"
+      ? await inferDirectChatIdentityByWindow(ops, startedAt, endedAt)
+      : null;
+    const remotePhone = source === "WHATSAPP_DESKTOP" && !trustedDesktopIdentity
+      ? (directHint?.phone || null)
+      : (remotePhoneCandidate || directHint?.phone || null);
     const identity = await resolveCallIdentity(ops, remotePhone);
-    const whatsappName =
-      (source === "WHATSAPP_WEB" ? cleanContactName(rawContactName) : null)
-      || (isWhatsappIdentitySource(identity?.source) ? cleanContactName(identity?.name) : null)
-      || (identitySource === "WHATSAPP_DESKTOP_UI" ? cleanContactName(rawContactName) : null);
-    const resolvedContactName = whatsappName || clean(identity.name, 160) || contactName;
+    const phoneName = remotePhone ? await bestWhatsappName(ops, remotePhone) : { name: null, role: null, source: null };
+    const identityWhatsappName = isWhatsappIdentitySource(identity?.source) ? safeContactName(identity?.name) : null;
+    const uiWhatsappName = ["WHATSAPP_DESKTOP_UI","WHATSAPP_LEVELDB_EXACT_CALL_WINDOW","WHATSAPP_LEVELDB_CONTACT_WINDOW","RELATO_USER_CONFIRMED"].includes(identitySource || "")
+      ? rawContactName
+      : null;
+    const whatsappName = uiWhatsappName
+      || safeContactName(directHint?.name)
+      || safeContactName(phoneName.name)
+      || identityWhatsappName;
+    const whatsappNameSource = uiWhatsappName
+      ? identitySource
+      : safeContactName(directHint?.name)
+        ? directHint?.source
+        : safeContactName(phoneName.name)
+          ? phoneName.source
+          : identityWhatsappName
+            ? identity?.source
+            : null;
+    const resolvedName = whatsappName || safeContactName(identity.name) || rawContactName;
+    const resolvedContactName = resolvedName || (remotePhone ? `WhatsApp +${remotePhone}` : "Contato WhatsApp");
+    const resolvedIdentity = {
+      ...identity,
+      phone: remotePhone || identity.phone || null,
+      name: resolvedName || identity.name || null,
+      role: identity.role || phoneName.role || null,
+      source: identity.source || whatsappNameSource || identitySource || null,
+    };
     const observedAt = new Date().toISOString();
+    const existingNameEvidence = {};
     const nameEvidence = {
-      whatsapp: whatsappName ? {
+      ...existingNameEvidence,
+      ...(whatsappName ? { whatsapp: {
         name: whatsappName,
-        source: source === "WHATSAPP_WEB" ? "WHATSAPP_WEB_UI" : (identity?.source || identitySource || "WHATSAPP_DESKTOP_UI"),
+        source: whatsappNameSource || "WHATSAPP",
         observed_at: observedAt,
         phone: remotePhone,
-      } : null,
+      }} : {}),
     };
-    if (!localSessionId || !startedAt || !endedAt) return respond({ error: "missing_call_data" }, 400);
     if (!Number.isFinite(Date.parse(startedAt)) || !Number.isFinite(Date.parse(endedAt))) return respond({ error: "invalid_timestamps" }, 400);
-    const roles = Array.isArray(body?.roles) ? body.roles.map((v: unknown) => clean(v, 20)).filter((v: string) => ["local", "remote"].includes(v)) : [];
+    const roles = Array.isArray(body?.roles) ? body.roles.map((v: unknown) => clean(v, 20)).filter((v: string) => ["local", "remote", "mixed"].includes(v)) : [];
     if (!roles.length) return respond({ error: "audio_roles_required" }, 400);
     const safeLocal = localSessionId.replace(/[^a-zA-Z0-9._-]/g, "_");
     const ext = clean(call.audio_ext, 12).toLowerCase() === "wav" ? "wav" : "webm";
+    const durationMs = Number.isFinite(Number(call.duration_ms)) ? Math.max(0, Math.round(Number(call.duration_ms))) : Math.max(0, Date.parse(endedAt) - Date.parse(startedAt));
     const audioPaths: Row = {};
-    for (const role of [...new Set(roles)]) audioPaths[role] = `calls/${device.id}/${safeLocal}/${role}.${ext}`;
+    for (const role of [...new Set(roles)]) {
+      const roleExt = role === "mixed" ? "mp3" : ext;
+      audioPaths[role] = `calls/${device.id}/${safeLocal}/${role}.${roleExt}`;
+    }
     const sessionPayload = {
       device_id: device.id, owner_person: device.owner_person, local_session_id: localSessionId,
       meeting_code: null, meeting_url: source === "WHATSAPP_WEB" ? "https://web.whatsapp.com/" : null, title: `Ligação WhatsApp — ${resolvedContactName}`,
       started_at: startedAt, ended_at: endedAt, state: "CAPTURING", capture_mode: source === "WHATSAPP_DESKTOP" ? "WHATSAPP_DESKTOP_AUDIO" : "WHATSAPP_WEB_AUDIO",
       native_transcript_available: false, captions_available: false,
-      metadata: { source, contact_name: resolvedContactName, local_phone: localPhone, remote_phone: remotePhone, identity_source: identitySource,
+      audio_status: audioPaths.mixed ? "UPLOADING" : "STORED",
+      audio_source: "DESKTOP_AGENT",
+      audio_local_path: audioPaths.local || null,
+      audio_remote_path: audioPaths.remote || null,
+      audio_mixed_path: audioPaths.mixed || null,
+      audio_duration_ms: durationMs,
+      audio_mime_type: audioPaths.mixed ? "audio/mpeg" : "audio/wav",
+      audio_updated_at: new Date().toISOString(),
+      metadata: { source, contact_name: resolvedContactName, local_phone: localPhone, remote_phone: remotePhone, identity_source: resolvedIdentity.source,
         identity_candidate_rejected: Boolean(remotePhoneCandidate && !remotePhone),
-        whatsapp_name: whatsappName, name_evidence: nameEvidence,
-        remote_name: identity.name, remote_role: identity.role, resolved_client_id: identity.client_id, resolved_client_name: identity.client_name,
-        identity_resolution: identity, audio_paths: audioPaths, finish_reason: clean(call.finish_reason, 80) || null, extension_version: clean(call.extension_version, 40) || null },
+        whatsapp_name: whatsappName,
+        name_evidence: nameEvidence,
+        remote_name: resolvedIdentity.name, remote_role: resolvedIdentity.role, resolved_client_id: resolvedIdentity.client_id, resolved_client_name: resolvedIdentity.client_name,
+        identity_resolution: resolvedIdentity, audio_paths: audioPaths, finish_reason: clean(call.finish_reason, 80) || null, extension_version: clean(call.extension_version, 40) || null },
       updated_at: new Date().toISOString(),
     };
     const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions").upsert(sessionPayload, { onConflict: "device_id,local_session_id" }).select("id").single();
@@ -406,14 +716,132 @@ Deno.serve(async (req: Request) => {
     const localSessionId = clean(body?.local_session_id, 180);
     if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
     const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
-      .select("id,metadata").eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
+      .select("id,transcript_id,owner_person,metadata").eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
     if (sessionError) return respond({ error: "feedback_context_failed", detail: sessionError.message }, 500);
     if (!session) return respond({ ok: true, pending: true });
+
     const remotePhone = normalizePhone(session.metadata?.remote_phone);
     const identity = session.metadata?.identity_resolution?.auto === true
       ? session.metadata.identity_resolution
       : await resolveCallIdentity(ops, remotePhone);
-    const requiresSelection = !Boolean(identity?.auto);
+    const genericNames = new Set(["contato","contato whatsapp","contato whatsapp desktop","whatsapp"]);
+    const rawName = clean(identity?.name || session.metadata?.remote_name || session.metadata?.contact_name, 160);
+    const remoteName = rawName && !genericNames.has(rawName.toLowerCase()) ? rawName : null;
+
+    const { data: roster } = await ops.from("team_roster")
+      .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
+    const isSdr = String(roster?.role || "").toUpperCase() === "SDR";
+    let prospectPrefill: Row | null = null;
+    let transcriptReady = Boolean(session.transcript_id);
+
+    if (isSdr) {
+      const crm = db.schema("crm");
+      let leadId = clean(session.metadata?.commercial_prospect?.lead_id, 80) || null;
+      let profile: Row | null = null;
+
+      if (!leadId) {
+        const { data: callRow } = await ops.from("commercial_call_records")
+          .select("lead_id").eq("capture_session_id", session.id).maybeSingle();
+        leadId = clean(callRow?.lead_id, 80) || null;
+      }
+      if (!leadId) {
+        const { data: profiles } = await ops.from("commercial_prospect_profiles")
+          .select("lead_id,city,website,decision_role,broker_count,current_structure,marketing_investment,primary_pain,secondary_pains,pain_points,goals,services_interest,objections,urgency,qualification_summary,closer_briefing,buying_signals,closing_risks,next_step,next_step_at,metadata,updated_at")
+          .contains("metadata", { capture_session_id: session.id })
+          .order("updated_at", { ascending: false }).limit(1);
+        profile = profiles?.[0] || null;
+        leadId = clean(profile?.lead_id, 80) || null;
+      }
+
+      let lead: Row | null = null;
+      if (leadId) {
+        const { data } = await crm.from("leads")
+          .select("id,name,company,email,phone,instagram,orcamento_mkt,atuacao,notes")
+          .eq("id", leadId).maybeSingle();
+        lead = data || null;
+      }
+      if (!lead && remotePhone) {
+        const variants = [remotePhone, "+" + remotePhone];
+        const { data } = await crm.from("leads")
+          .select("id,name,company,email,phone,instagram,orcamento_mkt,atuacao,notes")
+          .in("phone", variants).is("archived_at", null)
+          .order("updated_at", { ascending: false }).limit(1).maybeSingle();
+        lead = data || null;
+      }
+      if (lead?.id && !profile) {
+        const { data } = await ops.from("commercial_prospect_profiles")
+          .select("lead_id,city,website,decision_role,broker_count,current_structure,marketing_investment,primary_pain,secondary_pains,pain_points,goals,services_interest,objections,urgency,qualification_summary,closer_briefing,buying_signals,closing_risks,next_step,next_step_at,metadata,updated_at")
+          .eq("lead_id", lead.id).maybeSingle();
+        profile = data || null;
+      }
+
+      let transcriptText = "";
+      let aiSignals: Row = {};
+      let transcriptStatus = "";
+      if (session.transcript_id) {
+        const { data: transcript } = await ops.from("meeting_transcripts")
+          .select("transcript_text,processing_status,ai_signals,summary,metadata").eq("id", session.transcript_id).maybeSingle();
+        transcriptText = clean(transcript?.transcript_text, 30000);
+        transcriptStatus = clean(transcript?.processing_status, 40).toUpperCase();
+        aiSignals = transcript?.ai_signals && typeof transcript.ai_signals === "object" ? transcript.ai_signals : {};
+        if ((!aiSignals || !Object.keys(aiSignals).length) && transcript?.metadata?.commercial_analysis)
+          aiSignals = transcript.metadata.commercial_analysis;
+      }
+      transcriptReady = ["READY","REJECTED"].includes(transcriptStatus);
+      const commercialAnalysisReady = Boolean(
+        aiSignals && (
+          clean(aiSignals.summary, 1000)
+          || clean(aiSignals.primary_pain, 1000)
+          || clean(aiSignals.closer_briefing, 1000)
+          || (Array.isArray(aiSignals.pain_points) && aiSignals.pain_points.length)
+        )
+      );
+      const emailMatch = transcriptText.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+      const instagramMatch = transcriptText.match(/(?:instagram(?:\.com\/)?|@)([A-Z0-9._]{3,40})/i);
+      const brokersMatch = transcriptText.match(/\b(\d{1,4})\s+(?:corretores?|vendedores?)\b/i);
+      const investmentMatch = transcriptText.match(/(?:investe|investimento|verba)[^\n]{0,40}?(R\$\s*[\d.,]+|\d[\d.,]*\s*(?:mil|k))/i);
+
+      const aiArray = (value: unknown) => Array.isArray(value)
+        ? value.map((v: unknown) => clean(v, 500)).filter(Boolean).slice(0, 30)
+        : [];
+      const aiPain = [
+        clean(aiSignals.primary_pain, 500),
+        ...aiArray(aiSignals.secondary_pains),
+        ...aiArray(aiSignals.pain_points),
+      ].filter(Boolean);
+      prospectPrefill = {
+        name: clean(lead?.name || remoteName, 200) || null,
+        company: clean(lead?.company, 240) || null,
+        email: clean(lead?.email || emailMatch?.[0], 240).toLowerCase() || null,
+        phone: normalizePhone(lead?.phone || remotePhone) || null,
+        city: clean(profile?.city || lead?.atuacao, 200) || null,
+        instagram: clean(lead?.instagram || profile?.website || (instagramMatch ? "@" + instagramMatch[1] : null), 500) || null,
+        marketing_investment: clean(aiSignals.marketing_investment || profile?.marketing_investment || lead?.orcamento_mkt || investmentMatch?.[1], 240) || null,
+        broker_count: Number(aiSignals.broker_count || profile?.broker_count || brokersMatch?.[1] || 0) || null,
+        pain_points: aiPain.length ? [...new Set(aiPain)] : (Array.isArray(profile?.pain_points) ? profile.pain_points : []),
+        goals: aiArray(aiSignals.goals).length ? aiArray(aiSignals.goals) : (Array.isArray(profile?.goals) ? profile.goals : []),
+        services_interest: aiArray(aiSignals.services_interest).length ? aiArray(aiSignals.services_interest) : (Array.isArray(profile?.services_interest) ? profile.services_interest : []),
+        objections: aiArray(aiSignals.objections).length ? aiArray(aiSignals.objections) : (Array.isArray(profile?.objections) ? profile.objections : []),
+        urgency: clean(aiSignals.urgency || profile?.urgency, 1000) || null,
+        decision_role: clean(aiSignals.decision_role || profile?.decision_role, 1000) || null,
+        current_structure: clean(aiSignals.current_structure || profile?.current_structure, 2000) || null,
+        buying_signals: aiArray(aiSignals.buying_signals).length ? aiArray(aiSignals.buying_signals) : (Array.isArray(profile?.buying_signals) ? profile.buying_signals : []),
+        closing_risks: aiArray(aiSignals.closing_risks).length ? aiArray(aiSignals.closing_risks) : (Array.isArray(profile?.closing_risks) ? profile.closing_risks : []),
+        closer_briefing: clean(aiSignals.closer_briefing || profile?.closer_briefing, 6000) || null,
+        ai_summary: clean(aiSignals.summary || profile?.qualification_summary, 6000) || null,
+        next_step: clean(aiSignals.follow_up || profile?.next_step, 2000) || null,
+        next_step_at: profile?.next_step_at || null,
+      };
+      return respond({
+        ok: true, pending: false, workflow: "SDR_PROSPECT", transcript_ready: transcriptReady,
+        commercial_analysis_ready: commercialAnalysisReady,
+        requires_selection: false, remote_phone: remotePhone, remote_name: remoteName,
+        remote_role: "PROSPECT", client_id: null, client_name: null,
+        resolution_status: identity?.status || "UNRESOLVED", clients: [], prospect_prefill: prospectPrefill
+      });
+    }
+
+    const requiresSelection = !Boolean(identity?.auto) || (!identity?.client_id && String(identity?.side || "").toUpperCase() !== "TEAM");
     let clients: Row[] = [];
     if (requiresSelection) {
       const { data, error } = await ops.from("clients").select("id,display_name,lifecycle")
@@ -421,12 +849,47 @@ Deno.serve(async (req: Request) => {
       if (error) return respond({ error: "feedback_clients_failed", detail: error.message }, 500);
       clients = data || [];
     }
-    return respond({ ok: true, pending: false, requires_selection: requiresSelection,
-      remote_phone: remotePhone, remote_name: clean(identity?.name || session.metadata?.remote_name, 160) || null,
+    return respond({ ok: true, pending: false, workflow: "CLIENT_REVIEW", transcript_ready: transcriptReady,
+      requires_selection: requiresSelection, remote_phone: remotePhone, remote_name: remoteName,
       remote_role: clean(identity?.role || session.metadata?.remote_role, 80) || null,
       client_id: identity?.client_id || null, client_name: identity?.client_name || null,
-      resolution_status: identity?.status || "UNRESOLVED",
+      resolution_status: identity?.status || "UNRESOLVED", prospect_prefill: null,
       clients: clients.map((c: Row) => ({ id: c.id, name: c.display_name })) });
+  }
+
+  if (action === "call_mixed_ready") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const localSessionId = clean(body?.local_session_id, 180);
+    const path = clean(body?.path, 1000);
+    const bytes = Math.max(0, Math.round(Number(body?.bytes || 0)));
+    if (!localSessionId || !path || bytes < 1000) return respond({ error: "mixed_audio_data_required" }, 400);
+    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
+      .select("id,audio_mixed_path,audio_duration_ms,metadata")
+      .eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
+    if (sessionError || !session) return respond({ error: "call_session_not_found" }, 404);
+    if (!session.audio_mixed_path || path !== session.audio_mixed_path) return respond({ error: "call_audio_path_mismatch", role: "mixed" }, 400);
+    const durationMs = Number.isFinite(Number(body?.duration_ms))
+      ? Math.max(0, Math.round(Number(body.duration_ms)))
+      : Math.max(0, Math.round(Number(session.audio_duration_ms || 0)));
+    const now = new Date().toISOString();
+    const metadata = {
+      ...(session.metadata || {}),
+      audio_player: { path, bytes, mime_type: "audio/mpeg", codec: "mp3", ready_at: now, source: "DESKTOP_AGENT" }
+    };
+    const { error: updateError } = await ops.from("meeting_capture_sessions").update({
+      audio_status: "READY",
+      audio_mixed_path: path,
+      audio_size_bytes: bytes,
+      audio_duration_ms: durationMs || null,
+      audio_mime_type: "audio/mpeg",
+      audio_last_error: null,
+      audio_updated_at: now,
+      metadata,
+      updated_at: now,
+    }).eq("id", session.id);
+    if (updateError) return respond({ error: "mixed_audio_commit_failed", detail: updateError.message }, 500);
+    return respond({ ok: true, session_id: session.id, audio_status: "READY" });
   }
 
   if (action === "call_finalize") {
@@ -434,9 +897,50 @@ Deno.serve(async (req: Request) => {
     if (!device) return respond({ error: "invalid_device" }, 401);
     const localSessionId = clean(body?.local_session_id, 180);
     if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
-    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions").select("id,state,metadata").eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
+    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
+      .select("id,state,metadata,audio_local_path,audio_remote_path,audio_mixed_path,audio_duration_ms,audio_status")
+      .eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
     if (sessionError || !session) return respond({ error: "call_session_not_found" }, 404);
-    await ops.from("meeting_capture_sessions").update({ state: "PROCESSING", updated_at: new Date().toISOString() }).eq("id", session.id);
+    const uploaded = Array.isArray(body?.uploaded) ? body.uploaded : [];
+    let totalBytes = 0;
+    let mixedBytes = 0;
+    for (const raw of uploaded) {
+      const role = clean(raw?.role,20).toLowerCase();
+      if (!["local","remote","mixed"].includes(role)) continue;
+      const expected = role === "local" ? session.audio_local_path : role === "remote" ? session.audio_remote_path : session.audio_mixed_path;
+      const path = clean(raw?.path,1000);
+      if (!expected || path !== expected) return respond({ error: "call_audio_path_mismatch", role }, 400);
+      const bytes = Math.max(0, Math.round(Number(raw?.bytes || 0)));
+      if (!bytes) return respond({ error: "call_audio_empty_upload", role }, 400);
+      totalBytes += bytes;
+      if (role === "mixed") mixedBytes = bytes;
+    }
+    const durationMs = Number.isFinite(Number(body?.duration_ms))
+      ? Math.max(0, Math.round(Number(body.duration_ms)))
+      : Math.max(0, Math.round(Number(session.audio_duration_ms || 0)));
+    const expectedMixedBytes = durationMs > 0 ? Math.round((durationMs / 1000) * 16000) : 0;
+    const partialMixedAudio = mixedBytes > 0 && durationMs >= 15000 && expectedMixedBytes > 0 && mixedBytes < expectedMixedBytes * 0.50;
+    const now = new Date().toISOString();
+    await ops.from("meeting_capture_sessions").update({
+      state: "PROCESSING",
+      audio_status: mixedBytes > 0 ? (partialMixedAudio ? "PARTIAL" : "READY") : "STORED",
+      audio_size_bytes: mixedBytes > 0 ? mixedBytes : totalBytes || null,
+      audio_duration_ms: durationMs || null,
+      audio_mime_type: mixedBytes > 0 ? "audio/mpeg" : "audio/wav",
+      audio_last_error: partialMixedAudio ? "audio_capture_shorter_than_call" : null,
+      metadata: {
+        ...(session.metadata || {}),
+        audio_integrity: mixedBytes > 0 ? {
+          status: partialMixedAudio ? "PARTIAL" : "OK",
+          expected_min_bytes: expectedMixedBytes,
+          mixed_bytes: mixedBytes,
+          duration_ms: durationMs,
+          checked_at: now
+        } : null
+      },
+      audio_updated_at: now,
+      updated_at: now
+    }).eq("id", session.id);
     const { data: jobId, error: jobError } = await ops.rpc("enqueue_heavy_job", {
       p_job_type: "CALL_TRANSCRIBE", p_payload: { session_id: session.id }, p_dedupe_key: `call:${session.id}`, p_max_attempts: 5, p_available_at: new Date().toISOString(),
     });
@@ -451,7 +955,7 @@ Deno.serve(async (req: Request) => {
     const localSessionId = clean(feedback.local_session_id, 180);
     if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
     const { data: session } = await ops.from("meeting_capture_sessions")
-      .select("id,transcript_id,owner_person,metadata")
+      .select("id,transcript_id,owner_person,metadata,capture_mode")
       .eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
     if (!session || String(session.owner_person || "") !== String(device.owner_person || "")) return respond({ error: "feedback_session_not_found" }, 404);
     const dismissed = Boolean(feedback.dismissed);
@@ -462,8 +966,17 @@ Deno.serve(async (req: Request) => {
     let selectedClientName: string | null = null;
     let bindingSource = "AUTO";
     let noClient = false;
+    let commercialLead: Row | null = null;
+    const prospectInput = (feedback.prospect || {}) as Row;
+    const isProspect = !dismissed && Boolean(feedback.is_prospect);
+    const feedbackProspectName = clean(prospectInput.name, 200) || null;
+    const feedbackProspectPhone = normalizePhone(prospectInput.phone) || null;
+    const requestedBindingSource = clean(feedback.binding_source, 40).toUpperCase();
 
-    if (!dismissed && currentIdentity?.auto) {
+    if (isProspect) {
+      bindingSource = "RELATO_COMMERCIAL";
+      noClient = false;
+    } else if (!dismissed && currentIdentity?.auto && requestedBindingSource === "AUTO") {
       selectedClientId = currentIdentity.client_id || null;
       selectedClientName = currentIdentity.client_name || null;
       noClient = !selectedClientId;
@@ -481,14 +994,266 @@ Deno.serve(async (req: Request) => {
       }
     }
     const remotePhone = normalizePhone(session.metadata?.remote_phone);
-    const remoteName = cleanContactName(session.metadata?.remote_name || currentIdentity?.name);
-    const postCallName = cleanContactName(feedback.prospect_name);
+    const remoteName = safeContactName(session.metadata?.remote_name || currentIdentity?.name);
+    const whatsappName = safeContactName(
+      session.metadata?.name_evidence?.whatsapp?.name
+      || session.metadata?.whatsapp_name
+      || (isWhatsappIdentitySource(currentIdentity?.source) ? currentIdentity?.name : null)
+    );
+    const postCallName = safeContactName(feedbackProspectName || feedback.prospect_name);
     const remoteRole = clean(session.metadata?.remote_role || currentIdentity?.role, 80) || null;
+    const interactionChannel = clean(session.capture_mode, 60).toUpperCase().includes("MEET")
+      ? "MEET"
+      : (clean(feedback.channel, 40) || "WHATSAPP_DESKTOP");
+
+    if (isProspect) {
+      const crm = db.schema("crm");
+      const prospectName = clean(feedbackProspectName || remoteName, 200);
+      if (!prospectName) return respond({ error: "prospect_name_required" }, 400);
+      const prospectCompany = clean(prospectInput.company, 240) || null;
+      const prospectEmail = clean(prospectInput.email, 240).toLowerCase() || null;
+      const prospectPhone = normalizePhone(feedbackProspectPhone || remotePhone) || null;
+      const prospectCity = clean(prospectInput.city, 200) || null;
+      const prospectInstagram = clean(prospectInput.instagram, 500) || null;
+      let aiSignals: Row = {};
+      let aiSummary: string | null = null;
+      if (session.transcript_id) {
+        const { data: transcriptRow } = await ops.from("meeting_transcripts")
+          .select("summary,ai_signals,metadata").eq("id", session.transcript_id).maybeSingle();
+        aiSignals = transcriptRow?.ai_signals && typeof transcriptRow.ai_signals === "object" ? transcriptRow.ai_signals : {};
+        if ((!aiSignals || !Object.keys(aiSignals).length) && transcriptRow?.metadata?.commercial_analysis)
+          aiSignals = transcriptRow.metadata.commercial_analysis;
+        aiSummary = clean(transcriptRow?.summary, 6000) || null;
+      }
+      const arr = (value: unknown, max = 30) => Array.isArray(value)
+        ? value.map((v: unknown) => clean(v, 500)).filter(Boolean).slice(0, max)
+        : [];
+      const inputPainPoints = arr(prospectInput.pain_points);
+      const aiPainPoints = [
+        clean(aiSignals.primary_pain, 500),
+        ...arr(aiSignals.secondary_pains),
+        ...arr(aiSignals.pain_points),
+      ].filter(Boolean);
+      const painPoints = inputPainPoints.length ? inputPainPoints : [...new Set(aiPainPoints)];
+      const goals = arr(prospectInput.goals).length ? arr(prospectInput.goals) : arr(aiSignals.goals);
+      const servicesInterest = arr(prospectInput.services_interest).length ? arr(prospectInput.services_interest) : arr(aiSignals.services_interest);
+      const objections = arr(prospectInput.objections).length ? arr(prospectInput.objections) : arr(aiSignals.objections);
+      const urgency = clean(prospectInput.urgency || aiSignals.urgency, 1000) || null;
+      const decisionRole = clean(prospectInput.decision_role || aiSignals.decision_role, 1000) || null;
+      const currentStructure = clean(prospectInput.current_structure || aiSignals.current_structure, 2000) || null;
+      const buyingSignals = arr(prospectInput.buying_signals).length ? arr(prospectInput.buying_signals) : arr(aiSignals.buying_signals);
+      const closingRisks = arr(prospectInput.closing_risks).length ? arr(prospectInput.closing_risks) : arr(aiSignals.closing_risks);
+      const marketingInvestment = clean(prospectInput.marketing_investment || aiSignals.marketing_investment, 240) || null;
+      const brokerCountRaw = Number(prospectInput.broker_count || aiSignals.broker_count || 0);
+      const brokerCount = Number.isFinite(brokerCountRaw) && brokerCountRaw > 0 ? Math.round(brokerCountRaw) : null;
+      const primaryPain = painPoints[0] || clean(aiSignals.primary_pain, 500) || null;
+      const secondaryPains = painPoints.slice(1);
+      const requestedCloserBriefing = clean(prospectInput.closer_briefing || aiSignals.closer_briefing, 6000) || null;
+      const nextStep = clean(prospectInput.next_step || aiSignals.follow_up, 2000) || null;
+      const nextStepRaw = clean(prospectInput.next_step_at, 100);
+      const nextStepAt = nextStepRaw && Number.isFinite(Date.parse(nextStepRaw)) ? new Date(nextStepRaw).toISOString() : null;
+      const now = new Date().toISOString();
+      const { data: closerProfile, error: closerError } = await db.from("profiles")
+        .select("id,email").eq("email", "feitozaluizvitor@gmail.com").maybeSingle();
+      if (closerError || !closerProfile?.id) return respond({ error: "commercial_closer_not_configured", detail: closerError?.message }, 500);
+
+      let existingLead: Row | null = null;
+      const relatoExternalId = `relato-call:${session.id}`;
+
+      const { data: sessionLead } = await crm.from("leads")
+        .select("id,owner_id,stage").eq("source", "RELATO_AI_SDR").eq("external_id", relatoExternalId).maybeSingle();
+      existingLead = sessionLead || null;
+
+      if (!existingLead) {
+        const { data: callRows } = await ops.from("commercial_call_records")
+          .select("lead_id").eq("capture_session_id", session.id).limit(1);
+        const priorLeadId = clean(callRows?.[0]?.lead_id, 80);
+        if (priorLeadId) {
+          const { data } = await crm.from("leads").select("id,owner_id,stage").eq("id", priorLeadId).maybeSingle();
+          existingLead = data || null;
+        }
+      }
+      if (!existingLead) {
+        const { data: priorProfiles } = await ops.from("commercial_prospect_profiles")
+          .select("lead_id,updated_at").contains("metadata", { capture_session_id: session.id })
+          .order("updated_at", { ascending: false }).limit(1);
+        const priorLeadId = clean(priorProfiles?.[0]?.lead_id, 80);
+        if (priorLeadId) {
+          const { data } = await crm.from("leads").select("id,owner_id,stage").eq("id", priorLeadId).maybeSingle();
+          existingLead = data || null;
+        }
+      }
+      if (!existingLead && prospectEmail) {
+        const { data } = await crm.from("leads").select("id,owner_id,stage").eq("owner_id", closerProfile.id).eq("email", prospectEmail).is("archived_at", null).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+        existingLead = data || null;
+      }
+      if (!existingLead && prospectPhone) {
+        const variants = [prospectPhone, "+" + prospectPhone];
+        const { data } = await crm.from("leads").select("id,owner_id,stage").eq("owner_id", closerProfile.id).in("phone", variants).is("archived_at", null).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+        existingLead = data || null;
+      }
+      if (!existingLead && prospectName) {
+        const { data } = await crm.from("leads")
+          .select("id,owner_id,stage,name,company")
+          .eq("owner_id", closerProfile.id)
+          .ilike("name", prospectName)
+          .is("archived_at", null)
+          .order("updated_at", { ascending: false })
+          .limit(2);
+        if ((data || []).length === 1) existingLead = data?.[0] || null;
+      }
+
+      const leadPatch: Row = {
+        owner_id: closerProfile.id, name: prospectName, company: prospectCompany,
+        email: prospectEmail, phone: prospectPhone, instagram: prospectInstagram,
+        orcamento_mkt: marketingInvestment, updated_at: now,
+      };
+      let leadError: any = null;
+      if (existingLead?.id) {
+        const result = await crm.from("leads").update(leadPatch).eq("id", existingLead.id).select("id,owner_id,name,company,stage,email,phone").single();
+        commercialLead = result.data || null; leadError = result.error;
+      } else {
+        const result = await crm.from("leads").insert({ ...leadPatch, source: "RELATO_AI_SDR", external_id: relatoExternalId, stage: "qualificacao", created_at: now }).select("id,owner_id,name,company,stage,email,phone").single();
+        commercialLead = result.data || null; leadError = result.error;
+        if (leadError?.code === "23505") {
+          const retry = await crm.from("leads").select("id,owner_id,name,company,stage,email,phone")
+            .eq("source", "RELATO_AI_SDR").eq("external_id", relatoExternalId).maybeSingle();
+          commercialLead = retry.data || null;
+          leadError = retry.error;
+        }
+      }
+      if (leadError || !commercialLead?.id) return respond({ error: "commercial_lead_save_failed", detail: leadError?.message }, 500);
+
+      const generatedCloserBriefing = [
+        prospectCompany ? `Empresa: ${prospectCompany}` : null,
+        prospectCity ? `Região: ${prospectCity}` : null,
+        marketingInvestment ? `Investimento atual: ${marketingInvestment}` : null,
+        brokerCount ? `Corretores: ${brokerCount}` : null,
+        primaryPain ? `Dor principal: ${primaryPain}` : null,
+        secondaryPains.length ? `Dores secundárias: ${secondaryPains.join(" · ")}` : null,
+        goals.length ? `Objetivos: ${goals.join(" · ")}` : null,
+        urgency ? `Urgência: ${urgency}` : null,
+        decisionRole ? `Decisão: ${decisionRole}` : null,
+        currentStructure ? `Estrutura atual: ${currentStructure}` : null,
+        servicesInterest.length ? `Interesses: ${servicesInterest.join(" · ")}` : null,
+        objections.length ? `Objeções: ${objections.join(" · ")}` : null,
+        buyingSignals.length ? `Sinais de compra: ${buyingSignals.join(" · ")}` : null,
+        closingRisks.length ? `Riscos de fechamento: ${closingRisks.join(" · ")}` : null,
+        nextStep ? `Próximo passo: ${nextStep}` : null,
+        clean(feedback.note, 2000) ? `Nota do SDR: ${clean(feedback.note, 2000)}` : null,
+      ].filter(Boolean).join("\n");
+      const closerBriefing = requestedCloserBriefing || generatedCloserBriefing || aiSummary || null;
+
+      const { data: existingProspectProfile } = await ops.from("commercial_prospect_profiles")
+        .select("*").eq("lead_id", commercialLead.id).maybeSingle();
+      const mergeArray = (...values: unknown[]) => [...new Set(values.flatMap(v => Array.isArray(v) ? v : [])
+        .map(v => clean(v, 500)).filter(Boolean))].slice(0, 50);
+
+      const { error: prospectProfileError } = await ops.from("commercial_prospect_profiles").upsert({
+        lead_id: commercialLead.id,
+        city: prospectCity || existingProspectProfile?.city || null,
+        website: prospectInstagram?.startsWith("http") ? prospectInstagram : existingProspectProfile?.website || null,
+        decision_role: decisionRole || existingProspectProfile?.decision_role || null,
+        broker_count: brokerCount || existingProspectProfile?.broker_count || null,
+        current_structure: currentStructure || existingProspectProfile?.current_structure || null,
+        marketing_investment: marketingInvestment || existingProspectProfile?.marketing_investment || null,
+        primary_pain: primaryPain || existingProspectProfile?.primary_pain || null,
+        secondary_pains: mergeArray(existingProspectProfile?.secondary_pains, secondaryPains),
+        pain_points: mergeArray(existingProspectProfile?.pain_points, painPoints),
+        goals: mergeArray(existingProspectProfile?.goals, goals),
+        services_interest: mergeArray(existingProspectProfile?.services_interest, servicesInterest),
+        objections: mergeArray(existingProspectProfile?.objections, objections),
+        urgency: urgency || existingProspectProfile?.urgency || null,
+        buying_signals: mergeArray(existingProspectProfile?.buying_signals, buyingSignals),
+        closing_risks: mergeArray(existingProspectProfile?.closing_risks, closingRisks),
+        qualification_summary: clean(feedback.note, 6000) || aiSummary || existingProspectProfile?.qualification_summary || closerBriefing,
+        closer_briefing: closerBriefing || existingProspectProfile?.closer_briefing || null,
+        next_step: nextStep || existingProspectProfile?.next_step || null,
+        next_step_at: nextStepAt || existingProspectProfile?.next_step_at || null,
+        sdr_person: device.owner_person, closer_person: "Vitor Feitoza", last_call_at: now,
+        last_transcript_id: session.transcript_id || existingProspectProfile?.last_transcript_id || null,
+        metadata: {
+          ...(existingProspectProfile?.metadata || {}),
+          source: "RELATO_AI",
+          remote_phone: prospectPhone, remote_name: remoteName, capture_session_id: session.id,
+          human_confirmed: true, human_confirmed_at: now, confirmed_by: device.owner_person,
+          last_ai_analysis: aiSignals,
+        },
+        updated_at: now,
+      }, { onConflict: "lead_id" });
+      if (prospectProfileError) return respond({ error: "commercial_prospect_profile_failed", detail: prospectProfileError.message }, 500);
+
+      const { error: callRecordError } = await ops.from("commercial_call_records").upsert({
+        lead_id: commercialLead.id, capture_session_id: session.id, transcript_id: session.transcript_id || null,
+        sdr_person: device.owner_person, closer_person: "Vitor Feitoza", channel: interactionChannel,
+        remote_phone: prospectPhone, remote_name: prospectName, outcome: clean(feedback.relationship_direction, 80) || null,
+        notes: clean(feedback.note, 3000) || null, ai_summary: aiSummary,
+        primary_pain: primaryPain, secondary_pains: secondaryPains, pain_points: painPoints, goals,
+        urgency, decision_role: decisionRole, current_structure: currentStructure,
+        services_interest: servicesInterest, objections, buying_signals: buyingSignals, closing_risks: closingRisks,
+        closer_briefing: closerBriefing, next_step: nextStep, next_step_at: nextStepAt,
+        metadata: {
+          source: "RELATO_AI", tags: Array.isArray(feedback.tags) ? feedback.tags : [],
+          prospect_company: prospectCompany, human_confirmed: true, human_confirmed_at: now,
+          ai_analysis: aiSignals,
+        },
+        updated_at: now,
+      }, { onConflict: "capture_session_id" });
+      if (callRecordError) return respond({ error: "commercial_call_record_failed", detail: callRecordError.message }, 500);
+
+      const crmActivityExternalId = session.transcript_id ? `relato-transcript:${session.transcript_id}` : `relato-session:${session.id}`;
+      const crmActivityContent = [
+        aiSummary ? `[RELATO AI] ${aiSummary}` : `[RELATO AI] Interação comercial de ${prospectName}`,
+        primaryPain ? `Dor principal: ${primaryPain}` : null,
+        secondaryPains.length ? `Dores secundárias: ${secondaryPains.join(" · ")}` : null,
+        goals.length ? `Objetivos: ${goals.join(" · ")}` : null,
+        urgency ? `Urgência: ${urgency}` : null,
+        decisionRole ? `Decisão: ${decisionRole}` : null,
+        objections.length ? `Objeções: ${objections.join(" · ")}` : null,
+        buyingSignals.length ? `Sinais de compra: ${buyingSignals.join(" · ")}` : null,
+        closingRisks.length ? `Riscos: ${closingRisks.join(" · ")}` : null,
+        nextStep ? `Próximo passo: ${nextStep}` : null,
+        closerBriefing ? `Briefing para closer: ${closerBriefing}` : null,
+        clean(feedback.note, 2000) ? `Nota confirmada pelo SDR: ${clean(feedback.note, 2000)}` : null,
+      ].filter(Boolean).join("\n");
+      const { data: existingCrmActivity } = await crm.from("lead_activities")
+        .select("id").eq("external_id", crmActivityExternalId).maybeSingle();
+      const crmActivityPatch = {
+        lead_id: commercialLead.id,
+        type: interactionChannel.toUpperCase().includes("MEET") ? "reuniao" : "ligacao",
+        content: crmActivityContent.slice(0, 20000),
+        done: true,
+        external_id: crmActivityExternalId,
+        metadata: {
+          source: "RELATO_AI", capture_session_id: session.id, transcript_id: session.transcript_id || null,
+          sdr_person: device.owner_person, closer_person: "Vitor Feitoza", human_confirmed: true,
+          confirmed_at: now,
+        },
+      };
+      const crmActivityResult = existingCrmActivity?.id
+        ? await crm.from("lead_activities").update(crmActivityPatch).eq("id", existingCrmActivity.id)
+        : await crm.from("lead_activities").insert(crmActivityPatch);
+      if (crmActivityResult.error) return respond({ error: "crm_lead_activity_failed", detail: crmActivityResult.error.message }, 500);
+
+      if (nextStep) {
+        const { data: existingActivity } = await ops.from("commercial_activities").select("id")
+          .eq("lead_id", commercialLead.id).contains("metadata", { capture_session_id: session.id }).limit(1).maybeSingle();
+        if (!existingActivity?.id) {
+          const { error: activityError } = await ops.from("commercial_activities").insert({
+            lead_id: commercialLead.id, activity_type: "FOLLOW_UP", title: nextStep.slice(0, 500),
+            description: closerBriefing || null, owner_person: "Vitor Feitoza", due_at: nextStepAt,
+            source: "RELATO_AI", metadata: { capture_session_id: session.id, sdr_person: device.owner_person },
+          });
+          if (activityError) return respond({ error: "commercial_activity_failed", detail: activityError.message }, 500);
+        }
+      }
+    }
+
     if (!dismissed && bindingSource === "MANUAL" && remotePhone) {
       const now = new Date().toISOString();
       const manualIdentity = {
         chat_id: "relato-manual", identity_key: `phone:${remotePhone}`, phone: remotePhone,
-        sender_lid: null, canonical_name: isWhatsappIdentitySource(currentIdentity?.source) ? remoteName : null, client_id: selectedClientId,
+        sender_lid: null, canonical_name: remoteName, client_id: selectedClientId,
         side: selectedClientId ? "CLIENT_SIDE" : "EXTERNAL",
         role_hint: selectedClientId ? (remoteRole || "CLIENT_CONTACT") : remoteRole,
         confidence: 1, source: "RELATO_MANUAL_FEEDBACK", first_seen_at: now, last_seen_at: now,
@@ -502,26 +1267,54 @@ Deno.serve(async (req: Request) => {
     }
 
     const confirmedAt = new Date().toISOString();
-    const identityName = remoteName || postCallName;
-    const resolvedIdentity = dismissed ? currentIdentity : {
-      ...(currentIdentity || {}), status: selectedClientId ? "AUTO_CLIENT" : "AUTO_NON_CLIENT",
-      auto: Boolean(currentIdentity?.auto && remoteName),
-      phone: remotePhone, name: identityName, role: remoteRole, client_id: selectedClientId,
+    const resolvedIdentity = dismissed ? currentIdentity : isProspect ? {
+      ...(currentIdentity || {}), status: "COMMERCIAL_PROSPECT", auto: false,
+      phone: remotePhone, name: postCallName || whatsappName || remoteName, role: "PROSPECT",
+      client_id: null, client_name: null, side: "EXTERNAL", source: postCallName ? "RELATO_COMMERCIAL" : (currentIdentity?.source || "RELATO_COMMERCIAL"),
+      commercial_lead_id: commercialLead?.id || null,
+    } : {
+      ...(currentIdentity || {}), status: selectedClientId ? "AUTO_CLIENT" : "AUTO_NON_CLIENT", auto: Boolean(currentIdentity?.auto),
+      phone: remotePhone, name: remoteName, role: remoteRole, client_id: selectedClientId,
       client_name: selectedClientName, side: selectedClientId ? "CLIENT_SIDE" : (currentIdentity?.side || "EXTERNAL"),
-      source: remoteName ? (currentIdentity?.source || "AUTO") : (postCallName ? "RELATO_POST_CALL" : (bindingSource === "MANUAL" ? "RELATO_MANUAL" : "AUTO")),
+      source: bindingSource === "MANUAL" ? "RELATO_MANUAL" : (currentIdentity?.source || "AUTO"),
     };
     if (!dismissed) {
       const previousEvidence = session.metadata?.name_evidence || {};
       const nextEvidence = {
         ...previousEvidence,
-        ...(postCallName ? { post_call: { name: postCallName, source: "SDR_POST_CALL", confirmed_by: device.owner_person, confirmed_at: confirmedAt } } : {}),
+        ...(whatsappName ? { whatsapp: {
+          ...(previousEvidence?.whatsapp || {}),
+          name: whatsappName,
+          source: previousEvidence?.whatsapp?.source || currentIdentity?.source || "WHATSAPP",
+        }} : {}),
+        ...(postCallName ? { post_call: {
+          name: postCallName,
+          source: "SDR_POST_CALL",
+          confirmed_by: device.owner_person,
+          confirmed_at: confirmedAt,
+        }} : {}),
+        ...(commercialLead?.name ? { crm: {
+          name: commercialLead.name,
+          lead_id: commercialLead.id,
+          source: "CRM",
+          observed_at: confirmedAt,
+        }} : {}),
       };
       const nextMetadata = { ...(session.metadata || {}),
-        remote_name: remoteName, remote_role: remoteRole,
+        remote_name: remoteName,
+        whatsapp_name: whatsappName || session.metadata?.whatsapp_name || null,
         post_call_name: postCallName || session.metadata?.post_call_name || null,
+        crm_name: commercialLead?.name || session.metadata?.crm_name || null,
         name_evidence: nextEvidence,
+        remote_phone: isProspect ? (feedbackProspectPhone || remotePhone) : remotePhone,
+        remote_role: isProspect ? "PROSPECT" : remoteRole,
         resolved_client_id: selectedClientId, resolved_client_name: selectedClientName,
         identity_resolution: resolvedIdentity,
+        ...(isProspect && commercialLead ? { commercial_prospect: {
+          lead_id: commercialLead.id, name: commercialLead.name, company: commercialLead.company,
+          name_source: postCallName ? "POST_CALL" : (whatsappName ? "WHATSAPP" : "CRM"),
+          closer_person: "Vitor Feitoza", sdr_person: device.owner_person,
+        }} : {}),
         feedback_binding: { source: bindingSource, prospect_name: postCallName, confirmed_by: device.owner_person, confirmed_at: confirmedAt },
       };
       await ops.from("meeting_capture_sessions").update({ metadata: nextMetadata, updated_at: new Date().toISOString() }).eq("id", session.id);
@@ -541,7 +1334,7 @@ Deno.serve(async (req: Request) => {
       transcript_id: Number(feedback.transcript_id || session.transcript_id || 0) || null,
       capture_session_id: session.id, local_session_id: localSessionId, owner_person: device.owner_person,
       client_id: selectedClientId,
-      channel: clean(feedback.channel, 40) || "MEET", mood: clean(feedback.mood, 60) || null, tone: clean(feedback.tone, 60) || null,
+      channel: interactionChannel, mood: clean(feedback.mood, 60) || null, tone: clean(feedback.tone, 60) || null,
       receptivity: asScore(feedback.receptivity), trust_level: asScore(feedback.trust_level), perceived_risk: asScore(feedback.perceived_risk),
       relationship_direction: ["IMPROVING","STABLE","WORSENING","UNKNOWN"].includes(clean(feedback.relationship_direction, 20).toUpperCase()) ? clean(feedback.relationship_direction, 20).toUpperCase() : "UNKNOWN",
       tags, note: clean(feedback.note, 2000) || null, dismissed,
@@ -549,7 +1342,7 @@ Deno.serve(async (req: Request) => {
     };
     const { data, error } = await ops.from("meeting_human_feedback").upsert(payload, { onConflict: "owner_person,local_session_id" }).select("id,transcript_id,client_id,submitted_at,dismissed").single();
     if (error) return respond({ error: "feedback_save_failed", detail: error.message }, 500);
-    return respond({ ok: true, feedback: data, binding: { source: bindingSource, client_id: selectedClientId, client_name: selectedClientName, prospect_name: postCallName, no_client: noClient } });
+    return respond({ ok: true, feedback: data, binding: { source: bindingSource, client_id: selectedClientId, client_name: selectedClientName, prospect_name: postCallName, no_client: noClient, is_prospect: isProspect, commercial_lead_id: commercialLead?.id || null } });
   }
 
   if (action === "finalize") {
@@ -587,10 +1380,23 @@ Deno.serve(async (req: Request) => {
       metadata: { ...(meeting?.metadata || {}), extension_version: clean(meeting?.extension_version, 40) || null, captured_at: new Date().toISOString() },
       updated_at: new Date().toISOString(),
     };
-    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
-      .upsert(sessionPayload, { onConflict: "device_id,local_session_id" })
-      .select("id,transcript_id")
-      .single();
+    const { data: existingSession, error: existingSessionError } = await ops.from("meeting_capture_sessions")
+      .select("id,transcript_id,metadata").eq("owner_person", device.owner_person).eq("local_session_id", localSessionId).maybeSingle();
+    if (existingSessionError) return respond({ error: "session_lookup_failed", detail: existingSessionError.message }, 500);
+    let session: Row | null = null;
+    let sessionError: any = null;
+    if (existingSession?.id) {
+      const updatePayload: Row = { ...sessionPayload };
+      delete updatePayload.device_id;
+      delete updatePayload.owner_person;
+      delete updatePayload.local_session_id;
+      updatePayload.metadata = { ...(existingSession.metadata || {}), ...(sessionPayload.metadata || {}) };
+      const result = await ops.from("meeting_capture_sessions").update(updatePayload).eq("id", existingSession.id).select("id,transcript_id").single();
+      session = result.data; sessionError = result.error;
+    } else {
+      const result = await ops.from("meeting_capture_sessions").insert(sessionPayload).select("id,transcript_id").single();
+      session = result.data; sessionError = result.error;
+    }
     if (sessionError || !session) return respond({ error: "session_upsert_failed", detail: sessionError?.message }, 500);
 
     const participantInput = Array.isArray(body?.participants) ? body.participants : [];
@@ -605,6 +1411,36 @@ Deno.serve(async (req: Request) => {
       if (!participantMap.has(key)) participantMap.set(key, { participant_key: key, display_name: segment.speaker_name, source: "CAPTIONS" });
     }
     const participantNames = Array.from(participantMap.values()).map((p) => clean(p.display_name, 160)).filter(Boolean);
+    const { data: activeTeam } = await ops.from("team_roster")
+      .select("person").eq("is_former", false);
+    const teamNameKeys = new Set((activeTeam || []).map((row: Row) => personNameKey(row.person)).filter(Boolean));
+    teamNameKeys.add(personNameKey(device.owner_person));
+    const externalParticipants = participantNames
+      .map((name) => safeContactName(name))
+      .filter((name): name is string => Boolean(name) && !teamNameKeys.has(personNameKey(name)));
+    const externalWeights = new Map<string, number>();
+    for (const segment of segments) {
+      const name = safeContactName(segment.speaker_name);
+      if (!name || teamNameKeys.has(personNameKey(name))) continue;
+      externalWeights.set(name, (externalWeights.get(name) || 0) + clean(segment.text, 8000).length);
+    }
+    const primaryProspectName = [...externalWeights.entries()]
+      .sort((a,b) => b[1] - a[1])[0]?.[0]
+      || externalParticipants[0]
+      || null;
+    const meetingIdentityMetadata = {
+      remote_name: primaryProspectName,
+      contact_name: primaryProspectName,
+      remote_role: primaryProspectName ? "PROSPECT" : null,
+      meeting_external_participants: [...new Set(externalParticipants)],
+      identity_source: primaryProspectName ? "MEET_PARTICIPANTS" : null,
+    };
+    if (primaryProspectName) {
+      await ops.from("meeting_capture_sessions").update({
+        metadata: { ...(existingSession?.metadata || {}), ...(sessionPayload.metadata || {}), ...meetingIdentityMetadata },
+        updated_at: new Date().toISOString(),
+      }).eq("id", session.id);
+    }
 
     let transcript: Row | null = null;
     const { data: existing } = await ops.from("meeting_transcripts").select("id").eq("capture_session_id", session.id).maybeSingle();
@@ -627,7 +1463,7 @@ Deno.serve(async (req: Request) => {
       processing_status: "CAPTURED",
       transcript_source: captureMode === "MEET_RTC_AUDIO" ? "MEET_RTC_WHISPER" : captureMode === "MEET_RTC_CAPTIONS" ? "MEET_RTC_CAPTIONS" : "MEET_CAPTIONS",
       capture_session_id: session.id,
-      metadata: { capture_mode: sessionPayload.capture_mode, local_session_id: localSessionId, captured_by: VERSION },
+      metadata: { capture_mode: sessionPayload.capture_mode, local_session_id: localSessionId, captured_by: VERSION, ...meetingIdentityMetadata },
       updated_at: new Date().toISOString(),
     };
     if (existing?.id) {
