@@ -44,14 +44,30 @@ async function sha256(value){
 function out(body,status=200){
   return new Response(JSON.stringify(body),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"}});
 }
-function parseCandidate(result){
-  const candidate=result?.response ?? result?.result?.response ?? result?.result?.text ?? result?.text ?? result?.choices?.[0]?.message?.content ?? null;
-  if(candidate && typeof candidate==="object") return candidate;
-  if(typeof candidate!=="string") return null;
-  let cleaned=candidate.trim();
+function parseJsonText(value){
+  if(typeof value!=="string") return null;
+  let cleaned=value.trim();
   if(cleaned.startsWith("```")) cleaned=cleaned.replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/i,"");
   try{return JSON.parse(cleaned);}catch{return null;}
 }
+function findAnalysis(value,depth=0){
+  if(depth>5 || value==null) return null;
+  if(typeof value==="string"){
+    const parsed=parseJsonText(value);
+    return parsed ? findAnalysis(parsed,depth+1) : null;
+  }
+  if(Array.isArray(value)){
+    for(const item of value){const found=findAnalysis(item,depth+1);if(found)return found;}
+    return null;
+  }
+  if(typeof value!=="object") return null;
+  if(typeof value.summary==="string" && value.summary.trim()) return value;
+  for(const key of ["response","result","output","json","data","content","message","choices"]){
+    if(key in value){const found=findAnalysis(value[key],depth+1);if(found)return found;}
+  }
+  return null;
+}
+function parseCandidate(result){return findAnalysis(result);}
 export default {
   async fetch(request,env){
     if(request.method==="GET") return out({ok:true,service:"relato-commercial-ai",model:MODEL});
