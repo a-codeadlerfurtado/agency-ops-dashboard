@@ -44,6 +44,26 @@ const dayKey=(v:unknown)=>{
   return map.year+"-"+map.month+"-"+map.day;
 };
 const pct=(n:number,d:number)=>d?Math.round((n/d)*100):0;
+const reviewLabel=(value:unknown)=>{
+  const key=String(value||"").toUpperCase();
+  const labels:Record<string,string>={
+    CLIENT_CALL:"Cliente",COMMERCIAL_PROSPECT:"Prospect",COMMERCIAL_SCHEDULING:"Agendamento comercial",
+    COMMERCIAL_PROSPECT_AUDIO_REJECTED:"Prospect · áudio insuficiente",INTERNAL_TEAM_CALL:"Equipe interna",
+    NON_COMMERCIAL_CALL:"Não comercial",NO_TRANSCRIPT:"Sem transcrição",UNUSABLE_AUDIO:"Áudio insuficiente",
+    REVIEWED_UNRESOLVED:"Identidade não confirmada",TEST_OR_INTERNAL_CALL:"Teste / interno",
+    TEST_OR_NOISY_CALL:"Teste / ruído"
+  };
+  return labels[key]||String(value||"");
+};
+const unidentifiedLabel=(row:Row)=>{
+  const key=String(row.review_classification||"").toUpperCase();
+  if(key==="NO_TRANSCRIPT")return "Contato não identificado · sem transcrição";
+  if(key==="UNUSABLE_AUDIO")return "Contato não identificado · áudio insuficiente";
+  if(key==="REVIEWED_UNRESOLVED")return "Contato não identificado · revisado";
+  if(key==="TEST_OR_NOISY_CALL")return "Chamada de teste / ruído";
+  if(key==="TEST_OR_INTERNAL_CALL")return "Chamada de teste / interna";
+  return "Contato não identificado";
+};
 function Empty({children}:{children:React.ReactNode}) {
   return <div className="sdr-empty">{children}</div>;
 }
@@ -179,29 +199,33 @@ function CallsView({data}:{data:Row}) {
     </div>
 
     <div className="sdr-list">{visible.map(row=><article className="sdr-item" key={row.id}>
-      <div className="sdr-item-top"><div><span>{text(row.channel,"Ligação")}</span><h3>{text(row.prospect_name||row.remote_name,"Contato não identificado")}</h3></div>
+      <div className="sdr-item-top"><div><span>{text(row.channel,"Ligação")}</span><h3>{text(row.prospect_name||row.remote_name,unidentifiedLabel(row))}</h3></div>
       <time>{dateTime(row.created_at)}</time></div>
       <div className="sdr-call-facts">
         <span><b>Outro número</b>{phone(row.remote_phone)}</span>
         <span><b>Duração</b>{duration(row.duration_seconds)}</span>
         <span><b>Status</b>{text(row.state)}</span>
+        {row.review_classification&&<span><b>Classificação</b>{reviewLabel(row.review_classification)}</span>}
       </div>
       <p>{text(row.transcript_summary||row.notes,"Sem resumo disponível ainda.")}</p>
       <footer><button className="sdr-detail-btn" type="button" onClick={()=>openDetail(row)} disabled={detailLoading}>Ver transcrição e gravação</button>
       {row.stage&&<b>Etapa: {text(row.stage)}</b>}
       {row.prospect_lead_id&&<b>Prospect no CRM</b>}
+      {row.review_reason&&<b title={String(row.review_reason)}>Revisado pelo backfill</b>}
       {row.next_step&&<b>Próximo passo: {row.next_step}{row.next_step_at?(" · "+dateTime(row.next_step_at)):""}</b>}</footer>
     </article>)}</div>{!visible.length&&<Empty>Nenhuma ligação encontrada com esses filtros.</Empty>}
     {detailError&&<div className="sdr-error">{detailError}</div>}
     {detail&&<div className="sdr-modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setDetail(null);}}>
       <section className="sdr-modal" role="dialog" aria-modal="true" aria-label="Detalhes da ligação">
-        <header><div><span>RELATO AI · LIGAÇÃO</span><h2>{text(detail.prospect_name||detail.remote_name||detail.contact_name,"Contato não identificado")}</h2></div><button type="button" onClick={()=>setDetail(null)}>Fechar</button></header>
+        <header><div><span>RELATO AI · LIGAÇÃO</span><h2>{text(detail.prospect_name||detail.remote_name||detail.contact_name,unidentifiedLabel(detail))}</h2></div><button type="button" onClick={()=>setDetail(null)}>Fechar</button></header>
         <div className="sdr-detail-grid">
           <article><span>Outro número</span><b>{phone(detail.remote_phone)}</b></article>
           <article><span>Duração</span><b>{duration(detail.duration_seconds)}</b></article>
           <article><span>Início</span><b>{dateTime(detail.started_at)}</b></article>
           <article><span>Status</span><b>{text(detail.state)}</b></article>
+          {detail.review_classification&&<article><span>Classificação</span><b>{reviewLabel(detail.review_classification)}</b></article>}
         </div>
+        {detail.review_reason&&<div className="sdr-note"><b>Revisão do histórico</b><span>{text(detail.review_reason)}</span></div>}
         <div className="sdr-detail-section"><h3>Gravação</h3>
           {Array.isArray(detail.audio)&&detail.audio.length>0?<div className="sdr-audio-list">{detail.audio.map((audio:Row)=>{
             const label=audio.role==="mixed"?"Gravação completa":audio.role==="remote"?"Outro lado":"Minha voz";
