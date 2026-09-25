@@ -447,9 +447,21 @@ Deno.serve(async (req) => {
       const ownerName = String(session.owner_person || "Colaborador").slice(0,160);
       const rawSegments = Array.isArray(body.segments) ? body.segments.slice(0, 20000) : [];
       const inferredName = inferProspectNameFromSegments(rawSegments as any[], ownerName);
-      const resolvedRemoteName = safeProspectName(session.metadata?.remote_name)
+      const whatsappName = safeProspectName(session.metadata?.name_evidence?.whatsapp?.name || session.metadata?.whatsapp_name);
+      const postCallName = safeProspectName(session.metadata?.name_evidence?.post_call?.name || session.metadata?.post_call_name);
+      const existingRemoteName = safeProspectName(session.metadata?.remote_name);
+      const resolvedRemoteName = whatsappName
+        || existingRemoteName
+        || postCallName
         || safeProspectName(contactName)
         || inferredName;
+      const resolvedNameSource = whatsappName
+        ? "WHATSAPP_NAME"
+        : existingRemoteName
+          ? (session.metadata?.identity_resolution?.source || session.metadata?.identity_source || "RELATO_AI")
+          : postCallName
+            ? "RELATO_POST_CALL"
+            : (inferredName ? "TRANSCRIPT_DIRECT_ADDRESS" : "RELATO_AI");
       const formatPhone = (value: string | null) => value ? `+${value}` : "";
       const localLabel = localPhone ? `${ownerName} · ${formatPhone(localPhone)}` : ownerName;
       const remoteBase = resolvedRemoteName || "Contato WhatsApp";
@@ -514,15 +526,21 @@ Deno.serve(async (req) => {
         phone: remotePhone,
         role: session.metadata?.remote_role || "PROSPECT",
         side: "EXTERNAL",
-        status: inferredName && !safeProspectName(session.metadata?.remote_name) ? "AUTO_TRANSCRIPT_NAME" : (session.metadata?.identity_resolution?.status || "AUTO_NAME"),
-        source: inferredName && !safeProspectName(session.metadata?.remote_name) ? "TRANSCRIPT_DIRECT_ADDRESS" : (session.metadata?.identity_resolution?.source || session.metadata?.identity_source || "RELATO_AI"),
-        confidence: inferredName && !safeProspectName(session.metadata?.remote_name) ? 0.86 : (session.metadata?.identity_resolution?.confidence || null),
+        status: inferredName && !whatsappName && !existingRemoteName && !postCallName ? "AUTO_TRANSCRIPT_NAME" : (session.metadata?.identity_resolution?.status || "AUTO_NAME"),
+        source: resolvedNameSource,
+        confidence: inferredName && !whatsappName && !existingRemoteName && !postCallName ? 0.86 : (session.metadata?.identity_resolution?.confidence || null),
       } : (session.metadata?.identity_resolution || null);
       const resolvedMetadata = {
         ...(session.metadata || {}),
         ...(resolvedRemoteName ? { remote_name: resolvedRemoteName } : {}),
         ...(identityResolution ? { identity_resolution: identityResolution } : {}),
-        ...(inferredName ? { transcript_inferred_name: inferredName } : {}),
+        ...(inferredName ? {
+          transcript_inferred_name: inferredName,
+          name_evidence: {
+            ...(session.metadata?.name_evidence || {}),
+            transcript: { name: inferredName, source: "TRANSCRIPT_DIRECT_ADDRESS", confidence: 0.86, observed_at: new Date().toISOString() },
+          },
+        } : {}),
         capture_mode: session.capture_mode,
         channel,
       };
@@ -1102,11 +1120,17 @@ Deno.serve(async (req) => {
           .filter((v: string) => !v.includes("+"));
         const uniqueParticipantNames = [...new Map(participantCandidates.map((v: string) => [normalizedNameKey(v), v])).values()];
         const remoteName = safeProspectName(
-          session?.metadata?.remote_name
-          || session?.metadata?.contact_name
+          session?.metadata?.name_evidence?.whatsapp?.name
+          || session?.metadata?.whatsapp_name
+          || transcriptRow?.metadata?.name_evidence?.whatsapp?.name
+          || transcriptRow?.metadata?.whatsapp_name
+          || session?.metadata?.post_call_name
+          || transcriptRow?.metadata?.post_call_name
+          || session?.metadata?.remote_name
           || transcriptRow?.metadata?.remote_name
-          || transcriptRow?.metadata?.contact_name
           || transcriptRow?.client_name_raw
+          || session?.metadata?.contact_name
+          || transcriptRow?.metadata?.contact_name
         ) || (uniqueParticipantNames.length === 1 ? uniqueParticipantNames[0] : null);
         const identityResolution = (session?.metadata?.identity_resolution || transcriptRow?.metadata?.identity_resolution || {}) as Record<string, unknown>;
         const identitySide = String(identityResolution.side || "").toUpperCase();
@@ -1327,6 +1351,10 @@ Deno.serve(async (req) => {
         const commercialProspect = leadId ? {
           lead_id: leadId,
           name: remoteName,
+          name_source: session?.metadata?.name_evidence?.whatsapp?.name || session?.metadata?.whatsapp_name ? "WHATSAPP"
+            : session?.metadata?.post_call_name ? "POST_CALL"
+            : transcriptRow?.metadata?.transcript_inferred_name ? "TRANSCRIPT"
+            : "CRM_OR_LEGACY",
           phone: remotePhone,
           sdr_person: transcriptRow?.owner_person || null,
           closer_person: "Vitor Feitoza",
