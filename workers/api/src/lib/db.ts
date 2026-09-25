@@ -16,6 +16,14 @@ export interface Env {
   AGENCY_BRIDGE_TOKEN?: string;
   AMBIENTE: string;
   SLA: Workflow;
+  FIREBASE_PROJECT_ID?: string;
+  FIREBASE_CLIENT_EMAIL?: string;
+  FIREBASE_PRIVATE_KEY?: string;
+  APNS_TEAM_ID?: string;
+  APNS_KEY_ID?: string;
+  APNS_PRIVATE_KEY?: string;
+  APNS_BUNDLE_ID?: string;
+  APNS_SANDBOX?: string;
 }
 
 export class ErroDeBanco extends Error {

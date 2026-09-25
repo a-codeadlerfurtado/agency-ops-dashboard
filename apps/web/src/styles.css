@@ -1659,3 +1659,49 @@ html, body { max-width: 100%; overflow-x: hidden; }
   .kcol { flex-basis: calc(100vw - 30px); }
   dialog.mdl.centro, dialog.mdl.lateral { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
 }
+
+.kcard-move { display: none; }
+
+@media (max-width: 860px) {
+  .kcard { cursor: pointer; }
+  .kcard-move {
+    display: block;
+    margin-top: 9px;
+    height: 38px;
+    min-height: 38px;
+    font-size: 14px;
+  }
+}
+
+.lead-mobile-list { display: none; }
+
+@media (max-width: 860px) {
+  .desktop-lead-table { display: none; }
+  .lead-mobile-list { display: grid; gap: 9px; padding: 10px; }
+  .lead-mobile-card {
+    border: 1px solid var(--line-soft);
+    border-radius: var(--r-md);
+    background: var(--panel-2);
+    padding: 12px;
+    cursor: pointer;
+    min-width: 0;
+  }
+  .lead-mobile-card:active { transform: scale(.995); background: var(--surface-raised); }
+  .lead-mobile-meta {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 11.5px;
+  }
+  .lead-mobile-owner {
+    gap: 7px;
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--line-soft);
+    color: var(--muted);
+    font-size: 12px;
+  }
+}

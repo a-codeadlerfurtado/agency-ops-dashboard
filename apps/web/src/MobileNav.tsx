@@ -1,7 +1,6 @@
 import type { Sessao } from "./lib/types";
 import { impactoLeve } from "./lib/native";
 import { Ico } from "./ui";
-import { irPara } from "./App";
 
 export default function MobileNav({
   sessao, rota, aoAbrirMais,
@@ -32,7 +31,7 @@ export default function MobileNav({
             aria-current={ativo ? "page" : undefined}
             onClick={() => {
               void impactoLeve();
-              irPara(item.rota);
+              location.hash = item.rota;
             }}
           >
             {item.icone()}

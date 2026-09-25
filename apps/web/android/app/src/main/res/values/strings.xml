@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ImobiBoard</string>
+    <string name="title_activity_main">ImobiBoard</string>
+    <string name="package_name">com.imobiboard.crm</string>
+    <string name="custom_url_scheme">com.imobiboard.crm</string>
+</resources>

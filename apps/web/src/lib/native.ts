@@ -1,9 +1,11 @@
 import { Capacitor } from "@capacitor/core";
 import { App as NativeApp } from "@capacitor/app";
+import { AppLauncher } from "@capacitor/app-launcher";
 import { Browser } from "@capacitor/browser";
 import { Camera, CameraResultType, CameraSource } from "@capacitor/camera";
 import { Haptics, ImpactStyle } from "@capacitor/haptics";
 import { Network } from "@capacitor/network";
+import { Keyboard, KeyboardResize } from "@capacitor/keyboard";
 import { Preferences } from "@capacitor/preferences";
 import { PushNotifications, type Token } from "@capacitor/push-notifications";
 import { Share } from "@capacitor/share";
@@ -43,12 +45,14 @@ export async function iniciarCamadaNativa() {
   document.documentElement.dataset.native = Capacitor.getPlatform();
 
   try {
-    await StatusBar.setStyle({ style: Style.Dark });
+    await StatusBar.setStyle({ style: Style.Light });
     if (Capacitor.getPlatform() === "android") {
       await StatusBar.setBackgroundColor({ color: "#030b14" });
+    } else if (Capacitor.getPlatform() === "ios") {
+      await Keyboard.setResizeMode({ mode: KeyboardResize.Body });
     }
   } catch {
-    // Alguns previews web nao implementam StatusBar.
+    // Alguns previews web nao implementam plugins nativos.
   }
 
   await NativeApp.addListener("appUrlOpen", ({ url }) => {
@@ -67,6 +71,17 @@ export async function abrirWhatsapp(url: string) {
   if (!ehNativo()) {
     window.open(url, "_blank", "noopener,noreferrer");
     return;
+  }
+
+  try {
+    const u = new URL(url);
+    const telefone = u.pathname.replace(/\D/g, "");
+    const texto = u.searchParams.get("text");
+    const esquema = `whatsapp://send?phone=${telefone}${texto ? `&text=${encodeURIComponent(texto)}` : ""}`;
+    const abriu = await AppLauncher.openUrl({ url: esquema });
+    if (abriu.completed) return;
+  } catch {
+    // Se o WhatsApp nao estiver instalado, cai no link web oficial abaixo.
   }
   await Browser.open({ url });
 }
@@ -157,22 +172,31 @@ export async function observarRede(cb: (conectado: boolean) => void) {
 let pushInicializadoPara: string | null = null;
 
 async function salvarPushToken(token: Token, sessao: Sessao) {
+  const info = await NativeApp.getInfo().catch(() => null);
   const { error } = await supabase.rpc("registrar_dispositivo_mobile", {
     p_token: token.value,
     p_plataforma: Capacitor.getPlatform(),
     p_tenant: sessao.tenant.id,
+    p_app_version: info?.version ?? null,
+    p_device_label: null,
   });
   if (error) {
     console.warn("push.registration_failed", { code: error.code });
   }
 }
 
-export async function registrarPush(sessao: Sessao) {
-  if (!ehNativo() || pushInicializadoPara === sessao.userId) return;
-  pushInicializadoPara = sessao.userId;
+async function iniciarRegistroPush(sessao: Sessao, solicitarPermissao: boolean) {
+  // A conta Master recebe memberships internas em todos os tenants. Ela nao
+  // deve virar assinante de push de clientes so por entrar em modo suporte.
+  if (!ehNativo() || sessao.modoMestre) return false;
 
-  const permissao = await PushNotifications.requestPermissions();
-  if (permissao.receive !== "granted") return;
+  const permissao = solicitarPermissao
+    ? await PushNotifications.requestPermissions()
+    : await PushNotifications.checkPermissions();
+  if (permissao.receive !== "granted") return false;
+
+  const chave = sessao.userId + ":" + sessao.tenant.id;
+  if (pushInicializadoPara === chave) return true;
 
   await PushNotifications.addListener("registration", (token) => {
     void salvarPushToken(token, sessao);
@@ -181,4 +205,16 @@ export async function registrarPush(sessao: Sessao) {
     console.warn("push.registration_error", { message: String(erro.error ?? "unknown") });
   });
   await PushNotifications.register();
+  pushInicializadoPara = chave;
+  return true;
+}
+
+/** Restaura push ja autorizado sem abrir prompt durante o login. */
+export async function registrarPush(sessao: Sessao) {
+  return iniciarRegistroPush(sessao, false);
+}
+
+/** Deve ser chamado somente apos acao explicita do usuario. */
+export async function ativarPush(sessao: Sessao) {
+  return iniciarRegistroPush(sessao, true);
 }

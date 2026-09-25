@@ -2,6 +2,7 @@ import { rpc, sha256Hex, ErroDeBanco, type Env } from "../lib/db";
 import { anotarErro, avisosDeLead, buscarLead, tokenDaPagina } from "./meta";
 import { fonteDaPagina } from "./meta-oauth";
 import type { ParametrosSla } from "../sla-workflow";
+import { enviarPushNovoLead } from "../lib/push";
 
 export interface LeadNormalizado {
   nome: string;
@@ -347,6 +348,20 @@ async function salvarLead(
       console.error(JSON.stringify({
         evento: "sla.workflow_nao_criado",
         assignment_id: r.assignment_id,
+        erro: e instanceof Error ? e.message : String(e),
+      }));
+    }
+  }
+
+  if (!r.duplicado) {
+    // Push e efeito colateral: nunca transforma um lead ja salvo em erro de
+    // ingestao. Sem dispositivos cadastrados nao faz chamada externa.
+    try {
+      await enviarPushNovoLead(env, r.opportunity_id);
+    } catch (e) {
+      console.warn(JSON.stringify({
+        evento: "push.novo_lead_nao_enviado",
+        opportunity_id: r.opportunity_id,
         erro: e instanceof Error ? e.message : String(e),
       }));
     }

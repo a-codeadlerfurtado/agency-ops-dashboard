@@ -6,6 +6,7 @@ import {
   moverEtapa, oportunidade, registrarAtividade,
 } from "../lib/queries";
 import { mensagemDeErro } from "../lib/supabase";
+import { abrirWhatsapp, compartilharLead, impactoLeve } from "../lib/native";
 import {
   Alerta, Avatar, BotaoAcao, Card, EtapaBadge, Ico, Skeleton, useAsync, useToast,
 } from "../ui";
@@ -78,6 +79,7 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
     setSalvando(true);
     try {
       await moverEtapa(oppId, etapaId, nota);
+      await impactoLeve();
       avisar("ok", `Movido para ${alvo?.name}.`);
       dados.recarregar();
     } catch (e) {
@@ -96,10 +98,19 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
           {Ico.back({ size: 15 })} Leads
         </button>
         <span className="spacer" />
+        <button
+          className="btn ghost sm"
+          onClick={() => void compartilharLead(
+            opp.contact?.full_name ?? "Lead ImobiBoard",
+            location.href
+          )}
+        >
+          {Ico.arrow({ size: 15 })} Compartilhar
+        </button>
         {wa && (
-          <a className="btn" href={wa} target="_blank" rel="noopener noreferrer">
+          <button className="btn" onClick={() => void abrirWhatsapp(wa)}>
             {Ico.whats({ size: 15 })} Abrir no WhatsApp
-          </a>
+          </button>
         )}
       </div>
 

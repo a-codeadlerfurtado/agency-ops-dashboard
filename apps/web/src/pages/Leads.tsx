@@ -242,8 +242,56 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
               )}
             />
           ) : (
-            <div className="table-wrap">
-              <table className="tbl">
+            <div className="lead-results">
+              <div className="lead-mobile-list">
+                {itens.map((o) => {
+                  const etapa = etapaPorId.get(o.stage_id);
+                  const produto = o.development?.name ?? o.property?.title ?? "Sem produto";
+                  return (
+                    <article
+                      key={o.id}
+                      className="lead-mobile-card"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => irPara(`/leads/${o.id}`)}
+                      onKeyDown={(e) => { if (e.key === "Enter") irPara(`/leads/${o.id}`); }}
+                    >
+                      <div className="row" style={{ alignItems: "flex-start", gap: 10 }}>
+                        <Avatar nome={o.contact?.full_name} />
+                        <div className="col" style={{ minWidth: 0, flex: 1, gap: 3 }}>
+                          <strong className="truncate">{o.contact?.full_name ?? "Sem nome"}</strong>
+                          <span className="hint">{o.contact?.phone ?? o.contact?.email ?? "Sem contato"}</span>
+                        </div>
+                        {etapa && <EtapaBadge kind={etapa.kind} nome={etapa.name} />}
+                      </div>
+                      <div className="lead-mobile-meta">
+                        <span className="badge">{rotuloOrigem(o.source)}</span>
+                        <span className="truncate">{produto}</span>
+                        <span>{relativo(o.last_interaction_at)}</span>
+                      </div>
+                      {sessao.isAdmin && (
+                        <div className="row lead-mobile-owner">
+                          <Avatar nome={o.assigned_user_id ? nomePorId.get(o.assigned_user_id) : null} />
+                          <span className="truncate">
+                            {o.assigned_user_id ? nomePorId.get(o.assigned_user_id) ?? "--" : "Na fila"}
+                          </span>
+                          <span className="spacer" />
+                          <button
+                            type="button"
+                            className="btn ghost sm"
+                            aria-label={`Excluir ${o.contact?.full_name ?? "lead"}`}
+                            onClick={(e) => { e.stopPropagation(); setParaExcluir(o); }}
+                          >
+                            {Ico.lixeira({ size: 15 })}
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+              <div className="table-wrap desktop-lead-table">
+                <table className="tbl">
                 <thead>
                   <tr>
                     <th>Nome</th>
@@ -328,7 +376,8 @@ export default function Leads({ sessao }: { sessao: Sessao }) {
                     );
                   })}
                 </tbody>
-              </table>
+                </table>
+              </div>
             </div>
           )}
         </div>

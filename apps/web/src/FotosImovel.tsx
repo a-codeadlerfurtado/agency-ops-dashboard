@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { supabase, mensagemDeErro } from "./lib/supabase";
+import { escolherImagemDaCamera, ehNativo, impactoLeve } from "./lib/native";
 import { Ico, Skeleton, useAsync, useToast } from "./ui";
 
 const BUCKET = "imobi-board-imoveis";
@@ -52,7 +53,7 @@ export default function FotosImovel({
   const [enviando, setEnviando] = useState(false);
   const lista = useAsync(() => listar(tenantId, propertyId), [tenantId, propertyId]);
 
-  async function enviar(arquivos: FileList | null) {
+  async function enviar(arquivos: FileList | File[] | null) {
     if (!arquivos?.length) return;
     setEnviando(true);
     try {
@@ -76,6 +77,7 @@ export default function FotosImovel({
           throw eReg;
         }
       }
+      await impactoLeve();
       avisar("ok", arquivos.length > 1 ? "Fotos enviadas." : "Foto enviada.");
       lista.recarregar();
     } catch (e) {
@@ -83,6 +85,22 @@ export default function FotosImovel({
     } finally {
       setEnviando(false);
       if (input.current) input.current.value = "";
+    }
+  }
+
+  async function fotografar() {
+    try {
+      const uri = await escolherImagemDaCamera();
+      if (!uri) return;
+      const resposta = await fetch(uri);
+      const blob = await resposta.blob();
+      const ext = blob.type === "image/png" ? "png" : blob.type === "image/webp" ? "webp" : "jpg";
+      const arquivo = new File([blob], `camera-${Date.now()}.${ext}`, {
+        type: blob.type || "image/jpeg",
+      });
+      await enviar([arquivo]);
+    } catch (e) {
+      avisar("err", e instanceof Error ? e.message : "Nao foi possivel abrir a camera.");
     }
   }
 
@@ -150,6 +168,12 @@ export default function FotosImovel({
                   onClick={() => input.current?.click()}>
             {Ico.plus({ size: 14 })} {enviando ? "Enviando..." : "Adicionar fotos"}
           </button>
+          {ehNativo() && (
+            <button type="button" className="btn sm" disabled={enviando}
+                    style={{ marginLeft: 8 }} onClick={() => void fotografar()}>
+              {Ico.plus({ size: 14 })} Tirar foto
+            </button>
+          )}
           <span className="hint" style={{ marginLeft: 10 }}>
             JPG, PNG, WebP ou AVIF ate 8 MB.
           </span>

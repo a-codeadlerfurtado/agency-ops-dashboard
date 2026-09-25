@@ -7,6 +7,7 @@ import {
   excluirEtapaPipeline, moverEtapa, moverEtapaPipeline, oportunidadesDoQuadro,
 } from "../lib/queries";
 import { mensagemDeErro } from "../lib/supabase";
+import { impactoLeve } from "../lib/native";
 import { useFlip } from "../lib/flip";
 import {
   Alerta, Avatar, CabecalhoDaPagina, Ico, Skeleton, useAsync, useToast, Vazio,
@@ -107,12 +108,7 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
     }
   }
 
-  async function soltar(etapaId: string) {
-    const id = arrastando;
-    setArrastando(null);
-    setColunaAtiva(null);
-    if (!id) return;
-
+  async function moverCard(id: string, etapaId: string) {
     const opp = opps.find((o) => o.id === id);
     if (!opp || etapaDe(opp) === etapaId) return;
 
@@ -125,16 +121,24 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
     }
 
     const anterior = etapaDe(opp);
-    capturar();                       // mede onde o card esta AGORA
+    capturar();
     setAjuste((a) => ({ ...a, [id]: etapaId }));
     try {
       await moverEtapa(id, etapaId, nota);
+      await impactoLeve();
       avisar("ok", `Movido para ${alvo?.name}.`);
     } catch (e) {
-      capturar();                                   // o card volta animando tambem
-      setAjuste((a) => ({ ...a, [id]: anterior }));  // desfaz o otimismo
+      capturar();
+      setAjuste((a) => ({ ...a, [id]: anterior }));
       avisar("err", mensagemDeErro(e));
     }
+  }
+
+  async function soltar(etapaId: string) {
+    const id = arrastando;
+    setArrastando(null);
+    setColunaAtiva(null);
+    if (id) await moverCard(id, etapaId);
   }
 
   // o cabecalho diz quantas existem, nao quantas couberam na tela
@@ -206,6 +210,9 @@ export default function Pipeline({ sessao }: { sessao: Sessao }) {
                       corretor={o.assigned_user_id ? nomePorId.get(o.assigned_user_id) : null}
                       mostrarCorretor={sessao.isAdmin}
                       arrastando={arrastando === o.id}
+                      etapas={colunas}
+                      etapaAtual={etapaDe(o)}
+                      aoMover={(etapaId) => void moverCard(o.id, etapaId)}
                       aoArrastar={() => setArrastando(o.id)}
                       aoSoltar={() => setArrastando(null)}
                     />
@@ -375,10 +382,11 @@ function EditorPipeline({
 }
 
 function CardLead({
-  o, corretor, mostrarCorretor, arrastando, aoArrastar, aoSoltar,
+  o, corretor, mostrarCorretor, arrastando, etapas, etapaAtual, aoMover, aoArrastar, aoSoltar,
 }: {
   o: Opportunity; corretor: string | null | undefined; mostrarCorretor: boolean;
-  arrastando: boolean; aoArrastar: () => void; aoSoltar: () => void;
+  arrastando: boolean; etapas: Stage[]; etapaAtual: string;
+  aoMover: (etapaId: string) => void; aoArrastar: () => void; aoSoltar: () => void;
 }) {
   const frio = Date.now() - new Date(o.last_interaction_at).getTime() > 30 * 86_400_000;
 
@@ -404,6 +412,18 @@ function CardLead({
         <span className="spacer" />
         {mostrarCorretor && <Avatar nome={corretor} />}
       </div>
+      <select
+        className="select kcard-move"
+        value={etapaAtual}
+        aria-label={"Mover " + (o.contact?.full_name ?? "lead") + " de etapa"}
+        onClick={(e) => e.stopPropagation()}
+        onChange={(e) => {
+          e.stopPropagation();
+          aoMover(e.target.value);
+        }}
+      >
+        {etapas.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+      </select>
     </article>
   );
 }

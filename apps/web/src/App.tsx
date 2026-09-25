@@ -27,6 +27,7 @@ import Integracoes from "./pages/Integracoes";
 import Topbar from "./Topbar";
 import MobileNav from "./MobileNav";
 import MobileSecurityControl from "./MobileSecurityControl";
+import MobileAppLock from "./MobileAppLock";
 import { registrarPush } from "./lib/native";
 
 /* Router por hash: sem dependencia, sem servidor de rotas, funciona em
@@ -133,7 +134,11 @@ function Shell({
   const [menuAberto, setMenuAberto] = useState(false);
 
   useEffect(() => { setMenuAberto(false); }, [rota]);
-  useEffect(() => { void registrarPush(sessao); }, [sessao.userId, sessao.tenant.id]);
+  useEffect(() => {
+    void registrarPush(sessao).catch((e) => {
+      console.warn("push.init_failed", { message: e instanceof Error ? e.message : "unknown" });
+    });
+  }, [sessao.userId, sessao.tenant.id, sessao.modoMestre]);
 
   const partes = rota.split("/").filter(Boolean);
   const leadId = partes[0] === "leads" && partes[1] ? partes[1] : null;
@@ -222,7 +227,7 @@ function Shell({
         <Nav sessao={sessao} rota={rota} aoNavegar={() => setMenuAberto(false)} />
 
         <div className="sidebar-foot">
-          <MobileSecurityControl />
+          <MobileSecurityControl sessao={sessao} />
           <div className="row" style={{ padding: "6px 4px" }}>
             <Avatar nome={sessao.nome} />
             <div className="col" style={{ minWidth: 0, gap: 0 }}>
@@ -389,12 +394,14 @@ export default function App() {
 
   if (estado.fase === "operador") {
     return (
-      <ConsoleDaOperacao
-        sair={sair}
-        email={estado.email}
-        isMaster={estado.isMaster}
-        entrarComoMestre={entrarComoMestre}
-      />
+      <MobileAppLock>
+        <ConsoleDaOperacao
+          sair={sair}
+          email={estado.email}
+          isMaster={estado.isMaster}
+          entrarComoMestre={entrarComoMestre}
+        />
+      </MobileAppLock>
     );
   }
 
@@ -419,12 +426,14 @@ export default function App() {
   }
 
   return (
-    <Shell
-      sessao={estado.sessao}
-      sair={sair}
-      entrarComoMestre={entrarComoMestre}
-      voltarAoMestre={voltarAoMestre}
-    />
+    <MobileAppLock>
+      <Shell
+        sessao={estado.sessao}
+        sair={sair}
+        entrarComoMestre={entrarComoMestre}
+        voltarAoMestre={voltarAoMestre}
+      />
+    </MobileAppLock>
   );
 }
 

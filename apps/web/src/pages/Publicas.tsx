@@ -16,7 +16,7 @@ import { ImobiBoardMark } from "../Marca";
 /* Trocar aqui muda nas duas páginas. */
 const CONTATO = "leonardoimobiia@gmail.com";
 const EMPRESA = "Leonardo Imobi / LAK Assessoria Digital";
-const ATUALIZADO = "4 de setembro de 2026";
+const ATUALIZADO = "25 de setembro de 2026";
 
 function Casca({ titulo, children }: { titulo: string; children: React.ReactNode }) {
   return (
@@ -76,7 +76,10 @@ export function Privacidade() {
         <li>as <b>demais respostas do formulário</b> criado pela imobiliária;</li>
         <li>identificadores da <b>campanha, conjunto de anúncios e anúncio</b> de origem, e o
           identificador do lead na Meta, usados para saber de onde o contato veio;</li>
-        <li>a <b>data e a hora</b> do envio.</li>
+        <li>a <b>data e a hora</b> do envio;</li>
+        <li>para usuários do aplicativo móvel, <b>plataforma, identificador de push
+          do aparelho e vínculo com a conta/tenant</b>, usados somente para entregar
+          notificações autorizadas. O ImobiBoard não recebe o dado biométrico do aparelho.</li>
       </ul>
       <p>
         Recebemos também dados enviados diretamente pela imobiliária ou pelo
@@ -164,8 +167,8 @@ export function Privacidade() {
       <ul>
         <li>o acesso exige autenticação, e cada imobiliária só alcança os próprios
           registros — a regra é aplicada no banco de dados;</li>
-        <li>credenciais de integração são guardadas apenas como resumo criptográfico,
-          nunca em texto;</li>
+        <li>credenciais e segredos de integração ficam em componentes server-side com
+          acesso restrito e não são incluídos no bundle do aplicativo;</li>
         <li>fotos de imóveis ficam em armazenamento privado, acessíveis por link
           temporário e assinado;</li>
         <li>todo o tráfego é cifrado em trânsito.</li>
