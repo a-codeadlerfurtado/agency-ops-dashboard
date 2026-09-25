@@ -64,6 +64,10 @@ const unidentifiedLabel=(row:Row)=>{
   if(key==="TEST_OR_INTERNAL_CALL")return "Chamada de teste / interna";
   return "Contato não identificado";
 };
+const nameSourceLabel=(value:unknown)=>{
+  const key=String(value||"").toUpperCase();
+  return ({WHATSAPP:"WhatsApp",CRM:"CRM",POST_CALL:"Pós-call do SDR",TRANSCRIPT:"Transcrição",LEGACY:"Histórico"} as Record<string,string>)[key]||"";
+};
 function Empty({children}:{children:React.ReactNode}) {
   return <div className="sdr-empty">{children}</div>;
 }
@@ -86,7 +90,7 @@ function CallsView({data}:{data:Row}) {
 
   const visible=useMemo(()=>calls.filter(row=>{
     const q=norm(query);
-    if(q&&!norm(String(row.prospect_name||"")+" "+String(row.remote_name||"")+" "+String(row.remote_phone||"")+" "+String(row.notes||"")+" "+String(row.stage||"")).includes(q))return false;
+    if(q&&!norm(String(row.prospect_name||"")+" "+String(row.whatsapp_name||"")+" "+String(row.post_call_name||"")+" "+String(row.crm_name||"")+" "+String(row.auto_identified_name||"")+" "+String(row.remote_name||"")+" "+String(row.remote_phone||"")+" "+String(row.notes||"")+" "+String(row.stage||"")).includes(q))return false;
 
     const when=Date.parse(String(row.created_at||""));
     if(period==="today"&&dayKey(row.created_at)!==dayKey(new Date()))return false;
@@ -209,6 +213,7 @@ function CallsView({data}:{data:Row}) {
       </div>
       <p>{text(row.transcript_summary||row.notes,"Sem resumo disponível ainda.")}</p>
       <footer><button className="sdr-detail-btn" type="button" onClick={()=>openDetail(row)} disabled={detailLoading}>Ver transcrição e gravação</button>
+      {row.prospect_name_source&&<b>Nome: {nameSourceLabel(row.prospect_name_source)}</b>}
       {row.stage&&<b>Etapa: {text(row.stage)}</b>}
       {row.prospect_lead_id&&<b>Prospect no CRM</b>}
       {row.review_reason&&<b title={String(row.review_reason)}>Revisado pelo backfill</b>}
@@ -223,6 +228,11 @@ function CallsView({data}:{data:Row}) {
           <article><span>Duração</span><b>{duration(detail.duration_seconds)}</b></article>
           <article><span>Início</span><b>{dateTime(detail.started_at)}</b></article>
           <article><span>Status</span><b>{text(detail.state)}</b></article>
+          {detail.prospect_name_source&&<article><span>Nome exibido</span><b>{text(detail.prospect_name)} · {nameSourceLabel(detail.prospect_name_source)}</b></article>}
+          {detail.whatsapp_name&&<article><span>Nome do WhatsApp</span><b>{text(detail.whatsapp_name)}</b></article>}
+          {detail.post_call_name&&<article><span>Nome informado no pós-call</span><b>{text(detail.post_call_name)}</b></article>}
+          {detail.crm_name&&<article><span>Nome no CRM</span><b>{text(detail.crm_name)}</b></article>}
+          {detail.auto_identified_name&&<article><span>Nome inferido da transcrição</span><b>{text(detail.auto_identified_name)}</b></article>}
           {detail.review_classification&&<article><span>Classificação</span><b>{reviewLabel(detail.review_classification)}</b></article>}
         </div>
         {detail.review_reason&&<div className="sdr-note"><b>Revisão do histórico</b><span>{text(detail.review_reason)}</span></div>}
