@@ -162,23 +162,52 @@ function isWhatsappIdentitySource(value: unknown) {
 async function resolveUniquePhoneByExactWhatsappName(ops: any, value: unknown) {
   const name = safeContactName(value);
   if (!name) return null;
-  const [{ data: team }, { data: participants }] = await Promise.all([
-    ops.from("whatsapp_team_identities")
+
+  const loadCandidates = async (mode: "exact" | "prefix") => {
+    const first = name.trim().split(/\s+/)[0];
+    const teamQuery = ops.from("whatsapp_team_identities")
       .select("identity_value,canonical_name,role")
-      .eq("identity_type","PHONE").eq("active",true).eq("canonical_name",name).limit(10),
-    ops.from("whatsapp_participant_identity")
+      .eq("identity_type","PHONE").eq("active",true);
+    const participantQuery = ops.from("whatsapp_participant_identity")
       .select("phone,canonical_name,role_hint,source,confidence,last_seen_at")
-      .eq("canonical_name",name).not("phone","is",null)
-      .order("confidence",{ascending:false}).order("last_seen_at",{ascending:false}).limit(20)
-  ]);
-  const candidates = [
-    ...(team||[]).map((row:Row)=>({phone:normalizePhone(row.identity_value),name:row.canonical_name,role:row.role,source:"TEAM_REGISTRY"})),
-    ...(participants||[]).map((row:Row)=>({phone:normalizePhone(row.phone),name:row.canonical_name,role:row.role_hint,source:row.source||"PARTICIPANT_IDENTITY"}))
-  ].filter((row:Row)=>row.phone);
+      .not("phone","is",null);
+
+    const [{ data: team }, { data: participants }] = await Promise.all([
+      mode === "exact"
+        ? teamQuery.eq("canonical_name",name).limit(10)
+        : teamQuery.ilike("canonical_name", first + "%").limit(30),
+      mode === "exact"
+        ? participantQuery.eq("canonical_name",name)
+            .order("confidence",{ascending:false}).order("last_seen_at",{ascending:false}).limit(20)
+        : participantQuery.ilike("canonical_name", first + "%").gte("confidence",0.9)
+            .order("confidence",{ascending:false}).order("last_seen_at",{ascending:false}).limit(40)
+    ]);
+
+    return [
+      ...(team||[]).map((row:Row)=>({phone:normalizePhone(row.identity_value),name:row.canonical_name,role:row.role,source:"TEAM_REGISTRY"})),
+      ...(participants||[]).map((row:Row)=>({phone:normalizePhone(row.phone),name:row.canonical_name,role:row.role_hint,source:row.source||"PARTICIPANT_IDENTITY"}))
+    ].filter((row:Row)=>row.phone);
+  };
+
+  let candidates = await loadCandidates("exact");
+  if (!candidates.length) {
+    const wanted = personNameKey(name);
+    const first = wanted.split(" ")[0] || "";
+    if (first.length < 4) return null;
+    const prefixCandidates = await loadCandidates("prefix");
+    candidates = prefixCandidates.filter((row:Row)=>{
+      const candidate = personNameKey(row.name);
+      if (!candidate) return false;
+      return candidate === wanted
+        || candidate.startsWith(wanted + " ")
+        || wanted.startsWith(candidate + " ");
+    });
+  }
+
   const phones=[...new Set(candidates.map((row:Row)=>String(row.phone)))];
   if(phones.length!==1)return null;
   const best=candidates.find((row:Row)=>String(row.phone)===phones[0])||candidates[0];
-  return {phone:phones[0],name:safeContactName(best?.name)||name,role:best?.role||null,source:best?.source||"NAME_EXACT_MATCH"};
+  return {phone:phones[0],name:safeContactName(best?.name)||name,role:best?.role||null,source:best?.source||"NAME_UNIQUE_MATCH"};
 }
 function personNameKey(value: unknown) {
   return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
