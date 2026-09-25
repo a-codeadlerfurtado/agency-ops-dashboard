@@ -319,7 +319,7 @@ export default function SdrProfileShell() {
       {error&&<div className="sdr-error">{error}</div>}
       {data.agent?.update_required&&<div className="sdr-update-required">
         <div><b>Atualização obrigatória do Relato Desktop</b>
-        <span>Seu agente atual é {text(data.agent?.current_version,"versão antiga")}. Instale {text(data.agent?.required_version,"desktop-0.4.7")} para capturar nome/telefone do prospect corretamente.</span></div>
+        <span>Seu agente atual é {text(data.agent?.current_version,"versão antiga")}. Instale {text(data.agent?.required_version,"desktop-0.4.8")} para capturar nome/telefone do prospect corretamente.</span></div>
         <a href={String(data.agent?.release_url||"#")} target="_blank" rel="noreferrer">Baixar atualização</a>
       </div>}
       <section className="sdr-content">
