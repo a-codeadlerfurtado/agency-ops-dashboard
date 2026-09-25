@@ -146,7 +146,11 @@ async function clientSummary(ops: any, clientId: string | null) {
 const GENERIC_CONTACT_NAMES = new Set(["contato","contato whatsapp","contato whatsapp desktop","whatsapp","participante","prospect"]);
 function safeContactName(value: unknown) {
   const name = clean(value, 160);
-  return name && !GENERIC_CONTACT_NAMES.has(name.toLowerCase()) && !/@(?:lid|c\.us)$/i.test(name) ? name : null;
+  if (!name || GENERIC_CONTACT_NAMES.has(name.toLowerCase()) || /@(?:lid|c\.us)$/i.test(name)) return null;
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(name)) return null;
+  const letters = name.match(/\p{L}/gu)?.length || 0;
+  if (letters < 2) return null;
+  return name;
 }
 function isWhatsappIdentitySource(value: unknown) {
   const source = clean(value, 120).toUpperCase();
@@ -164,15 +168,17 @@ async function bestWhatsappName(ops: any, phoneValue: string) {
   if (!phone) return { name: null, role: null, source: null };
 
   const { data: identities } = await ops.from("whatsapp_participant_identity")
-    .select("canonical_name,role_hint,confidence,last_seen_at")
+    .select("canonical_name,role_hint,confidence,last_seen_at,source")
     .eq("phone", phone)
     .not("canonical_name", "is", null)
     .order("confidence", { ascending: false })
     .order("last_seen_at", { ascending: false })
     .limit(8);
   for (const row of identities || []) {
+    const source = clean(row?.source, 120).toUpperCase();
+    if (source.startsWith("RELATO_")) continue;
     const name = safeContactName(row?.canonical_name);
-    if (name) return { name, role: clean(row.role_hint, 80) || null, source: "PARTICIPANT_IDENTITY" };
+    if (name) return { name, role: clean(row.role_hint, 80) || null, source: source || "PARTICIPANT_IDENTITY" };
   }
 
   const { data: synced } = await ops.from("whatsapp_contact_identity_sync_state")
