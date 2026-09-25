@@ -13,6 +13,14 @@ internal sealed record WhatsAppDesktopUiIdentity(
 
 internal static class WhatsAppDesktopUiIdentityResolver
 {
+    private sealed record UiRect(double Left, double Top, double Width, double Height)
+    {
+        public double Right => Left + Width;
+        public double Bottom => Top + Height;
+        public bool Valid => Width > 20 && Height > 20;
+    }
+
+    private sealed record NamedElement(dynamic Element, string Name, UiRect? Rect, int ControlType);
     private sealed record Candidate(int Score, string? Name, string? Phone, string Evidence);
 
     private static readonly Regex PhoneRegex = new(
@@ -23,13 +31,15 @@ internal static class WhatsAppDesktopUiIdentityResolver
     [
         new(@"(?:chamada|liga[cç][aã]o|voice call|video call|call)\s+(?:de\s+(?:voz|v[ií]deo)\s+)?(?:com|with)\s+(.{2,80})$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
         new(@"^(.{2,80})\s*[–—-]\s*(?:chamada|liga[cç][aã]o|voice call|video call|call)", RegexOptions.Compiled | RegexOptions.IgnoreCase),
+        new(@"(?:ligando\s+para|calling)\s+(.{2,80})$", RegexOptions.Compiled | RegexOptions.IgnoreCase),
     ];
 
     private static readonly string[] CallAnchorTerms =
     [
         "desligar", "encerrar", "finalizar chamada", "end call", "hang up",
         "silenciar", "mute", "microfone", "microphone",
-        "câmera", "camera", "vídeo", "video", "alto-falante", "speaker"
+        "câmera", "camera", "vídeo", "video", "alto-falante", "speaker",
+        "adicionar participante", "add participant"
     ];
 
     private static readonly HashSet<string> GenericNames = new(StringComparer.OrdinalIgnoreCase)
@@ -41,11 +51,13 @@ internal static class WhatsAppDesktopUiIdentityResolver
         "desligar", "encerrar", "end call", "atender", "recusar", "speaker", "alto-falante",
         "mais", "more", "voltar", "back", "status", "comunidades", "communities",
         "nova conversa", "new chat", "configurações", "settings", "perfil", "profile",
-        "adicionar participante", "add participant", "minimizar", "maximize", "maximizar"
+        "adicionar participante", "add participant", "minimizar", "maximize", "maximizar",
+        "online", "digitando", "digitando…", "typing", "typing…", "gravar", "record",
+        "todos", "não lidas", "nao lidas", "favoritos", "grupos", "arquivadas", "archived"
     };
 
-    // Uses the native Windows UI Automation COM API through late binding.
-    // This keeps the agent dependency-free while reading the actual WhatsApp Desktop/WebView2 accessibility tree.
+    // Reads the actual WhatsApp Desktop/WebView2 accessibility tree.
+    // It is called only while Windows confirms an active WhatsApp call.
     public static WhatsAppDesktopUiIdentity? Resolve(string? knownLocalPhone, string? localOwnerName = null)
     {
         object? automationObject = null;
@@ -77,74 +89,117 @@ internal static class WhatsAppDesktopUiIdentityResolver
                 }
                 catch { continue; }
 
-                var windowNames = ReadNamedElements(window, trueCondition, 2500);
+                var windowRect = TryRect(window);
+                var windowNames = ReadNamedElements(window, trueCondition, 3000);
                 if (windowNames.Count == 0) continue;
+
+                var rootName = Clean(SafeCurrentName(window));
+                if (!string.IsNullOrWhiteSpace(rootName))
+                {
+                    var explicitRoot = ExtractExplicitContactName(rootName, localOwnerName);
+                    if (explicitRoot is not null)
+                        candidates.Add(new Candidate(320, explicitRoot, PhoneFromText(rootName, knownLocalPhone), "window-explicit:" + rootName));
+                    else
+                    {
+                        var rootPhone = PhoneFromText(rootName, knownLocalPhone);
+                        var rootPerson = PersonLikeName(rootName, localOwnerName);
+                        if (rootPhone is not null) candidates.Add(new Candidate(245, rootPerson, rootPhone, "window-phone:" + rootName));
+                        else if (rootPerson is not null && !rootName.Equals("WhatsApp", StringComparison.OrdinalIgnoreCase))
+                            candidates.Add(new Candidate(205, rootPerson, null, "window-name:" + rootName));
+                    }
+                }
 
                 foreach (var node in windowNames)
                 {
                     var explicitName = ExtractExplicitContactName(node.Name, localOwnerName);
                     if (explicitName is not null)
-                        candidates.Add(new Candidate(220, explicitName, PhoneFromText(node.Name, knownLocalPhone), "explicit:" + node.Name));
+                        candidates.Add(new Candidate(300, explicitName, PhoneFromText(node.Name, knownLocalPhone), "explicit:" + node.Name));
                 }
 
-                var anchorList = new List<NamedElement>();
-                foreach (var node in windowNames)
+                var anchors = windowNames
+                    .Where(node => CallAnchorTerms.Any(term => node.Name.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                    .Take(16)
+                    .ToArray();
+
+                if (anchors.Length > 0)
                 {
-                    var anchorMatch = false;
-                    foreach (var term in CallAnchorTerms)
+                    dynamic walker = automation.ControlViewWalker;
+                    foreach (var anchor in anchors)
                     {
-                        if (!node.Name.Contains(term, StringComparison.OrdinalIgnoreCase)) continue;
-                        anchorMatch = true;
-                        break;
-                    }
-                    if (!anchorMatch) continue;
-                    anchorList.Add(node);
-                    if (anchorList.Count >= 12) break;
-                }
-                var anchors = anchorList.ToArray();
-                if (anchors.Length == 0) continue;
-
-                dynamic walker = automation.ControlViewWalker;
-                foreach (var anchor in anchors)
-                {
-                    dynamic current = anchor.Element;
-                    for (var depth = 0; depth < 5; depth++)
-                    {
-                        try
+                        dynamic current = anchor.Element;
+                        for (var depth = 0; depth < 5; depth++)
                         {
-                            current = walker.GetParentElement(current);
-                            if (current is null) break;
-                        }
-                        catch { break; }
-
-                        var localNodes = ReadNamedElements(current, trueCondition, 420);
-                        if (localNodes.Count == 0) continue;
-                        if (localNodes.Count > 300 && depth >= 2) break;
-
-                        var compactBoost = localNodes.Count <= 35 ? 70 : localNodes.Count <= 90 ? 40 : localNodes.Count <= 180 ? 20 : 0;
-                        var depthBoost = Math.Max(0, 80 - depth * 18);
-
-                        foreach (var node in localNodes)
-                        {
-                            var explicitName = ExtractExplicitContactName(node.Name, localOwnerName);
-                            if (explicitName is not null)
+                            try
                             {
-                                candidates.Add(new Candidate(
-                                    230 + compactBoost,
-                                    explicitName,
-                                    PhoneFromText(node.Name, knownLocalPhone),
-                                    "call-subtree-explicit:" + node.Name));
-                                continue;
+                                current = walker.GetParentElement(current);
+                                if (current is null) break;
                             }
+                            catch { break; }
 
-                            var phone = PhoneFromText(node.Name, knownLocalPhone);
-                            if (phone is not null)
-                                candidates.Add(new Candidate(95 + compactBoost + depthBoost, null, phone, "call-subtree-phone:" + node.Name));
+                            var localNodes = ReadNamedElements(current, trueCondition, 520);
+                            if (localNodes.Count == 0) continue;
+                            if (localNodes.Count > 360 && depth >= 2) break;
 
-                            var person = PersonLikeName(node.Name, localOwnerName);
-                            if (person is not null)
-                                candidates.Add(new Candidate(80 + compactBoost + depthBoost, person, null, "call-subtree-name:" + node.Name));
+                            var compactBoost = localNodes.Count <= 35 ? 90 : localNodes.Count <= 90 ? 55 : localNodes.Count <= 180 ? 30 : 0;
+                            var depthBoost = Math.Max(0, 90 - depth * 20);
+
+                            foreach (var node in localNodes)
+                            {
+                                var explicitName = ExtractExplicitContactName(node.Name, localOwnerName);
+                                if (explicitName is not null)
+                                {
+                                    candidates.Add(new Candidate(
+                                        300 + compactBoost,
+                                        explicitName,
+                                        PhoneFromText(node.Name, knownLocalPhone),
+                                        "call-subtree-explicit:" + node.Name));
+                                    continue;
+                                }
+
+                                var phone = PhoneFromText(node.Name, knownLocalPhone);
+                                if (phone is not null)
+                                    candidates.Add(new Candidate(140 + compactBoost + depthBoost, null, phone, "call-subtree-phone:" + node.Name));
+
+                                var person = PersonLikeName(node.Name, localOwnerName);
+                                if (person is not null)
+                                    candidates.Add(new Candidate(120 + compactBoost + depthBoost, person, null, "call-subtree-name:" + node.Name));
+                            }
                         }
+                    }
+                }
+
+                // Some Store/WebView2 builds do not expose semantic call labels, but they do expose
+                // the visible chat/call header. While a call is active, accept only the upper-right
+                // header region of the WhatsApp window; never scan the left chat list.
+                if (windowRect is { Valid: true })
+                {
+                    foreach (var node in windowNames)
+                    {
+                        if (node.Rect is not { Valid: true } rect) continue;
+                        var cx = rect.Left + rect.Width / 2.0;
+                        var cy = rect.Top + rect.Height / 2.0;
+                        var relX = (cx - windowRect.Left) / Math.Max(1, windowRect.Width);
+                        var relY = (cy - windowRect.Top) / Math.Max(1, windowRect.Height);
+                        if (relX < 0.34 || relX > 0.98 || relY < 0.0 || relY > 0.30) continue;
+                        if (rect.Width > windowRect.Width * 0.62 || rect.Height > 100) continue;
+
+                        var phone = PhoneFromText(node.Name, knownLocalPhone);
+                        var person = PersonLikeName(node.Name, localOwnerName);
+                        var isText = node.ControlType == 50020; // UIA_TextControlTypeId
+                        var geometryBoost = relY <= 0.18 ? 42 : 20;
+                        var textBoost = isText ? 20 : 0;
+                        var anchorBoost = anchors.Length > 0 ? 35 : 0;
+
+                        if (phone is not null)
+                            candidates.Add(new Candidate(
+                                205 + geometryBoost + textBoost + anchorBoost,
+                                person, phone,
+                                $"active-header-phone:x={relX:F2},y={relY:F2}:{node.Name}"));
+                        else if (person is not null)
+                            candidates.Add(new Candidate(
+                                165 + geometryBoost + textBoost + anchorBoost,
+                                person, null,
+                                $"active-header-name:x={relX:F2},y={relY:F2}:{node.Name}"));
                     }
                 }
             }
@@ -154,7 +209,7 @@ internal static class WhatsAppDesktopUiIdentityResolver
                 .Select(group =>
                 {
                     var best = group.OrderByDescending(x => x.Score).First();
-                    var support = Math.Min(45, group.Count() * 8);
+                    var support = Math.Min(60, Math.Max(0, group.Count() - 1) * 12);
                     return best with { Score = best.Score + support };
                 })
                 .OrderByDescending(x => x.Score)
@@ -165,7 +220,7 @@ internal static class WhatsAppDesktopUiIdentityResolver
                 .Select(group =>
                 {
                     var best = group.OrderByDescending(x => x.Score).First();
-                    var support = Math.Min(45, group.Count() * 8);
+                    var support = Math.Min(60, Math.Max(0, group.Count() - 1) * 12);
                     return best with { Score = best.Score + support };
                 })
                 .OrderByDescending(x => x.Score)
@@ -174,15 +229,15 @@ internal static class WhatsAppDesktopUiIdentityResolver
             var topName = names.FirstOrDefault();
             var topPhone = phones.FirstOrDefault();
             var nameReliable = topName?.Name is not null
-                && topName.Score >= 180
-                && (names.Length == 1 || topName.Score - names[1].Score >= 28);
+                && topName.Score >= 205
+                && (names.Length == 1 || topName.Score - names[1].Score >= 34);
             var phoneReliable = topPhone?.Phone is not null
-                && topPhone.Score >= 180
-                && (phones.Length == 1 || topPhone.Score - phones[1].Score >= 28);
+                && topPhone.Score >= 220
+                && (phones.Length == 1 || topPhone.Score - phones[1].Score >= 34);
 
             if (!nameReliable && !phoneReliable) return null;
 
-            var confidence = nameReliable && phoneReliable ? 0.995 : nameReliable ? 0.98 : 0.97;
+            var confidence = nameReliable && phoneReliable ? 0.997 : nameReliable ? 0.985 : 0.98;
             var evidence = string.Join(" | ", new[]
             {
                 nameReliable ? topName!.Evidence : null,
@@ -209,8 +264,6 @@ internal static class WhatsAppDesktopUiIdentityResolver
         }
     }
 
-    private sealed record NamedElement(dynamic Element, string Name);
-
     private static List<NamedElement> ReadNamedElements(dynamic root, dynamic condition, int limit)
     {
         var result = new List<NamedElement>();
@@ -229,13 +282,52 @@ internal static class WhatsAppDesktopUiIdentityResolver
                     try { offscreen = Convert.ToBoolean(element.CurrentIsOffscreen); }
                     catch { offscreen = false; }
                     if (offscreen) continue;
-                    result.Add(new NamedElement(element, name));
+
+                    var controlType = 0;
+                    try { controlType = Convert.ToInt32(element.CurrentControlType); } catch { }
+                    result.Add(new NamedElement(element, name, TryRect(element), controlType));
                 }
                 catch { }
             }
         }
         catch { }
         return result;
+    }
+
+    private static UiRect? TryRect(dynamic element)
+    {
+        try
+        {
+            object raw = element.GetCurrentPropertyValue(30001); // UIA_BoundingRectanglePropertyId
+            if (raw is Array array && array.Length >= 4)
+            {
+                var left = Convert.ToDouble(array.GetValue(0));
+                var top = Convert.ToDouble(array.GetValue(1));
+                var width = Convert.ToDouble(array.GetValue(2));
+                var height = Convert.ToDouble(array.GetValue(3));
+                var rect = new UiRect(left, top, width, height);
+                return rect.Valid ? rect : null;
+            }
+        }
+        catch { }
+
+        try
+        {
+            dynamic rect = element.CurrentBoundingRectangle;
+            var left = Convert.ToDouble(rect.left);
+            var top = Convert.ToDouble(rect.top);
+            var right = Convert.ToDouble(rect.right);
+            var bottom = Convert.ToDouble(rect.bottom);
+            var value = new UiRect(left, top, Math.Max(0, right - left), Math.Max(0, bottom - top));
+            return value.Valid ? value : null;
+        }
+        catch { return null; }
+    }
+
+    private static string SafeCurrentName(dynamic element)
+    {
+        try { return Convert.ToString(element.CurrentName) ?? ""; }
+        catch { return ""; }
     }
 
     private static int SafeLength(dynamic collection)
@@ -272,7 +364,12 @@ internal static class WhatsAppDesktopUiIdentityResolver
         if (PhoneFromText(text, null) is not null) return null;
         if (text.Contains("http", StringComparison.OrdinalIgnoreCase)
             || text.Contains("@c.us", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("@lid", StringComparison.OrdinalIgnoreCase)) return null;
+            || text.Contains("@lid", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("visto por último", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("visto por ultimo", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("last seen", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("digitando", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("typing", StringComparison.OrdinalIgnoreCase)) return null;
         var letters = text.Count(char.IsLetter);
         if (letters < 2) return null;
         if (text.Count(char.IsWhiteSpace) > 6) return null;
