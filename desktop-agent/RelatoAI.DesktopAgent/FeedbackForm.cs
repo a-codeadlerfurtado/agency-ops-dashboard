@@ -25,6 +25,7 @@ internal sealed class FeedbackForm : Form
     private readonly Button laterButton = new();
     private readonly Label contactStatus = new();
     private readonly Label contactDetail = new();
+    private readonly TextBox prospectName = new();
     private readonly ComboBox clientBinding = SelectBox(532);
     private FeedbackContext? feedbackContext;
     private bool contextReady;
@@ -61,11 +62,8 @@ internal sealed class FeedbackForm : Form
         direction.SelectedIndex = 1;
         BuildUi();
         saveButton.Enabled = false;
-        clientBinding.SelectedIndexChanged += (_, _) =>
-        {
-            if (feedbackContext?.RequiresSelection == true)
-                saveButton.Enabled = clientBinding.SelectedItem is BindingOption option && (option.Id is not null || option.NoClient);
-        };
+        clientBinding.SelectedIndexChanged += (_, _) => saveButton.Enabled = HasRequiredBinding();
+        prospectName.TextChanged += (_, _) => saveButton.Enabled = HasRequiredBinding();
         Shown += async (_, _) => { Activate(); BringToFront(); await LoadContextAsync(); };
     }
 
@@ -122,7 +120,7 @@ internal sealed class FeedbackForm : Form
 
     private Control BuildContactCard()
     {
-        var card = Card(570, 150);
+        var card = Card(570, 205);
         card.Margin = new Padding(0, 0, 0, 16);
         contactStatus.Text = "Identificando contato...";
         contactStatus.ForeColor = Blue;
@@ -132,12 +130,20 @@ internal sealed class FeedbackForm : Form
         contactDetail.Text = "Cruzando número, grupos e cadastro de clientes.";
         contactDetail.ForeColor = Muted;
         contactDetail.AutoSize = true;
-        contactDetail.MaximumSize = new Size(532, 42);
+        contactDetail.MaximumSize = new Size(532, 38);
         contactDetail.Location = new Point(18, 42);
-        clientBinding.Location = new Point(18, 92);
+        var nameLabel = new Label { Text = "Nome do contato / prospect", ForeColor = Muted, AutoSize = true, Location = new Point(18, 82) };
+        prospectName.SetBounds(18, 104, 532, 32);
+        prospectName.BackColor = Panel2;
+        prospectName.ForeColor = TextMain;
+        prospectName.BorderStyle = BorderStyle.FixedSingle;
+        prospectName.PlaceholderText = "Nome exibido no WhatsApp ou confirmado por você";
+        clientBinding.Location = new Point(18, 153);
         clientBinding.Visible = false;
         card.Controls.Add(contactStatus);
         card.Controls.Add(contactDetail);
+        card.Controls.Add(nameLabel);
+        card.Controls.Add(prospectName);
         card.Controls.Add(clientBinding);
         return card;
     }
@@ -312,6 +318,7 @@ internal sealed class FeedbackForm : Form
 
     private void ApplyContext(FeedbackContext context)
     {
+        prospectName.Text = context.RemoteName ?? "";
         var phone = string.IsNullOrWhiteSpace(context.RemotePhone) ? null : $"+{context.RemotePhone}";
         var person = string.IsNullOrWhiteSpace(context.RemoteName) ? phone ?? "Contato não identificado" : context.RemoteName;
         var identity = string.Join(" · ", new[] { person, phone }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct());
@@ -322,7 +329,7 @@ internal sealed class FeedbackForm : Form
             var relation = string.Join(" • ", new[] { context.RemoteRole, context.ClientName }.Where(x => !string.IsNullOrWhiteSpace(x)));
             contactDetail.Text = string.IsNullOrWhiteSpace(relation) ? identity : $"{identity}\n{relation}";
             clientBinding.Visible = false;
-            saveButton.Enabled = true;
+            saveButton.Enabled = HasRequiredBinding();
             return;
         }
 
@@ -342,6 +349,7 @@ internal sealed class FeedbackForm : Form
     private bool HasRequiredBinding()
     {
         if (!contextReady) return false;
+        if (string.IsNullOrWhiteSpace(prospectName.Text)) return false;
         if (feedbackContext?.RequiresSelection != true) return true;
         return clientBinding.SelectedItem is BindingOption option && (option.Id is not null || option.NoClient);
     }
@@ -383,7 +391,7 @@ internal sealed class FeedbackForm : Form
             _ => "STABLE"
         };
         if (!dismissed && !HasRequiredBinding())
-            throw new InvalidOperationException("Selecione o cliente relacionado à call ou 'Sem vínculo com cliente'.");
+            throw new InvalidOperationException("Informe o nome do contato/prospect e, quando necessário, selecione o cliente relacionado ou 'Sem vínculo com cliente'.");
         var selected = clientBinding.SelectedItem as BindingOption;
         var manual = feedbackContext?.RequiresSelection == true;
         var clientId = manual ? selected?.Id : feedbackContext?.ClientId;
@@ -391,6 +399,7 @@ internal sealed class FeedbackForm : Form
         var feedback = new
         {
             channel = "WHATSAPP_DESKTOP",
+            prospect_name = prospectName.Text.Trim(),
             client_id = clientId,
             no_client = noClient,
             binding_source = manual ? "MANUAL" : "AUTO",
