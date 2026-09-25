@@ -398,6 +398,12 @@ Deno.serve(async (req: Request) => {
     const device = await resolveDevice(req, ops);
     if (!device) return respond({ error: "invalid_device" }, 401);
     const currentVersion = clean(body?.current_version, 40) || "";
+    if (currentVersion) {
+      await ops.from("meeting_capture_devices").update({
+        extension_version: currentVersion,
+        updated_at: new Date().toISOString()
+      }).eq("id", device.id);
+    }
     return respond({
       ok: true,
       current_version: currentVersion,
