@@ -15,7 +15,10 @@ const phoneDigits=(v:unknown)=>clean(v).replace(/\D/g,"");
 const GENERIC_CONTACT_NAMES=new Set(["contato","contato whatsapp","contato whatsapp desktop","whatsapp"]);
 const safeContactName=(v:unknown)=>{
   const name=clean(v);
-  return name&&!GENERIC_CONTACT_NAMES.has(name.toLowerCase())?name:null;
+  if(!name||GENERIC_CONTACT_NAMES.has(name.toLowerCase())) return null;
+  if(/[\u0000-\u001f\u007f-\u009f]/.test(name)) return null;
+  const letters=name.match(/\p{L}/gu)?.length||0;
+  return letters>=2?name:null;
 };
 const nameEvidence=(metadata:Row={},lead:Row|null=null,record:Row|null=null)=>{
   const identity:Row=metadata?.identity_resolution||{};
