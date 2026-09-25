@@ -636,7 +636,8 @@ Deno.serve(async (req: Request) => {
     const extensionVersion = clean(call.extension_version, 40) || "";
     const { data: roster } = await ops.from("team_roster")
       .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
-    if (String(roster?.role || "").toUpperCase() === "SDR" && extensionVersion !== REQUIRED_SDR_DESKTOP_VERSION) {
+    const supportedSdrDesktopVersions = new Set([REQUIRED_SDR_DESKTOP_VERSION, "desktop-0.5.0"]);
+    if (String(roster?.role || "").toUpperCase() === "SDR" && !supportedSdrDesktopVersions.has(extensionVersion)) {
       return respond({
         error: "desktop_agent_upgrade_required",
         message: "Atualize o Relato AI Desktop antes de gravar novas ligações.",
