@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { BrandMark, SUPABASE_URL, authenticatedFetch, loadProfileLite, supabase } from "./shared";
 
@@ -70,6 +70,79 @@ const nameSourceLabel=(value:unknown)=>{
 };
 function Empty({children}:{children:React.ReactNode}) {
   return <div className="sdr-empty">{children}</div>;
+}
+
+function SyncedCallPlayer({audio,segments,rawTranscript}:{audio:Row[];segments:Row[];rawTranscript?:unknown}) {
+  const preferred=useMemo(()=>audio.find(row=>row.role==="mixed"&&row.play_url)||audio.find(row=>row.play_url)||audio[0]||null,[audio]);
+  const audioRef=useRef<HTMLAudioElement|null>(null);
+  const transcriptRef=useRef<HTMLDivElement|null>(null);
+  const rowRefs=useRef(new Map<number,HTMLElement>());
+  const [playing,setPlaying]=useState(false);
+  const [current,setCurrent]=useState(0);
+  const [total,setTotal]=useState(0);
+  const [rate,setRate]=useState(1);
+
+  const activeIndex=useMemo(()=>{
+    if(!segments.length)return -1;
+    const ms=current*1000;
+    let found=-1;
+    for(let i=0;i<segments.length;i++){
+      const start=Math.max(0,Number(segments[i]?.started_ms||0));
+      const next=i+1<segments.length?Math.max(start,Number(segments[i+1]?.started_ms||0)):Number.POSITIVE_INFINITY;
+      const end=Number(segments[i]?.ended_ms||0)>start?Number(segments[i].ended_ms):next;
+      if(ms>=start&&ms<end){found=i;break;}
+      if(ms>=start)found=i;
+    }
+    return found;
+  },[segments,current]);
+
+  useEffect(()=>{
+    const el=audioRef.current;
+    if(!el)return;
+    el.pause();el.currentTime=0;
+    setCurrent(0);setTotal(0);setPlaying(false);setRate(1);
+  },[preferred?.play_url]);
+
+  useEffect(()=>{
+    if(activeIndex<0||!playing)return;
+    const row=rowRefs.current.get(activeIndex),list=transcriptRef.current;
+    if(!row||!list)return;
+    const top=row.offsetTop,bottom=top+row.offsetHeight;
+    if(top<list.scrollTop+24||bottom>list.scrollTop+list.clientHeight-24)
+      row.scrollIntoView({behavior:"smooth",block:"center"});
+  },[activeIndex,playing]);
+
+  const toggle=async()=>{const el=audioRef.current;if(!el)return;if(el.paused){try{await el.play();}catch{}}else el.pause();};
+  const seek=(seconds:number,autoplay=false)=>{const el=audioRef.current;if(!el)return;const max=Number.isFinite(el.duration)&&el.duration>0?el.duration:seconds;const next=Math.max(0,Math.min(max,seconds));el.currentTime=next;setCurrent(next);if(autoplay)el.play().catch(()=>{});};
+  const clock=(seconds:number)=>{const value=Math.max(0,Math.floor(seconds||0));const h=Math.floor(value/3600),m=Math.floor((value%3600)/60),s=value%60;return h?[h,m,s].map(v=>String(v).padStart(2,"0")).join(":"):[m,s].map(v=>String(v).padStart(2,"0")).join(":");};
+
+  if(!preferred)return <p>Nenhuma gravação disponível ainda.</p>;
+  const src=String(preferred.play_url||"");
+  const downloadUrl=String(preferred.download_url||preferred.play_url||"");
+  const isMp3=String(preferred.mime_type||"").includes("mpeg")||String(preferred.path||"").toLowerCase().endsWith(".mp3");
+  return <div className="sdr-sync-player">
+    <audio key={src} ref={audioRef} preload="metadata" src={src} playsInline
+      onLoadedMetadata={e=>setTotal(Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0)}
+      onDurationChange={e=>setTotal(Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0)}
+      onTimeUpdate={e=>setCurrent(e.currentTarget.currentTime||0)}
+      onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)}/>
+    <div className="sdr-player-shell">
+      <button type="button" className="sdr-play-button" onClick={toggle} aria-label={playing?"Pausar":"Reproduzir"}>{playing?"Ⅱ":"▶"}</button>
+      <div className="sdr-player-main">
+        <div className="sdr-player-head"><b>{preferred.role==="mixed"?"Gravação completa":preferred.role==="remote"?"Outro lado":"Minha voz"}</b><span>{clock(current)} / {clock(total)}</span></div>
+        <input className="sdr-player-range" type="range" min="0" max={Math.max(total,0.01)} step="0.05" value={Math.min(current,Math.max(total,0.01))} onChange={e=>seek(Number(e.target.value))}/>
+      </div>
+      <select className="sdr-player-rate" value={rate} onChange={e=>{const value=Number(e.target.value);setRate(value);if(audioRef.current)audioRef.current.playbackRate=value;}} aria-label="Velocidade">
+        <option value={0.75}>0,75×</option><option value={1}>1×</option><option value={1.25}>1,25×</option><option value={1.5}>1,5×</option><option value={2}>2×</option>
+      </select>
+      <a className="sdr-player-download" href={downloadUrl} download={String(preferred.download_name||("relato-ligacao."+(isMp3?"mp3":"wav")))}>{isMp3?"Baixar MP3":"Baixar áudio"}</a>
+    </div>
+    <div className="sdr-player-reading"><span>LEITURA SINCRONIZADA</span><small>A fala atual acompanha o áudio. Clique em qualquer trecho para ouvir dali.</small></div>
+    {segments.length>0?<div ref={transcriptRef} className="sdr-transcript-list sdr-transcript-synced">{segments.map((segment:Row,index:number)=>
+      <article key={String(segment.sequence_no??index)} ref={node=>{if(node)rowRefs.current.set(index,node);else rowRefs.current.delete(index);}} className={activeIndex===index?"active":""} onClick={()=>seek(Math.max(0,Number(segment.started_ms||0))/1000,true)}>
+        <time>{timestamp(segment.started_ms)}</time><div><b>{text(segment.speaker_name,"Participante")}</b><p>{text(segment.text,"")}</p></div>
+      </article>)}</div>:<div className="sdr-transcript-raw">{text(rawTranscript,"Transcrição ainda indisponível.")}</div>}
+  </div>;
 }
 
 function CallsView({data}:{data:Row}) {
@@ -236,19 +309,10 @@ function CallsView({data}:{data:Row}) {
           {detail.review_classification&&<article><span>Classificação</span><b>{reviewLabel(detail.review_classification)}</b></article>}
         </div>
         {detail.review_reason&&<div className="sdr-note"><b>Revisão do histórico</b><span>{text(detail.review_reason)}</span></div>}
-        <div className="sdr-detail-section"><h3>Gravação</h3>
-          {Array.isArray(detail.audio)&&detail.audio.length>0?<div className="sdr-audio-list">{detail.audio.map((audio:Row)=>{
-            const label=audio.role==="mixed"?"Gravação completa":audio.role==="remote"?"Outro lado":"Minha voz";
-            return <article key={String(audio.role)}><div><b>{label}</b><span>{text(audio.mime_type)}</span></div>
-              <audio controls preload="metadata" src={String(audio.play_url||"")}/>
-              <a href={String(audio.download_url||audio.play_url||"")} download={String(audio.download_name||"relato-ligacao.wav")}>Baixar {label.toLowerCase()}</a>
-            </article>;
-          })}</div>:<p>{detail.audio_status?("Áudio: "+detail.audio_status):"Nenhuma gravação disponível ainda."}</p>}
-        </div>
-        <div className="sdr-detail-section"><h3>Transcrição</h3>
-          {Array.isArray(detail.segments)&&detail.segments.length>0?<div className="sdr-transcript-list">{detail.segments.map((segment:Row,index:number)=><article key={String(segment.sequence_no??index)}>
-            <time>{timestamp(segment.started_ms)}</time><div><b>{text(segment.speaker_name,"Participante")}</b><p>{text(segment.text,"")}</p></div>
-          </article>)}</div>:<div className="sdr-transcript-raw">{text(detail.transcript_text,"Transcrição ainda indisponível.")}</div>}
+        <div className="sdr-detail-section"><h3>Gravação + transcrição</h3>
+          {Array.isArray(detail.audio)&&detail.audio.length>0
+            ?<SyncedCallPlayer audio={detail.audio} segments={Array.isArray(detail.segments)?detail.segments:[]} rawTranscript={detail.transcript_text}/>
+            :<p>{detail.audio_status?("Áudio: "+detail.audio_status):"Nenhuma gravação disponível ainda."}</p>}
         </div>
       </section>
     </div>}
@@ -347,5 +411,6 @@ const styles = [
 ".sdr-list{display:grid;gap:9px}.sdr-item{border:1px solid #1d3135;background:#091519;border-radius:12px;padding:14px}.sdr-item-top{display:flex;justify-content:space-between;gap:12px}.sdr-item-top span{font-size:8px;color:#62cca0;font-weight:800}.sdr-item h3{font-size:13px;margin:4px 0}.sdr-item time{font-size:9px;color:#6f8882}.sdr-item p{font-size:10px;color:#8ca49e;line-height:1.55}.sdr-item footer{display:flex;flex-wrap:wrap;gap:8px;border-top:1px solid #182b2e;padding-top:9px}.sdr-item footer>*{font-size:9px;color:#76908a}.sdr-note{display:grid;gap:4px;margin-top:10px;border-top:1px solid #182b2e;padding-top:9px}.sdr-note b{font-size:9px}.sdr-note span{font-size:9px;color:#8ca49e}.sdr-empty{padding:24px;text-align:center;color:#657f79;font-size:10px}.sdr-error{margin:14px 26px 0;border:1px solid #663b37;background:#2a1514;color:#ef9b90;border-radius:10px;padding:10px 12px;font-size:10px}",
 ".sdr-call-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}.sdr-call-kpis article{border:1px solid #203338;background:#091519;border-radius:10px;padding:11px}.sdr-call-kpis span{display:block;font-size:7px;color:#6e8882;text-transform:uppercase;letter-spacing:.08em}.sdr-call-kpis b{display:block;margin-top:5px;font-size:17px}.sdr-call-kpis small{display:block;margin-top:3px;font-size:7px;color:#58716c}.sdr-filter-panel{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:14px 0;padding:12px;border:1px solid #203338;background:#081317;border-radius:11px}.sdr-filter-panel label{display:grid;gap:4px}.sdr-filter-panel label>span{font-size:7px;color:#6f8983;text-transform:uppercase;font-weight:800;letter-spacing:.08em}.sdr-filter-panel input,.sdr-filter-panel select{height:34px;border:1px solid #263a3f;background:#0a171b;color:#cfe0dc;border-radius:8px;padding:0 9px;font:600 9px Inter}.sdr-filter-search{flex:1 1 260px}.sdr-filter-search input{width:100%}.sdr-clear-filters{height:34px;border:1px solid #32494b;background:transparent;color:#8fa7a1;border-radius:8px;padding:0 10px;font:800 8px Inter;cursor:pointer}",
 ".sdr-call-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}.sdr-call-facts>span{display:flex;flex-direction:column;gap:3px;padding:8px;border:1px solid #1c3034;border-radius:8px;background:#081216;font-size:9px;color:#9ab0aa}.sdr-call-facts b{font-size:7px;color:#607b75;text-transform:uppercase;letter-spacing:.08em}.sdr-detail-btn{border:1px solid #285043;background:#10231f;color:#bdf4d8;border-radius:8px;padding:7px 9px;font:800 9px Inter;cursor:pointer}.sdr-modal-backdrop{position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.72);display:grid;place-items:center;padding:24px}.sdr-modal{width:min(920px,96vw);max-height:90vh;overflow:auto;border:1px solid #28413f;background:#081216;border-radius:16px;padding:18px;box-shadow:0 30px 100px rgba(0,0,0,.55)}.sdr-modal>header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-bottom:1px solid #1d3034;padding-bottom:12px}.sdr-modal>header span{font-size:8px;color:#62cca0;font-weight:900;letter-spacing:.12em}.sdr-modal>header h2{margin:4px 0 0;font-size:21px}.sdr-modal>header button{border:1px solid #33484b;background:#101c20;color:#dbe7e3;border-radius:8px;padding:8px 10px;font:700 9px Inter;cursor:pointer}.sdr-detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}.sdr-detail-grid article{border:1px solid #1d3034;background:#0b171b;border-radius:9px;padding:10px}.sdr-detail-grid span{display:block;font-size:7px;color:#637c76;text-transform:uppercase}.sdr-detail-grid b{display:block;margin-top:5px;font-size:10px}.sdr-detail-section{margin-top:14px}.sdr-detail-section h3{font-size:11px;margin:0 0 8px;color:#b9d6ce}.sdr-audio-list{display:grid;gap:8px}.sdr-audio-list article{border:1px solid #1d3034;background:#0b171b;border-radius:10px;padding:10px;display:grid;gap:8px}.sdr-audio-list article>div{display:flex;justify-content:space-between}.sdr-audio-list b{font-size:10px}.sdr-audio-list span{font-size:8px;color:#6f8983}.sdr-audio-list audio{width:100%;height:36px}.sdr-audio-list a{width:max-content;color:#82d8b3;font-size:9px;font-weight:800;text-decoration:none}.sdr-transcript-list{display:grid;gap:6px;max-height:42vh;overflow:auto}.sdr-transcript-list article{display:grid;grid-template-columns:50px minmax(0,1fr);gap:8px;border:1px solid #1a2c30;background:#091519;border-radius:8px;padding:8px}.sdr-transcript-list time{font:800 9px ui-monospace,SFMono-Regular,Menlo,monospace;color:#63cca1}.sdr-transcript-list b{font-size:9px;color:#e0eee9}.sdr-transcript-list p{margin:3px 0 0;font-size:10px;color:#94aaa4}.sdr-transcript-raw{white-space:pre-wrap;border:1px solid #1a2c30;background:#091519;border-radius:8px;padding:10px;font-size:10px;line-height:1.55;color:#94aaa4}",
-"@media(max-width:760px){.sdr-call-kpis{grid-template-columns:1fr 1fr}.sdr-filter-panel{display:grid;grid-template-columns:1fr 1fr}.sdr-filter-search{grid-column:1/-1}.sdr-call-facts,.sdr-detail-grid{grid-template-columns:1fr 1fr}.sdr-modal-backdrop{padding:8px}.sdr-modal{max-height:95vh;padding:12px}.sdr-root{display:block;overflow:auto}.sdr-sidebar{height:auto;position:sticky;top:0;z-index:8}.sdr-brand,.sdr-profile{display:none}.sdr-sidebar nav{display:flex}.sdr-sidebar nav button{white-space:nowrap}.sdr-main{height:auto}.sdr-top{position:relative;align-items:flex-start;flex-direction:column;padding:16px}.sdr-content{padding:14px 12px 70px}.sdr-kpis{grid-template-columns:1fr 1fr}.sdr-actions{flex-wrap:wrap}}"
+".sdr-sync-player{display:grid;gap:10px}.sdr-sync-player>audio{display:none}.sdr-player-shell{display:grid;grid-template-columns:42px minmax(0,1fr) auto auto;gap:10px;align-items:center;border:1px solid #28423b;background:linear-gradient(135deg,#0c1b1b,#0b151a);border-radius:13px;padding:12px}.sdr-play-button{width:42px;height:42px;border-radius:50%;border:1px solid #3d725f;background:#17352b;color:#d8ffec;font:900 15px Inter;cursor:pointer}.sdr-player-main{min-width:0}.sdr-player-head{display:flex;justify-content:space-between;gap:10px;align-items:center}.sdr-player-head b{font-size:10px}.sdr-player-head span{font:800 9px ui-monospace,SFMono-Regular,Menlo,monospace;color:#86a99f}.sdr-player-range{width:100%;accent-color:#62cca0;cursor:pointer}.sdr-player-rate{height:34px;border:1px solid #2e4a43;background:#0d1b1b;color:#cfe8df;border-radius:8px;padding:0 7px;font:800 9px Inter}.sdr-player-download{white-space:nowrap;border:1px solid #3b765e;background:#143326;color:#bff8da;border-radius:8px;padding:9px 10px;font:900 9px Inter;text-decoration:none}.sdr-player-reading{display:flex;justify-content:space-between;gap:12px;align-items:center}.sdr-player-reading span{font-size:8px;color:#62cca0;font-weight:900;letter-spacing:.12em}.sdr-player-reading small{font-size:8px;color:#6e8781}.sdr-transcript-synced article{cursor:pointer;transition:border-color .16s,background .16s,transform .16s}.sdr-transcript-synced article:hover{border-color:#2d5146}.sdr-transcript-synced article.active{border-color:#5ed29f;background:#123027;box-shadow:0 0 0 1px rgba(94,210,159,.12);transform:translateX(2px)}.sdr-transcript-synced article.active p{color:#d7eee6}",
+"@media(max-width:760px){.sdr-player-shell{grid-template-columns:42px minmax(0,1fr)}.sdr-player-reading{align-items:flex-start;flex-direction:column}.sdr-call-kpis{grid-template-columns:1fr 1fr}.sdr-filter-panel{display:grid;grid-template-columns:1fr 1fr}.sdr-filter-search{grid-column:1/-1}.sdr-call-facts,.sdr-detail-grid{grid-template-columns:1fr 1fr}.sdr-modal-backdrop{padding:8px}.sdr-modal{max-height:95vh;padding:12px}.sdr-root{display:block;overflow:auto}.sdr-sidebar{height:auto;position:sticky;top:0;z-index:8}.sdr-brand,.sdr-profile{display:none}.sdr-sidebar nav{display:flex}.sdr-sidebar nav button{white-space:nowrap}.sdr-main{height:auto}.sdr-top{position:relative;align-items:flex-start;flex-direction:column;padding:16px}.sdr-content{padding:14px 12px 70px}.sdr-kpis{grid-template-columns:1fr 1fr}.sdr-actions{flex-wrap:wrap}}"
 ].join("");
