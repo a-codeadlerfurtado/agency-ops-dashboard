@@ -10,6 +10,7 @@ internal sealed class AgentContext : ApplicationContext
     private readonly WhatsAppDesktopCapture capture;
     private readonly MeetDesktopCapture meetCapture;
     private readonly MeetLocalBridge meetBridge;
+    private readonly AgentUpdater updater;
     private readonly Control dispatcher = new();
     private RecordingIndicatorForm? recordingIndicator;
 
@@ -30,6 +31,10 @@ internal sealed class AgentContext : ApplicationContext
         meetBridge = new MeetLocalBridge(meetCapture);
         meetBridge.Start();
         WireEvents();
+        updater = new AgentUpdater(
+            () => config,
+            text => Post(() => UpdateStatus(text)),
+            () => Post(ExitThread));
         autoItem.CheckedChanged += (_, _) => capture.Enabled = autoItem.Checked;
         finishItem.Click += async (_, _) =>
         {
@@ -141,6 +146,7 @@ internal sealed class AgentContext : ApplicationContext
     protected override void ExitThreadCore()
     {
         recordingIndicator?.Dispose();
+        updater.Dispose();
         meetBridge.Dispose();
         meetCapture.Dispose();
         capture.Dispose();

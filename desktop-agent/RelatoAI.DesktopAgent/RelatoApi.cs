@@ -17,6 +17,9 @@ internal sealed record FeedbackContext(
     bool Pending, bool RequiresSelection, string? RemotePhone, string? RemoteName, string? RemoteRole,
     string? ClientId, string? ClientName, string? ResolutionStatus, IReadOnlyList<ClientOption> Clients,
     string Workflow, bool TranscriptReady, ProspectPrefill? ProspectPrefill);
+internal sealed record AgentUpdateInfo(
+    bool UpdateRequired, string CurrentVersion, string RequiredVersion,
+    string DownloadUrl, string Sha256);
 
 internal sealed partial class RelatoApi
 {
@@ -48,6 +51,25 @@ internal sealed partial class RelatoApi
         return JsonDocument.Parse(text);
     }
 
+    public async Task<AgentUpdateInfo> GetUpdateInfoAsync(string currentVersion)
+    {
+        using var doc = await SendAsync(new
+        {
+            action = "agent_update_check",
+            current_version = currentVersion
+        });
+        var root = doc.RootElement;
+        string Read(string name) => root.TryGetProperty(name, out var el) && el.ValueKind != JsonValueKind.Null
+            ? el.GetString() ?? ""
+            : "";
+        return new AgentUpdateInfo(
+            root.TryGetProperty("update_required", out var updateEl) && updateEl.GetBoolean(),
+            Read("current_version"),
+            Read("required_version"),
+            Read("download_url"),
+            Read("sha256"));
+    }
+
     public async Task<PairResult> PairAsync(string code)
     {
         using var doc = await SendAsync(new
@@ -55,7 +77,7 @@ internal sealed partial class RelatoApi
             action = "pair_redeem",
             code = code.Trim().ToUpperInvariant(),
             device_name = Environment.MachineName + " · Relato AI Desktop Agent",
-            extension_version = "desktop-0.4.7"
+            extension_version = "desktop-0.4.8"
         }, withToken: false);
         var root = doc.RootElement;
         return new PairResult(
@@ -83,7 +105,7 @@ internal sealed partial class RelatoApi
                 identity_source = identitySource,
                 duration_ms = durationMs,
                 finish_reason = "desktop_audio_session_ended",
-                extension_version = "desktop-0.4.7",
+                extension_version = "desktop-0.4.8",
                 source = "WHATSAPP_DESKTOP",
                 audio_ext = "wav"
             },
