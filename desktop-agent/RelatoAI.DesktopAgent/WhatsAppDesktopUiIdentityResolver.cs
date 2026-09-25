@@ -1,7 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
-using System.Windows;
-using System.Windows.Automation;
 
 namespace RelatoAI.DesktopAgent;
 
@@ -14,7 +13,7 @@ internal sealed record WhatsAppDesktopUiIdentity(
 
 internal static class WhatsAppDesktopUiIdentityResolver
 {
-    private sealed record UiNode(string Text, Rect Bounds, ControlType ControlType);
+    private sealed record Candidate(int Score, string? Name, string? Phone, string Evidence);
 
     private static readonly Regex PhoneRegex = new(
         @"(?<!\d)(?:\+?55\s*)?(?:\(?\d{2}\)?[\s.-]*)?\d{4,5}[\s.-]*\d{4}(?!\d)",
@@ -30,7 +29,7 @@ internal static class WhatsAppDesktopUiIdentityResolver
     [
         "desligar", "encerrar", "finalizar chamada", "end call", "hang up",
         "silenciar", "mute", "microfone", "microphone",
-        "câmera", "camera", "vídeo", "video"
+        "câmera", "camera", "vídeo", "video", "alto-falante", "speaker"
     ];
 
     private static readonly HashSet<string> GenericNames = new(StringComparer.OrdinalIgnoreCase)
@@ -41,118 +40,147 @@ internal static class WhatsAppDesktopUiIdentityResolver
         "silenciar", "mute", "microfone", "microphone", "câmera", "camera", "vídeo", "video",
         "desligar", "encerrar", "end call", "atender", "recusar", "speaker", "alto-falante",
         "mais", "more", "voltar", "back", "status", "comunidades", "communities",
-        "nova conversa", "new chat", "configurações", "settings", "perfil", "profile"
+        "nova conversa", "new chat", "configurações", "settings", "perfil", "profile",
+        "adicionar participante", "add participant", "minimizar", "maximize", "maximizar"
     };
 
-    public static WhatsAppDesktopUiIdentity? Resolve(string? knownLocalPhone)
+    // Uses the native Windows UI Automation COM API through late binding.
+    // This keeps the agent dependency-free while reading the actual WhatsApp Desktop/WebView2 accessibility tree.
+    public static WhatsAppDesktopUiIdentity? Resolve(string? knownLocalPhone, string? localOwnerName = null)
     {
+        object? automationObject = null;
         try
         {
+            var automationType = Type.GetTypeFromProgID("UIAutomationClient.CUIAutomation");
+            if (automationType is null) return null;
+            automationObject = Activator.CreateInstance(automationType);
+            if (automationObject is null) return null;
+            dynamic automation = automationObject;
+
             var pids = Process.GetProcesses()
                 .Where(p => p.ProcessName.StartsWith("WhatsApp", StringComparison.OrdinalIgnoreCase))
                 .Select(p => p.Id)
                 .ToHashSet();
             if (pids.Count == 0) return null;
 
-            var windows = AutomationElement.RootElement.FindAll(TreeScope.Children, Condition.TrueCondition);
-            var best = new List<(int Score, string? Name, string? Phone, string Evidence)>();
+            dynamic trueCondition = automation.CreateTrueCondition();
+            dynamic windows = automation.GetRootElement().FindAll(2, trueCondition); // TreeScope_Children
+            var candidates = new List<Candidate>();
 
-            for (var i = 0; i < windows.Count; i++)
+            for (var i = 0; i < SafeLength(windows); i++)
             {
-                AutomationElement window;
+                dynamic window;
                 try
                 {
-                    window = windows[i];
-                    if (!pids.Contains(window.Current.ProcessId)) continue;
+                    window = windows.GetElement(i);
+                    if (!pids.Contains((int)window.CurrentProcessId)) continue;
                 }
                 catch { continue; }
 
-                var nodes = ReadNodes(window);
-                if (nodes.Count == 0) continue;
+                var windowNames = ReadNamedElements(window, trueCondition, 2500);
+                if (windowNames.Count == 0) continue;
 
-                var anchors = nodes
-                    .Where(node => CallAnchorTerms.Any(term => node.Text.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                foreach (var node in windowNames)
+                {
+                    var explicitName = ExtractExplicitContactName(node.Name, localOwnerName);
+                    if (explicitName is not null)
+                        candidates.Add(new Candidate(220, explicitName, PhoneFromText(node.Name, knownLocalPhone), "explicit:" + node.Name));
+                }
+
+                var anchors = windowNames
+                    .Where(node => CallAnchorTerms.Any(term => node.Name.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                    .Take(12)
                     .ToArray();
                 if (anchors.Length == 0) continue;
 
-                Rect windowBounds;
-                string windowTitle;
-                try
+                dynamic walker = automation.ControlViewWalker;
+                foreach (var anchor in anchors)
                 {
-                    windowBounds = window.Current.BoundingRectangle;
-                    windowTitle = Clean(window.Current.Name);
-                }
-                catch
-                {
-                    windowBounds = Rect.Empty;
-                    windowTitle = "";
-                }
-
-                foreach (var node in nodes)
-                {
-                    var text = node.Text;
-                    if (string.IsNullOrWhiteSpace(text)) continue;
-
-                    var explicitName = ExtractExplicitContactName(text);
-                    if (explicitName is not null)
+                    dynamic current = anchor.Element;
+                    for (var depth = 0; depth < 5; depth++)
                     {
-                        var explicitPhone = PhoneFromText(text, knownLocalPhone);
-                        best.Add((170, explicitName, explicitPhone, $"explicit:{text}"));
-                    }
+                        try
+                        {
+                            current = walker.GetParentElement(current);
+                            if (current is null) break;
+                        }
+                        catch { break; }
 
-                    var phone = PhoneFromText(text, knownLocalPhone);
-                    if (phone is not null)
-                    {
-                        var score = 80 + ProximityScore(node.Bounds, anchors);
-                        if (IsTopHeader(node.Bounds, windowBounds)) score += 30;
-                        best.Add((score, null, phone, $"phone:{text}"));
-                    }
+                        var localNodes = ReadNamedElements(current, trueCondition, 420);
+                        if (localNodes.Count == 0) continue;
+                        if (localNodes.Count > 300 && depth >= 2) break;
 
-                    var name = PersonLikeName(text);
-                    if (name is null) continue;
-                    var nameScore = 35 + ProximityScore(node.Bounds, anchors);
-                    if (node.ControlType == ControlType.Text) nameScore += 15;
-                    if (IsTopHeader(node.Bounds, windowBounds)) nameScore += 45;
-                    if (text.Equals(windowTitle, StringComparison.OrdinalIgnoreCase)) nameScore += 25;
-                    if (nameScore >= 90)
-                        best.Add((nameScore, name, null, $"ui:{text}"));
+                        var compactBoost = localNodes.Count <= 35 ? 70 : localNodes.Count <= 90 ? 40 : localNodes.Count <= 180 ? 20 : 0;
+                        var depthBoost = Math.Max(0, 80 - depth * 18);
+
+                        foreach (var node in localNodes)
+                        {
+                            var explicitName = ExtractExplicitContactName(node.Name, localOwnerName);
+                            if (explicitName is not null)
+                            {
+                                candidates.Add(new Candidate(
+                                    230 + compactBoost,
+                                    explicitName,
+                                    PhoneFromText(node.Name, knownLocalPhone),
+                                    "call-subtree-explicit:" + node.Name));
+                                continue;
+                            }
+
+                            var phone = PhoneFromText(node.Name, knownLocalPhone);
+                            if (phone is not null)
+                                candidates.Add(new Candidate(95 + compactBoost + depthBoost, null, phone, "call-subtree-phone:" + node.Name));
+
+                            var person = PersonLikeName(node.Name, localOwnerName);
+                            if (person is not null)
+                                candidates.Add(new Candidate(80 + compactBoost + depthBoost, person, null, "call-subtree-name:" + node.Name));
+                        }
+                    }
                 }
-
-                var titleName = PersonLikeName(windowTitle);
-                if (titleName is not null)
-                    best.Add((115, titleName, PhoneFromText(windowTitle, knownLocalPhone), $"title:{windowTitle}"));
             }
 
-            var names = best.Where(x => x.Name is not null)
+            var names = candidates.Where(x => x.Name is not null)
                 .GroupBy(x => Key(x.Name!))
-                .Select(g => g.OrderByDescending(x => x.Score).First())
+                .Select(group =>
+                {
+                    var best = group.OrderByDescending(x => x.Score).First();
+                    var support = Math.Min(45, group.Count() * 8);
+                    return best with { Score = best.Score + support };
+                })
                 .OrderByDescending(x => x.Score)
                 .ToArray();
-            var phones = best.Where(x => x.Phone is not null)
+
+            var phones = candidates.Where(x => x.Phone is not null)
                 .GroupBy(x => x.Phone!)
-                .Select(g => g.OrderByDescending(x => x.Score).First())
+                .Select(group =>
+                {
+                    var best = group.OrderByDescending(x => x.Score).First();
+                    var support = Math.Min(45, group.Count() * 8);
+                    return best with { Score = best.Score + support };
+                })
                 .OrderByDescending(x => x.Score)
                 .ToArray();
 
             var topName = names.FirstOrDefault();
             var topPhone = phones.FirstOrDefault();
-            var nameReliable = topName.Name is not null && topName.Score >= 95
-                && (names.Length == 1 || topName.Score - names[1].Score >= 20);
-            var phoneReliable = topPhone.Phone is not null && topPhone.Score >= 100
-                && (phones.Length == 1 || topPhone.Score - phones[1].Score >= 20);
+            var nameReliable = topName?.Name is not null
+                && topName.Score >= 180
+                && (names.Length == 1 || topName.Score - names[1].Score >= 28);
+            var phoneReliable = topPhone?.Phone is not null
+                && topPhone.Score >= 180
+                && (phones.Length == 1 || topPhone.Score - phones[1].Score >= 28);
 
             if (!nameReliable && !phoneReliable) return null;
 
-            var confidence = nameReliable && phoneReliable ? 0.99 : nameReliable ? 0.96 : 0.94;
+            var confidence = nameReliable && phoneReliable ? 0.995 : nameReliable ? 0.98 : 0.97;
             var evidence = string.Join(" | ", new[]
             {
-                nameReliable ? topName.Evidence : null,
-                phoneReliable ? topPhone.Evidence : null
+                nameReliable ? topName!.Evidence : null,
+                phoneReliable ? topPhone!.Evidence : null
             }.Where(x => !string.IsNullOrWhiteSpace(x)));
 
             return new WhatsAppDesktopUiIdentity(
-                nameReliable ? topName.Name : null,
-                phoneReliable ? topPhone.Phone : null,
+                nameReliable ? topName!.Name : null,
+                phoneReliable ? topPhone!.Phone : null,
                 "WHATSAPP_DESKTOP_UI",
                 confidence,
                 evidence);
@@ -161,93 +189,84 @@ internal static class WhatsAppDesktopUiIdentityResolver
         {
             return null;
         }
+        finally
+        {
+            if (automationObject is not null && Marshal.IsComObject(automationObject))
+            {
+                try { Marshal.FinalReleaseComObject(automationObject); } catch { }
+            }
+        }
     }
 
-    private static List<UiNode> ReadNodes(AutomationElement window)
+    private sealed record NamedElement(dynamic Element, string Name);
+
+    private static List<NamedElement> ReadNamedElements(dynamic root, dynamic condition, int limit)
     {
-        var output = new List<UiNode>();
+        var result = new List<NamedElement>();
         try
         {
-            var condition = new OrCondition(
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Text),
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Button),
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Pane),
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Group));
-            var all = window.FindAll(TreeScope.Descendants, condition);
-            var limit = Math.Min(all.Count, 3500);
-            for (var i = 0; i < limit; i++)
+            dynamic all = root.FindAll(4, condition); // TreeScope_Descendants
+            var count = Math.Min(SafeLength(all), limit);
+            for (var i = 0; i < count; i++)
             {
                 try
                 {
-                    var element = all[i];
-                    if (element.Current.IsOffscreen) continue;
-                    var text = Clean(element.Current.Name);
-                    if (string.IsNullOrWhiteSpace(text)) continue;
-                    output.Add(new UiNode(text, element.Current.BoundingRectangle, element.Current.ControlType));
+                    dynamic element = all.GetElement(i);
+                    var name = Clean(Convert.ToString(element.CurrentName));
+                    if (string.IsNullOrWhiteSpace(name)) continue;
+                    bool offscreen;
+                    try { offscreen = Convert.ToBoolean(element.CurrentIsOffscreen); }
+                    catch { offscreen = false; }
+                    if (offscreen) continue;
+                    result.Add(new NamedElement(element, name));
                 }
                 catch { }
             }
         }
         catch { }
-        return output;
+        return result;
     }
 
-    private static string? ExtractExplicitContactName(string value)
+    private static int SafeLength(dynamic collection)
+    {
+        try { return Math.Max(0, Convert.ToInt32(collection.Length)); }
+        catch
+        {
+            try { return Math.Max(0, Convert.ToInt32(collection.Count)); }
+            catch { return 0; }
+        }
+    }
+
+    private static string? ExtractExplicitContactName(string value, string? localOwnerName)
     {
         foreach (var pattern in ExplicitContactPatterns)
         {
             var match = pattern.Match(value);
             if (!match.Success) continue;
             var raw = match.Groups[1].Value.Trim();
-            var phone = PhoneFromText(raw, null);
-            if (phone is not null) return null;
-            var name = PersonLikeName(raw);
+            if (PhoneFromText(raw, null) is not null) return null;
+            var name = PersonLikeName(raw, localOwnerName);
             if (name is not null) return name;
         }
         return null;
     }
 
-    private static string? PersonLikeName(string value)
+    private static string? PersonLikeName(string value, string? localOwnerName)
     {
         var text = Clean(value);
         if (string.IsNullOrWhiteSpace(text) || text.Length < 2 || text.Length > 80) return null;
         if (GenericNames.Contains(text)) return null;
+        if (!string.IsNullOrWhiteSpace(localOwnerName) && Key(text) == Key(localOwnerName)) return null;
         if (CallAnchorTerms.Any(term => text.Equals(term, StringComparison.OrdinalIgnoreCase))) return null;
         if (PhoneFromText(text, null) is not null) return null;
-        if (text.Contains("http", StringComparison.OrdinalIgnoreCase) || text.Contains("@c.us", StringComparison.OrdinalIgnoreCase)
+        if (text.Contains("http", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("@c.us", StringComparison.OrdinalIgnoreCase)
             || text.Contains("@lid", StringComparison.OrdinalIgnoreCase)) return null;
         var letters = text.Count(char.IsLetter);
         if (letters < 2) return null;
-        if (text.Count(char.IsWhiteSpace) > 7) return null;
-        if (text.EndsWith("...", StringComparison.Ordinal) || text.Length > 55 && text.Contains(' ')) return null;
+        if (text.Count(char.IsWhiteSpace) > 6) return null;
+        if (text.EndsWith("...", StringComparison.Ordinal)) return null;
         return text;
-    }
-
-    private static int ProximityScore(Rect candidate, IReadOnlyList<UiNode> anchors)
-    {
-        if (candidate.IsEmpty || anchors.Count == 0) return 0;
-        var cx = candidate.Left + candidate.Width / 2;
-        var cy = candidate.Top + candidate.Height / 2;
-        var best = double.MaxValue;
-        foreach (var anchor in anchors)
-        {
-            if (anchor.Bounds.IsEmpty) continue;
-            var ax = anchor.Bounds.Left + anchor.Bounds.Width / 2;
-            var ay = anchor.Bounds.Top + anchor.Bounds.Height / 2;
-            var distance = Math.Sqrt(Math.Pow(cx - ax, 2) + Math.Pow(cy - ay, 2));
-            if (distance < best) best = distance;
-        }
-        if (best <= 220) return 80;
-        if (best <= 420) return 60;
-        if (best <= 700) return 35;
-        return 0;
-    }
-
-    private static bool IsTopHeader(Rect candidate, Rect window)
-    {
-        if (candidate.IsEmpty || window.IsEmpty || window.Height <= 0) return false;
-        var centerY = candidate.Top + candidate.Height / 2;
-        return centerY <= window.Top + Math.Min(320, window.Height * 0.38);
     }
 
     private static string? PhoneFromText(string? value, string? knownLocalPhone)
