@@ -28,7 +28,7 @@ import Topbar from "./Topbar";
 import MobileNav from "./MobileNav";
 import MobileSecurityControl from "./MobileSecurityControl";
 import MobileAppLock from "./MobileAppLock";
-import { registrarPush } from "./lib/native";
+import { processarDeepLinkPendente, registrarPush } from "./lib/native";
 
 /* Router por hash: sem dependencia, sem servidor de rotas, funciona em
    qualquer host estatico. Para 8 telas, react-router seria peso morto. */
@@ -137,6 +137,9 @@ function Shell({
   useEffect(() => {
     void registrarPush(sessao).catch((e) => {
       console.warn("push.init_failed", { message: e instanceof Error ? e.message : "unknown" });
+    });
+    void processarDeepLinkPendente().catch((e) => {
+      console.warn("deeplink.retry_failed", { message: e instanceof Error ? e.message : "unknown" });
     });
   }, [sessao.userId, sessao.tenant.id, sessao.modoMestre]);
 

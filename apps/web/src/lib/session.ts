@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase, mensagemDeErro } from "./supabase";
+import { desativarPushAtual } from "./native";
 import type { Role, Sessao, Tenant } from "./types";
 
 const MASTER_TENANT_KEY = "imobi-board:master-tenant";
@@ -154,7 +155,11 @@ export function useSessao() {
   }, [estado]);
   const sair = useCallback(async () => {
     sessionStorage.removeItem(MASTER_TENANT_KEY);
-    await supabase.auth.signOut();
+    try {
+      await desativarPushAtual();
+    } finally {
+      await supabase.auth.signOut();
+    }
   }, []);
 
   return { estado, entrar, sair, entrarComoMestre, voltarAoMestre };

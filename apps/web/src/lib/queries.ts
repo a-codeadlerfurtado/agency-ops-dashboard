@@ -194,8 +194,11 @@ export async function oportunidade(id: string): Promise<Opportunity> {
     .from("opportunities")
     .select(OPP_COLS)
     .eq("id", id)
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  // Nao diferencia "nao existe" de "existe em outro tenant": isso evita
+  // vazar a existencia de um lead que a RLS corretamente ocultou.
+  if (!data) throw new Error("Lead nao encontrado ou sem permissao.");
   return data as unknown as Opportunity;
 }
 

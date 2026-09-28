@@ -38,8 +38,14 @@
 - Teste real da RPC de registro de dispositivo:
   - registro no próprio tenant: permitido;
   - tentativa de registrar dispositivo em outro tenant: rejeitada com SQLSTATE 42501.
+- Teste real de deep link/URL forjado:
+  - oportunidade `bbfba575-bbe3-4887-a492-c314f60cb5a9` pertence ao tenant Imobiliaria Horizonte;
+  - sob JWT autenticado de Terra Concreta, a consulta desse ID retornou 0 linhas;
+  - em teste end-to-end com Chrome/Selenium em viewport mobile, a conta demo Terra Concreta permaneceu em Terra mesmo após forçar `imobi-board:master-tenant` no sessionStorage para Horizonte;
+  - a URL manual `#/leads/bbfba575-bbe3-4887-a492-c314f60cb5a9` exibiu somente `Lead nao encontrado ou sem permissao.`, sem dados do outro tenant.
+- O deep link/push agora faz uma consulta explícita ao Supabase antes de navegar; a RLS precisa autorizar o ID.
+- Deep links recebidos no cold start ficam pendentes somente até a sessão ser restaurada e são então revalidados pelo backend.
 - Membership interna de Master é excluída de inscrição automática de push de clientes.
-- Deep link apenas seleciona uma oportunidade; o carregamento ainda passa pelo Supabase/RLS.
 
 ## UX mobile implementada
 - bottom navigation;
@@ -80,15 +86,20 @@
 - URL scheme `imobiboard://`.
 - textos de Face ID, câmera e biblioteca adicionados ao Info.plist.
 - bridge de registro APNs adicionada ao AppDelegate.
-- falta signing/capability efetiva em conta Apple e archive em macOS.
+- entitlement `aps-environment` e capability de Push Notifications preparados no projeto Xcode;
+- Debug usa ambiente APNs development e Release usa production;
+- falta vincular signing/capability à conta Apple real e executar archive em macOS.
 
 ## Push
 - tabela `imobi_board.mobile_devices` com RLS.
 - RPC autenticada de registro de aparelho.
 - payload de novo lead gerado server-side e filtrado por tenant/membership.
 - Worker tem implementação preparada para FCM Android e APNs iOS.
+- token push desta instalação é desativado no backend antes do logout;
+- listeners de registro são removidos ao trocar sessão/tenant para impedir callback antigo de registrar token no contexto anterior;
 - credenciais privadas permanecem previstas somente como secrets do Worker.
-- falta fornecer/configurar Firebase/FCM e Apple APNs para entrega real em aparelhos.
+- Firebase CLI foi testado em modo não interativo e confirmou que não há conta Google autenticada nesta máquina.
+- falta autenticar/configurar Firebase/FCM e Apple APNs para entrega real em aparelhos.
 
 ## Testes executados
 - web TypeScript build: passou.
@@ -97,8 +108,13 @@
 - Worker TypeScript check: passou.
 - Capacitor sync Android/iOS: passou.
 - Android release build com R8 e assinatura de upload: passou após sync com os 14 plugins Capacitor, incluindo Keyboard.
+- Build final após hardening passou com JDK 21; o JBR atual do Android Studio é Java 25 e é incompatível com este Gradle (major version 69).
 - RLS cross-tenant: passou.
 - RPC de dispositivo cross-tenant: bloqueada corretamente.
+- Deep link forjado de outro tenant: 0 registros visíveis.
+- Spoof de tenant via sessionStorage em teste E2E mobile: não alterou o tenant efetivo da sessão.
+- URL direta de lead de outro tenant em teste E2E mobile: bloqueada, sem vazamento de dados.
+- Registro + desativação de token no logout: testado em transação real; `enabled=false`.
 - Testes em aparelho Android/iPhone físico ainda não executados.
 - iOS archive não pode ser executado nesta máquina Windows.
 

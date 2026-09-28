@@ -1,4 +1,4 @@
-import { Capacitor } from "@capacitor/core";
+import { Capacitor, type PluginListenerHandle } from "@capacitor/core";
 import { App as NativeApp } from "@capacitor/app";
 import { AppLauncher } from "@capacitor/app-launcher";
 import { Browser } from "@capacitor/browser";
@@ -15,11 +15,14 @@ import { supabase } from "./supabase";
 import type { Sessao } from "./types";
 
 const BIOMETRIA_KEY = "imobiboard:biometria";
+const PUSH_TOKEN_KEY = "imobiboard:push-token";
+const PUSH_PLATFORM_KEY = "imobiboard:push-platform";
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+let oportunidadePendente: string | null = null;
 
 export const ehNativo = () => Capacitor.isNativePlatform();
 
-function oportunidadeDaUrl(url: string): string | null {
+export function oportunidadeDaUrl(url: string): string | null {
   try {
     const normalizada = url.replace(/^imobiboard:\/\//i, "https://imobiboard.local/");
     const u = new URL(normalizada);
@@ -30,13 +33,43 @@ function oportunidadeDaUrl(url: string): string | null {
     return null;
   }
 }
-export function navegarUrlExterna(url: string) {
+
+async function validarEAbrirOportunidade(opportunityId: string) {
+  if (!UUID_RE.test(opportunityId)) return false;
+
+  // Nao confiamos no ID vindo do push/deep link. Esta consulta passa pelo
+  // backend do Supabase e pela RLS do tenant antes de qualquer navegacao.
+  const { data, error } = await supabase
+    .from("opportunities")
+    .select("id")
+    .eq("id", opportunityId)
+    .maybeSingle();
+
+  if (error || !data?.id) {
+    const { data: auth } = await supabase.auth.getSession();
+    // Sem sessao, mantemos pendente para validar depois do login/restauracao.
+    // Com sessao ativa, a RLS ja decidiu que o ID nao pertence ao usuario.
+    if (auth.session) oportunidadePendente = null;
+    console.warn("deeplink.access_denied", { code: error?.code ?? "not_found" });
+    return false;
+  }
+
+  oportunidadePendente = null;
+  location.hash = "/leads/" + data.id;
+  return true;
+}
+
+export async function navegarUrlExterna(url: string) {
   const opportunityId = oportunidadeDaUrl(url);
   if (!opportunityId) return false;
-  // O hash so escolhe a tela. A leitura real ainda passa pela RLS do Supabase,
-  // portanto um ID forjado de outro tenant nunca entrega dados.
-  location.hash = "/leads/" + opportunityId;
-  return true;
+  oportunidadePendente = opportunityId;
+  return validarEAbrirOportunidade(opportunityId);
+}
+
+export async function processarDeepLinkPendente() {
+  const opportunityId = oportunidadePendente;
+  if (!opportunityId) return false;
+  return validarEAbrirOportunidade(opportunityId);
 }
 
 export async function iniciarCamadaNativa() {
@@ -56,14 +89,18 @@ export async function iniciarCamadaNativa() {
   }
 
   await NativeApp.addListener("appUrlOpen", ({ url }) => {
-    navegarUrlExterna(url);
+    void navegarUrlExterna(url);
   });
 
   await PushNotifications.addListener("pushNotificationActionPerformed", ({ notification }) => {
     const data = notification.data as Record<string, unknown> | undefined;
     const id = typeof data?.opportunity_id === "string" ? data.opportunity_id : "";
-    if (UUID_RE.test(id)) location.hash = "/leads/" + id;
-    else if (typeof data?.url === "string") navegarUrlExterna(data.url);
+    if (UUID_RE.test(id)) {
+      oportunidadePendente = id;
+      void validarEAbrirOportunidade(id);
+    } else if (typeof data?.url === "string") {
+      void navegarUrlExterna(data.url);
+    }
   });
 }
 
@@ -170,6 +207,15 @@ export async function observarRede(cb: (conectado: boolean) => void) {
 }
 
 let pushInicializadoPara: string | null = null;
+let pushRegistrationHandle: PluginListenerHandle | null = null;
+let pushRegistrationErrorHandle: PluginListenerHandle | null = null;
+
+async function limparListenersRegistroPush() {
+  await pushRegistrationHandle?.remove();
+  await pushRegistrationErrorHandle?.remove();
+  pushRegistrationHandle = null;
+  pushRegistrationErrorHandle = null;
+}
 
 async function salvarPushToken(token: Token, sessao: Sessao) {
   const info = await NativeApp.getInfo().catch(() => null);
@@ -182,7 +228,13 @@ async function salvarPushToken(token: Token, sessao: Sessao) {
   });
   if (error) {
     console.warn("push.registration_failed", { code: error.code });
+    return;
   }
+
+  await Promise.all([
+    Preferences.set({ key: PUSH_TOKEN_KEY, value: token.value }),
+    Preferences.set({ key: PUSH_PLATFORM_KEY, value: Capacitor.getPlatform() }),
+  ]);
 }
 
 async function iniciarRegistroPush(sessao: Sessao, solicitarPermissao: boolean) {
@@ -198,10 +250,14 @@ async function iniciarRegistroPush(sessao: Sessao, solicitarPermissao: boolean) 
   const chave = sessao.userId + ":" + sessao.tenant.id;
   if (pushInicializadoPara === chave) return true;
 
-  await PushNotifications.addListener("registration", (token) => {
+  // Evita callbacks antigos capturando uma sessao/tenant anterior quando a
+  // mesma instalacao troca de usuario ou tenant.
+  await limparListenersRegistroPush();
+
+  pushRegistrationHandle = await PushNotifications.addListener("registration", (token) => {
     void salvarPushToken(token, sessao);
   });
-  await PushNotifications.addListener("registrationError", (erro) => {
+  pushRegistrationErrorHandle = await PushNotifications.addListener("registrationError", (erro) => {
     console.warn("push.registration_error", { message: String(erro.error ?? "unknown") });
   });
   await PushNotifications.register();
@@ -217,4 +273,37 @@ export async function registrarPush(sessao: Sessao) {
 /** Deve ser chamado somente apos acao explicita do usuario. */
 export async function ativarPush(sessao: Sessao) {
   return iniciarRegistroPush(sessao, true);
+}
+
+
+/**
+ * Desativa o token desta instalacao antes de encerrar a sessao. A RPC usa o
+ * JWT ainda valido e so consegue alterar o proprio dispositivo do usuario.
+ */
+export async function desativarPushAtual() {
+  if (!ehNativo()) return;
+
+  const [tokenSalvo, plataformaSalva] = await Promise.all([
+    Preferences.get({ key: PUSH_TOKEN_KEY }),
+    Preferences.get({ key: PUSH_PLATFORM_KEY }),
+  ]);
+  const token = tokenSalvo.value;
+  const plataforma = plataformaSalva.value;
+
+  if (token && plataforma) {
+    const { error } = await supabase.rpc("desativar_dispositivo_mobile", {
+      p_token: token,
+      p_plataforma: plataforma,
+    });
+    if (error) {
+      console.warn("push.unregister_failed", { code: error.code });
+    }
+  }
+
+  await Promise.all([
+    Preferences.remove({ key: PUSH_TOKEN_KEY }),
+    Preferences.remove({ key: PUSH_PLATFORM_KEY }),
+    limparListenersRegistroPush(),
+  ]);
+  pushInicializadoPara = null;
 }

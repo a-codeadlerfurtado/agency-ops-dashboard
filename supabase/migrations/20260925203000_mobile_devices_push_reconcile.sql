@@ -93,6 +93,25 @@ revoke all on function imobi_board.registrar_dispositivo_mobile(text,text,uuid,t
 grant execute on function imobi_board.registrar_dispositivo_mobile(text,text,uuid,text,text)
   to authenticated;
 
+create or replace function imobi_board.desativar_dispositivo_mobile(
+  p_token text,
+  p_plataforma text
+) returns void
+language plpgsql security definer set search_path=''
+as $function$
+begin
+  if (select auth.uid()) is null then
+    raise exception 'Sessao obrigatoria.' using errcode='42501';
+  end if;
+
+  update imobi_board.mobile_devices
+     set enabled=false, updated_at=now()
+   where user_id=(select auth.uid())
+     and platform=lower(btrim(p_plataforma))
+     and push_token=btrim(p_token);
+end;
+$function$;
+
 revoke all on function imobi_board.desativar_dispositivo_mobile(text,text)
   from public, anon, service_role;
 grant execute on function imobi_board.desativar_dispositivo_mobile(text,text)
