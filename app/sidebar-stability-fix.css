@@ -162,6 +162,7 @@
 .shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Onboarding"] { order: 40; }
 .shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Campanhas"] { order: 50; }
 .shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Reuniões"] { order: 60; }
+.shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Calls SDR"] { order: 65; }
 .shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Direção Comercial"] { order: 70; }
 .shell:has(.leo-native-popover-wrap) .side-nav-items > [title="Financeiro"] { order: 80; }
 .shell:has(.leo-native-popover-wrap) .side-nav-items > [title^="Central Criativa"] { order: 90; }
