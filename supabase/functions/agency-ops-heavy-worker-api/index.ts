@@ -108,13 +108,29 @@ function normalizedNameKey(value: unknown) {
 
 function inferProspectNameFromSegments(segments: any[], ownerName: string) {
   const ownerKey = normalizedNameKey(ownerName);
-  const stop = new Set(["tudo","bem","aqui","quem","gente","sim","claro","hoje","agora","voce","você","senhor","senhora","amigo","amiga","cara","bom","boa"]);
+  const stop = new Set([
+    "tudo","bem","aqui","ali","la","lá","quem","gente","pessoal","sim","nao","não","claro","hoje","agora",
+    "voce","você","senhor","senhora","amigo","amiga","cara","bom","boa","mes","mês","ai","aí","nada",
+    "isso","isto","essa","esse","ele","ela","eu","ok","ta","tá","to","tô","perfeito","beleza","obrigado",
+    "obrigada","tchau","ola","olá","alo","alô"
+  ]);
   const scores = new Map<string, { score: number; name: string }>();
-  const add = (raw: string, score: number) => {
+  const plausibleTranscriptName = (raw: string) => {
     const name = safeProspectName(raw);
+    if (!name) return null;
+    const key = normalizedNameKey(name);
+    if (!key || stop.has(key) || key === ownerKey) return null;
+    const first = Array.from(name.trim())[0] || "";
+    // Transcript fallback is deliberately stricter than WhatsApp/CRM identity.
+    // A direct-address name should look like a proper name, not a filler word.
+    if (!first || first !== first.toLocaleUpperCase("pt-BR") || first === first.toLocaleLowerCase("pt-BR")) return null;
+    if (name.length < 3 || name.length > 40 || name.split(/\s+/).length > 3) return null;
+    return name;
+  };
+  const add = (raw: string, score: number) => {
+    const name = plausibleTranscriptName(raw);
     if (!name) return;
     const key = normalizedNameKey(name);
-    if (!key || stop.has(key) || key === ownerKey) return;
     const prev = scores.get(key);
     scores.set(key, { score: (prev?.score || 0) + score, name });
   };
@@ -123,15 +139,31 @@ function inferProspectNameFromSegments(segments: any[], ownerName: string) {
     if (!speaker || (ownerKey && speaker !== ownerKey && !speaker.startsWith(ownerKey))) continue;
     const text = String(seg?.text || "").trim();
     if (!text) continue;
-    for (const m of text.matchAll(/(?:^|\b)(?:al[oô]|oi|ol[aá]|bom dia|boa tarde|boa noite)\s*[,!:\-]?\s+([\p{L}][\p{L}'’\-]{1,30})\b/giu))
+
+    // Strong greetings/direct address.
+    for (const m of text.matchAll(/(?:^|\b)(?:al[oô]|oi|ol[aá]|bom dia|boa tarde|boa noite)\s*[,!:\-]?\s+([\p{Lu}][\p{L}'’\-]{1,30})\b/giu))
+      add(m[1], 7);
+
+    // "Gente, Carla, nesse..." and "Bom, João, se..." are common SDR vocatives.
+    for (const m of text.matchAll(/(?:^|[.!?]\s+)(?:gente|bom|boa|ent[aã]o|olha)\s*[,!:\-]\s*([\p{Lu}][\p{L}'’\-]{1,30})\s*[,!?:\-]/giu))
+      add(m[1], 7);
+
+    // "Ivone, eu...", "Carla, nesse...", "João, se..." at sentence start.
+    for (const m of text.matchAll(/(?:^|[.!?]\s+)([\p{Lu}][\p{L}'’\-]{1,30})\s*[,!?:\-]\s*(?:eu|se|nesse|neste|nessa|nesta|voc[eê]|a gente|vamos|olha|tem|estou|t[oô]|vou|s[oó]|o motivo|tudo bem|lembra|me diz|me fala)/giu))
+      add(m[1], 7);
+
+    // Slightly weaker mid-sentence direct address, accepted only with a clear vocative continuation.
+    for (const m of text.matchAll(/\b([\p{Lu}][\p{L}'’\-]{1,30})\s*[,!?]\s*(?:o motivo|tudo bem|voc[eê]|lembra|tem disponibilidade|a gente|eu falei|meu amigo|minha amiga|amigo|amiga)/giu))
       add(m[1], 5);
-    for (const m of text.matchAll(/\b([\p{L}][\p{L}'’\-]{1,30})\s*[,!?]\s*(?:o motivo|tudo bem|voc[eê]|lembra|tem disponibilidade|a gente|eu falei|meu amigo|minha amiga|amigo|amiga)/giu))
-      add(m[1], 5);
-    for (const m of text.matchAll(/\b(?:t[aá]\s+ok|ok|beleza|valeu|obrigado|obrigada|at[eé]\s+logo)\s*[,!:\-]?\s+([\p{L}][\p{L}'’\-]{1,30})\b/giu))
+
+    for (const m of text.matchAll(/\b(?:t[aá]\s+ok|ok|beleza|valeu|obrigado|obrigada|at[eé]\s+logo)\s*[,!:\-]?\s+([\p{Lu}][\p{L}'’\-]{1,30})\b/giu))
       add(m[1], 5);
   }
   const ranked = [...scores.values()].sort((a,b) => b.score - a.score);
-  return ranked[0] && ranked[0].score >= 4 ? ranked[0].name : null;
+  if (!ranked[0] || ranked[0].score < 5) return null;
+  // Do not auto-label an ambiguous transcript where two names have comparable support.
+  if (ranked[1] && ranked[0].score - ranked[1].score < 3) return null;
+  return ranked[0].name;
 }
 
 async function resolveTeamMentionIdentity(sb: any, rawName: string | null) {
