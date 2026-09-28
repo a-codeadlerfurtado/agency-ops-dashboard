@@ -118,9 +118,30 @@ Deno.serve(async(req:Request)=>{
   if(!person||(approval||[]).length===0) return reply({error:"profile_locked"},403);
   const {data:roster}=await ops.from("team_roster")
     .select("person,role,access_level,is_former").eq("person",person).maybeSingle();
-  if(!roster||roster.is_former||String(roster.role).toUpperCase()!=="SDR") return reply({error:"forbidden"},403);
+  const requesterRole=String(roster?.role||"").toUpperCase();
+  const isOwnSdr=Boolean(roster&&!roster.is_former&&requesterRole==="SDR");
+  const isLeonardoViewer=Boolean(roster&&!roster.is_former&&person==="Leonardo Augusto"&&requesterRole==="COMMERCIAL");
+  if(!isOwnSdr&&!isLeonardoViewer) return reply({error:"forbidden"},403);
+
+  let targetPeople:string[]=[person];
+  if(isLeonardoViewer){
+    const {data:sdrRows,error:sdrRowsError}=await ops.from("team_roster")
+      .select("person").eq("role","SDR").eq("is_former",false).order("person",{ascending:true});
+    if(sdrRowsError) return reply({error:"sdr_roster_failed",detail:sdrRowsError.message},500);
+    targetPeople=(sdrRows||[]).map((row:Row)=>clean(row.person)).filter(Boolean);
+    const requestedSdr=clean(requestUrl.searchParams.get("sdr_person"));
+    if(requestedSdr){
+      if(!targetPeople.includes(requestedSdr)) return reply({error:"sdr_not_allowed"},403);
+      targetPeople=[requestedSdr];
+    }
+    if(!targetPeople.length) return reply({
+      profile:{person,role:requesterRole,display_role:"Direção Comercial",access_level:"SDR_CALLS_READ_ONLY"},
+      summary:{meetings:0,calls:0},meetings:[],calls:[],sessions:[],sdr_options:[],generated_at:new Date().toISOString()
+    });
+  }
 
   if(req.method==="POST"){
+    if(!isOwnSdr) return reply({error:"read_only"},403);
     const body:Row=await req.json().catch(()=>({}));
     const action=clean(body.action).toLowerCase();
     const sessionId=clean(body.session_id);
@@ -166,7 +187,7 @@ Deno.serve(async(req:Request)=>{
   if(detailSessionId){
     const {data:sessionRow,error:sessionError}=await ops.from("meeting_capture_sessions")
       .select("id,owner_person,local_session_id,title,started_at,ended_at,state,capture_mode,transcript_id,metadata,audio_status,audio_source,audio_local_path,audio_remote_path,audio_mixed_path,audio_duration_ms,audio_size_bytes,audio_mime_type,audio_last_error,created_at,updated_at")
-      .eq("id",detailSessionId).eq("owner_person",person).maybeSingle();
+      .eq("id",detailSessionId).in("owner_person",targetPeople).maybeSingle();
     if(sessionError) return reply({error:"detail_session_failed",detail:sessionError.message},500);
     if(!sessionRow||!String(sessionRow.capture_mode||"").toUpperCase().includes("WHATSAPP")) return reply({error:"call_not_found"},404);
 
@@ -254,6 +275,8 @@ Deno.serve(async(req:Request)=>{
         id:sessionRow.id,session_id:sessionRow.id,local_session_id:sessionRow.local_session_id,
         title:sessionRow.title,started_at:sessionRow.started_at,ended_at:sessionRow.ended_at,
         state:sessionRow.state,capture_mode:sessionRow.capture_mode,
+        sdr_person:sessionRow.owner_person||null,
+        owner_person:sessionRow.owner_person||null,
         remote_phone:sessionRow.metadata?.remote_phone||null,
         remote_name:safeContactName(sessionRow.metadata?.remote_name),
         whatsapp_name:detailNames.whatsapp_name,
@@ -286,13 +309,13 @@ Deno.serve(async(req:Request)=>{
   const [sessionRes,transcriptRes,callRes]=await Promise.all([
     ops.from("meeting_capture_sessions")
       .select("id,local_session_id,title,started_at,ended_at,state,capture_mode,transcript_id,metadata,audio_status,audio_source,audio_local_path,audio_remote_path,audio_mixed_path,audio_duration_ms,audio_size_bytes,audio_mime_type,audio_last_error,created_at")
-      .eq("owner_person",person).order("started_at",{ascending:false}).limit(500),
+      .in("owner_person",targetPeople).order("started_at",{ascending:false}).limit(1000),
     ops.from("meeting_transcripts")
       .select("id,source_url,meeting_started_at,meeting_ended_at,duration_seconds,participants,summary,decisions,commitments,ai_signals,metadata,created_at,owner_person")
-      .eq("owner_person",person).order("meeting_started_at",{ascending:false}).limit(500),
+      .in("owner_person",targetPeople).order("meeting_started_at",{ascending:false}).limit(1000),
     ops.from("commercial_call_records")
-      .select("id,lead_id,capture_session_id,transcript_id,channel,remote_phone,remote_name,outcome,notes,next_step,next_step_at,metadata,created_at")
-      .eq("sdr_person",person).order("created_at",{ascending:false}).limit(500)
+      .select("id,lead_id,capture_session_id,transcript_id,sdr_person,channel,remote_phone,remote_name,outcome,notes,next_step,next_step_at,metadata,created_at")
+      .in("sdr_person",targetPeople).order("created_at",{ascending:false}).limit(1000)
   ]);
   const failed=[sessionRes,transcriptRes,callRes].find((r:any)=>r?.error);
   if(failed?.error) return reply({error:"query_failed",detail:failed.error.message},500);
@@ -348,6 +371,8 @@ Deno.serve(async(req:Request)=>{
       session_id:session.id,
       commercial_call_id:record?.id||null,
       transcript_id:session.transcript_id||record?.transcript_id||null,
+      sdr_person:record?.sdr_person||session.owner_person||null,
+      owner_person:session.owner_person||record?.sdr_person||null,
       channel:record?.channel||"WHATSAPP_DESKTOP_CALL",
       capture_mode:session.capture_mode||null,
       remote_phone:remotePhone,
@@ -381,6 +406,8 @@ Deno.serve(async(req:Request)=>{
   });
   const meetings=(transcriptRes.data||[]).map((r:Row)=>({
     id:r.id,
+    owner_person:r.owner_person||null,
+    sdr_person:r.owner_person||null,
     title:r.metadata?.donnah_title||r.metadata?.tipo_reuniao||"Reunião",
     started_at:r.meeting_started_at,
     ended_at:r.meeting_ended_at,
@@ -394,25 +421,32 @@ Deno.serve(async(req:Request)=>{
   }));
 
   const requiredAgentVersion="desktop-0.5.2";
-  const {data:latestDevice}=await ops.from("meeting_capture_devices")
-    .select("extension_version,last_seen_at,device_name,status")
-    .eq("owner_person",person)
-    .eq("status","ACTIVE")
-    .order("last_seen_at",{ascending:false,nullsFirst:false})
-    .limit(1)
-    .maybeSingle();
+  let latestDevice:Row|null=null;
+  if(isOwnSdr){
+    const {data}=await ops.from("meeting_capture_devices")
+      .select("extension_version,last_seen_at,device_name,status")
+      .eq("owner_person",person)
+      .eq("status","ACTIVE")
+      .order("last_seen_at",{ascending:false,nullsFirst:false})
+      .limit(1)
+      .maybeSingle();
+    latestDevice=data||null;
+  }
   const currentAgentVersion=clean(latestDevice?.extension_version)||null;
 
   return reply({
-    profile:{person,role:"SDR",display_role:"SDR",access_level:"OWN_ACTIVITY_ONLY"},
-    agent:{
+    profile:isOwnSdr
+      ? {person,role:"SDR",display_role:"SDR",access_level:"OWN_ACTIVITY_ONLY"}
+      : {person,role:requesterRole,display_role:"Direção Comercial",access_level:"SDR_CALLS_READ_ONLY"},
+    agent:isOwnSdr?{
       current_version:currentAgentVersion,
       required_version:requiredAgentVersion,
       update_required:currentAgentVersion!==requiredAgentVersion,
       last_seen_at:latestDevice?.last_seen_at||null,
       device_name:latestDevice?.device_name||null,
-      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.25.5/RelatoAI-Desktop-SDR.exe"
-    },
+      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.25.8/RelatoAI-Desktop-SDR.exe"
+    }:null,
+    sdr_options:isLeonardoViewer?targetPeople:[],
     summary:{meetings:meetings.length,calls:enrichedCalls.length},
     meetings,calls:enrichedCalls,sessions,
     generated_at:new Date().toISOString()
