@@ -1,6 +1,6 @@
 # ImobiBoard mobile — checklist de publicação
 
-Estado em 25/09/2026. Não marcar um item como validado sem teste real.
+Estado atualizado em 28/09/2026. Não marcar um item como validado sem teste real.
 
 ## Android — código e build
 - [x] App ID `com.imobiboard.crm`.
@@ -41,6 +41,8 @@ Saída esperada:
 - [x] Bridge APNs no AppDelegate.
 - [x] Push Notifications capability preparada.
 - [x] `aps-environment`: development em Debug, production em Release.
+- [x] `PrivacyInfo.xcprivacy` incluído no target com razão `CA92.1` para `UserDefaults`.
+- [x] Compilação do target iOS em runner macOS/Xcode 26 validada por GitHub Actions.
 - [ ] Bundle ID registrado na conta Apple Developer.
 - [ ] Team/signing configurados.
 - [ ] APNs Key criada e secrets configurados no Worker.
@@ -89,5 +91,5 @@ Não colocar nenhum destes valores em Git, Vite, Capacitor config ou bundle:
 
 ## Bloqueios externos reais
 1. Firebase: a CLI confirmou ausência de login Google nesta máquina.
-2. Apple: cadastro do Bundle ID, APNs e signing exigem conta Apple Developer; archive final exige macOS/Xcode.
+2. Apple: o projeto já compila em macOS/Xcode 26 via CI; cadastro do Bundle ID, APNs, signing e archive assinado ainda exigem autorização da conta Apple Developer.
 3. Publicação: Play Console/App Store Connect podem exigir aceite de termos, 2FA e etapas da conta.
