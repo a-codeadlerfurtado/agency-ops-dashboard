@@ -57,16 +57,32 @@ internal static class WhatsAppDesktopUiIdentityResolver
             if (automationObject is null) return null;
             dynamic automation = automationObject;
 
-            var pids = Process.GetProcesses()
+            var processes = Process.GetProcesses()
                 .Where(p => p.ProcessName.StartsWith("WhatsApp", StringComparison.OrdinalIgnoreCase))
-                .Select(p => p.Id)
-                .ToHashSet();
+                .ToArray();
+            var pids = processes.Select(p => p.Id).ToHashSet();
             if (pids.Count == 0) return null;
 
             dynamic trueCondition = automation.CreateTrueCondition();
-            dynamic windows = automation.GetRootElement().FindAll(2, trueCondition); // TreeScope_Children
             var candidates = new List<Candidate>();
+            var inspectedHandles = new HashSet<nint>();
 
+            // Prefer the real HWND. In recent Microsoft Store/WebView2 builds, descendants
+            // can belong to msedgewebview2 even though the visible root is WhatsApp.
+            foreach (var process in processes.OrderByDescending(p => p.MainWindowHandle != IntPtr.Zero))
+            {
+                try
+                {
+                    if (process.MainWindowHandle == IntPtr.Zero || !inspectedHandles.Add(process.MainWindowHandle)) continue;
+                    dynamic window = automation.ElementFromHandle(process.MainWindowHandle);
+                    InspectWindow(window, automation, trueCondition, knownLocalPhone, localOwnerName, candidates);
+                }
+                catch { }
+            }
+
+            // Fallback for older builds where UI Automation exposes WhatsApp as a normal
+            // top-level child of the desktop root.
+            dynamic windows = automation.GetRootElement().FindAll(2, trueCondition); // TreeScope_Children
             for (var i = 0; i < SafeLength(windows); i++)
             {
                 dynamic window;
@@ -74,79 +90,9 @@ internal static class WhatsAppDesktopUiIdentityResolver
                 {
                     window = windows.GetElement(i);
                     if (!pids.Contains((int)window.CurrentProcessId)) continue;
+                    InspectWindow(window, automation, trueCondition, knownLocalPhone, localOwnerName, candidates);
                 }
-                catch { continue; }
-
-                var windowNames = ReadNamedElements(window, trueCondition, 2500);
-                if (windowNames.Count == 0) continue;
-
-                foreach (var node in windowNames)
-                {
-                    var explicitName = ExtractExplicitContactName(node.Name, localOwnerName);
-                    if (explicitName is not null)
-                        candidates.Add(new Candidate(220, explicitName, PhoneFromText(node.Name, knownLocalPhone), "explicit:" + node.Name));
-                }
-
-                var anchorList = new List<NamedElement>();
-                foreach (var node in windowNames)
-                {
-                    var anchorMatch = false;
-                    foreach (var term in CallAnchorTerms)
-                    {
-                        if (!node.Name.Contains(term, StringComparison.OrdinalIgnoreCase)) continue;
-                        anchorMatch = true;
-                        break;
-                    }
-                    if (!anchorMatch) continue;
-                    anchorList.Add(node);
-                    if (anchorList.Count >= 12) break;
-                }
-                var anchors = anchorList.ToArray();
-                if (anchors.Length == 0) continue;
-
-                dynamic walker = automation.ControlViewWalker;
-                foreach (var anchor in anchors)
-                {
-                    dynamic current = anchor.Element;
-                    for (var depth = 0; depth < 5; depth++)
-                    {
-                        try
-                        {
-                            current = walker.GetParentElement(current);
-                            if (current is null) break;
-                        }
-                        catch { break; }
-
-                        var localNodes = ReadNamedElements(current, trueCondition, 420);
-                        if (localNodes.Count == 0) continue;
-                        if (localNodes.Count > 300 && depth >= 2) break;
-
-                        var compactBoost = localNodes.Count <= 35 ? 70 : localNodes.Count <= 90 ? 40 : localNodes.Count <= 180 ? 20 : 0;
-                        var depthBoost = Math.Max(0, 80 - depth * 18);
-
-                        foreach (var node in localNodes)
-                        {
-                            var explicitName = ExtractExplicitContactName(node.Name, localOwnerName);
-                            if (explicitName is not null)
-                            {
-                                candidates.Add(new Candidate(
-                                    230 + compactBoost,
-                                    explicitName,
-                                    PhoneFromText(node.Name, knownLocalPhone),
-                                    "call-subtree-explicit:" + node.Name));
-                                continue;
-                            }
-
-                            var phone = PhoneFromText(node.Name, knownLocalPhone);
-                            if (phone is not null)
-                                candidates.Add(new Candidate(95 + compactBoost + depthBoost, null, phone, "call-subtree-phone:" + node.Name));
-
-                            var person = PersonLikeName(node.Name, localOwnerName);
-                            if (person is not null)
-                                candidates.Add(new Candidate(80 + compactBoost + depthBoost, person, null, "call-subtree-name:" + node.Name));
-                        }
-                    }
-                }
+                catch { }
             }
 
             var names = candidates.Where(x => x.Name is not null)
@@ -205,6 +151,74 @@ internal static class WhatsAppDesktopUiIdentityResolver
             if (automationObject is not null && Marshal.IsComObject(automationObject))
             {
                 try { Marshal.FinalReleaseComObject(automationObject); } catch { }
+            }
+        }
+    }
+
+    private static void InspectWindow(
+        dynamic window,
+        dynamic automation,
+        dynamic trueCondition,
+        string? knownLocalPhone,
+        string? localOwnerName,
+        List<Candidate> candidates)
+    {
+        List<NamedElement> windowNames = ReadNamedElements(window, trueCondition, 3200);
+        if (windowNames.Count == 0) return;
+
+        foreach (var node in windowNames)
+        {
+            var explicitName = ExtractExplicitContactName(node.Name, localOwnerName);
+            if (explicitName is not null)
+                candidates.Add(new Candidate(240, explicitName, PhoneFromText(node.Name, knownLocalPhone), "explicit:" + node.Name));
+        }
+
+        var anchors = windowNames
+            .Where(node => CallAnchorTerms.Any(term => node.Name.Contains(term, StringComparison.OrdinalIgnoreCase)))
+            .Take(16)
+            .ToArray();
+        if (anchors.Length == 0) return;
+
+        dynamic walker = automation.ControlViewWalker;
+        foreach (var anchor in anchors)
+        {
+            dynamic current = anchor.Element;
+            for (var depth = 0; depth < 6; depth++)
+            {
+                try
+                {
+                    current = walker.GetParentElement(current);
+                    if (current is null) break;
+                }
+                catch { break; }
+
+                List<NamedElement> localNodes = ReadNamedElements(current, trueCondition, 520);
+                if (localNodes.Count == 0) continue;
+                if (localNodes.Count > 380 && depth >= 2) break;
+
+                var compactBoost = localNodes.Count <= 35 ? 90 : localNodes.Count <= 90 ? 55 : localNodes.Count <= 180 ? 30 : 0;
+                var depthBoost = Math.Max(0, 90 - depth * 18);
+                foreach (var node in localNodes)
+                {
+                    var explicitName = ExtractExplicitContactName(node.Name, localOwnerName);
+                    if (explicitName is not null)
+                    {
+                        candidates.Add(new Candidate(
+                            260 + compactBoost,
+                            explicitName,
+                            PhoneFromText(node.Name, knownLocalPhone),
+                            "call-subtree-explicit:" + node.Name));
+                        continue;
+                    }
+
+                    var phone = PhoneFromText(node.Name, knownLocalPhone);
+                    if (phone is not null)
+                        candidates.Add(new Candidate(110 + compactBoost + depthBoost, null, phone, "call-subtree-phone:" + node.Name));
+
+                    var person = PersonLikeName(node.Name, localOwnerName);
+                    if (person is not null)
+                        candidates.Add(new Candidate(95 + compactBoost + depthBoost, person, null, "call-subtree-name:" + node.Name));
+                }
             }
         }
     }

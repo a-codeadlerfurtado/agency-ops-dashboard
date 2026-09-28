@@ -12,7 +12,7 @@ internal sealed record WhatsAppCallIdentity(
 internal static class WhatsAppCallIdentityResolver
 {
     private static readonly Regex ChatPhoneRegex = new(
-        @"(?<fromme>true|false)_(?<phone>\d{10,15})@c\.us_[A-Za-z0-9]+",
+        @"(?<fromme>true|false)_(?<phone>\d{10,15})@(?:c\.us|s\.whatsapp\.net)_[A-Za-z0-9]+",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     public static async Task<WhatsAppCallIdentity> ResolveAsync(
@@ -265,12 +265,7 @@ internal static class WhatsAppCallIdentityResolver
                                         var candidate = window.Substring(quote + 1, end - quote - 1)
                                             .Replace("\0", " ").Trim();
                                         candidate = Regex.Replace(candidate, @"\s+", " ");
-                                        if (candidate.Length >= 2 && candidate.Length <= 100
-                                            && !candidate.All(char.IsDigit)
-                                            && !candidate.Contains("@c.us", StringComparison.OrdinalIgnoreCase)
-                                            && !candidate.Contains("@lid", StringComparison.OrdinalIgnoreCase)
-                                            && !candidate.Equals("true", StringComparison.OrdinalIgnoreCase)
-                                            && !candidate.Equals("false", StringComparison.OrdinalIgnoreCase))
+                                        if (IsPlausibleStoredName(candidate))
                                         {
                                             var fieldBoost = field.Equals("pushname", StringComparison.OrdinalIgnoreCase) ? 400 : 250;
                                             best.Add((fieldBoost + Math.Max(0, 1200 - distance), candidate));
@@ -287,6 +282,24 @@ internal static class WhatsAppCallIdentityResolver
             return best.OrderByDescending(x => x.score).Select(x => x.name).FirstOrDefault();
         }
         catch { return null; }
+    }
+
+    private static bool IsPlausibleStoredName(string candidate)
+    {
+        if (candidate.Length < 2 || candidate.Length > 100 || candidate.All(char.IsDigit)) return false;
+        if (candidate.Contains("@c.us", StringComparison.OrdinalIgnoreCase)
+            || candidate.Contains("@lid", StringComparison.OrdinalIgnoreCase)
+            || candidate.Contains("@s.whatsapp.net", StringComparison.OrdinalIgnoreCase)
+            || candidate.Contains('_')
+            || candidate.Contains('{')
+            || candidate.Contains('}')) return false;
+        var generic = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "true","false","phoneNumber","order_details","remote","local","name","pushname",
+            "contact","contacts","whatsapp","undefined","null"
+        };
+        if (generic.Contains(candidate)) return false;
+        return candidate.Count(char.IsLetter) >= 2;
     }
 
     public static string? PhoneFromVisibleText(string? value)
