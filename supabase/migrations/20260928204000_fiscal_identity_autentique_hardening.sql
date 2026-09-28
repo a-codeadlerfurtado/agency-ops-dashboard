@@ -235,3 +235,118 @@ select cron.schedule(
 );
 
 select agency_ops.refresh_fiscal_identity_alerts();
+
+
+-- Prevent the hourly reconciliation from re-running expensive downstream work
+-- when the Autentique payload did not materially change.
+create or replace function agency_ops.tg_contract_auto_enrich()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'agency_ops','net','pg_catalog'
+as $$
+declare
+  v_secret text;
+  v_request_id bigint;
+begin
+  if tg_op='UPDATE'
+     and new.client_id is not distinct from old.client_id
+     and new.signed_file_url is not distinct from old.signed_file_url
+     and new.original_file_url is not distinct from old.original_file_url
+     and new.document_status is not distinct from old.document_status
+     and new.is_deleted is not distinct from old.is_deleted then
+    return new;
+  end if;
+
+  if new.client_id is null
+     or coalesce(new.is_deleted,false)
+     or coalesce(new.signed_file_url,new.original_file_url,'') = '' then
+    return new;
+  end if;
+
+  select value #>> '{}' into v_secret
+  from agency_ops.automation_settings
+  where key='CONTRACT_ENRICH_SECRET';
+  if coalesce(v_secret,'')='' then return new; end if;
+
+  begin
+    v_request_id := net.http_post(
+      'https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-contract-auto-enrich',
+      jsonb_build_object('contract_id',new.id::text),
+      '{}'::jsonb,
+      jsonb_build_object('Content-Type','application/json','x-ops-secret',v_secret),
+      60000
+    );
+  exception when others then
+    null;
+  end;
+  return new;
+end
+$$;
+
+create or replace function agency_ops.tg_capture_contract_commercial_evidence()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'agency_ops','pg_catalog'
+as $$
+begin
+  if tg_op='UPDATE'
+     and new.client_id is not distinct from old.client_id
+     and new.term_months is not distinct from old.term_months
+     and new.term_confidence is not distinct from old.term_confidence
+     and new.is_finished is not distinct from old.is_finished
+     and new.finished_at is not distinct from old.finished_at then
+    return new;
+  end if;
+  perform agency_ops.capture_contract_commercial_evidence(new.id);
+  return new;
+end
+$$;
+
+create or replace function agency_ops.notify_contract_event_driven()
+returns trigger
+language plpgsql
+security definer
+set search_path to 'agency_ops','public','pg_catalog'
+as $$
+declare
+  v_name text;
+begin
+  if tg_op='UPDATE'
+     and new.client_id is not distinct from old.client_id
+     and new.client_match_status is not distinct from old.client_match_status
+     and new.is_deleted is not distinct from old.is_deleted then
+    return new;
+  end if;
+
+  if new.client_id is not null then
+    select display_name into v_name from agency_ops.clients where id=new.client_id;
+  end if;
+
+  if tg_op='INSERT' then
+    insert into agency_ops.contract_private_notifications(
+      event_key,type,level,title,description,client_id,contract_id,occurred_at,metadata
+    ) values (
+      'contract:new:'||new.autentique_document_id,
+      'CONTRACT_RECEIVED','INFO','Novo contrato recebido',
+      coalesce(v_name,new.document_name,'Documento Autentique')||' — documento recebido no Autentique'||case when new.client_id is null then ' e ainda não vinculado a um cliente.' else '.' end,
+      new.client_id,new.id,coalesce(new.source_created_at,new.first_seen_at,now()),
+      jsonb_build_object('autentique_document_id',new.autentique_document_id,'document_name',new.document_name,'match_status',new.client_match_status,'visibility','ADLER_ONLY','source','EVENT_TRIGGER')
+    ) on conflict(event_key) do nothing;
+  end if;
+
+  if new.client_id is null and new.client_match_status in ('UNMATCHED','AMBIGUOUS') and not coalesce(new.is_deleted,false) then
+    insert into agency_ops.contract_private_notifications(
+      event_key,type,level,title,description,client_id,contract_id,occurred_at,metadata
+    ) values (
+      'contract:unmatched:'||new.autentique_document_id,
+      'CONTRACT_UNMATCHED','ATTENTION','Contrato sem cliente identificado',
+      coalesce(new.document_name,'Documento Autentique')||' precisa ser vinculado a um cliente antes de entrar nos alertas de renovação.',
+      null,new.id,coalesce(new.first_seen_at,now()),
+      jsonb_build_object('autentique_document_id',new.autentique_document_id,'match_status',new.client_match_status,'document_name',new.document_name,'visibility','ADLER_ONLY','source','EVENT_TRIGGER')
+    ) on conflict(event_key) do nothing;
+  end if;
+  return new;
+end
+$$;
