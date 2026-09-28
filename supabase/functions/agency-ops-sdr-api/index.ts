@@ -135,22 +135,86 @@ Deno.serve(async(req:Request)=>{
       targetPeople=[requestedSdr];
     }
     if(!targetPeople.length) return reply({
-      profile:{person,role:requesterRole,display_role:"Direção Comercial",access_level:"SDR_CALLS_READ_ONLY"},
+      profile:{person,role:requesterRole,display_role:"Direção Comercial",access_level:"SDR_CALLS_COACHING"},
       summary:{meetings:0,calls:0},meetings:[],calls:[],sessions:[],sdr_options:[],generated_at:new Date().toISOString()
     });
   }
 
   if(req.method==="POST"){
-    if(!isOwnSdr) return reply({error:"read_only"},403);
     const body:Row=await req.json().catch(()=>({}));
     const action=clean(body.action).toLowerCase();
     const sessionId=clean(body.session_id);
     if(!sessionId) return reply({error:"session_id_required"},400);
+
     const {data:session,error:sessionError}=await ops.from("meeting_capture_sessions")
-      .select("id,device_id,owner_person,local_session_id,metadata,audio_mixed_path")
-      .eq("id",sessionId).eq("owner_person",person).maybeSingle();
-    if(sessionError) return reply({error:"audio_repair_session_failed",detail:sessionError.message},500);
-    if(!session) return reply({error:"call_not_found"},404);
+      .select("id,device_id,owner_person,local_session_id,capture_mode,metadata,audio_mixed_path,audio_duration_ms,started_at,ended_at,transcript_id")
+      .eq("id",sessionId).in("owner_person",targetPeople).maybeSingle();
+    if(sessionError) return reply({error:"call_session_failed",detail:sessionError.message},500);
+    if(!session||!String(session.capture_mode||"").toUpperCase().includes("WHATSAPP")) return reply({error:"call_not_found"},404);
+
+    if(action==="coaching_point_create"){
+      if(!isLeonardoViewer) return reply({error:"manager_only"},403);
+      const rawNote=clean(body.note);
+      const note=rawNote.slice(0,2000);
+      if(note.length<2) return reply({error:"coaching_note_required"},400);
+      const requestedKind=clean(body.kind).toUpperCase();
+      const kind=["IMPROVEMENT","PRAISE","OBSERVATION"].includes(requestedKind)?requestedKind:"IMPROVEMENT";
+      const startedMs=Date.parse(String(session.started_at||""));
+      const endedMs=Date.parse(String(session.ended_at||""));
+      const durationMs=Math.max(
+        0,
+        Math.round(Number(session.audio_duration_ms||0)),
+        Number.isFinite(startedMs)&&Number.isFinite(endedMs)?Math.max(0,endedMs-startedMs):0
+      );
+      let timestampMs=Math.max(0,Math.round(Number(body.timestamp_ms||0)));
+      if(durationMs>0) timestampMs=Math.min(timestampMs,durationMs);
+      else timestampMs=Math.min(timestampMs,12*60*60*1000);
+
+      let contextExcerpt:string|null=null;
+      if(session.transcript_id){
+        const {data:before}=await ops.from("meeting_transcript_segments")
+          .select("speaker_name,text,started_ms")
+          .eq("transcript_id",session.transcript_id)
+          .lte("started_ms",timestampMs)
+          .order("started_ms",{ascending:false})
+          .limit(1)
+          .maybeSingle();
+        const contextText=clean(before?.text).slice(0,600);
+        if(contextText) contextExcerpt=(clean(before?.speaker_name)||"Participante")+": "+contextText;
+      }
+
+      const {data:point,error:pointError}=await ops.from("relato_call_coaching_points").insert({
+        session_id:session.id,
+        transcript_id:session.transcript_id||null,
+        sdr_person:session.owner_person,
+        author_person:person,
+        kind,
+        timestamp_ms:timestampMs,
+        note,
+        context_excerpt:contextExcerpt,
+      }).select("id,session_id,transcript_id,sdr_person,author_person,kind,timestamp_ms,note,context_excerpt,created_at,updated_at").single();
+      if(pointError||!point) return reply({error:"coaching_point_create_failed",detail:pointError?.message},500);
+      return reply({ok:true,coaching_point:point});
+    }
+
+    if(action==="coaching_point_delete"){
+      if(!isLeonardoViewer) return reply({error:"manager_only"},403);
+      const pointId=clean(body.coaching_point_id);
+      if(!pointId) return reply({error:"coaching_point_id_required"},400);
+      const {data:point,error:pointLookupError}=await ops.from("relato_call_coaching_points")
+        .select("id,session_id,author_person")
+        .eq("id",pointId).eq("session_id",session.id).maybeSingle();
+      if(pointLookupError) return reply({error:"coaching_point_lookup_failed",detail:pointLookupError.message},500);
+      if(!point) return reply({error:"coaching_point_not_found"},404);
+      if(clean(point.author_person)!==person) return reply({error:"coaching_point_not_owned"},403);
+      const {error:deleteError}=await ops.from("relato_call_coaching_points").delete().eq("id",pointId);
+      if(deleteError) return reply({error:"coaching_point_delete_failed",detail:deleteError.message},500);
+      return reply({ok:true,deleted_id:pointId});
+    }
+
+    if(!isOwnSdr) return reply({error:"read_only"},403);
+    if(clean(session.owner_person)!==person) return reply({error:"call_not_found"},404);
+
     const safeLocal=clean(session.local_session_id).replace(/[^a-zA-Z0-9._-]/g,"_")||"session";
     const mixedPath="calls/"+session.device_id+"/"+safeLocal+"/mixed.mp3";
     const storage=db.storage.from("relato-call-audio");
@@ -220,6 +284,12 @@ Deno.serve(async(req:Request)=>{
           .eq("transcript_id",sessionRow.transcript_id).order("sequence_no",{ascending:true})
       : {data:[],error:null};
     if(segmentError) return reply({error:"detail_segments_failed",detail:segmentError.message},500);
+    const {data:coachingPoints,error:coachingError}=await ops.from("relato_call_coaching_points")
+      .select("id,session_id,transcript_id,sdr_person,author_person,kind,timestamp_ms,note,context_excerpt,created_at,updated_at")
+      .eq("session_id",sessionRow.id)
+      .order("timestamp_ms",{ascending:true})
+      .order("created_at",{ascending:true});
+    if(coachingError) return reply({error:"detail_coaching_failed",detail:coachingError.message},500);
     const safeSegments=(segments||[]).filter((row:Row)=>!likelyWhisperHallucination(row?.text));
     const clock=(value:unknown)=>{
       const total=Math.max(0,Math.floor(Number(value||0)/1000));
@@ -298,6 +368,8 @@ Deno.serve(async(req:Request)=>{
         transcript_summary:transcript?.metadata?.donnah_summary||transcript?.summary||null,
         participants:Array.isArray(transcript?.participants)?transcript.participants:[],
         segments:safeSegments,
+        coaching_points:coachingPoints||[],
+        coaching_can_write:isLeonardoViewer,
         audio,
         audio_status:sessionRow.audio_status||null,
         audio_last_error:sessionRow.audio_last_error||null,
@@ -338,6 +410,17 @@ Deno.serve(async(req:Request)=>{
     kind:String(r.capture_mode||"").toUpperCase().includes("WHATSAPP")?"CALL":"MEETING"
   }));
   const callSessions=sessions.filter((r:Row)=>r.kind==="CALL");
+  const coachingCountMap=new Map<string,number>();
+  if(callSessions.length){
+    const visibleSessionIds=new Set(callSessions.map((r:Row)=>String(r.id)).filter(Boolean));
+    const {data:coachingRows,error:coachingRowsError}=await ops.from("relato_call_coaching_points")
+      .select("session_id").in("sdr_person",targetPeople).limit(5000);
+    if(coachingRowsError) return reply({error:"coaching_counts_failed",detail:coachingRowsError.message},500);
+    for(const row of coachingRows||[]){
+      const key=String(row.session_id||"");
+      if(key&&visibleSessionIds.has(key)) coachingCountMap.set(key,(coachingCountMap.get(key)||0)+1);
+    }
+  }
   const sessionPhones=[...new Set(callSessions.map((r:Row)=>phoneDigits(r.metadata?.remote_phone)).filter(Boolean))];
   const phoneLeadMap=new Map<string,Row>();
   if(sessionPhones.length){
@@ -400,6 +483,7 @@ Deno.serve(async(req:Request)=>{
       review_classification:session.metadata?.backfill_review?.classification||null,
       review_reason:session.metadata?.backfill_review?.reason||null,
       commercial_sync_status:session.metadata?.commercial_sync?.status||null,
+      coaching_count:coachingCountMap.get(String(session.id))||0,
       transcript_summary:transcript?.metadata?.donnah_summary||transcript?.summary||record?.ai_summary||null,
       decisions:transcript?.decisions||[],commitments:transcript?.commitments||[],ai_signals:transcript?.ai_signals||{}
     };
@@ -437,7 +521,7 @@ Deno.serve(async(req:Request)=>{
   return reply({
     profile:isOwnSdr
       ? {person,role:"SDR",display_role:"SDR",access_level:"OWN_ACTIVITY_ONLY"}
-      : {person,role:requesterRole,display_role:"Direção Comercial",access_level:"SDR_CALLS_READ_ONLY"},
+      : {person,role:requesterRole,display_role:"Direção Comercial",access_level:"SDR_CALLS_COACHING"},
     agent:isOwnSdr?{
       current_version:currentAgentVersion,
       required_version:requiredAgentVersion,

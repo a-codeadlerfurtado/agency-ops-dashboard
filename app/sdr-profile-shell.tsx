@@ -72,7 +72,9 @@ function Empty({children}:{children:React.ReactNode}) {
   return <div className="sdr-empty">{children}</div>;
 }
 
-function SyncedCallPlayer({audio,segments,rawTranscript}:{audio:Row[];segments:Row[];rawTranscript?:unknown}) {
+function SyncedCallPlayer({
+  audio,segments,rawTranscript,coachingPoints=[],canCoach=false,sessionId
+}:{audio:Row[];segments:Row[];rawTranscript?:unknown;coachingPoints?:Row[];canCoach?:boolean;sessionId?:string}) {
   const preferred=useMemo(()=>audio.find(row=>row.role==="mixed"&&row.play_url)||audio.find(row=>row.play_url)||audio[0]||null,[audio]);
   const audioRef=useRef<HTMLAudioElement|null>(null);
   const transcriptRef=useRef<HTMLDivElement|null>(null);
@@ -81,6 +83,14 @@ function SyncedCallPlayer({audio,segments,rawTranscript}:{audio:Row[];segments:R
   const [current,setCurrent]=useState(0);
   const [total,setTotal]=useState(0);
   const [rate,setRate]=useState(1);
+  const [points,setPoints]=useState<Row[]>(Array.isArray(coachingPoints)?coachingPoints:[]);
+  const [composerOpen,setComposerOpen]=useState(false);
+  const [note,setNote]=useState("");
+  const [kind,setKind]=useState("IMPROVEMENT");
+  const [saving,setSaving]=useState(false);
+  const [coachingError,setCoachingError]=useState("");
+
+  useEffect(()=>setPoints(Array.isArray(coachingPoints)?coachingPoints:[]),[coachingPoints]);
 
   const activeIndex=useMemo(()=>{
     if(!segments.length)return -1;
@@ -100,7 +110,7 @@ function SyncedCallPlayer({audio,segments,rawTranscript}:{audio:Row[];segments:R
     const el=audioRef.current;
     if(!el)return;
     el.pause();el.currentTime=0;
-    setCurrent(0);setTotal(0);setPlaying(false);setRate(1);
+    setCurrent(0);setTotal(0);setPlaying(false);setRate(1);setComposerOpen(false);setNote("");setCoachingError("");
   },[preferred?.play_url]);
 
   useEffect(()=>{
@@ -114,12 +124,43 @@ function SyncedCallPlayer({audio,segments,rawTranscript}:{audio:Row[];segments:R
 
   const toggle=async()=>{const el=audioRef.current;if(!el)return;if(el.paused){try{await el.play();}catch{}}else el.pause();};
   const seek=(seconds:number,autoplay=false)=>{const el=audioRef.current;if(!el)return;const max=Number.isFinite(el.duration)&&el.duration>0?el.duration:seconds;const next=Math.max(0,Math.min(max,seconds));el.currentTime=next;setCurrent(next);if(autoplay)el.play().catch(()=>{});};
-  const clock=(seconds:number)=>{const value=Math.max(0,Math.floor(seconds||0));const h=Math.floor(value/3600),m=Math.floor((value%3600)/60),s=value%60;return h?[h,m,s].map(v=>String(v).padStart(2,"0")).join(":"):[m,s].map(v=>String(v).padStart(2,"0")).join(":");};
+  const clock=(seconds:number)=>{const value=Math.max(0,Math.floor(seconds||0));const h=Math.floor(value/3600),m=Math.floor((value%3600)/60),ss=value%60;return h?[h,m,ss].map(v=>String(v).padStart(2,"0")).join(":"):[m,ss].map(v=>String(v).padStart(2,"0")).join(":");};
+  const kindLabel=(value:unknown)=>({IMPROVEMENT:"Melhoria",PRAISE:"Acerto",OBSERVATION:"Observação"} as Record<string,string>)[String(value||"").toUpperCase()]||"Feedback";
+
+  const savePoint=async()=>{
+    if(!canCoach||!sessionId||note.trim().length<2||saving)return;
+    setSaving(true);setCoachingError("");
+    try{
+      const response=await authenticatedFetch(API,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
+        action:"coaching_point_create",session_id:sessionId,timestamp_ms:Math.max(0,Math.round(current*1000)),kind,note:note.trim()
+      })});
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(body?.detail||body?.error||("API "+response.status));
+      if(body?.coaching_point)setPoints(prev=>[...prev,body.coaching_point].sort((a,b)=>Number(a.timestamp_ms||0)-Number(b.timestamp_ms||0)));
+      setNote("");setKind("IMPROVEMENT");setComposerOpen(false);
+    }catch(error){setCoachingError(error instanceof Error?error.message:"Não foi possível salvar o feedback.");}
+    finally{setSaving(false);}
+  };
+
+  const deletePoint=async(point:Row)=>{
+    if(!canCoach||!sessionId||!point?.id||saving)return;
+    setSaving(true);setCoachingError("");
+    try{
+      const response=await authenticatedFetch(API,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({
+        action:"coaching_point_delete",session_id:sessionId,coaching_point_id:point.id
+      })});
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok)throw new Error(body?.detail||body?.error||("API "+response.status));
+      setPoints(prev=>prev.filter(row=>String(row.id)!==String(point.id)));
+    }catch(error){setCoachingError(error instanceof Error?error.message:"Não foi possível remover o feedback.");}
+    finally{setSaving(false);}
+  };
 
   if(!preferred)return <p>Nenhuma gravação disponível ainda.</p>;
   const src=String(preferred.play_url||"");
   const downloadUrl=String(preferred.download_url||preferred.play_url||"");
   const isMp3=String(preferred.mime_type||"").includes("mpeg")||String(preferred.path||"").toLowerCase().endsWith(".mp3");
+
   return <div className="sdr-sync-player">
     <audio key={src} ref={audioRef} preload="metadata" src={src} playsInline
       onLoadedMetadata={e=>setTotal(Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0)}
@@ -130,14 +171,42 @@ function SyncedCallPlayer({audio,segments,rawTranscript}:{audio:Row[];segments:R
       <button type="button" className="sdr-play-button" onClick={toggle} aria-label={playing?"Pausar":"Reproduzir"}>{playing?"Ⅱ":"▶"}</button>
       <div className="sdr-player-main">
         <div className="sdr-player-head"><b>{preferred.role==="mixed"?"Gravação completa":preferred.role==="remote"?"Outro lado":"Minha voz"}</b><span>{clock(current)} / {clock(total)}</span></div>
-        <input className="sdr-player-range" type="range" min="0" max={Math.max(total,0.01)} step="0.05" value={Math.min(current,Math.max(total,0.01))} onChange={e=>seek(Number(e.target.value))}/>
+        <div className="sdr-timeline-wrap">
+          <input className="sdr-player-range" type="range" min="0" max={Math.max(total,0.01)} step="0.05" value={Math.min(current,Math.max(total,0.01))} onChange={e=>seek(Number(e.target.value))}/>
+          {total>0&&points.map((point:Row)=><button key={String(point.id)} type="button" className={"sdr-coaching-marker "+String(point.kind||"IMPROVEMENT").toLowerCase()}
+            style={{left:String(Math.max(0,Math.min(100,(Number(point.timestamp_ms||0)/1000)/total*100)))+"%"}}
+            title={clock(Number(point.timestamp_ms||0)/1000)+" · "+kindLabel(point.kind)+" · "+text(point.note,"")}
+            onClick={()=>seek(Number(point.timestamp_ms||0)/1000,true)} aria-label={"Ir para feedback em "+clock(Number(point.timestamp_ms||0)/1000)}/>)}
+        </div>
       </div>
       <select className="sdr-player-rate" value={rate} onChange={e=>{const value=Number(e.target.value);setRate(value);if(audioRef.current)audioRef.current.playbackRate=value;}} aria-label="Velocidade">
         <option value={0.75}>0,75×</option><option value={1}>1×</option><option value={1.25}>1,25×</option><option value={1.5}>1,5×</option><option value={2}>2×</option>
       </select>
       <a className="sdr-player-download" href={downloadUrl} download={String(preferred.download_name||("relato-ligacao."+(isMp3?"mp3":"wav")))}>{isMp3?"Baixar MP3":"Baixar áudio"}</a>
     </div>
+
     <div className="sdr-player-reading"><span>LEITURA SINCRONIZADA</span><small>A fala atual acompanha o áudio. Clique em qualquer trecho para ouvir dali.</small></div>
+
+    <section className="sdr-coaching-panel">
+      <div className="sdr-coaching-head"><div><span>COACHING NA TIMELINE</span><b>Feedback do gestor</b><small>{points.length?(String(points.length)+" ponto"+(points.length===1?"":"s")+" marcado"+(points.length===1?"":"s")+" nesta call"):"Nenhum feedback marcado ainda"}</small></div>
+        {canCoach&&<button type="button" onClick={()=>{setComposerOpen(v=>!v);setCoachingError("");}}>Pontuar este momento · {clock(current)}</button>}
+      </div>
+      {composerOpen&&canCoach&&<div className="sdr-coaching-composer">
+        <div><label><span>Tipo</span><select value={kind} onChange={e=>setKind(e.target.value)}><option value="IMPROVEMENT">Melhoria</option><option value="PRAISE">Acerto</option><option value="OBSERVATION">Observação</option></select></label>
+          <div className="sdr-coaching-time"><span>Momento marcado</span><b>{clock(current)}</b></div></div>
+        <textarea value={note} onChange={e=>setNote(e.target.value)} maxLength={2000} placeholder="Ex.: aqui você interrompeu o prospect. Deixa ele terminar e depois aprofunda a dor."/>
+        <footer><small>{note.length}/2000</small><div><button type="button" className="ghost" onClick={()=>{setComposerOpen(false);setNote("");}}>Cancelar</button><button type="button" onClick={savePoint} disabled={saving||note.trim().length<2}>{saving?"Salvando…":"Salvar feedback"}</button></div></footer>
+      </div>}
+      {coachingError&&<div className="sdr-coaching-error">{coachingError}</div>}
+      {points.length>0&&<div className="sdr-coaching-list">{points.map((point:Row)=><article key={String(point.id)}>
+        <button type="button" className="sdr-coaching-time-btn" onClick={()=>seek(Number(point.timestamp_ms||0)/1000,true)}>{clock(Number(point.timestamp_ms||0)/1000)}</button>
+        <div><span className={"sdr-coaching-kind "+String(point.kind||"IMPROVEMENT").toLowerCase()}>{kindLabel(point.kind)}</span><p>{text(point.note,"")}</p>
+          {point.context_excerpt&&<small className="sdr-coaching-context">Trecho: {text(point.context_excerpt,"")}</small>}
+          <small>{text(point.author_person,"Gestor")} · {dateTime(point.created_at)}</small></div>
+        {canCoach&&<button type="button" className="sdr-coaching-delete" onClick={()=>deletePoint(point)} disabled={saving}>Excluir</button>}
+      </article>)}</div>}
+    </section>
+
     {segments.length>0?<div ref={transcriptRef} className="sdr-transcript-list sdr-transcript-synced">{segments.map((segment:Row,index:number)=>
       <article key={String(segment.sequence_no??index)} ref={node=>{if(node)rowRefs.current.set(index,node);else rowRefs.current.delete(index);}} className={activeIndex===index?"active":""} onClick={()=>seek(Math.max(0,Number(segment.started_ms||0))/1000,true)}>
         <time>{timestamp(segment.started_ms)}</time><div><b>{text(segment.speaker_name,"Participante")}</b><p>{text(segment.text,"")}</p></div>
@@ -239,7 +308,7 @@ export function CallsView({data,managerMode=false}:{data:Row;managerMode?:boolea
 
   return <section className="sdr-card">
     <header className="sdr-section-head"><div><span>RELATO AI · SDR</span><h2>{managerMode?"Calls SDR":"Minhas ligações"}</h2>
-      <p>{managerMode?"Acompanhe as ligações dos SDRs com transcrição, gravação e contexto completo.":"Volume, duração, identificação, transcrição e gravação das suas calls."}</p></div><b>{visible.length} exibidas</b></header>
+      <p>{managerMode?"Acompanhe as ligações dos SDRs, marque melhorias no segundo exato e deixe o coaching visível para o SDR.":"Volume, duração, identificação, transcrição, gravação e feedback do gestor nas suas calls."}</p></div><b>{visible.length} exibidas</b></header>
 
     <div className="sdr-call-kpis">
       <article><span>Ligações</span><b>{metrics.calls}</b><small>No filtro atual</small></article>
@@ -293,7 +362,7 @@ export function CallsView({data,managerMode=false}:{data:Row;managerMode?:boolea
       <footer><button className="sdr-detail-btn" type="button" onClick={()=>openDetail(row)} disabled={detailLoading}>Ver transcrição e gravação</button>
       {row.prospect_name_source&&<b>Nome: {nameSourceLabel(row.prospect_name_source)}</b>}
       {row.stage&&<b>Etapa: {text(row.stage)}</b>}
-      {row.prospect_lead_id&&<b>Prospect no CRM</b>}
+      {row.prospect_lead_id&&<b>Prospect no CRM</b>}{Number(row.coaching_count||0)>0&&<b>Coaching: {Number(row.coaching_count)} ponto{Number(row.coaching_count)===1?"":"s"}</b>}
       {row.review_reason&&<b title={String(row.review_reason)}>Revisado pelo backfill</b>}
       {row.next_step&&<b>Próximo passo: {row.next_step}{row.next_step_at?(" · "+dateTime(row.next_step_at)):""}</b>}</footer>
     </article>)}</div>{!visible.length&&<Empty>Nenhuma ligação encontrada com esses filtros.</Empty>}
@@ -316,7 +385,9 @@ export function CallsView({data,managerMode=false}:{data:Row;managerMode?:boolea
         {detail.review_reason&&<div className="sdr-note"><b>Revisão do histórico</b><span>{text(detail.review_reason)}</span></div>}
         <div className="sdr-detail-section"><h3>Gravação + transcrição</h3>
           {Array.isArray(detail.audio)&&detail.audio.length>0
-            ?<SyncedCallPlayer audio={detail.audio} segments={Array.isArray(detail.segments)?detail.segments:[]} rawTranscript={detail.transcript_text}/>
+            ?<SyncedCallPlayer audio={detail.audio} segments={Array.isArray(detail.segments)?detail.segments:[]} rawTranscript={detail.transcript_text}
+              coachingPoints={Array.isArray(detail.coaching_points)?detail.coaching_points:[]} canCoach={managerMode&&Boolean(detail.coaching_can_write)}
+              sessionId={String(detail.session_id||detail.id||"")}/>
             :<p>{detail.audio_status?("Áudio: "+detail.audio_status):"Nenhuma gravação disponível ainda."}</p>}
         </div>
       </section>
@@ -417,5 +488,6 @@ export const sdrSharedStyles = [
 ".sdr-call-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}.sdr-call-kpis article{border:1px solid #203338;background:#091519;border-radius:10px;padding:11px}.sdr-call-kpis span{display:block;font-size:7px;color:#6e8882;text-transform:uppercase;letter-spacing:.08em}.sdr-call-kpis b{display:block;margin-top:5px;font-size:17px}.sdr-call-kpis small{display:block;margin-top:3px;font-size:7px;color:#58716c}.sdr-filter-panel{display:flex;flex-wrap:wrap;gap:8px;align-items:end;margin:14px 0;padding:12px;border:1px solid #203338;background:#081317;border-radius:11px}.sdr-filter-panel label{display:grid;gap:4px}.sdr-filter-panel label>span{font-size:7px;color:#6f8983;text-transform:uppercase;font-weight:800;letter-spacing:.08em}.sdr-filter-panel input,.sdr-filter-panel select{height:34px;border:1px solid #263a3f;background:#0a171b;color:#cfe0dc;border-radius:8px;padding:0 9px;font:600 9px Inter}.sdr-filter-search{flex:1 1 260px}.sdr-filter-search input{width:100%}.sdr-clear-filters{height:34px;border:1px solid #32494b;background:transparent;color:#8fa7a1;border-radius:8px;padding:0 10px;font:800 8px Inter;cursor:pointer}",
 ".sdr-call-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}.sdr-call-facts>span{display:flex;flex-direction:column;gap:3px;padding:8px;border:1px solid #1c3034;border-radius:8px;background:#081216;font-size:9px;color:#9ab0aa}.sdr-call-facts b{font-size:7px;color:#607b75;text-transform:uppercase;letter-spacing:.08em}.sdr-detail-btn{border:1px solid #285043;background:#10231f;color:#bdf4d8;border-radius:8px;padding:7px 9px;font:800 9px Inter;cursor:pointer}.sdr-modal-backdrop{position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.72);display:grid;place-items:center;padding:24px}.sdr-modal{width:min(920px,96vw);max-height:90vh;overflow:auto;border:1px solid #28413f;background:#081216;border-radius:16px;padding:18px;box-shadow:0 30px 100px rgba(0,0,0,.55)}.sdr-modal>header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-bottom:1px solid #1d3034;padding-bottom:12px}.sdr-modal>header span{font-size:8px;color:#62cca0;font-weight:900;letter-spacing:.12em}.sdr-modal>header h2{margin:4px 0 0;font-size:21px}.sdr-modal>header button{border:1px solid #33484b;background:#101c20;color:#dbe7e3;border-radius:8px;padding:8px 10px;font:700 9px Inter;cursor:pointer}.sdr-detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}.sdr-detail-grid article{border:1px solid #1d3034;background:#0b171b;border-radius:9px;padding:10px}.sdr-detail-grid span{display:block;font-size:7px;color:#637c76;text-transform:uppercase}.sdr-detail-grid b{display:block;margin-top:5px;font-size:10px}.sdr-detail-section{margin-top:14px}.sdr-detail-section h3{font-size:11px;margin:0 0 8px;color:#b9d6ce}.sdr-audio-list{display:grid;gap:8px}.sdr-audio-list article{border:1px solid #1d3034;background:#0b171b;border-radius:10px;padding:10px;display:grid;gap:8px}.sdr-audio-list article>div{display:flex;justify-content:space-between}.sdr-audio-list b{font-size:10px}.sdr-audio-list span{font-size:8px;color:#6f8983}.sdr-audio-list audio{width:100%;height:36px}.sdr-audio-list a{width:max-content;color:#82d8b3;font-size:9px;font-weight:800;text-decoration:none}.sdr-transcript-list{display:grid;gap:6px;max-height:42vh;overflow:auto}.sdr-transcript-list article{display:grid;grid-template-columns:50px minmax(0,1fr);gap:8px;border:1px solid #1a2c30;background:#091519;border-radius:8px;padding:8px}.sdr-transcript-list time{font:800 9px ui-monospace,SFMono-Regular,Menlo,monospace;color:#63cca1}.sdr-transcript-list b{font-size:9px;color:#e0eee9}.sdr-transcript-list p{margin:3px 0 0;font-size:10px;color:#94aaa4}.sdr-transcript-raw{white-space:pre-wrap;border:1px solid #1a2c30;background:#091519;border-radius:8px;padding:10px;font-size:10px;line-height:1.55;color:#94aaa4}",
 ".sdr-sync-player{display:grid;gap:10px}.sdr-sync-player>audio{display:none}.sdr-player-shell{display:grid;grid-template-columns:42px minmax(0,1fr) auto auto;gap:10px;align-items:center;border:1px solid #28423b;background:linear-gradient(135deg,#0c1b1b,#0b151a);border-radius:13px;padding:12px}.sdr-play-button{width:42px;height:42px;border-radius:50%;border:1px solid #3d725f;background:#17352b;color:#d8ffec;font:900 15px Inter;cursor:pointer}.sdr-player-main{min-width:0}.sdr-player-head{display:flex;justify-content:space-between;gap:10px;align-items:center}.sdr-player-head b{font-size:10px}.sdr-player-head span{font:800 9px ui-monospace,SFMono-Regular,Menlo,monospace;color:#86a99f}.sdr-player-range{width:100%;accent-color:#62cca0;cursor:pointer}.sdr-player-rate{height:34px;border:1px solid #2e4a43;background:#0d1b1b;color:#cfe8df;border-radius:8px;padding:0 7px;font:800 9px Inter}.sdr-player-download{white-space:nowrap;border:1px solid #3b765e;background:#143326;color:#bff8da;border-radius:8px;padding:9px 10px;font:900 9px Inter;text-decoration:none}.sdr-player-reading{display:flex;justify-content:space-between;gap:12px;align-items:center}.sdr-player-reading span{font-size:8px;color:#62cca0;font-weight:900;letter-spacing:.12em}.sdr-player-reading small{font-size:8px;color:#6e8781}.sdr-transcript-synced article{cursor:pointer;transition:border-color .16s,background .16s,transform .16s}.sdr-transcript-synced article:hover{border-color:#2d5146}.sdr-transcript-synced article.active{border-color:#5ed29f;background:#123027;box-shadow:0 0 0 1px rgba(94,210,159,.12);transform:translateX(2px)}.sdr-transcript-synced article.active p{color:#d7eee6}",
-"@media(max-width:760px){.sdr-player-shell{grid-template-columns:42px minmax(0,1fr)}.sdr-player-reading{align-items:flex-start;flex-direction:column}.sdr-call-kpis{grid-template-columns:1fr 1fr}.sdr-filter-panel{display:grid;grid-template-columns:1fr 1fr}.sdr-filter-search{grid-column:1/-1}.sdr-call-facts,.sdr-detail-grid{grid-template-columns:1fr 1fr}.sdr-modal-backdrop{padding:8px}.sdr-modal{max-height:95vh;padding:12px}.sdr-root{display:block;overflow:auto}.sdr-sidebar{height:auto;position:sticky;top:0;z-index:8}.sdr-brand,.sdr-profile{display:none}.sdr-sidebar nav{display:flex}.sdr-sidebar nav button{white-space:nowrap}.sdr-main{height:auto}.sdr-top{position:relative;align-items:flex-start;flex-direction:column;padding:16px}.sdr-content{padding:14px 12px 70px}.sdr-kpis{grid-template-columns:1fr 1fr}.sdr-actions{flex-wrap:wrap}}"
+".sdr-timeline-wrap{position:relative;padding:7px 0 2px}.sdr-coaching-marker{position:absolute;top:2px;transform:translateX(-50%);width:9px;height:9px;border-radius:50%;border:2px solid #071015;background:#f59e0b;z-index:3;cursor:pointer;padding:0}.sdr-coaching-marker.praise{background:#62cca0}.sdr-coaching-marker.observation{background:#60a5fa}.sdr-coaching-panel{border:1px solid #28413f;background:#0a171b;border-radius:12px;padding:12px;display:grid;gap:10px}.sdr-coaching-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.sdr-coaching-head>div{display:flex;flex-direction:column;gap:2px}.sdr-coaching-head span{font-size:7px;color:#f3b35f;font-weight:900;letter-spacing:.13em}.sdr-coaching-head b{font-size:11px}.sdr-coaching-head small{font-size:8px;color:#6f8983}.sdr-coaching-head>button,.sdr-coaching-composer button{border:1px solid #875c27;background:#342311;color:#ffd99e;border-radius:8px;padding:8px 10px;font:800 9px Inter;cursor:pointer}.sdr-coaching-composer{border:1px solid #3a3225;background:#15130f;border-radius:10px;padding:10px;display:grid;gap:8px}.sdr-coaching-composer>div:first-child{display:flex;gap:10px;align-items:end}.sdr-coaching-composer label{display:grid;gap:4px}.sdr-coaching-composer label span,.sdr-coaching-time span{font-size:7px;color:#8d8171;text-transform:uppercase;letter-spacing:.08em}.sdr-coaching-composer select{height:32px;border:1px solid #4b4234;background:#0d1517;color:#dfe9e5;border-radius:7px;padding:0 8px;font:700 9px Inter}.sdr-coaching-time{display:grid;gap:4px}.sdr-coaching-time b{font:900 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#f6c67d}.sdr-coaching-composer textarea{min-height:84px;resize:vertical;border:1px solid #4b4234;background:#0b1214;color:#e8efec;border-radius:8px;padding:9px;font:600 10px/1.5 Inter}.sdr-coaching-composer footer{display:flex;justify-content:space-between;align-items:center}.sdr-coaching-composer footer small{font-size:8px;color:#766f65}.sdr-coaching-composer footer>div{display:flex;gap:7px}.sdr-coaching-composer button.ghost{background:transparent;border-color:#4a4a43;color:#a8ada9}.sdr-coaching-composer button:disabled{opacity:.45;cursor:not-allowed}.sdr-coaching-error{border:1px solid #663b37;background:#2a1514;color:#ef9b90;border-radius:8px;padding:8px;font-size:9px}.sdr-coaching-list{display:grid;gap:7px}.sdr-coaching-list article{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:start;border:1px solid #24383b;background:#081317;border-radius:9px;padding:9px}.sdr-coaching-time-btn{border:1px solid #875c27;background:#241a0f;color:#ffd291;border-radius:7px;padding:6px 8px;font:900 9px ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer}.sdr-coaching-list article>div{display:grid;gap:4px}.sdr-coaching-list p{margin:0;color:#d7e4df;font-size:10px;line-height:1.5}.sdr-coaching-list small{font-size:8px;color:#708783}.sdr-coaching-kind{width:max-content;border-radius:999px;padding:3px 6px;background:#3a260d;color:#f7c87d;font-size:7px!important;font-weight:900!important;letter-spacing:.08em}.sdr-coaching-kind.praise{background:#123125;color:#9ce3c1}.sdr-coaching-kind.observation{background:#132a3a;color:#9ed4fb}.sdr-coaching-context{color:#8ea69f!important;font-style:italic}.sdr-coaching-delete{border:0;background:transparent;color:#b9756f;font:800 8px Inter;cursor:pointer;padding:5px}.sdr-coaching-delete:disabled{opacity:.4}",
+"@media(max-width:760px){.sdr-player-shell{grid-template-columns:42px minmax(0,1fr)}.sdr-coaching-head{align-items:flex-start;flex-direction:column}.sdr-coaching-head>button{width:100%}.sdr-coaching-list article{grid-template-columns:auto minmax(0,1fr)}.sdr-coaching-delete{grid-column:2;justify-self:start}.sdr-coaching-composer>div:first-child{align-items:flex-start;flex-direction:column}.sdr-player-reading{align-items:flex-start;flex-direction:column}.sdr-call-kpis{grid-template-columns:1fr 1fr}.sdr-filter-panel{display:grid;grid-template-columns:1fr 1fr}.sdr-filter-search{grid-column:1/-1}.sdr-call-facts,.sdr-detail-grid{grid-template-columns:1fr 1fr}.sdr-modal-backdrop{padding:8px}.sdr-modal{max-height:95vh;padding:12px}.sdr-root{display:block;overflow:auto}.sdr-sidebar{height:auto;position:sticky;top:0;z-index:8}.sdr-brand,.sdr-profile{display:none}.sdr-sidebar nav{display:flex}.sdr-sidebar nav button{white-space:nowrap}.sdr-main{height:auto}.sdr-top{position:relative;align-items:flex-start;flex-direction:column;padding:16px}.sdr-content{padding:14px 12px 70px}.sdr-kpis{grid-template-columns:1fr 1fr}.sdr-actions{flex-wrap:wrap}}"
 ].join("");
