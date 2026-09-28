@@ -8,9 +8,9 @@ import { RelatoPairingCard } from "./relato-pairing-card";
 
 type Row = Record<string, any>;
 
-type View = "calls" | "meetings";
+type View = "calls" | "meetings" | "notifications";
 const API = SUPABASE_URL + "/functions/v1/agency-ops-sdr-api";
-const views: Array<[View,string]> = [["calls","Minhas ligações"],["meetings","Minhas reuniões"]];
+const views: Array<[View,string]> = [["calls","Minhas ligações"],["meetings","Minhas reuniões"],["notifications","Notificações"]];
 const norm=(v:unknown)=>String(v??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase();
 const text=(v:unknown,fallback="—")=>String(v??"").trim()||fallback;
 const dateTime=(v:unknown)=>{
@@ -73,8 +73,8 @@ function Empty({children}:{children:React.ReactNode}) {
 }
 
 function SyncedCallPlayer({
-  audio,segments,rawTranscript,coachingPoints=[],canCoach=false,sessionId
-}:{audio:Row[];segments:Row[];rawTranscript?:unknown;coachingPoints?:Row[];canCoach?:boolean;sessionId?:string}) {
+  audio,segments,rawTranscript,coachingPoints=[],canCoach=false,sessionId,initialTimestampMs=0
+}:{audio:Row[];segments:Row[];rawTranscript?:unknown;coachingPoints?:Row[];canCoach?:boolean;sessionId?:string;initialTimestampMs?:number}) {
   const preferred=useMemo(()=>audio.find(row=>row.role==="mixed"&&row.play_url)||audio.find(row=>row.play_url)||audio[0]||null,[audio]);
   const audioRef=useRef<HTMLAudioElement|null>(null);
   const transcriptRef=useRef<HTMLDivElement|null>(null);
@@ -163,7 +163,7 @@ function SyncedCallPlayer({
 
   return <div className="sdr-sync-player">
     <audio key={src} ref={audioRef} preload="metadata" src={src} playsInline
-      onLoadedMetadata={e=>setTotal(Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0)}
+      onLoadedMetadata={e=>{const d=Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0;setTotal(d);if(initialTimestampMs>0){const next=Math.max(0,Math.min(d||initialTimestampMs/1000,initialTimestampMs/1000));e.currentTarget.currentTime=next;setCurrent(next);}}}
       onDurationChange={e=>setTotal(Number.isFinite(e.currentTarget.duration)?e.currentTarget.duration:0)}
       onTimeUpdate={e=>setCurrent(e.currentTarget.currentTime||0)}
       onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onEnded={()=>setPlaying(false)}/>
@@ -214,7 +214,7 @@ function SyncedCallPlayer({
   </div>;
 }
 
-export function CallsView({data,managerMode=false}:{data:Row;managerMode?:boolean}) {
+export function CallsView({data,managerMode=false,focus,onFocusConsumed}:{data:Row;managerMode?:boolean;focus?:Row|null;onFocusConsumed?:()=>void}) {
   const [query,setQuery]=useState("");
   const [sdrPerson,setSdrPerson]=useState("all");
   const [period,setPeriod]=useState("30d");
@@ -227,6 +227,7 @@ export function CallsView({data,managerMode=false}:{data:Row;managerMode?:boolea
   const [durationBand,setDurationBand]=useState("all");
   const [channel,setChannel]=useState("all");
   const [detail,setDetail]=useState<Row|null>(null);
+  const [detailSeekMs,setDetailSeekMs]=useState(0);
   const [detailLoading,setDetailLoading]=useState(false);
   const [detailError,setDetailError]=useState("");
   const calls:Row[]=data.calls||[];
@@ -295,8 +296,8 @@ export function CallsView({data,managerMode=false}:{data:Row;managerMode?:boolea
 
   const clearFilters=()=>{setQuery("");setSdrPerson("all");setPeriod("30d");setDateFrom("");setDateTo("");setStatus("all");setIdentity("all");setTranscript("all");setRecording("all");setDurationBand("all");setChannel("all");};
 
-  const openDetail=async(row:Row)=>{
-    setDetailLoading(true);setDetailError("");
+  const openDetail=async(row:Row,seekMs=0)=>{
+    setDetailLoading(true);setDetailError("");setDetailSeekMs(Math.max(0,Number(seekMs||0)));
     try{
       const response=await authenticatedFetch(API+"?session_id="+encodeURIComponent(String(row.session_id||row.id)),{cache:"no-store"});
       const body=await response.json().catch(()=>({}));
@@ -305,6 +306,13 @@ export function CallsView({data,managerMode=false}:{data:Row;managerMode?:boolea
     }catch(error){setDetailError(error instanceof Error?error.message:"Não foi possível abrir a ligação.");}
     finally{setDetailLoading(false);}
   };
+
+  useEffect(()=>{
+    const sessionId=String(focus?.session_id||focus?.sessionId||"").trim();
+    if(!sessionId)return;
+    void openDetail({id:sessionId,session_id:sessionId},Number(focus?.timestamp_ms||focus?.timestampMs||0));
+    onFocusConsumed?.();
+  },[focus?.session_id,focus?.sessionId,focus?.timestamp_ms,focus?.timestampMs]);
 
   return <section className="sdr-card">
     <header className="sdr-section-head"><div><span>RELATO AI · SDR</span><h2>{managerMode?"Calls SDR":"Minhas ligações"}</h2>
@@ -359,7 +367,7 @@ export function CallsView({data,managerMode=false}:{data:Row;managerMode?:boolea
         {row.review_classification&&<span><b>Classificação</b>{reviewLabel(row.review_classification)}</span>}
       </div>
       <p>{text(row.transcript_summary||row.notes,"Sem resumo disponível ainda.")}</p>
-      <footer><button className="sdr-detail-btn" type="button" onClick={()=>openDetail(row)} disabled={detailLoading}>Ver transcrição e gravação</button>
+      <footer><button className="sdr-detail-btn" type="button" onClick={()=>openDetail(row,0)} disabled={detailLoading}>Ver transcrição e gravação</button>
       {row.prospect_name_source&&<b>Nome: {nameSourceLabel(row.prospect_name_source)}</b>}
       {row.stage&&<b>Etapa: {text(row.stage)}</b>}
       {row.prospect_lead_id&&<b>Prospect no CRM</b>}{Number(row.coaching_count||0)>0&&<b>Coaching: {Number(row.coaching_count)} ponto{Number(row.coaching_count)===1?"":"s"}</b>}
@@ -387,13 +395,68 @@ export function CallsView({data,managerMode=false}:{data:Row;managerMode?:boolea
           {Array.isArray(detail.audio)&&detail.audio.length>0
             ?<SyncedCallPlayer audio={detail.audio} segments={Array.isArray(detail.segments)?detail.segments:[]} rawTranscript={detail.transcript_text}
               coachingPoints={Array.isArray(detail.coaching_points)?detail.coaching_points:[]} canCoach={managerMode&&Boolean(detail.coaching_can_write)}
-              sessionId={String(detail.session_id||detail.id||"")}/>
+              sessionId={String(detail.session_id||detail.id||"")} initialTimestampMs={detailSeekMs}/>
             :<p>{detail.audio_status?("Áudio: "+detail.audio_status):"Nenhuma gravação disponível ainda."}</p>}
         </div>
       </section>
     </div>}
   </section>;
 }
+function NotificationsView({data,onOpenCall,refresh}:{data:Row;onOpenCall:(item:Row)=>void;refresh:()=>Promise<void>}) {
+  const notifications:Row[]=Array.isArray(data.notifications)?data.notifications:[];
+  const [filter,setFilter]=useState<"all"|"unread">("all");
+  const [busy,setBusy]=useState("");
+  const unread=notifications.filter(row=>!row.read_at).length;
+  const visible=filter==="unread"?notifications.filter(row=>!row.read_at):notifications;
+  const kindLabel=(value:unknown)=>({IMPROVEMENT:"Melhoria",PRAISE:"Acerto",OBSERVATION:"Observação"} as Record<string,string>)[String(value||"").toUpperCase()]||"Feedback";
+  const markRead=async(item:Row)=>{
+    if(item.read_at)return;
+    const id=String(item.id||""); if(!id)return;
+    setBusy(id);
+    try{
+      const response=await authenticatedFetch(API,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"notification_read",notification_id:id})});
+      if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(body?.detail||body?.error||("API "+response.status));}
+      await refresh();
+    }finally{setBusy("");}
+  };
+  const markAll=async()=>{
+    setBusy("all");
+    try{
+      const response=await authenticatedFetch(API,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"notifications_read_all"})});
+      if(!response.ok){const body=await response.json().catch(()=>({}));throw new Error(body?.detail||body?.error||("API "+response.status));}
+      await refresh();
+    }finally{setBusy("");}
+  };
+  const open=async(item:Row)=>{
+    try{await markRead(item);}catch{}
+    onOpenCall(item);
+  };
+  return <section className="sdr-card sdr-notification-center">
+    <header className="sdr-section-head"><div><span>RELATO AI · FEEDBACK</span><h2>Central de notificações</h2>
+      <p>Todo ponto marcado pelo Leonardo em uma call aparece aqui e leva você direto ao segundo do feedback.</p></div><b>{unread} não lida{unread===1?"":"s"}</b></header>
+    <div className="sdr-notif-toolbar">
+      <div><button className={filter==="all"?"active":""} onClick={()=>setFilter("all")}>Todas <b>{notifications.length}</b></button>
+      <button className={filter==="unread"?"active":""} onClick={()=>setFilter("unread")}>Não lidas <b>{unread}</b></button></div>
+      {unread>0&&<button className="sdr-notif-read-all" disabled={busy==="all"} onClick={()=>void markAll()}>{busy==="all"?"Salvando…":"Marcar todas como lidas"}</button>}
+    </div>
+    <div className="sdr-notif-list">{visible.map(item=>{
+      const meta=item.metadata||{};
+      const at=timestamp(meta.timestamp_ms);
+      return <article key={String(item.id)} className={item.read_at?"":"unread"}>
+        <button className="sdr-notif-open" type="button" onClick={()=>void open(item)} disabled={busy===String(item.id)}>
+          <div className="sdr-notif-icon">{String(meta.kind||"").toUpperCase()==="PRAISE"?"✓":String(meta.kind||"").toUpperCase()==="OBSERVATION"?"i":"!"}</div>
+          <div className="sdr-notif-copy"><div><span>{kindLabel(meta.kind)} · {at}</span><time>{dateTime(item.occurred_at)}</time></div>
+            <h3>{text(item.title,"Novo feedback do Leonardo")}</h3><p>{text(item.description,"O Leonardo pontuou um trecho da sua call.")}</p>
+            {meta.context_excerpt&&<small>Trecho: {text(meta.context_excerpt)}</small>}
+          </div>
+          <strong>Ver na call →</strong>
+        </button>
+      </article>;
+    })}</div>
+    {!visible.length&&<Empty>{filter==="unread"?"Você não tem notificações novas.":"Nenhum feedback do Leonardo chegou ainda."}</Empty>}
+  </section>;
+}
+
 function MeetingsView({data}:{data:Row}) {
   const [query,setQuery]=useState("");
   const meetings:Row[]=data.meetings||[];
@@ -419,6 +482,7 @@ export default function SdrProfileShell() {
   const [role,setRole]=useState("");
   const [person,setPerson]=useState("");
   const [view,setView]=useState<View>("calls");
+  const [callFocus,setCallFocus]=useState<Row|null>(null);
   const [data,setData]=useState<Row>({});
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
@@ -456,23 +520,54 @@ export default function SdrProfileShell() {
     return()=>window.clearInterval(timer);
   },[role,load]);
 
+  const loadNotifications=useCallback(async()=>{
+    if(!session?.access_token||role!=="SDR")return;
+    try{
+      const response=await authenticatedFetch(API+"?notifications_only=1",{cache:"no-store"});
+      const body=await response.json().catch(()=>({}));
+      if(!response.ok)return;
+      setData(prev=>({...prev,notifications:Array.isArray(body.notifications)?body.notifications:[],summary:{...(prev.summary||{}),notifications_unread:Number(body.unread||0)}}));
+    }catch{}
+  },[session?.access_token,role]);
+  useEffect(()=>{
+    if(role!=="SDR")return;
+    void loadNotifications();
+    const timer=window.setInterval(()=>void loadNotifications(),12_000);
+    const onFocus=()=>void loadNotifications();
+    window.addEventListener("focus",onFocus);
+    return()=>{window.clearInterval(timer);window.removeEventListener("focus",onFocus);};
+  },[role,loadNotifications]);
+
   if(role!=="SDR"||!session)return null;
   const displayName=data.profile?.person||person||"SDR";
+  const unreadNotifications=Number(data.summary?.notifications_unread||0);
+  const openNotificationCall=(item:Row)=>{
+    const meta=item.metadata||{};
+    const sessionId=String(meta.session_id||"").trim();
+    if(!sessionId)return;
+    setCallFocus({sessionId,timestampMs:Number(meta.timestamp_ms||0),notificationId:item.id});
+    setView("calls");
+    window.scrollTo({top:0,behavior:"smooth"});
+  };
   return <div className="sdr-root"><style>{sdrSharedStyles}</style>
     <aside className="sdr-sidebar"><div className="sdr-brand"><BrandMark/><div><b>Leonardo Imobi</b><span>Relato AI · SDR</span></div></div>
-      <nav>{views.map(([key,label])=><button key={key} className={view===key?"active":""} onClick={()=>setView(key)}>{label}</button>)}</nav>
+      <nav>{views.map(([key,label])=><button key={key} className={view===key?"active":""} onClick={()=>setView(key)}><span>{label}</span>{key==="notifications"&&unreadNotifications>0&&<b className="sdr-nav-badge">{unreadNotifications>99?"99+":unreadNotifications}</b>}</button>)}</nav>
       <div className="sdr-profile"><span>Perfil</span><b>{displayName}</b><small>SDR · atividade própria</small></div>
     </aside>
     <main className="sdr-main"><header className="sdr-top"><div><span>ORGANIZAÇÃO COMERCIAL</span><h1>{views.find(([k])=>k===view)?.[1]}</h1>
-      <p>Você vê somente suas próprias ligações e reuniões.</p></div>
+      <p>{view==="notifications"?"Feedbacks do Leonardo sobre suas calls.":"Você vê somente suas próprias ligações e reuniões."}</p></div>
       <div className="sdr-actions"><span>{loading?"Atualizando…":error?"Falha na atualização":("Atualizado "+dateTime(data.generated_at))}</span>
       <button onClick={load} disabled={loading}>Atualizar</button><button className="ghost" onClick={()=>supabase.auth.signOut({scope:"local"})}>Sair</button></div></header>
       {error&&<div className="sdr-error">{error}</div>}
       <section className="sdr-content">
-        <RelatoPairingCard/>
+        {view!=="notifications"&&<><RelatoPairingCard/>
         <div className="sdr-kpis"><article><span>Ligações</span><b>{Number(data.summary?.calls||0)}</b></article>
-        <article><span>Reuniões</span><b>{Number(data.summary?.meetings||0)}</b></article></div>
-        {view==="calls"?<CallsView data={data}/>:<MeetingsView data={data}/>}
+        <article><span>Reuniões</span><b>{Number(data.summary?.meetings||0)}</b></article></div></>}
+        {view==="calls"
+          ?<CallsView data={data} focus={callFocus} onFocusConsumed={()=>setCallFocus(null)}/>
+          :view==="meetings"
+            ?<MeetingsView data={data}/>
+            :<NotificationsView data={data} onOpenCall={openNotificationCall} refresh={loadNotifications}/>}
       </section>
     </main>
   </div>;
@@ -489,5 +584,6 @@ export const sdrSharedStyles = [
 ".sdr-call-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}.sdr-call-facts>span{display:flex;flex-direction:column;gap:3px;padding:8px;border:1px solid #1c3034;border-radius:8px;background:#081216;font-size:9px;color:#9ab0aa}.sdr-call-facts b{font-size:7px;color:#607b75;text-transform:uppercase;letter-spacing:.08em}.sdr-detail-btn{border:1px solid #285043;background:#10231f;color:#bdf4d8;border-radius:8px;padding:7px 9px;font:800 9px Inter;cursor:pointer}.sdr-modal-backdrop{position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.72);display:grid;place-items:center;padding:24px}.sdr-modal{width:min(920px,96vw);max-height:90vh;overflow:auto;border:1px solid #28413f;background:#081216;border-radius:16px;padding:18px;box-shadow:0 30px 100px rgba(0,0,0,.55)}.sdr-modal>header{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;border-bottom:1px solid #1d3034;padding-bottom:12px}.sdr-modal>header span{font-size:8px;color:#62cca0;font-weight:900;letter-spacing:.12em}.sdr-modal>header h2{margin:4px 0 0;font-size:21px}.sdr-modal>header button{border:1px solid #33484b;background:#101c20;color:#dbe7e3;border-radius:8px;padding:8px 10px;font:700 9px Inter;cursor:pointer}.sdr-detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin:14px 0}.sdr-detail-grid article{border:1px solid #1d3034;background:#0b171b;border-radius:9px;padding:10px}.sdr-detail-grid span{display:block;font-size:7px;color:#637c76;text-transform:uppercase}.sdr-detail-grid b{display:block;margin-top:5px;font-size:10px}.sdr-detail-section{margin-top:14px}.sdr-detail-section h3{font-size:11px;margin:0 0 8px;color:#b9d6ce}.sdr-audio-list{display:grid;gap:8px}.sdr-audio-list article{border:1px solid #1d3034;background:#0b171b;border-radius:10px;padding:10px;display:grid;gap:8px}.sdr-audio-list article>div{display:flex;justify-content:space-between}.sdr-audio-list b{font-size:10px}.sdr-audio-list span{font-size:8px;color:#6f8983}.sdr-audio-list audio{width:100%;height:36px}.sdr-audio-list a{width:max-content;color:#82d8b3;font-size:9px;font-weight:800;text-decoration:none}.sdr-transcript-list{display:grid;gap:6px;max-height:42vh;overflow:auto}.sdr-transcript-list article{display:grid;grid-template-columns:50px minmax(0,1fr);gap:8px;border:1px solid #1a2c30;background:#091519;border-radius:8px;padding:8px}.sdr-transcript-list time{font:800 9px ui-monospace,SFMono-Regular,Menlo,monospace;color:#63cca1}.sdr-transcript-list b{font-size:9px;color:#e0eee9}.sdr-transcript-list p{margin:3px 0 0;font-size:10px;color:#94aaa4}.sdr-transcript-raw{white-space:pre-wrap;border:1px solid #1a2c30;background:#091519;border-radius:8px;padding:10px;font-size:10px;line-height:1.55;color:#94aaa4}",
 ".sdr-sync-player{display:grid;gap:10px}.sdr-sync-player>audio{display:none}.sdr-player-shell{display:grid;grid-template-columns:42px minmax(0,1fr) auto auto;gap:10px;align-items:center;border:1px solid #28423b;background:linear-gradient(135deg,#0c1b1b,#0b151a);border-radius:13px;padding:12px}.sdr-play-button{width:42px;height:42px;border-radius:50%;border:1px solid #3d725f;background:#17352b;color:#d8ffec;font:900 15px Inter;cursor:pointer}.sdr-player-main{min-width:0}.sdr-player-head{display:flex;justify-content:space-between;gap:10px;align-items:center}.sdr-player-head b{font-size:10px}.sdr-player-head span{font:800 9px ui-monospace,SFMono-Regular,Menlo,monospace;color:#86a99f}.sdr-player-range{width:100%;accent-color:#62cca0;cursor:pointer}.sdr-player-rate{height:34px;border:1px solid #2e4a43;background:#0d1b1b;color:#cfe8df;border-radius:8px;padding:0 7px;font:800 9px Inter}.sdr-player-download{white-space:nowrap;border:1px solid #3b765e;background:#143326;color:#bff8da;border-radius:8px;padding:9px 10px;font:900 9px Inter;text-decoration:none}.sdr-player-reading{display:flex;justify-content:space-between;gap:12px;align-items:center}.sdr-player-reading span{font-size:8px;color:#62cca0;font-weight:900;letter-spacing:.12em}.sdr-player-reading small{font-size:8px;color:#6e8781}.sdr-transcript-synced article{cursor:pointer;transition:border-color .16s,background .16s,transform .16s}.sdr-transcript-synced article:hover{border-color:#2d5146}.sdr-transcript-synced article.active{border-color:#5ed29f;background:#123027;box-shadow:0 0 0 1px rgba(94,210,159,.12);transform:translateX(2px)}.sdr-transcript-synced article.active p{color:#d7eee6}",
 ".sdr-timeline-wrap{position:relative;padding:7px 0 2px}.sdr-coaching-marker{position:absolute;top:2px;transform:translateX(-50%);width:9px;height:9px;border-radius:50%;border:2px solid #071015;background:#f59e0b;z-index:3;cursor:pointer;padding:0}.sdr-coaching-marker.praise{background:#62cca0}.sdr-coaching-marker.observation{background:#60a5fa}.sdr-coaching-panel{border:1px solid #28413f;background:#0a171b;border-radius:12px;padding:12px;display:grid;gap:10px}.sdr-coaching-head{display:flex;justify-content:space-between;gap:12px;align-items:center}.sdr-coaching-head>div{display:flex;flex-direction:column;gap:2px}.sdr-coaching-head span{font-size:7px;color:#f3b35f;font-weight:900;letter-spacing:.13em}.sdr-coaching-head b{font-size:11px}.sdr-coaching-head small{font-size:8px;color:#6f8983}.sdr-coaching-head>button,.sdr-coaching-composer button{border:1px solid #875c27;background:#342311;color:#ffd99e;border-radius:8px;padding:8px 10px;font:800 9px Inter;cursor:pointer}.sdr-coaching-composer{border:1px solid #3a3225;background:#15130f;border-radius:10px;padding:10px;display:grid;gap:8px}.sdr-coaching-composer>div:first-child{display:flex;gap:10px;align-items:end}.sdr-coaching-composer label{display:grid;gap:4px}.sdr-coaching-composer label span,.sdr-coaching-time span{font-size:7px;color:#8d8171;text-transform:uppercase;letter-spacing:.08em}.sdr-coaching-composer select{height:32px;border:1px solid #4b4234;background:#0d1517;color:#dfe9e5;border-radius:7px;padding:0 8px;font:700 9px Inter}.sdr-coaching-time{display:grid;gap:4px}.sdr-coaching-time b{font:900 12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#f6c67d}.sdr-coaching-composer textarea{min-height:84px;resize:vertical;border:1px solid #4b4234;background:#0b1214;color:#e8efec;border-radius:8px;padding:9px;font:600 10px/1.5 Inter}.sdr-coaching-composer footer{display:flex;justify-content:space-between;align-items:center}.sdr-coaching-composer footer small{font-size:8px;color:#766f65}.sdr-coaching-composer footer>div{display:flex;gap:7px}.sdr-coaching-composer button.ghost{background:transparent;border-color:#4a4a43;color:#a8ada9}.sdr-coaching-composer button:disabled{opacity:.45;cursor:not-allowed}.sdr-coaching-error{border:1px solid #663b37;background:#2a1514;color:#ef9b90;border-radius:8px;padding:8px;font-size:9px}.sdr-coaching-list{display:grid;gap:7px}.sdr-coaching-list article{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:9px;align-items:start;border:1px solid #24383b;background:#081317;border-radius:9px;padding:9px}.sdr-coaching-time-btn{border:1px solid #875c27;background:#241a0f;color:#ffd291;border-radius:7px;padding:6px 8px;font:900 9px ui-monospace,SFMono-Regular,Menlo,monospace;cursor:pointer}.sdr-coaching-list article>div{display:grid;gap:4px}.sdr-coaching-list p{margin:0;color:#d7e4df;font-size:10px;line-height:1.5}.sdr-coaching-list small{font-size:8px;color:#708783}.sdr-coaching-kind{width:max-content;border-radius:999px;padding:3px 6px;background:#3a260d;color:#f7c87d;font-size:7px!important;font-weight:900!important;letter-spacing:.08em}.sdr-coaching-kind.praise{background:#123125;color:#9ce3c1}.sdr-coaching-kind.observation{background:#132a3a;color:#9ed4fb}.sdr-coaching-context{color:#8ea69f!important;font-style:italic}.sdr-coaching-delete{border:0;background:transparent;color:#b9756f;font:800 8px Inter;cursor:pointer;padding:5px}.sdr-coaching-delete:disabled{opacity:.4}",
-"@media(max-width:760px){.sdr-player-shell{grid-template-columns:42px minmax(0,1fr)}.sdr-coaching-head{align-items:flex-start;flex-direction:column}.sdr-coaching-head>button{width:100%}.sdr-coaching-list article{grid-template-columns:auto minmax(0,1fr)}.sdr-coaching-delete{grid-column:2;justify-self:start}.sdr-coaching-composer>div:first-child{align-items:flex-start;flex-direction:column}.sdr-player-reading{align-items:flex-start;flex-direction:column}.sdr-call-kpis{grid-template-columns:1fr 1fr}.sdr-filter-panel{display:grid;grid-template-columns:1fr 1fr}.sdr-filter-search{grid-column:1/-1}.sdr-call-facts,.sdr-detail-grid{grid-template-columns:1fr 1fr}.sdr-modal-backdrop{padding:8px}.sdr-modal{max-height:95vh;padding:12px}.sdr-root{display:block;overflow:auto}.sdr-sidebar{height:auto;position:sticky;top:0;z-index:8}.sdr-brand,.sdr-profile{display:none}.sdr-sidebar nav{display:flex}.sdr-sidebar nav button{white-space:nowrap}.sdr-main{height:auto}.sdr-top{position:relative;align-items:flex-start;flex-direction:column;padding:16px}.sdr-content{padding:14px 12px 70px}.sdr-kpis{grid-template-columns:1fr 1fr}.sdr-actions{flex-wrap:wrap}}"
+".sdr-sidebar nav button{display:flex;align-items:center;justify-content:space-between;gap:8px}.sdr-nav-badge{display:inline-flex;align-items:center;justify-content:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:#f08b45;color:#160b05;font:900 8px Inter}.sdr-notification-center{display:grid;gap:14px}.sdr-notif-toolbar{display:flex;justify-content:space-between;gap:12px;align-items:center}.sdr-notif-toolbar>div{display:flex;gap:7px}.sdr-notif-toolbar button{border:1px solid #29413f;background:#0a171b;color:#8ea59f;border-radius:8px;padding:8px 10px;font:800 9px Inter;cursor:pointer}.sdr-notif-toolbar button.active{border-color:#3e8067;background:#123027;color:#c9f6df}.sdr-notif-toolbar button b{margin-left:4px;color:#62cca0}.sdr-notif-read-all{color:#f4c987!important;border-color:#5d4829!important;background:#241b10!important}.sdr-notif-read-all:disabled{opacity:.5}.sdr-notif-list{display:grid;gap:8px}.sdr-notif-list article{border:1px solid #203338;background:#091519;border-radius:11px;overflow:hidden}.sdr-notif-list article.unread{border-color:#4b6f62;box-shadow:inset 3px 0 #62cca0;background:linear-gradient(90deg,rgba(98,204,160,.08),#091519 42%)}.sdr-notif-open{display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:11px;align-items:center;width:100%;border:0;background:transparent;color:inherit;text-align:left;padding:13px;cursor:pointer}.sdr-notif-open:disabled{opacity:.6}.sdr-notif-icon{width:34px;height:34px;border-radius:10px;border:1px solid #3b604f;background:#11271f;color:#8de2b7;display:grid;place-items:center;font:900 13px Inter}.sdr-notif-copy{min-width:0}.sdr-notif-copy>div{display:flex;justify-content:space-between;gap:10px;align-items:center}.sdr-notif-copy span{font-size:8px;color:#f0b86c;font-weight:900;text-transform:uppercase;letter-spacing:.08em}.sdr-notif-copy time{font-size:8px;color:#607a74}.sdr-notif-copy h3{margin:5px 0 3px;font-size:11px}.sdr-notif-copy p{margin:0;color:#8fa49f;font-size:9px;line-height:1.5}.sdr-notif-copy small{display:block;margin-top:6px;color:#718a84;font-size:8px;font-style:italic}.sdr-notif-open>strong{white-space:nowrap;color:#8de2b7;font-size:9px}",
+"@media(max-width:760px){.sdr-player-shell{grid-template-columns:42px minmax(0,1fr)}.sdr-coaching-head{align-items:flex-start;flex-direction:column}.sdr-coaching-head>button{width:100%}.sdr-coaching-list article{grid-template-columns:auto minmax(0,1fr)}.sdr-coaching-delete{grid-column:2;justify-self:start}.sdr-coaching-composer>div:first-child{align-items:flex-start;flex-direction:column}.sdr-player-reading{align-items:flex-start;flex-direction:column}.sdr-call-kpis{grid-template-columns:1fr 1fr}.sdr-filter-panel{display:grid;grid-template-columns:1fr 1fr}.sdr-filter-search{grid-column:1/-1}.sdr-call-facts,.sdr-detail-grid{grid-template-columns:1fr 1fr}.sdr-modal-backdrop{padding:8px}.sdr-modal{max-height:95vh;padding:12px}.sdr-root{display:block;overflow:auto}.sdr-sidebar{height:auto;position:sticky;top:0;z-index:8}.sdr-brand,.sdr-profile{display:none}.sdr-sidebar nav{display:flex;overflow:auto}.sdr-sidebar nav button{white-space:nowrap}.sdr-notif-toolbar{align-items:stretch;flex-direction:column}.sdr-notif-toolbar>div{display:grid;grid-template-columns:1fr 1fr}.sdr-notif-open{grid-template-columns:34px minmax(0,1fr)}.sdr-notif-open>strong{grid-column:2}.sdr-main{height:auto}.sdr-top{position:relative;align-items:flex-start;flex-direction:column;padding:16px}.sdr-content{padding:14px 12px 70px}.sdr-kpis{grid-template-columns:1fr 1fr}.sdr-actions{flex-wrap:wrap}}"
 ].join("");
