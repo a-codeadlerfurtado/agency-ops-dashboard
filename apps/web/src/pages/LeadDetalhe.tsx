@@ -73,9 +73,6 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
   async function trocarResponsavel() {
     if (!corretorNovo || corretorNovo === opp.assigned_user_id) return;
     const novo = atribuiveis.find((p) => p.id === corretorNovo);
-    const atual = opp.assigned_user_id ? nomePorId.get(opp.assigned_user_id) ?? "corretor atual" : "fila";
-    if (!window.confirm(`Trocar este lead de ${atual} para ${novo?.full_name ?? "o novo corretor"}?`)) return;
-
     setSalvando(true);
     try {
       await trocarCorretor(oppId, corretorNovo);
@@ -210,7 +207,7 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
                 disabled={salvando || !corretorNovo || corretorNovo === opp.assigned_user_id}
                 onClick={trocarResponsavel}
               >
-                Trocar corretor
+                {salvando ? "Transferindo..." : "Trocar corretor"}
               </button>
             </div>
           )}
