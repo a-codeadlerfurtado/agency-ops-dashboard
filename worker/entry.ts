@@ -5,7 +5,7 @@ import { rodarRondas } from "./jarvis/routines";
 const SUPABASE = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const OLD_IMG_SRC = "img-src 'self' data:";
 const NEW_IMG_SRC = `img-src 'self' data: ${SUPABASE} https://*.fbcdn.net https://*.facebook.com`;
-const MEDIA_SRC = "media-src 'self' blob: https://*.fbcdn.net https://*.facebook.com";
+const MEDIA_SRC = `media-src 'self' blob: ${SUPABASE} https://*.fbcdn.net https://*.facebook.com`;
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 const RADAR_TEXT_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
 const VISION_BULK_KEY = "cvi_20260829_5b1d73f04c784898";
@@ -19,6 +19,7 @@ function widenImageCsp(response: Response): Response {
       : csp;
     if (!/\bmedia-src\b/i.test(next)) next = `${next}; ${MEDIA_SRC}`;
     else if (!/\bmedia-src\b[^;]*\bblob:/i.test(next)) next = next.replace(/\bmedia-src\b([^;]*)/i, `media-src$1 blob:`);
+    if (!next.includes(SUPABASE)) next = next.replace(/\bmedia-src\b([^;]*)/i, `media-src$1 ${SUPABASE}`);
     if (next !== csp) headers.set("content-security-policy", next);
   }
   const contentType = (headers.get("content-type") || "").toLowerCase();
@@ -26,6 +27,7 @@ function widenImageCsp(response: Response): Response {
     headers.set("cache-control", "no-store, no-cache, must-revalidate, max-age=0");
     headers.set("pragma", "no-cache");
     headers.set("x-jarvis-ui-build", "cedar-only-v3");
+    headers.set("x-relato-ui-build", "sdr-coaching-v1");
   }
   return new Response(response.body, {
     status: response.status,
