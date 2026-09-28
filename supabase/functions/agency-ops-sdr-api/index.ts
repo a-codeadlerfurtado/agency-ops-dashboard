@@ -93,6 +93,17 @@ const likelyWhisperHallucination=(value:unknown)=>{
   return false;
 };
 
+const coachingClock=(ms:unknown)=>{
+  const total=Math.max(0,Math.floor(Number(ms||0)/1000));
+  const mm=String(Math.floor(total/60)).padStart(2,"0");
+  const ss=String(total%60).padStart(2,"0");
+  return mm+":"+ss;
+};
+const coachingKindLabel=(value:unknown)=>{
+  const key=clean(value).toUpperCase();
+  return key==="PRAISE"?"Acerto":key==="OBSERVATION"?"Observação":"Melhoria";
+};
+
 Deno.serve(async(req:Request)=>{
   if(req.method==="OPTIONS") return new Response(null,{status:204,headers:CORS});
   if(!["GET","POST"].includes(req.method)) return reply({error:"method_not_allowed"},405);
@@ -140,9 +151,70 @@ Deno.serve(async(req:Request)=>{
     });
   }
 
+  const loadOwnNotifications=async()=>{
+    if(!isOwnSdr) return {items:[] as Row[],unread:0};
+    const {data:notifRows,error:notifError}=await ops.from("platform_notifications")
+      .select("id,event_key,type,level,title,description,source,actor,occurred_at,metadata")
+      .eq("type","RELATO_SDR_COACHING")
+      .order("occurred_at",{ascending:false})
+      .limit(500);
+    if(notifError) throw notifError;
+    const own=(notifRows||[]).filter((row:Row)=>
+      row?.metadata?.private_to_person===true && clean(row?.metadata?.target_person)===person
+    ).slice(0,120);
+    if(!own.length) return {items:[],unread:0};
+    const ids=own.map((row:Row)=>String(row.id));
+    const {data:readRows,error:readError}=await ops.from("platform_notification_reads")
+      .select("notification_id,read_at")
+      .eq("user_key",userData.user.id)
+      .in("notification_id",ids);
+    if(readError) throw readError;
+    const readMap=new Map((readRows||[]).map((row:Row)=>[String(row.notification_id),row.read_at]));
+    const items=own.map((row:Row)=>({...row,read_at:readMap.get(String(row.id))||null}));
+    return {items,unread:items.filter((row:Row)=>!row.read_at).length};
+  };
+
+  if(req.method==="GET"&&requestUrl.searchParams.get("notifications_only")==="1"){
+    if(!isOwnSdr) return reply({notifications:[],unread:0,generated_at:new Date().toISOString()});
+    try{
+      const notifications=await loadOwnNotifications();
+      return reply({notifications:notifications.items,unread:notifications.unread,generated_at:new Date().toISOString()});
+    }catch(error:any){
+      return reply({error:"notifications_failed",detail:error?.message||String(error)},500);
+    }
+  }
+
   if(req.method==="POST"){
     const body:Row=await req.json().catch(()=>({}));
     const action=clean(body.action).toLowerCase();
+
+    if(action==="notification_read"||action==="notifications_read_all"){
+      if(!isOwnSdr) return reply({error:"sdr_only"},403);
+      const {data:notifRows,error:notifError}=await ops.from("platform_notifications")
+        .select("id,type,metadata")
+        .eq("type","RELATO_SDR_COACHING")
+        .order("occurred_at",{ascending:false})
+        .limit(500);
+      if(notifError) return reply({error:"notification_lookup_failed",detail:notifError.message},500);
+      const own=(notifRows||[]).filter((row:Row)=>
+        row?.metadata?.private_to_person===true && clean(row?.metadata?.target_person)===person
+      );
+      const requestedId=clean(body.notification_id);
+      const target=action==="notification_read"
+        ? own.filter((row:Row)=>String(row.id)===requestedId)
+        : own;
+      if(action==="notification_read"&&!requestedId) return reply({error:"notification_id_required"},400);
+      if(action==="notification_read"&&!target.length) return reply({error:"notification_not_found"},404);
+      if(target.length){
+        const now=new Date().toISOString();
+        const rows=target.map((row:Row)=>({notification_id:row.id,user_key:userData.user.id,read_at:now}));
+        const {error:readError}=await ops.from("platform_notification_reads")
+          .upsert(rows,{onConflict:"notification_id,user_key"});
+        if(readError) return reply({error:"notification_read_failed",detail:readError.message},500);
+      }
+      return reply({ok:true,read_count:target.length});
+    }
+
     const sessionId=clean(body.session_id);
     if(!sessionId) return reply({error:"session_id_required"},400);
 
@@ -194,7 +266,47 @@ Deno.serve(async(req:Request)=>{
         context_excerpt:contextExcerpt,
       }).select("id,session_id,transcript_id,sdr_person,author_person,kind,timestamp_ms,note,context_excerpt,created_at,updated_at").single();
       if(pointError||!point) return reply({error:"coaching_point_create_failed",detail:pointError?.message},500);
-      return reply({ok:true,coaching_point:point});
+
+      const prospectName=safeContactName(
+        session.metadata?.commercial_prospect?.name ||
+        session.metadata?.whatsapp_name ||
+        session.metadata?.remote_name ||
+        session.metadata?.contact_name
+      );
+      const kindLabel=coachingKindLabel(kind);
+      const notificationTitle=prospectName
+        ? "Leonardo pontuou sua call com "+prospectName
+        : "Leonardo pontuou uma das suas calls";
+      const notificationDescription=kindLabel+" em "+coachingClock(timestampMs)+" · "+note.slice(0,320);
+      const {data:notification,error:notificationError}=await ops.from("platform_notifications").insert({
+        event_key:"relato_sdr_coaching:"+point.id,
+        type:"RELATO_SDR_COACHING",
+        level:kind==="PRAISE"?"SUCCESS":kind==="OBSERVATION"?"INFO":"ATTENTION",
+        title:notificationTitle,
+        description:notificationDescription,
+        source:"RELATO_AI",
+        actor:person,
+        occurred_at:point.created_at||new Date().toISOString(),
+        metadata:{
+          private_to_person:true,
+          target_person:session.owner_person,
+          session_id:session.id,
+          coaching_point_id:point.id,
+          transcript_id:session.transcript_id||null,
+          timestamp_ms:timestampMs,
+          kind,
+          note,
+          context_excerpt:contextExcerpt,
+          call_started_at:session.started_at||null,
+          prospect_name:prospectName||null,
+          route:"SDR_CALL_COACHING"
+        }
+      }).select("id,event_key,type,level,title,description,source,actor,occurred_at,metadata").single();
+      if(notificationError||!notification){
+        await ops.from("relato_call_coaching_points").delete().eq("id",point.id);
+        return reply({error:"coaching_notification_failed",detail:notificationError?.message},500);
+      }
+      return reply({ok:true,coaching_point:point,notification});
     }
 
     if(action==="coaching_point_delete"){
@@ -209,6 +321,7 @@ Deno.serve(async(req:Request)=>{
       if(clean(point.author_person)!==person) return reply({error:"coaching_point_not_owned"},403);
       const {error:deleteError}=await ops.from("relato_call_coaching_points").delete().eq("id",pointId);
       if(deleteError) return reply({error:"coaching_point_delete_failed",detail:deleteError.message},500);
+      await ops.from("platform_notifications").delete().eq("event_key","relato_sdr_coaching:"+pointId);
       return reply({ok:true,deleted_id:pointId});
     }
 
@@ -517,6 +630,11 @@ Deno.serve(async(req:Request)=>{
     latestDevice=data||null;
   }
   const currentAgentVersion=clean(latestDevice?.extension_version)||null;
+  let ownNotifications:{items:Row[];unread:number}={items:[],unread:0};
+  if(isOwnSdr){
+    try{ ownNotifications=await loadOwnNotifications(); }
+    catch(error:any){ return reply({error:"notifications_failed",detail:error?.message||String(error)},500); }
+  }
 
   return reply({
     profile:isOwnSdr
@@ -531,7 +649,8 @@ Deno.serve(async(req:Request)=>{
       release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.28.1/RelatoAI-Desktop-SDR.exe"
     }:null,
     sdr_options:isLeonardoViewer?targetPeople:[],
-    summary:{meetings:meetings.length,calls:enrichedCalls.length},
+    summary:{meetings:meetings.length,calls:enrichedCalls.length,notifications_unread:ownNotifications.unread},
+    notifications:ownNotifications.items,
     meetings,calls:enrichedCalls,sessions,
     generated_at:new Date().toISOString()
   });
