@@ -74,7 +74,7 @@ export async function corretoresAtribuiveis(tenantId: string): Promise<Profile[]
     .select("profile:profiles(id, full_name, phone)")
     .eq("tenant_id", tenantId)
     .eq("status", "ACTIVE")
-    .eq("role", "BROKER")
+    .in("role", ["BROKER", "ADMIN"])
     .eq("is_internal", false);
   if (error) throw error;
   return (data ?? [])

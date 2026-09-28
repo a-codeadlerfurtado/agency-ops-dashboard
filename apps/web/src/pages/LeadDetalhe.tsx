@@ -193,14 +193,20 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
               <select
                 className="select"
                 style={{ width: "auto", minWidth: 190 }}
-                value={corretorNovo || opp.assigned_user_id || ""}
+                value={corretorNovo}
                 onChange={(e) => setCorretorNovo(e.target.value)}
                 disabled={salvando}
               >
-                {!opp.assigned_user_id && <option value="">Na fila</option>}
-                {atribuiveis.map((p) => (
-                  <option key={p.id} value={p.id}>{p.full_name ?? "Corretor"}</option>
-                ))}
+                <option value="">
+                  {opp.assigned_user_id
+                    ? `Escolher novo corretor (atual: ${nomePorId.get(opp.assigned_user_id) ?? "responsável atual"})`
+                    : "Escolher corretor"}
+                </option>
+                {atribuiveis
+                  .filter((p) => p.id !== opp.assigned_user_id)
+                  .map((p) => (
+                    <option key={p.id} value={p.id}>{p.full_name ?? "Corretor"}</option>
+                  ))}
               </select>
               <button
                 className="btn sm"
