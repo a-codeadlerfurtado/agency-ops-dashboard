@@ -68,6 +68,29 @@ export async function corretores(tenantId: string): Promise<Profile[]> {
     .filter(Boolean);
 }
 
+export async function corretoresAtribuiveis(tenantId: string): Promise<Profile[]> {
+  const { data, error } = await supabase
+    .from("memberships")
+    .select("profile:profiles(id, full_name, phone)")
+    .eq("tenant_id", tenantId)
+    .eq("status", "ACTIVE")
+    .eq("role", "BROKER")
+    .eq("is_internal", false);
+  if (error) throw error;
+  return (data ?? [])
+    .map((m) => m.profile as unknown as Profile)
+    .filter(Boolean)
+    .sort((a, b) => (a.full_name ?? "").localeCompare(b.full_name ?? ""));
+}
+
+export async function trocarCorretor(oppId: string, corretorId: string) {
+  const { error } = await supabase.rpc("reassign_opportunity_broker", {
+    p_opportunity_id: oppId,
+    p_broker_id: corretorId,
+  });
+  if (error) throw error;
+}
+
 export interface FiltrosLead {
   busca?: string;
   etapaId?: string;

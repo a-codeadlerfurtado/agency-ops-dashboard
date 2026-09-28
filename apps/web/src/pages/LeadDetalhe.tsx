@@ -2,8 +2,8 @@ import { useState } from "react";
 import { irPara } from "../App";
 import { dataHora, linkWhatsapp, relativo, rotuloOrigem } from "../lib/format";
 import {
-  atividades, corretores, criarTarefa, etapas, historicoWhatsapp, integracaoWhatsappAtiva,
-  moverEtapa, oportunidade, registrarAtividade,
+  atividades, corretores, corretoresAtribuiveis, criarTarefa, etapas, historicoWhatsapp,
+  integracaoWhatsappAtiva, moverEtapa, oportunidade, registrarAtividade, trocarCorretor,
 } from "../lib/queries";
 import { mensagemDeErro } from "../lib/supabase";
 import { abrirWhatsapp, compartilharLead, impactoLeve } from "../lib/native";
@@ -36,6 +36,7 @@ const ROTULO_ATIVIDADE: Record<ActivityType, string> = {
 export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: string }) {
   const avisar = useToast();
   const [salvando, setSalvando] = useState(false);
+  const [corretorNovo, setCorretorNovo] = useState("");
   const [sugerido, setSugerido] = useState<Match | null>(null);
   // muda a cada salvamento de interesse para o matching recalcular
   const [chaveMatch, setChaveMatch] = useState(0);
@@ -48,6 +49,7 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
       whatsAtivo: await integracaoWhatsappAtiva(sessao.tenant.id),
       etapas: await etapas(sessao.tenant.id),
       pessoas: await corretores(sessao.tenant.id),
+      atribuiveis: await corretoresAtribuiveis(sessao.tenant.id),
     }),
     [oppId, sessao.tenant.id]
   );
@@ -63,10 +65,30 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
     );
   }
 
-  const { opp, hist, whats, whatsAtivo, etapas: listaEtapas, pessoas } = dados.dado;
+  const { opp, hist, whats, whatsAtivo, etapas: listaEtapas, pessoas, atribuiveis } = dados.dado;
   const etapaAtual = listaEtapas.find((e) => e.id === opp.stage_id);
   const nomePorId = new Map(pessoas.map((p) => [p.id, p.full_name ?? "--"]));
   const wa = linkWhatsapp(opp.contact?.phone_normalized ?? opp.contact?.phone);
+
+  async function trocarResponsavel() {
+    if (!corretorNovo || corretorNovo === opp.assigned_user_id) return;
+    const novo = atribuiveis.find((p) => p.id === corretorNovo);
+    const atual = opp.assigned_user_id ? nomePorId.get(opp.assigned_user_id) ?? "corretor atual" : "fila";
+    if (!window.confirm(`Trocar este lead de ${atual} para ${novo?.full_name ?? "o novo corretor"}?`)) return;
+
+    setSalvando(true);
+    try {
+      await trocarCorretor(oppId, corretorNovo);
+      await impactoLeve();
+      avisar("ok", `Lead transferido para ${novo?.full_name ?? "o novo corretor"}.`);
+      setCorretorNovo("");
+      dados.recarregar();
+    } catch (e) {
+      avisar("err", mensagemDeErro(e));
+    } finally {
+      setSalvando(false);
+    }
+  }
 
   async function mover(etapaId: string) {
     const alvo = listaEtapas.find((e) => e.id === etapaId);
@@ -165,6 +187,33 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
               </button>
             ))}
           </div>
+
+          {sessao.isAdmin && atribuiveis.length > 0 && (
+            <div className="row" style={{ gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 12, color: "var(--text-subtle)" }}>
+                Corretor responsável:
+              </span>
+              <select
+                className="select"
+                style={{ width: "auto", minWidth: 190 }}
+                value={corretorNovo || opp.assigned_user_id || ""}
+                onChange={(e) => setCorretorNovo(e.target.value)}
+                disabled={salvando}
+              >
+                {!opp.assigned_user_id && <option value="">Na fila</option>}
+                {atribuiveis.map((p) => (
+                  <option key={p.id} value={p.id}>{p.full_name ?? "Corretor"}</option>
+                ))}
+              </select>
+              <button
+                className="btn sm"
+                disabled={salvando || !corretorNovo || corretorNovo === opp.assigned_user_id}
+                onClick={trocarResponsavel}
+              >
+                Trocar corretor
+              </button>
+            </div>
+          )}
         </div>
       </Card>
 
