@@ -8,7 +8,7 @@ export interface LeadNormalizado {
   nome: string;
   telefone?: string;
   email?: string;
-  atribuicao: Record<string, string | undefined>;
+  atribuicao: Record<string, unknown>;
   eventoExterno?: string;
 }
 
@@ -88,7 +88,10 @@ const adaptadorMeta: Adaptador = (corpo) => {
       ad_id: texto(c.ad_id),
       ad_name: texto(c.ad_name),
       form_id: texto(c.form_id),
-      platform_lead_id: texto(c.leadgen_id ?? c.lead_id),
+      platform_lead_id: texto(c.leadgen_id ?? c.lead_id ?? c.id),
+      // Mantem TODAS as perguntas e respostas do formulario. A RPC ingerir_lead
+      // grava esse array em lead_form_submissions na mesma transacao do lead.
+      field_data: Array.isArray(brutos) ? brutos : undefined,
     },
     // leadgen_id e o identificador estavel da Meta: e ele que torna o reenvio
     // do mesmo lead inofensivo (spec 64).
@@ -275,10 +278,10 @@ export function tokenDoRequest(req: Request): string | null {
   return k && k.trim() !== "" ? k.trim() : null;
 }
 
-function limpar(o: Record<string, string | undefined>): Record<string, string> {
+function limpar(o: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(
     Object.entries(o).filter(([, v]) => v != null && v !== "")
-  ) as Record<string, string>;
+  );
 }
 
 export function json(corpo: unknown, status = 200): Response {
