@@ -145,8 +145,9 @@ function SyncedCallPlayer({audio,segments,rawTranscript}:{audio:Row[];segments:R
   </div>;
 }
 
-function CallsView({data}:{data:Row}) {
+export function CallsView({data,managerMode=false}:{data:Row;managerMode?:boolean}) {
   const [query,setQuery]=useState("");
+  const [sdrPerson,setSdrPerson]=useState("all");
   const [period,setPeriod]=useState("30d");
   const [dateFrom,setDateFrom]=useState("");
   const [dateTo,setDateTo]=useState("");
@@ -160,10 +161,13 @@ function CallsView({data}:{data:Row}) {
   const [detailLoading,setDetailLoading]=useState(false);
   const [detailError,setDetailError]=useState("");
   const calls:Row[]=data.calls||[];
+  const sdrOptions=useMemo(()=>Array.from(new Set(calls.map(row=>String(row.sdr_person||row.owner_person||"").trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"pt-BR")),[calls]);
 
   const visible=useMemo(()=>calls.filter(row=>{
+    const rowSdr=String(row.sdr_person||row.owner_person||"").trim();
+    if(managerMode&&sdrPerson!=="all"&&rowSdr!==sdrPerson)return false;
     const q=norm(query);
-    if(q&&!norm(String(row.prospect_name||"")+" "+String(row.whatsapp_name||"")+" "+String(row.post_call_name||"")+" "+String(row.crm_name||"")+" "+String(row.auto_identified_name||"")+" "+String(row.remote_name||"")+" "+String(row.remote_phone||"")+" "+String(row.notes||"")+" "+String(row.stage||"")).includes(q))return false;
+    if(q&&!norm(String(rowSdr)+" "+String(row.prospect_name||"")+" "+String(row.whatsapp_name||"")+" "+String(row.post_call_name||"")+" "+String(row.crm_name||"")+" "+String(row.auto_identified_name||"")+" "+String(row.remote_name||"")+" "+String(row.remote_phone||"")+" "+String(row.notes||"")+" "+String(row.stage||"")).includes(q))return false;
 
     const when=Date.parse(String(row.created_at||""));
     if(period==="today"&&dayKey(row.created_at)!==dayKey(new Date()))return false;
@@ -201,7 +205,7 @@ function CallsView({data}:{data:Row}) {
     if(channel==="desktop"&&!mode.includes("DESKTOP"))return false;
     if(channel==="web"&&!mode.includes("WEB"))return false;
     return true;
-  }),[calls,query,period,dateFrom,dateTo,status,identity,transcript,recording,durationBand,channel]);
+  }),[calls,query,period,dateFrom,dateTo,status,identity,transcript,recording,durationBand,channel,managerMode,sdrPerson]);
 
   const metrics=useMemo(()=>{
     const secs=visible.map(r=>Math.max(0,Number(r.duration_seconds||0))).filter(n=>n>0);
@@ -220,7 +224,7 @@ function CallsView({data}:{data:Row}) {
     };
   },[visible]);
 
-  const clearFilters=()=>{setQuery("");setPeriod("30d");setDateFrom("");setDateTo("");setStatus("all");setIdentity("all");setTranscript("all");setRecording("all");setDurationBand("all");setChannel("all");};
+  const clearFilters=()=>{setQuery("");setSdrPerson("all");setPeriod("30d");setDateFrom("");setDateTo("");setStatus("all");setIdentity("all");setTranscript("all");setRecording("all");setDurationBand("all");setChannel("all");};
 
   const openDetail=async(row:Row)=>{
     setDetailLoading(true);setDetailError("");
@@ -234,8 +238,8 @@ function CallsView({data}:{data:Row}) {
   };
 
   return <section className="sdr-card">
-    <header className="sdr-section-head"><div><span>RELATO AI · SDR</span><h2>Minhas ligações</h2>
-      <p>Volume, duração, identificação, transcrição e gravação das suas calls.</p></div><b>{visible.length} exibidas</b></header>
+    <header className="sdr-section-head"><div><span>RELATO AI · SDR</span><h2>{managerMode?"Calls SDR":"Minhas ligações"}</h2>
+      <p>{managerMode?"Acompanhe as ligações dos SDRs com transcrição, gravação e contexto completo.":"Volume, duração, identificação, transcrição e gravação das suas calls."}</p></div><b>{visible.length} exibidas</b></header>
 
     <div className="sdr-call-kpis">
       <article><span>Ligações</span><b>{metrics.calls}</b><small>No filtro atual</small></article>
@@ -249,7 +253,8 @@ function CallsView({data}:{data:Row}) {
     </div>
 
     <div className="sdr-filter-panel">
-      <div className="sdr-filter-search"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Buscar prospect, telefone, etapa ou anotação"/></div>
+      <div className="sdr-filter-search"><input value={query} onChange={e=>setQuery(e.target.value)} placeholder={managerMode?"Buscar SDR, prospect, telefone, etapa ou anotação":"Buscar prospect, telefone, etapa ou anotação"}/></div>
+      {managerMode&&<label><span>SDR</span><select value={sdrPerson} onChange={e=>setSdrPerson(e.target.value)}><option value="all">Todos os SDRs</option>{sdrOptions.map(name=><option key={name} value={name}>{name}</option>)}</select></label>}
       <label><span>Período</span><select value={period} onChange={e=>setPeriod(e.target.value)}>
         <option value="today">Hoje</option><option value="7d">Últimos 7 dias</option><option value="30d">Últimos 30 dias</option><option value="all">Tudo</option><option value="custom">Personalizado</option>
       </select></label>
@@ -276,7 +281,7 @@ function CallsView({data}:{data:Row}) {
     </div>
 
     <div className="sdr-list">{visible.map(row=><article className="sdr-item" key={row.id}>
-      <div className="sdr-item-top"><div><span>{text(row.channel,"Ligação")}</span><h3>{text(row.prospect_name||row.remote_name,unidentifiedLabel(row))}</h3></div>
+      <div className="sdr-item-top"><div><span>{managerMode?text(row.sdr_person||row.owner_person,"SDR"):text(row.channel,"Ligação")}</span><h3>{text(row.prospect_name||row.remote_name,unidentifiedLabel(row))}</h3>{managerMode&&<small className="sdr-call-channel">{text(row.channel,"Ligação")}</small>}</div>
       <time>{dateTime(row.created_at)}</time></div>
       <div className="sdr-call-facts">
         <span><b>Outro número</b>{phone(row.remote_phone)}</span>
@@ -382,7 +387,7 @@ export default function SdrProfileShell() {
 
   if(role!=="SDR"||!session)return null;
   const displayName=data.profile?.person||person||"SDR";
-  return <div className="sdr-root"><style>{styles}</style>
+  return <div className="sdr-root"><style>{sdrSharedStyles}</style>
     <aside className="sdr-sidebar"><div className="sdr-brand"><BrandMark/><div><b>Leonardo Imobi</b><span>Relato AI · SDR</span></div></div>
       <nav>{views.map(([key,label])=><button key={key} className={view===key?"active":""} onClick={()=>setView(key)}>{label}</button>)}</nav>
       <div className="sdr-profile"><span>Perfil</span><b>{displayName}</b><small>SDR · atividade própria</small></div>
@@ -401,7 +406,7 @@ export default function SdrProfileShell() {
     </main>
   </div>;
 }
-const styles = [
+export const sdrSharedStyles = [
 ".sdr-root{position:fixed;inset:0;z-index:9000;display:grid;grid-template-columns:220px minmax(0,1fr);background:#071015;color:#eaf2ef;font-family:Inter,system-ui,sans-serif}",
 ".sdr-sidebar{display:flex;flex-direction:column;border-right:1px solid #203137;background:#091417;padding:18px 12px}.sdr-brand{display:flex;align-items:center;gap:10px;padding:8px 8px 22px}.sdr-brand svg{width:30px;color:#f47b43}.sdr-brand div{display:flex;flex-direction:column}.sdr-brand b{font-size:13px}.sdr-brand span,.sdr-profile span{font-size:8px;color:#78908c;text-transform:uppercase;letter-spacing:.12em;margin-top:3px}",
 ".sdr-sidebar nav{display:grid;gap:5px}.sdr-sidebar nav button{border:1px solid transparent;background:transparent;color:#8ca39e;text-align:left;border-radius:9px;padding:11px 12px;font:700 11px Inter;cursor:pointer}.sdr-sidebar nav button.active{background:#142b25;border-color:#285043;color:#bdf4d8}.sdr-profile{margin-top:auto;border-top:1px solid #1b2c31;padding:15px 9px 4px;display:flex;flex-direction:column}.sdr-profile b{font-size:11px;margin-top:5px}.sdr-profile small{font-size:9px;color:#708783;margin-top:3px}",
