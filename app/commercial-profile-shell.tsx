@@ -3,15 +3,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { BrandMark, SUPABASE_URL, authenticatedFetch, loadProfileLite, supabase } from "./shared";
+import CloserClientsView from "./closer-clients-view";
 
 type Row = Record<string, any>;
-type View = "home" | "funnel" | "clients" | "campaigns" | "meetings" | "direction";
+type View = "home" | "funnel" | "clients" | "closed-clients" | "campaigns" | "meetings" | "direction";
 
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-commercial-direction-api`;
 const views: Array<[View, string]> = [
   ["home", "Home Comercial"],
   ["funnel", "Funil Comercial"],
   ["clients", "Clientes"],
+  ["closed-clients", "Meus clientes fechados"],
   ["campaigns", "Campanhas"],
   ["meetings", "Reuniões"],
   ["direction", "Direção Comercial"],
@@ -145,6 +147,7 @@ function DirectionView({ data }: { data: Row }) {
 export default function CommercialProfileShell() {
   const [session, setSession] = useState<Session | null>(null);
   const [role, setRole] = useState<string | null>(null);
+  const [person, setPerson] = useState("");
   const [view, setView] = useState<View>("home");
   const [data, setData] = useState<Row>({});
   const [loading, setLoading] = useState(false);
@@ -156,14 +159,14 @@ export default function CommercialProfileShell() {
     return () => subscription.unsubscribe();
   }, []);
   useEffect(() => {
-    if (!session?.access_token) { setRole(null); return; }
+    if (!session?.access_token) { setRole(null); setPerson(""); return; }
     let active = true;
-    loadProfileLite().then((body) => { if (active) setRole(String(body?.profile?.role || "").toUpperCase()); }).catch(() => { if (active) setRole(null); });
+    loadProfileLite().then((body) => { if (active) { setRole(String(body?.profile?.role || "").toUpperCase()); setPerson(String(body?.profile?.person || "")); } }).catch(() => { if (active) { setRole(null); setPerson(""); } });
     return () => { active = false; };
   }, [session?.access_token]);
 
   const load = useCallback(async () => {
-    if (!session?.access_token || role !== "COMMERCIAL") return;
+    if (!session?.access_token || !["COMMERCIAL", "CLOSER"].includes(String(role || ""))) return;
     setLoading(true); setError("");
     try {
       const response = await authenticatedFetch(API, { cache: "no-store" });
@@ -176,23 +179,23 @@ export default function CommercialProfileShell() {
   }, [session?.access_token, role]);
 
   useEffect(() => {
-    if (role !== "COMMERCIAL") return;
+    if (!["COMMERCIAL", "CLOSER"].includes(String(role || ""))) return;
     load();
     const timer = window.setInterval(load, 60_000);
     return () => window.clearInterval(timer);
   }, [role, load]);
 
   useEffect(() => {
-    if (role !== "COMMERCIAL") return;
+    if (!["COMMERCIAL", "CLOSER"].includes(String(role || ""))) return;
     document.documentElement.classList.add("leonardo-commercial-profile");
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.documentElement.classList.remove("leonardo-commercial-profile"); document.body.style.overflow = previous; };
   }, [role]);
 
-  if (role !== "COMMERCIAL" || !session) return null;
+  if (!["COMMERCIAL", "CLOSER"].includes(String(role || "")) || !session) return null;
 
-  return <div className="lc-root"><style>{styles}</style><aside className="lc-sidebar"><div className="lc-logo"><BrandMark/><div><b>Leonardo Imobi</b><span>Direção Comercial</span></div></div><nav>{views.map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)}>{label}</button>)}</nav><div className="lc-side-foot"><span>Perfil</span><b>Leonardo Augusto</b><small>Comercial · somente leitura</small></div></aside><main className="lc-main"><header className="lc-top"><div><span>CENTRAL COMERCIAL</span><h1>{views.find(([key]) => key === view)?.[1]}</h1><p>Vendas, campanhas, clientes e reuniões. Operação fica fora deste perfil.</p></div><div className="lc-top-actions"><div className={`lc-sync ${error ? "error" : loading ? "loading" : ""}`}><i/><span>{loading ? "Atualizando…" : error ? "Falha na atualização" : `Carga da tela ${dateTime(data.generated_at)}`}</span></div><button onClick={load} disabled={loading}>Atualizar</button><button className="ghost" onClick={() => supabase.auth.signOut({ scope: "local" })}>Sair</button></div></header>{error && <div className="lc-error">{error}</div>}<section className="lc-content">{view === "home" && <HomeView data={data}/>} {view === "funnel" && <FunnelView data={data}/>} {view === "clients" && <ClientsView data={data}/>} {view === "campaigns" && <CampaignsView data={data}/>} {view === "meetings" && <MeetingsView data={data}/>} {view === "direction" && <DirectionView data={data}/>}</section></main></div>;
+  return <div className="lc-root"><style>{styles}</style><aside className="lc-sidebar"><div className="lc-logo"><BrandMark/><div><b>Leonardo Imobi</b><span>{role === "CLOSER" ? "Closer" : "Direção Comercial"}</span></div></div><nav>{views.map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)}>{label}</button>)}</nav><div className="lc-side-foot"><span>Perfil</span><b>{text(person || data.profile?.person || "Comercial")}</b><small>{role === "CLOSER" ? "Closer" : "Direção Comercial"}</small></div></aside><main className="lc-main"><header className="lc-top"><div><span>CENTRAL COMERCIAL</span><h1>{views.find(([key]) => key === view)?.[1]}</h1><p>Vendas, campanhas, clientes e reuniões. Operação fica fora deste perfil.</p></div><div className="lc-top-actions"><div className={`lc-sync ${error ? "error" : loading ? "loading" : ""}`}><i/><span>{loading ? "Atualizando…" : error ? "Falha na atualização" : `Carga da tela ${dateTime(data.generated_at)}`}</span></div><button onClick={load} disabled={loading}>Atualizar</button><button className="ghost" onClick={() => supabase.auth.signOut({ scope: "local" })}>Sair</button></div></header>{error && <div className="lc-error">{error}</div>}<section className="lc-content">{view === "home" && <HomeView data={data}/>} {view === "funnel" && <FunnelView data={data}/>} {view === "clients" && <ClientsView data={data}/>} {view === "closed-clients" && <CloserClientsView rows={data.portfolio_clients || []} closerName={String(person || data.profile?.person || "Vitor Feitoza")} />} {view === "campaigns" && <CampaignsView data={data}/>} {view === "meetings" && <MeetingsView data={data}/>} {view === "direction" && <DirectionView data={data}/>}</section></main></div>;
 }
 
 const styles = `

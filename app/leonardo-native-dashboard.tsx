@@ -12,12 +12,13 @@ import {
   text,
 } from "./shared";
 import { CallsView, sdrSharedStyles } from "./sdr-profile-shell";
+import CloserClientsView from "./closer-clients-view";
 
 const CreativeCenter = lazy(() => import("./views/creative").then((m) => ({ default: m.CreativeCenter })));
 const VideoScriptsCenter = lazy(() => import("./views/video-scripts").then((m) => ({ default: m.VideoScriptsCenter })));
 
 type Row = Record<string, any>;
-type Tab = "home" | "funnel" | "clients" | "campaigns" | "meetings" | "calls_sdr" | "direction" | "creative" | "scripts" | "clickup";
+type Tab = "home" | "funnel" | "clients" | "closed-clients" | "campaigns" | "meetings" | "calls_sdr" | "direction" | "creative" | "scripts" | "clickup";
 type NavItem = { key: string; label: string; tab?: Tab; href?: string };
 
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-commercial-direction-api`;
@@ -27,6 +28,7 @@ const NAV: NavItem[] = [
   { key: "home", label: "Home Comercial", tab: "home" },
   { key: "funnel", label: "Funil Comercial", tab: "funnel" },
   { key: "clients", label: "Clientes", tab: "clients" },
+  { key: "closed-clients", label: "Meus clientes fechados", tab: "closed-clients" },
   { key: "campaigns", label: "Campanhas", tab: "campaigns" },
   { key: "meetings", label: "Reuniões", tab: "meetings" },
   { key: "calls_sdr", label: "Calls SDR", tab: "calls_sdr" },
@@ -174,6 +176,7 @@ function CommercialContent({ tab, data, sdrCalls, clickup, token }: { tab: Tab; 
   if (tab === "calls_sdr") return <><style>{sdrSharedStyles}</style><CallsView data={sdrCalls} managerMode /></>;
   if (tab === "funnel") return <FunnelView data={data} />;
   if (tab === "clients") return <ClientsView data={data} />;
+  if (tab === "closed-clients") return <CloserClientsView rows={data.portfolio_clients || []} closerName="Leonardo Augusto" />;
   if (tab === "campaigns") return <CampaignsView data={data} />;
   if (tab === "meetings") return <MeetingsView data={data} />;
   if (tab === "direction") return <DirectionView data={data} />;
