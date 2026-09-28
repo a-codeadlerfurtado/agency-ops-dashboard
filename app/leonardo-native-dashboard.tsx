@@ -11,15 +11,17 @@ import {
   supabase,
   text,
 } from "./shared";
+import { CallsView, sdrSharedStyles } from "./sdr-profile-shell";
 
 const CreativeCenter = lazy(() => import("./views/creative").then((m) => ({ default: m.CreativeCenter })));
 const VideoScriptsCenter = lazy(() => import("./views/video-scripts").then((m) => ({ default: m.VideoScriptsCenter })));
 
 type Row = Record<string, any>;
-type Tab = "home" | "funnel" | "clients" | "campaigns" | "meetings" | "direction" | "creative" | "scripts" | "clickup";
+type Tab = "home" | "funnel" | "clients" | "campaigns" | "meetings" | "calls_sdr" | "direction" | "creative" | "scripts" | "clickup";
 type NavItem = { key: string; label: string; tab?: Tab; href?: string };
 
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-commercial-direction-api`;
+const SDR_CALLS_API = `${SUPABASE_URL}/functions/v1/agency-ops-sdr-api`;
 const CLICKUP_API = `${SUPABASE_URL}/functions/v1/agency-ops-leonardo-clickup-api`;
 const NAV: NavItem[] = [
   { key: "home", label: "Home Comercial", tab: "home" },
@@ -27,6 +29,7 @@ const NAV: NavItem[] = [
   { key: "clients", label: "Clientes", tab: "clients" },
   { key: "campaigns", label: "Campanhas", tab: "campaigns" },
   { key: "meetings", label: "Reuniões", tab: "meetings" },
+  { key: "calls_sdr", label: "Calls SDR", tab: "calls_sdr" },
   { key: "direction", label: "Direção Comercial", tab: "direction" },
   { key: "finance", label: "Financeiro", href: "/finance" },
   { key: "onboarding", label: "Onboarding", href: "/leonardo-onboarding" },
@@ -164,10 +167,11 @@ function ClickUpExecutiveView({ data }: { data: Row }) {
   </div>;
 }
 
-function CommercialContent({ tab, data, clickup, token }: { tab: Tab; data: Row; clickup: Row; token: string }) {
+function CommercialContent({ tab, data, sdrCalls, clickup, token }: { tab: Tab; data: Row; sdrCalls: Row; clickup: Row; token: string }) {
   if (tab === "creative") return <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando Central Criativa…</div>}><CreativeCenter token={token} /></Suspense>;
   if (tab === "scripts") return <Suspense fallback={<div className="auth-loading"><span className="dot loading"/> Carregando Produção de Roteiros…</div>}><VideoScriptsCenter token={token} /></Suspense>;
   if (tab === "clickup") return <ClickUpExecutiveView data={clickup} />;
+  if (tab === "calls_sdr") return <><style>{sdrSharedStyles}</style><CallsView data={sdrCalls} managerMode /></>;
   if (tab === "funnel") return <FunnelView data={data} />;
   if (tab === "clients") return <ClientsView data={data} />;
   if (tab === "campaigns") return <CampaignsView data={data} />;
@@ -179,6 +183,7 @@ function CommercialContent({ tab, data, clickup, token }: { tab: Tab; data: Row;
 export default function LeonardoNativeDashboard({ session }: { session: Session }) {
   const [tab, setTab] = useState<Tab>("home");
   const [data, setData] = useState<Row>({});
+  const [sdrCalls, setSdrCalls] = useState<Row>({});
   const [clickup, setClickup] = useState<Row>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -201,11 +206,13 @@ export default function LeonardoNativeDashboard({ session }: { session: Session 
     if (tab === "creative" || tab === "scripts") { setLoading(false); return; }
     setLoading(true); setError("");
     try {
-      const endpoint = tab === "clickup" ? CLICKUP_API : API;
+      const endpoint = tab === "clickup" ? CLICKUP_API : tab === "calls_sdr" ? SDR_CALLS_API : API;
       const response = await fetch(endpoint, { headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY }, cache: "no-store" });
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body?.detail || body?.error || `API ${response.status}`);
-      if (tab === "clickup") setClickup(body?.clickup || {}); else setData(body || {});
+      if (tab === "clickup") setClickup(body?.clickup || {});
+      else if (tab === "calls_sdr") setSdrCalls(body || {});
+      else setData(body || {});
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Falha ao carregar dados."); }
     finally { setLoading(false); }
   }, [session.access_token, tab]);
@@ -226,7 +233,11 @@ export default function LeonardoNativeDashboard({ session }: { session: Session 
   };
   const openItem = (item: NavItem) => { if (item.href) { window.location.assign(item.href); return; } if (item.tab) { setTab(item.tab); setProfileOpen(false); setNotificationsOpen(false); window.scrollTo({ top: 0, behavior: "smooth" }); } };
   const meetingNotifications: Row[] = (data.meetings || []).slice(0, 5);
-  const hasCurrentData = tab === "clickup" ? Object.keys(clickup).length > 0 : Object.keys(data).length > 0;
+  const hasCurrentData = tab === "clickup"
+    ? Object.keys(clickup).length > 0
+    : tab === "calls_sdr"
+      ? Object.keys(sdrCalls).length > 0
+      : Object.keys(data).length > 0;
 
   return <>
     <main className={`shell ${sidebarOpen ? "sidebar-open" : "sidebar-collapsed"}`}>
@@ -237,7 +248,7 @@ export default function LeonardoNativeDashboard({ session }: { session: Session 
       <div className="source-banner"><span>Visão executiva comercial.</span> Comercial, financeiro, onboarding e indicadores consolidados permanecem acessíveis; a operação geral continua fora deste perfil.</div>
       <aside className={`side-nav${sidebarOpen ? " open" : ""}`} aria-label="Visões do dashboard"><button className="side-nav-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? "Recolher menu" : "Expandir menu"} title={sidebarOpen ? "Recolher menu" : "Expandir menu"}>{sidebarOpen ? "⟨" : "⟩"}</button><div className="side-nav-items">{NAV.map((item) => <button key={item.key} className={item.tab === tab && !item.href ? "active" : ""} onClick={() => openItem(item)} title={item.label}>{item.label}</button>)}</div></aside>
       {error && <div className="error-box">{error}</div>}
-      {loading && !hasCurrentData && !(["creative", "scripts"] as Tab[]).includes(tab) ? <div className="auth-loading"><span className="dot loading"/> Carregando…</div> : <CommercialContent tab={tab} data={data} clickup={clickup} token={session.access_token} />}
+      {loading && !hasCurrentData && !(["creative", "scripts"] as Tab[]).includes(tab) ? <div className="auth-loading"><span className="dot loading"/> Carregando…</div> : <CommercialContent tab={tab} data={data} sdrCalls={sdrCalls} clickup={clickup} token={session.access_token} />}
     </main>
 
     {commandOpen && <div className="leo-native-modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) setCommandOpen(false); }}><section className="card leo-native-command" role="dialog" aria-modal="true"><div className="workspace-head"><div><span className="eyebrow">Navegação rápida</span><h2>Pesquisar no perfil</h2></div><button className="theme-btn" onClick={() => setCommandOpen(false)}>×</button></div><div className="leo-native-command-grid">{NAV.map((item) => <button key={item.key} onClick={() => { openItem(item); setCommandOpen(false); }}>{item.label}</button>)}</div></section></div>}
