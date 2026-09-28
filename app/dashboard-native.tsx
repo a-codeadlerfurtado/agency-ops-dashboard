@@ -561,6 +561,10 @@ export default function Dashboard() {
       {isDesignRestricted && view === "focus" && <DesignFocusMetrics focus={data?.operations?.design_focus || {}} loading={!data} />}
       {view === "overview" && !isDesignRestricted && <section className="grid kpis">
             <Metric label="Clientes ativos" value={formatNumber(kpis.active_clients)} tone="blue" hint="Ativos + onboarding" loading={!data} />
+            <Metric label="Ativos em operação" value={formatNumber(kpis.operation_clients)} tone="green" hint="lifecycle ACTIVE" loading={!data} />
+            <Metric label="Clientes em onboarding" value={formatNumber(kpis.onboarding_clients)} tone="yellow" hint="lifecycle ONBOARDING" loading={!data} />
+            <Metric label="Clientes de marketing" value={formatNumber(kpis.marketing_clients)} tone="blue" hint="ativos + onboarding" loading={!data} />
+            <Metric label="Clientes de IA" value={formatNumber(kpis.ia_clients)} tone="blue" hint="ativos + onboarding" loading={!data} />
             <Metric label="Atenção agora" value={formatNumber(kpis.attention_now)} tone="red" hint="prioridade operacional" loading={!data} />
             <Metric label="Follow-up" value={formatNumber(kpis.follow_up)} tone="yellow" hint="ação em acompanhamento" loading={!data} />
             <Metric label="Operação OK" value={formatNumber(kpis.ok)} tone="green" hint="sem pendência crítica" loading={!data} />
