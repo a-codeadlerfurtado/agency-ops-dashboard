@@ -59,26 +59,43 @@ function Score({lead}:{lead:Row}){
 
 function CallCard({call,onOutcome}:{call:Row;onOutcome:(call:Row,outcome:string)=>Promise<void>}){
   const [open,setOpen]=useState(false);
+  const [detail,setDetail]=useState<Row|null>(null);
+  const [detailLoading,setDetailLoading]=useState(false);
+  const [detailError,setDetailError]=useState("");
   const [current,setCurrent]=useState(0);
   const audioRef=useRef<HTMLAudioElement|null>(null);
-  const segments:Row[]=call.segments||[];
+  const shown=detail?{...call,...detail}:call;
+  const segments:Row[]=shown.segments||[];
   const active=useMemo(()=>{let found=-1,ms=current*1000;for(let i=0;i<segments.length;i++){if(ms>=Number(segments[i].started_ms||0))found=i;else break;}return found;},[segments,current]);
   const seek=(ms:number)=>{const el=audioRef.current;if(!el)return;el.currentTime=Math.max(0,ms/1000);void el.play();};
+  const toggle=async()=>{
+    if(open){setOpen(false);return;}
+    setOpen(true);
+    if(detail||detailLoading)return;
+    setDetailLoading(true);setDetailError("");
+    try{
+      const data=await post({action:"get_call_detail",call_id:call.id});
+      setDetail(data?.call||null);
+    }catch(e){setDetailError(e instanceof Error?e.message:"Falha ao carregar a call.");}
+    finally{setDetailLoading(false);}
+  };
   return <article className="cc-call">
     <div className="cc-call-head">
       <div><span>RELATO AI · {txt(call.sdr_person,"Comercial")}{call.is_test?" · TESTE":call.read_only?" · HISTÓRICO":""}</span><b>{txt(call.remote_name||call.transcript_summary,"Call comercial")}</b><small>{when(call.created_at)} · {call.duration_seconds?Math.round(Number(call.duration_seconds)/60)+" min":"duração não informada"}</small></div>
       <div className="cc-call-actions">
         <select disabled={Boolean(call.read_only)} title={call.read_only?"Histórico: o lead não está mais na carteira atual":undefined} value={String(call.outcome||"")} onChange={e=>void onOutcome(call,e.target.value)}><option value="">Outcome</option><option value="NAO_ATENDEU">Não atendeu</option><option value="REAGENDAMENTO">Reagendamento</option><option value="QUALIFICADO">Qualificado</option><option value="DESQUALIFICADO">Desqualificado</option><option value="REUNIAO_MARCADA">Reunião marcada</option><option value="PROPOSTA">Proposta</option><option value="NEGOCIACAO">Negociação</option><option value="GANHO">Ganho</option><option value="PERDIDO">Perdido</option><option value="TEST_CALL">Teste</option><option value="STABLE">Legado</option></select>
-        <button onClick={()=>setOpen(v=>!v)}>{open?"Recolher":"Abrir"}</button>
+        <button onClick={()=>void toggle()}>{open?"Recolher":"Abrir"}</button>
       </div>
     </div>
     {open&&<div className="cc-call-body">
-      {call.audio?.play_url?<div className="cc-audio"><audio ref={audioRef} controls preload="metadata" src={String(call.audio.play_url)} onTimeUpdate={e=>setCurrent(e.currentTarget.currentTime||0)}/><a href={String(call.audio.download_url||call.audio.play_url)} download>Baixar MP3</a></div>:<div className="cc-empty">Áudio ainda indisponível.</div>}
-      <div className="cc-two">
-        <section className="cc-mini"><h4>Resumo</h4><p>{txt(call.transcript_summary||call.ai_summary,"Sem resumo.")}</p><h4>Próximo passo</h4><p>{txt(call.next_step,"Não registrado")}</p></section>
-        <section className="cc-mini"><h4>Coaching baseado na call</h4>{Array.isArray(call.coaching)&&call.coaching.length?<ul>{call.coaching.map((x:string,i:number)=><li key={i}>{x}</li>)}</ul>:<p>Nenhum alerta de coaching detectado.</p>}<h4>Decisões e compromissos</h4><p>{[...(call.decisions||[]),...(call.commitments||[])].map((x:any)=>typeof x==="string"?x:JSON.stringify(x)).join(" · ")||"Nenhum registro estruturado."}</p></section>
-      </div>
-      {segments.length?<div className="cc-transcript">{segments.map((s:Row,i:number)=><button key={String(s.sequence_no??i)} className={i===active?"active":""} onClick={()=>seek(Number(s.started_ms||0))}><time>{Math.floor(Number(s.started_ms||0)/60000)}:{String(Math.floor(Number(s.started_ms||0)/1000)%60).padStart(2,"0")}</time><span><b>{txt(s.speaker_name,"Participante")}</b>{txt(s.text,"")}</span></button>)}</div>:<pre className="cc-raw">{txt(call.transcript_text,"Transcrição ainda indisponível.")}</pre>}
+      {detailLoading?<div className="cc-empty">Carregando áudio e transcrição…</div>:detailError?<div className="cc-error">{detailError}</div>:<>
+        {shown.audio?.play_url?<div className="cc-audio"><audio ref={audioRef} controls preload="metadata" src={String(shown.audio.play_url)} onTimeUpdate={e=>setCurrent(e.currentTarget.currentTime||0)}/><a href={String(shown.audio.download_url||shown.audio.play_url)} download>Baixar MP3</a></div>:<div className="cc-empty">Áudio ainda indisponível.</div>}
+        <div className="cc-two">
+          <section className="cc-mini"><h4>Resumo</h4><p>{txt(shown.transcript_summary||shown.ai_summary,"Sem resumo.")}</p><h4>Próximo passo</h4><p>{txt(shown.next_step,"Não registrado")}</p></section>
+          <section className="cc-mini"><h4>Coaching baseado na call</h4>{Array.isArray(shown.coaching)&&shown.coaching.length?<ul>{shown.coaching.map((x:string,i:number)=><li key={i}>{x}</li>)}</ul>:<p>Nenhum alerta de coaching detectado.</p>}<h4>Decisões e compromissos</h4><p>{[...(shown.decisions||[]),...(shown.commitments||[])].map((x:any)=>typeof x==="string"?x:JSON.stringify(x)).join(" · ")||"Nenhum registro estruturado."}</p></section>
+        </div>
+        {segments.length?<div className="cc-transcript">{segments.map((s:Row,i:number)=><button key={String(s.sequence_no??i)} className={i===active?"active":""} onClick={()=>seek(Number(s.started_ms||0))}><time>{Math.floor(Number(s.started_ms||0)/60000)}:{String(Math.floor(Number(s.started_ms||0)/1000)%60).padStart(2,"0")}</time><span><b>{txt(s.speaker_name,"Participante")}</b>{txt(s.text,"")}</span></button>)}</div>:<pre className="cc-raw">{txt(shown.transcript_text,"Transcrição ainda indisponível.")}</pre>}
+      </>}
     </div>}
   </article>;
 }
@@ -147,6 +164,7 @@ export default function CloserCockpit({session}:{session:Session}){
   const [calendar,setCalendar]=useState<Row>({events:[]});
   const [calendarLoading,setCalendarLoading]=useState(false);
   const [calendarError,setCalendarError]=useState("");
+  const [clientFilter,setClientFilter]=useState<"ACTIVE"|"ONBOARDING"|"CHURNED"|"ALL">("ACTIVE");
 
   const load=useCallback(async()=>{setLoading(true);setError("");try{const r=await authenticatedFetch(API,{cache:"no-store"}),j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j?.detail||j?.error||("API "+r.status));setData(j);}catch(e){setError(e instanceof Error?e.message:"Falha ao carregar o cockpit.");}finally{setLoading(false);}},[]);
   const loadAwave=useCallback(async()=>{setAwaveLoading(true);setAwaveError("");try{const r=await authenticatedFetch(AWAVE_API,{cache:"no-store"}),j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j?.detail||j?.error||("Awave "+r.status));setAwave(j);setPipelineId((old)=>old||String(j.primary_pipeline_id||j.pipelines?.[0]?.id||""));}catch(e){setAwaveError(e instanceof Error?e.message:"Falha ao sincronizar Awave.");}finally{setAwaveLoading(false);}},[]);
@@ -157,6 +175,8 @@ export default function CloserCockpit({session}:{session:Session}){
   useEffect(()=>{if(view!=="meetings")return;void loadCalendar();const id=window.setInterval(()=>void loadCalendar(),60000);return()=>window.clearInterval(id);},[view,loadCalendar]);
 
   const leads:Row[]=data.leads||[],clients:Row[]=data.portfolio_clients||[],calls:Row[]=data.commercial_calls||[],activities:Row[]=data.commercial_activities||[];
+  const clientCounts={ACTIVE:clients.filter(c=>c.lifecycle==="ACTIVE").length,ONBOARDING:clients.filter(c=>c.lifecycle==="ONBOARDING").length,CHURNED:clients.filter(c=>c.lifecycle==="CHURNED").length};
+  const visibleClients=clientFilter==="ALL"?clients:clients.filter(c=>c.lifecycle===clientFilter);
   const summary=data.summary||{},quality=data.data_quality||{},awaveSummary=awave.summary||{};
   const awavePipelines:Row[]=awave.pipelines||[],awaveStages:Row[]=awave.stages||[],awaveDeals:Row[]=awave.deals||[];
 
@@ -179,7 +199,7 @@ export default function CloserCockpit({session}:{session:Session}){
 
   const callsView=<section className="cc-stack"><div className="cc-section-head"><div><span>RELATO AI</span><h2>Calls do handoff e comerciais</h2><p>Áudio, transcrição sincronizada, resumo, outcome, próximo passo e coaching.</p></div><b>{calls.length} calls</b></div><div className="cc-call-list">{calls.map(c=><CallCard key={c.id} call={c} onOutcome={outcome}/>)}</div></section>;
 
-  const clientsView=<section className="cc-panel"><div className="cc-section-head"><div><span>CARTEIRA DO CLOSER</span><h2>Clientes que eu fechei</h2><p>Histórico canônico com retenção, campanha, handoff e contrato.</p></div><b>{clients.length} clientes</b></div><div className="cc-table"><table><thead><tr><th>Cliente</th><th>Status</th><th>Entrada</th><th>Tempo</th><th>Contrato</th><th>Campanha</th><th>Handoff</th></tr></thead><tbody>{clients.map(c=><tr key={c.client_id}><td><b>{txt(c.display_name)}</b><small>{txt(c.service)}</small></td><td>{txt(c.lifecycle)}</td><td>{day(c.entrada)}</td><td>{c.client_days==null?"—":c.client_days+"d"}</td><td>{txt(c.contract?.contract_state||c.contract?.document_status,"não vinculado")}</td><td>{c.campaign?String(c.campaign.active_campaigns||0)+" ativas":"sem campanha ativa"}</td><td>{c.handoff?<><b>{txt(c.handoff.urgency,"registrado")}</b><small>{txt(list(c.handoff.objections),"sem objeção")}</small></>:"—"}</td></tr>)}</tbody></table></div></section>;
+  const clientsView=<section className="cc-panel"><div className="cc-section-head"><div><span>CARTEIRA DO CLOSER</span><h2>Clientes que eu fechei</h2><p>Histórico canônico por closer de origem, separado por situação atual.</p></div><b>{clients.length} clientes</b></div><div className="cc-buttons" style={{marginBottom:14,flexWrap:"wrap"}}><button className={clientFilter==="ACTIVE"?"primary":""} onClick={()=>setClientFilter("ACTIVE")}>Ativos ({clientCounts.ACTIVE})</button><button className={clientFilter==="ONBOARDING"?"primary":""} onClick={()=>setClientFilter("ONBOARDING")}>Onboarding ({clientCounts.ONBOARDING})</button><button className={clientFilter==="CHURNED"?"primary":""} onClick={()=>setClientFilter("CHURNED")}>Churn ({clientCounts.CHURNED})</button><button className={clientFilter==="ALL"?"primary":""} onClick={()=>setClientFilter("ALL")}>Todos ({clients.length})</button></div><div className="cc-table"><table><thead><tr><th>Cliente</th><th>Status</th><th>Entrada</th><th>Tempo</th><th>Contrato</th><th>Campanha</th><th>Handoff</th></tr></thead><tbody>{visibleClients.map(c=><tr key={c.client_id}><td><b>{txt(c.display_name)}</b><small>{txt(c.service)}</small></td><td>{c.lifecycle==="ACTIVE"?"ATIVO":c.lifecycle==="ONBOARDING"?"ONBOARDING":c.lifecycle==="CHURNED"?"CHURN":"—"}</td><td>{day(c.entrada)}</td><td>{c.client_days==null?"—":c.client_days+"d"}</td><td>{txt(c.contract?.contract_state||c.contract?.document_status,"não vinculado")}</td><td>{c.campaign?String(c.campaign.active_campaigns||0)+" ativas":"sem campanha ativa"}</td><td>{c.handoff?<><b>{txt(c.handoff.urgency,"registrado")}</b><small>{txt(list(c.handoff.objections),"sem objeção")}</small></>:"—"}</td></tr>)}{!visibleClients.length&&<tr><td colSpan={7}><div className="cc-empty">Nenhum cliente neste filtro.</div></td></tr>}</tbody></table></div></section>;
 
   const googleAgenda:Row[]=(Array.isArray(calendar.events)?calendar.events:[]).map((e:Row)=>({id:"gcal:"+String(e.id),calendar_event_id:e.id,scheduled_for:e.start_time,calendar_title:e.title,meet_url:e.meet_url,calendar_html_link:e.html_link,chat_name:"Google Agenda",calendar_sync_status:"GOOGLE",source_label:"Google Agenda"}));
   const internalAgenda:Row[]=(data.agenda_events||[]).map((e:Row)=>({...e,id:"internal:"+String(e.id),source_label:"Agenda interna"}));

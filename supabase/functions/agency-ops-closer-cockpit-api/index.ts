@@ -142,6 +142,28 @@ Deno.serve(async(req:Request)=>{
       await ops.from("commercial_prospect_profiles").upsert({lead_id:String(item.lead_id),closer_person:person,next_step:next?.title||null,next_step_at:next?.due_at||null,updated_at:new Date().toISOString()},{onConflict:"lead_id"});
       return reply({ok:true,activity:saved});
     }
+    if(action==="get_call_detail"){
+      const callId=clean(body?.call_id);if(!callId)return reply({error:"call_id_required"},400);
+      const {data:call,error:callError}=await ops.from("commercial_call_records").select("*").eq("id",callId).eq("closer_person",person).maybeSingle();
+      if(callError)return reply({error:"call_detail_failed",detail:callError.message},500);
+      if(!call)return reply({error:"call_not_available"},404);
+      const transcriptId=clean(call.transcript_id),sessionId=clean(call.capture_session_id);
+      const [{data:tr},{data:session},{data:segments}]=await Promise.all([
+        transcriptId?ops.from("meeting_transcripts").select("id,duration_seconds,summary,transcript_text,decisions,commitments,ai_signals").eq("id",transcriptId).maybeSingle():Promise.resolve({data:null}),
+        sessionId?ops.from("meeting_capture_sessions").select("id,audio_mixed_path,audio_duration_ms,audio_mime_type").eq("id",sessionId).maybeSingle():Promise.resolve({data:null}),
+        transcriptId?ops.from("meeting_transcript_segments").select("transcript_id,sequence_no,started_ms,ended_ms,speaker_name,text,confidence,source").eq("transcript_id",transcriptId).order("sequence_no",{ascending:true}).limit(5000):Promise.resolve({data:[]})
+      ]);
+      let audio:Row|null=null;
+      if(session?.audio_mixed_path){
+        const storage=db.storage.from("relato-call-audio");
+        const [play,download]=await Promise.all([
+          storage.createSignedUrl(String(session.audio_mixed_path),900),
+          storage.createSignedUrl(String(session.audio_mixed_path),900,{download:"relato-call-"+String(session.id)+".mp3"})
+        ]);
+        if(play.data?.signedUrl)audio={play_url:play.data.signedUrl,download_url:download.data?.signedUrl||play.data.signedUrl,mime_type:session.audio_mime_type||"audio/mpeg",duration_ms:session.audio_duration_ms||null};
+      }
+      return reply({ok:true,call:{...call,transcript_summary:tr?.summary||call.ai_summary||null,transcript_text:tr?.transcript_text||null,decisions:tr?.decisions||[],commitments:tr?.commitments||[],ai_signals:tr?.ai_signals||{},segments:segments||[],audio,duration_seconds:num(tr?.duration_seconds)||Math.round(num(session?.audio_duration_ms)/1000)}});
+    }
     if(action==="update_call_outcome"){
       const callId=clean(body?.call_id),outcome=clean(body?.outcome).toUpperCase();if(!callId||!callOutcomes.has(outcome))return reply({error:"invalid_call_outcome"},400);
       const {data:call}=await ops.from("commercial_call_records").select("id,lead_id,closer_person").eq("id",callId).eq("closer_person",person).maybeSingle();
@@ -168,7 +190,7 @@ Deno.serve(async(req:Request)=>{
     clientIds.length?ops.from("campaign_client_latest").select("*").in("client_id",clientIds).in("lifecycle",["ACTIVE","ONBOARDING"]):Promise.resolve({data:[]}),
     clientIds.length?ops.from("client_contract_status").select("*").in("client_id",clientIds):Promise.resolve({data:[]}),
     clientIds.length?ops.from("onboarding_group_sales_handoff").select("*").in("client_id",clientIds).order("created_at",{ascending:false}):Promise.resolve({data:[]}),
-    ops.from("meeting_transcripts").select("id,meeting_started_at,meeting_ended_at,duration_seconds,ingested_at,client_id,client_name_raw,match_status,participants,summary,transcript_text,decisions,commitments,ai_signals,metadata,owner_person").order("ingested_at",{ascending:false}).limit(700)
+    ops.from("meeting_transcripts").select("id,meeting_started_at,meeting_ended_at,duration_seconds,ingested_at,client_id,client_name_raw,match_status,participants,summary,decisions,commitments,ai_signals,metadata,owner_person").order("ingested_at",{ascending:false}).limit(700)
   ]);
 
   const profileByLead=new Map((profiles||[]).map((r:Row)=>[String(r.lead_id),r]));
@@ -183,25 +205,15 @@ Deno.serve(async(req:Request)=>{
   const enrichedClients=clients.map(c=>{const start=at(c.entrada),end=c.lifecycle==="CHURNED"&&c.saida?at(c.saida):Date.now();return{...c,client_id:c.id,client_days:Number.isFinite(start)&&Number.isFinite(end)?Math.max(0,Math.floor((end-start)/86400000)):null,contract:contractByClient.get(String(c.id))||null,campaign:campaignByClient.get(String(c.id))||null,handoff:handoffByClient.get(String(c.id))||null};});
 
   const transcriptMap=new Map((meetingRows||[]).map((r:Row)=>[String(r.id),r]));
-  const sessionIds=(calls||[]).map((r:Row)=>String(r.capture_session_id||"")).filter(Boolean);
-  const transcriptIds=(calls||[]).map((r:Row)=>String(r.transcript_id||"")).filter(Boolean);
-  const [{data:sessions},{data:segments}]=await Promise.all([
-    sessionIds.length?ops.from("meeting_capture_sessions").select("id,owner_person,started_at,ended_at,capture_mode,transcript_id,audio_status,audio_mixed_path,audio_duration_ms,audio_mime_type").in("id",sessionIds):Promise.resolve({data:[]}),
-    transcriptIds.length?ops.from("meeting_transcript_segments").select("transcript_id,sequence_no,started_ms,ended_ms,speaker_name,text,confidence,source").in("transcript_id",transcriptIds).order("sequence_no",{ascending:true}).limit(12000):Promise.resolve({data:[]})
-  ]);
-  const sessionMap=new Map((sessions||[]).map((r:Row)=>[String(r.id),r])),segmentsByTranscript=new Map<string,Row[]>();
-  for(const s of segments||[]){const k=String(s.transcript_id),a=segmentsByTranscript.get(k)||[];a.push(s);segmentsByTranscript.set(k,a);}
-  const storage=db.storage.from("relato-call-audio"),signedBySession=new Map<string,Row>();
-  await Promise.all((sessions||[]).filter((s:Row)=>s.audio_mixed_path).map(async(s:Row)=>{
-    const [play,download]=await Promise.all([storage.createSignedUrl(String(s.audio_mixed_path),900),storage.createSignedUrl(String(s.audio_mixed_path),900,{download:"relato-call-"+String(s.id)+".mp3"})]);
-    if(play.data?.signedUrl)signedBySession.set(String(s.id),{play_url:play.data.signedUrl,download_url:download.data?.signedUrl||play.data.signedUrl,mime_type:s.audio_mime_type||"audio/mpeg",duration_ms:s.audio_duration_ms||null});
-  }));
 
+  // Carga inicial deliberadamente leve: áudio, transcrição integral e segmentos
+  // são buscados somente quando o usuário abre uma call. Antes, cada refresh
+  // serializava ~4 MB e podia levar 40s+, estourando o timeout do navegador.
   const currentLeadSet=new Set(leadIds);
   const enrichedCalls=(calls||[]).map((c:Row)=>{
-    const tr=transcriptMap.get(String(c.transcript_id))||null,session=sessionMap.get(String(c.capture_session_id))||null;
+    const tr=transcriptMap.get(String(c.transcript_id))||null;
     const coaching:string[]=[];if(!clean(c.next_step))coaching.push("Fechar a call com próximo passo explícito.");if(!clean(c.primary_pain)&&!array(c.pain_points).length)coaching.push("Aprofundar a dor principal.");if(!array(c.objections).length)coaching.push("Registrar a objeção principal quando houver.");if(array(c.buying_signals).length)coaching.push("Sinais de compra detectados: "+array(c.buying_signals).join(", ")+".");if(array(c.closing_risks).length)coaching.push("Riscos detectados: "+array(c.closing_risks).join(", ")+".");
-    return {...c,read_only:!currentLeadSet.has(String(c.lead_id)),is_test:isTestCall(c),transcript_summary:tr?.summary||c.ai_summary||null,transcript_text:tr?.transcript_text||null,decisions:tr?.decisions||[],commitments:tr?.commitments||[],ai_signals:tr?.ai_signals||{},segments:segmentsByTranscript.get(String(c.transcript_id))||[],audio:signedBySession.get(String(c.capture_session_id))||null,duration_seconds:num(tr?.duration_seconds)||Math.round(num(session?.audio_duration_ms)/1000),coaching};
+    return {...c,read_only:!currentLeadSet.has(String(c.lead_id)),is_test:isTestCall(c),transcript_summary:tr?.summary||c.ai_summary||null,decisions:tr?.decisions||[],commitments:tr?.commitments||[],ai_signals:tr?.ai_signals||{},duration_seconds:num(tr?.duration_seconds)||null,coaching};
   });
   const richCallsByLead=new Map<string,Row[]>();for(const c of enrichedCalls){const k=String(c.lead_id),a=richCallsByLead.get(k)||[];a.push(c);richCallsByLead.set(k,a);}
 
