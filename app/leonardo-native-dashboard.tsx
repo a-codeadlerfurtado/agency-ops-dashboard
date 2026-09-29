@@ -13,6 +13,7 @@ import {
 } from "./shared";
 import { CallsView, sdrSharedStyles } from "./sdr-profile-shell";
 import CloserClientsView from "./closer-clients-view";
+import { DailyReflection } from "./daily-reflection";
 
 const CreativeCenter = lazy(() => import("./views/creative").then((m) => ({ default: m.CreativeCenter })));
 const VideoScriptsCenter = lazy(() => import("./views/video-scripts").then((m) => ({ default: m.VideoScriptsCenter })));
@@ -251,6 +252,7 @@ export default function LeonardoNativeDashboard({ session }: { session: Session 
       <div className="source-banner"><span>Visão executiva comercial.</span> Comercial, financeiro, onboarding e indicadores consolidados permanecem acessíveis; a operação geral continua fora deste perfil.</div>
       <aside className={`side-nav${sidebarOpen ? " open" : ""}`} aria-label="Visões do dashboard"><button className="side-nav-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={sidebarOpen ? "Recolher menu" : "Expandir menu"} title={sidebarOpen ? "Recolher menu" : "Expandir menu"}>{sidebarOpen ? "⟨" : "⟩"}</button><div className="side-nav-items">{NAV.map((item) => <button key={item.key} className={item.tab === tab && !item.href ? "active" : ""} onClick={() => openItem(item)} title={item.label}>{item.label}</button>)}</div></aside>
       {error && <div className="error-box">{error}</div>}
+      {tab === "home" && <DailyReflection token={session.access_token} />}
       {loading && !hasCurrentData && !(["creative", "scripts"] as Tab[]).includes(tab) ? <div className="auth-loading"><span className="dot loading"/> Carregando…</div> : <CommercialContent tab={tab} data={data} sdrCalls={sdrCalls} clickup={clickup} token={session.access_token} />}
     </main>
 

@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { BrandMark, SUPABASE_URL, authenticatedFetch, loadProfileLite, supabase } from "./shared";
 import CloserClientsView from "./closer-clients-view";
+import CloserCockpit from "./closer-cockpit";
+import { DailyReflection } from "./daily-reflection";
 
 type Row = Record<string, any>;
 type View = "home" | "funnel" | "clients" | "closed-clients" | "campaigns" | "meetings" | "direction";
@@ -133,7 +135,7 @@ function MeetingsView({ data }: { data: Row }) {
   const meetings: Row[] = data.meetings || [];
   const owners = [...new Set(meetings.map((row) => text(row.owner)).filter((name) => name !== "—"))].sort();
   const visible = owner === "ALL" ? meetings : meetings.filter((row) => row.owner === owner);
-  return <section className="lc-card lc-wide"><div className="lc-view-head"><div><span>REUNIÕES COMERCIAIS</span><h2>Reuniões</h2><p>Resumos vindos da Donnah. A fonte mostra a data real de ingestão.</p></div><b>{visible.length} registros</b></div><div className="lc-filters"><select value={owner} onChange={(e) => setOwner(e.target.value)}><option value="ALL">Leonardo + Vitor</option>{owners.map((name) => <option key={name}>{name}</option>)}</select></div><div className="lc-meetings">{visible.slice(0, 80).map((row) => <article className="lc-meeting" key={row.id}><div className="lc-meeting-top"><div><span>{text(row.type, "reunião")}</span><h3>{text(row.title)}</h3></div><time>{dateTime(row.meeting_started_at)}</time></div><p>{text(row.summary)}</p><footer><b>{text(row.owner)}</b><span>{row.client_name ? `Cliente: ${row.client_name}` : row.match_status === "MATCHED" ? "Cliente vinculado" : "Sem cliente confirmado"}</span><span>{(row.participants || []).join(" · ") || "Participantes não informados"}</span></footer></article>)}</div>{!visible.length && <Empty>Nenhuma reunião encontrada.</Empty>}</section>;
+  return <section className="lc-card lc-wide"><div className="lc-view-head"><div><span>REUNIÕES COMERCIAIS</span><h2>Reuniões</h2><p>Resumos vindos do Relato AI. A fonte mostra a data real de ingestão.</p></div><b>{visible.length} registros</b></div><div className="lc-filters"><select value={owner} onChange={(e) => setOwner(e.target.value)}><option value="ALL">Leonardo + Vitor</option>{owners.map((name) => <option key={name}>{name}</option>)}</select></div><div className="lc-meetings">{visible.slice(0, 80).map((row) => <article className="lc-meeting" key={row.id}><div className="lc-meeting-top"><div><span>{text(row.type, "reunião")}</span><h3>{text(row.title)}</h3></div><time>{dateTime(row.meeting_started_at)}</time></div><p>{text(row.summary)}</p><footer><b>{text(row.owner)}</b><span>{row.client_name ? `Cliente: ${row.client_name}` : row.match_status === "MATCHED" ? "Cliente vinculado" : "Sem cliente confirmado"}</span><span>{(row.participants || []).join(" · ") || "Participantes não informados"}</span></footer></article>)}</div>{!visible.length && <Empty>Nenhuma reunião encontrada.</Empty>}</section>;
 }
 
 function DirectionView({ data }: { data: Row }) {
@@ -166,7 +168,7 @@ export default function CommercialProfileShell() {
   }, [session?.access_token]);
 
   const load = useCallback(async () => {
-    if (!session?.access_token || !["COMMERCIAL", "CLOSER"].includes(String(role || ""))) return;
+    if (!session?.access_token || role !== "COMMERCIAL") return;
     setLoading(true); setError("");
     try {
       const response = await authenticatedFetch(API, { cache: "no-store" });
@@ -179,7 +181,7 @@ export default function CommercialProfileShell() {
   }, [session?.access_token, role]);
 
   useEffect(() => {
-    if (!["COMMERCIAL", "CLOSER"].includes(String(role || ""))) return;
+    if (role !== "COMMERCIAL") return;
     load();
     const timer = window.setInterval(load, 60_000);
     return () => window.clearInterval(timer);
@@ -194,8 +196,9 @@ export default function CommercialProfileShell() {
   }, [role]);
 
   if (!["COMMERCIAL", "CLOSER"].includes(String(role || "")) || !session) return null;
+  if (role === "CLOSER") return <CloserCockpit session={session} />;
 
-  return <div className="lc-root"><style>{styles}</style><aside className="lc-sidebar"><div className="lc-logo"><BrandMark/><div><b>Leonardo Imobi</b><span>{role === "CLOSER" ? "Closer" : "Direção Comercial"}</span></div></div><nav>{views.map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)}>{label}</button>)}</nav><div className="lc-side-foot"><span>Perfil</span><b>{text(person || data.profile?.person || "Comercial")}</b><small>{role === "CLOSER" ? "Closer" : "Direção Comercial"}</small></div></aside><main className="lc-main"><header className="lc-top"><div><span>CENTRAL COMERCIAL</span><h1>{views.find(([key]) => key === view)?.[1]}</h1><p>Vendas, campanhas, clientes e reuniões. Operação fica fora deste perfil.</p></div><div className="lc-top-actions"><div className={`lc-sync ${error ? "error" : loading ? "loading" : ""}`}><i/><span>{loading ? "Atualizando…" : error ? "Falha na atualização" : `Carga da tela ${dateTime(data.generated_at)}`}</span></div><button onClick={load} disabled={loading}>Atualizar</button><button className="ghost" onClick={() => supabase.auth.signOut({ scope: "local" })}>Sair</button></div></header>{error && <div className="lc-error">{error}</div>}<section className="lc-content">{view === "home" && <HomeView data={data}/>} {view === "funnel" && <FunnelView data={data}/>} {view === "clients" && <ClientsView data={data}/>} {view === "closed-clients" && <CloserClientsView rows={data.portfolio_clients || []} closerName={String(person || data.profile?.person || "Vitor Feitoza")} />} {view === "campaigns" && <CampaignsView data={data}/>} {view === "meetings" && <MeetingsView data={data}/>} {view === "direction" && <DirectionView data={data}/>}</section></main></div>;
+  return <div className="lc-root"><style>{styles}</style><aside className="lc-sidebar"><div className="lc-logo"><BrandMark/><div><b>Leonardo Imobi</b><span>{role === "CLOSER" ? "Closer" : "Direção Comercial"}</span></div></div><nav>{views.map(([key, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => setView(key)}>{label}</button>)}</nav><div className="lc-side-foot"><span>Perfil</span><b>{text(person || data.profile?.person || "Comercial")}</b><small>{role === "CLOSER" ? "Closer" : "Direção Comercial"}</small></div></aside><main className="lc-main"><header className="lc-top"><div><span>CENTRAL COMERCIAL</span><h1>{views.find(([key]) => key === view)?.[1]}</h1><p>Vendas, campanhas, clientes e reuniões. Operação fica fora deste perfil.</p></div><div className="lc-top-actions"><div className={`lc-sync ${error ? "error" : loading ? "loading" : ""}`}><i/><span>{loading ? "Atualizando…" : error ? "Falha na atualização" : `Carga da tela ${dateTime(data.generated_at)}`}</span></div><button onClick={load} disabled={loading}>Atualizar</button><button className="ghost" onClick={() => supabase.auth.signOut({ scope: "local" })}>Sair</button></div></header>{error && <div className="lc-error">{error}</div>}<section className="lc-content">{view === "home" && <DailyReflection token={session.access_token}/>} {view === "home" && <HomeView data={data}/>} {view === "funnel" && <FunnelView data={data}/>} {view === "clients" && <ClientsView data={data}/>} {view === "closed-clients" && <CloserClientsView rows={data.portfolio_clients || []} closerName={String(person || data.profile?.person || "Vitor Feitoza")} />} {view === "campaigns" && <CampaignsView data={data}/>} {view === "meetings" && <MeetingsView data={data}/>} {view === "direction" && <DirectionView data={data}/>}</section></main></div>;
 }
 
 const styles = `
