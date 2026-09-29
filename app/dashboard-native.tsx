@@ -433,7 +433,8 @@ export default function Dashboard() {
     try {
       setSelected(await api("client", session.access_token, { id: clientId }));
     } catch (caught) {
-      setSelected({ error: caught instanceof Error ? caught.message : "Falha ao carregar cliente" });
+      const message = caught instanceof Error ? caught.message : "Falha ao carregar cliente";
+      setSelected({ error: /signal timed out|timeout/i.test(message) ? "A visão do cliente demorou para responder. Feche e abra novamente; a alteração já salva no banco não é desfeita." : message });
     } finally {
       setDetailLoading(false);
     }
@@ -708,7 +709,18 @@ export default function Dashboard() {
       {commandOpen && <GlobalCommand clients={allClients} tasks={data?.clickup?.recent_completed || []} preclients={data?.preclients || []} close={() => setCommandOpen(false)} openClient={openClient} />}
       {profileOpen && <ProfileMenu preferences={data?.preferences || {}} profile={data?.profile || {}} email={session.user.email || ""} settings={() => { setProfileOpen(false); setSettingsOpen(true); }} openWalletManagement={() => { setProfileOpen(false); setWalletManagementOpen(true); }} canManageWallets={canManageWallets} close={() => setProfileOpen(false)} signOut={() => supabase.auth.signOut()} requestAccess={requestAccess} token={session.access_token} clients={allClients} />}
       {walletManagementOpen && canManageWallets && <AdlerWalletManagement token={session.access_token} close={() => setWalletManagementOpen(false)} refresh={load} />}
-      {walletTransferClient && canManageWallets && <ClientWalletTransfer token={session.access_token} client={walletTransferClient} close={() => setWalletTransferClient(null)} refresh={async () => { await load(); const openId = String((selected?.client || selected || {})?.client_id || ""); if (openId) await openClient(openId); }} />}
+      {walletTransferClient && canManageWallets && <ClientWalletTransfer token={session.access_token} client={walletTransferClient} close={() => setWalletTransferClient(null)} refresh={async (result) => {
+        const confirmed = result?.client || {};
+        setSelected((previous: Row | null) => {
+          if (!previous) return previous;
+          const current = previous.client || previous;
+          const currentId = String(current.client_id || current.id || "");
+          if (currentId !== String(walletTransferClient.client_id || walletTransferClient.id || "")) return previous;
+          const patched = { ...current, gt_owner: confirmed.gt_owner ?? current.gt_owner, carteira: confirmed.carteira ?? current.carteira };
+          return previous.client ? { ...previous, client: patched } : patched;
+        });
+        void load();
+      }} />}
       {notificationsOpen && <NotificationCenter items={data?.notifications || []} close={() => setNotificationsOpen(false)} refresh={load} openClient={openClient} openWork={(id) => { setNotificationsOpen(false); setWorkItemId(id); setView("work"); }} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
       {settingsOpen && <SettingsModal preferences={data?.preferences || {}} close={() => setSettingsOpen(false)} refresh={load} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
       {toast && <button className={`toast${toastLeaving ? " leaving" : ""}`} onClick={() => { const workId = toast.metadata?.work_item_id; if (workId) { setWorkItemId(String(workId)); setView("work"); } else if (toast.client_id) openClient(toast.client_id); setToast(null); }}><Chip value={toast.level}/><span><b>{text(toast.title)}</b><small>{text(toast.actor ? `${toast.actor}: ${toast.description}` : toast.description)}</small>{(toast.gestor || toast.carteira) && <small className="toast-meta">{text(toast.carteira ? `Carteira ${toast.carteira}` : (toast.gestor ? `Gestor: ${toast.gestor}` : ""))}</small>}</span><i onClick={(event) => { event.stopPropagation(); setToast(null); }}>×</i></button>}
