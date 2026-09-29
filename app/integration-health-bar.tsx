@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { SUPABASE_URL, SUPABASE_ANON_KEY, supabase } from "./shared";
+import { SUPABASE_URL, SUPABASE_ANON_KEY, loadProfileLite, supabase } from "./shared";
 
 const HEALTH_API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-integration-health`;
 
@@ -167,6 +167,8 @@ function clock(value: string | null) {
 
 export default function IntegrationHealthBar() {
   const [session, setSession] = useState<Session | null>(null);
+  const [isAdler, setIsAdler] = useState(false);
+  const [profileResolved, setProfileResolved] = useState(false);
   const [data, setData] = useState<HealthPayload | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [showDivergences, setShowDivergences] = useState(false);
@@ -181,7 +183,35 @@ export default function IntegrationHealthBar() {
   }, []);
 
   useEffect(() => {
-    if (!session?.access_token) { setData(null); return; }
+    if (!session?.access_token) {
+      setIsAdler(false);
+      setProfileResolved(true);
+      return;
+    }
+    let active = true;
+    setProfileResolved(false);
+    loadProfileLite()
+      .then((payload) => {
+        if (!active) return;
+        const person = String(payload?.profile?.person || "").trim();
+        const role = String(payload?.profile?.role || "").trim().toUpperCase();
+        setIsAdler(person === "Adler Furtado" && role === "MGMT");
+        setProfileResolved(true);
+      })
+      .catch(() => {
+        if (active) {
+          setIsAdler(false);
+          setProfileResolved(true);
+        }
+      });
+    return () => { active = false; };
+  }, [session?.access_token]);
+
+  useEffect(() => {
+    if (!session?.access_token || !profileResolved || !isAdler) {
+      setData(null);
+      return;
+    }
     let active = true;
     let accessDenied = false;
     async function load() {
@@ -212,7 +242,7 @@ export default function IntegrationHealthBar() {
     void load();
     const timer = window.setInterval(load, 45_000);
     return () => { active = false; window.clearInterval(timer); };
-  }, [session?.access_token]);
+  }, [session?.access_token, profileResolved, isAdler]);
 
   const integrations = data?.integrations || [];
   const worst = useMemo<"OK" | "DELAY" | "FAIL">(() => {
@@ -221,7 +251,7 @@ export default function IntegrationHealthBar() {
     return "OK";
   }, [integrations]);
 
-  if (!session || forbidden) return null;
+  if (!session || !profileResolved || !isAdler || forbidden) return null;
 
   const summary = data?.client_health_crosscheck_summary || {};
   const details = data?.client_health_crosscheck_details || [];
@@ -249,14 +279,14 @@ export default function IntegrationHealthBar() {
         onDoubleClick={arraste.reposicionar}
         onClick={() => { if (arraste.arrasteEngoliuOClique()) return; setExpanded((v) => !v); }}
         aria-expanded={expanded}
-        aria-label="Saúde das integrações"
-        title="Saúde das integrações · arraste para mover · duplo clique volta ao canto"
+        aria-label="Saúde do Sistema"
+        title="Saúde do Sistema · arraste para mover · duplo clique volta ao canto"
         style={{ width: expanded ? "100%" : 40, height: expanded ? "auto" : 40, display:"flex", alignItems:"center", justifyContent: expanded ? "flex-start" : "center", gap:8, border:`1px solid ${state.border}`, background:"rgba(9,12,20,.94)", color:"#f8fafc", borderRadius: expanded ? 13 : 999, padding: expanded ? "8px 10px" : 0, boxShadow:"0 16px 50px rgba(0,0,0,.28)", cursor: arraste.arrastando ? "grabbing" : "grab", backdropFilter:"blur(16px)", touchAction:"none" }}
         >
         <span style={{ width:8, height:8, borderRadius:999, background:state.color, boxShadow:`0 0 0 5px ${state.bg}` }} />
         {expanded && (
           <><span style={{ display:"flex", flexDirection:"column", alignItems:"flex-start", flex:1, minWidth:0 }}>
-          <b style={{ fontSize:11.5, whiteSpace:"nowrap" }}>Saúde das integrações</b>
+          <b style={{ fontSize:11.5, whiteSpace:"nowrap" }}>Saúde do Sistema</b>
           <small style={{ color:"#94a3b8", marginTop:2 }}>{loading ? "Atualizando…" : `${state.icon} ${state.label}`}</small>
         </span>
         <span style={{ fontSize:16, color:"#94a3b8" }}>{expanded ? "−" : "+"}</span>
