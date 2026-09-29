@@ -13,7 +13,7 @@ const ops = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession: f
 const sleep = (ms:number) => new Promise((r) => setTimeout(r, ms));
 
 function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*", "access-control-allow-headers": "authorization,content-type,x-agency-worker-token", "access-control-allow-methods": "GET,POST,OPTIONS" } });
+  return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "access-control-allow-origin": "*", "access-control-allow-headers": "authorization,apikey,content-type,x-client-info,x-agency-worker-token", "access-control-allow-methods": "GET,POST,OPTIONS" } });
 }
 function clean(v: unknown, n = 300) { return String(v ?? "").trim().slice(0, n); }
 function b64url(bytes: Uint8Array) { return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, ""); }
