@@ -4,9 +4,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 type Row = Record<string, any>;
 
 const VERSION = "meeting-capture-v1.1-audio";
-const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.3";
-const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.28.1/RelatoAI-Desktop-SDR.exe";
-const SDR_DESKTOP_SHA256 = "f3917e35c0d8d6df7d697187334e571a74aadfe3081ab6dfabcbe590727ec832";
+const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.4";
+const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.29.1/RelatoAI-Desktop-SDR.exe";
+const SDR_DESKTOP_SHA256 = "c51d735b14e3ee4464e2a3c4cde5efddbd11102597fd601d450e9f6d0e7cb23b";
 const DASHBOARD_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
   "http://localhost:3000",
@@ -1117,7 +1117,8 @@ Deno.serve(async (req: Request) => {
 
     if (isProspect) {
       const crm = db.schema("crm");
-      const prospectName = clean(feedbackProspectName || remoteName, 200);
+      const requiresManualProspectName = personNameKey(device.owner_person) === personNameKey("Gustavo Royce");
+      const prospectName = clean(requiresManualProspectName ? feedbackProspectName : (feedbackProspectName || remoteName), 200);
       if (!prospectName) return respond({ error: "prospect_name_required" }, 400);
       const prospectCompany = clean(prospectInput.company, 240) || null;
       const prospectEmail = clean(prospectInput.email, 240).toLowerCase() || null;
@@ -1213,10 +1214,15 @@ Deno.serve(async (req: Request) => {
       }
 
       const leadPatch: Row = {
-        owner_id: closerProfile.id, name: prospectName, company: prospectCompany,
-        email: prospectEmail, phone: prospectPhone, instagram: prospectInstagram,
-        orcamento_mkt: marketingInvestment, updated_at: now,
+        owner_id: closerProfile.id,
+        name: prospectName,
+        updated_at: now,
       };
+      if (prospectCompany) leadPatch.company = prospectCompany;
+      if (prospectEmail) leadPatch.email = prospectEmail;
+      if (prospectPhone) leadPatch.phone = prospectPhone;
+      if (prospectInstagram) leadPatch.instagram = prospectInstagram;
+      if (marketingInvestment) leadPatch.orcamento_mkt = marketingInvestment;
       let leadError: any = null;
       if (existingLead?.id) {
         const result = await crm.from("leads").update(leadPatch).eq("id", existingLead.id).select("id,owner_id,name,company,stage,email,phone").single();
@@ -1437,7 +1443,10 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    const asScore = (value: unknown) => Number.isFinite(Number(value)) ? Math.max(1, Math.min(5, Math.round(Number(value)))) : null;
+    const asScore = (value: unknown) => {
+      if (value === null || value === undefined || clean(value, 20) === "") return null;
+      return Number.isFinite(Number(value)) ? Math.max(1, Math.min(5, Math.round(Number(value)))) : null;
+    };
     const tags = Array.isArray(feedback.tags) ? feedback.tags.map((v: unknown) => clean(v, 80)).filter(Boolean).slice(0, 12) : [];
     const payload = {
       transcript_id: Number(feedback.transcript_id || session.transcript_id || 0) || null,
