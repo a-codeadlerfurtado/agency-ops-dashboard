@@ -544,6 +544,8 @@ export default function Dashboard() {
         </div>
       </header>
 
+      {view === "overview" && <DailyReflection token={session.access_token} />}
+
       <div className="source-banner"><span>O dashboard prioriza e diagnostica.</span> O ClickUp continua sendo a fonte oficial para executar e concluir tarefas.</div>
 
       <aside className={`side-nav${sidebarOpen ? " open" : ""}`} aria-label="Visões do dashboard">
@@ -576,7 +578,6 @@ export default function Dashboard() {
             {data?.profile?.can_view_operational_alerts && <Metric label="Alertas abertos" value={formatNumber(kpis.open_alerts)} tone={kpis.critical_alerts ? "red" : "yellow"} hint={`${formatNumber(kpis.critical_alerts)} críticos/altos`} loading={!data} />}
           </section>}
 
-      {view === "overview" && <DailyReflection token={session.access_token} />}
 
       {view === "focus" && (isDesignRestricted
         ? <DesignFocusCenter focus={data?.operations?.design_focus || {}} />
