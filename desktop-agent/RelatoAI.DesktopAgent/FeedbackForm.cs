@@ -51,6 +51,7 @@ internal sealed class FeedbackForm : Form
     private FeedbackContext? feedbackContext;
     private bool contextReady;
     private bool submitted;
+    private bool IsGustavoSdr => string.Equals(config?.OwnerPerson?.Trim(), "Gustavo Royce", StringComparison.OrdinalIgnoreCase);
 
     private sealed record BindingOption(string? Id, string Name, bool NoClient = false, bool Prospect = false)
     {
@@ -91,7 +92,7 @@ internal sealed class FeedbackForm : Form
             prospectCard.Visible = option?.Prospect == true;
             if (option?.Prospect == true)
             {
-                if (string.IsNullOrWhiteSpace(prospectName.Text)) prospectName.Text = feedbackContext?.RemoteName ?? "";
+                if (!IsGustavoSdr && string.IsNullOrWhiteSpace(prospectName.Text)) prospectName.Text = feedbackContext?.RemoteName ?? "";
                 if (string.IsNullOrWhiteSpace(prospectPhone.Text) && !string.IsNullOrWhiteSpace(feedbackContext?.RemotePhone)) prospectPhone.Text = $"+{feedbackContext.RemotePhone}";
             }
             if (feedbackContext?.RequiresSelection == true)
@@ -118,8 +119,12 @@ internal sealed class FeedbackForm : Form
         var header = new Panel { Dock = DockStyle.Fill, BackColor = Panel2, Padding = new Padding(28, 20, 28, 16) };
         header.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 4, BackColor = Accent });
         var brand = new Label { Text = "RELATO AI  •  OPS", ForeColor = Accent, Font = new Font(Font.FontFamily, 9F, FontStyle.Bold), AutoSize = true, Location = new Point(28, 18) };
-        var title = new Label { Text = "Como essa call terminou?", ForeColor = TextMain, Font = new Font(Font.FontFamily, 18F, FontStyle.Bold), AutoSize = true, Location = new Point(28, 43) };
-        var sub = new Label { Text = "Sua leitura humana complementa a transcrição e ajuda a detectar risco, confiança e próximos passos.", ForeColor = Muted, Font = new Font(Font.FontFamily, 9.5F), AutoSize = true, MaximumSize = new Size(570, 40), Location = new Point(30, 78) };
+        var titleText = IsGustavoSdr ? "Registrar prospect" : "Como essa call terminou?";
+        var subtitleText = IsGustavoSdr
+            ? "Digite o nome manualmente e confirme só o essencial. O Relato completa o CRM Awave com a transcrição."
+            : "Sua leitura humana complementa a transcrição e ajuda a detectar risco, confiança e próximos passos.";
+        var title = new Label { Text = titleText, ForeColor = TextMain, Font = new Font(Font.FontFamily, 18F, FontStyle.Bold), AutoSize = true, Location = new Point(28, 43) };
+        var sub = new Label { Text = subtitleText, ForeColor = Muted, Font = new Font(Font.FontFamily, 9.5F), AutoSize = true, MaximumSize = new Size(570, 40), Location = new Point(30, 78) };
         header.Controls.Add(brand);
         header.Controls.Add(title);
         header.Controls.Add(sub);
@@ -139,7 +144,8 @@ internal sealed class FeedbackForm : Form
         };
 
         body.Controls.Add(BuildContactCard());
-        body.Controls.Add(BuildProspectCard());
+        body.Controls.Add(IsGustavoSdr ? BuildGustavoProspectCard() : BuildProspectCard());
+        if (IsGustavoSdr) return body;
         body.Controls.Add(SectionTitle("Leitura da conversa", "Percepção geral da call"));
         body.Controls.Add(FieldRow("Humor", mood));
         body.Controls.Add(FieldRow("Tom de voz", tone));
@@ -155,7 +161,7 @@ internal sealed class FeedbackForm : Form
 
     private Control BuildContactCard()
     {
-        var card = Card(570, 150);
+        var card = Card(570, IsGustavoSdr ? 104 : 150);
         card.Margin = new Padding(0, 0, 0, 16);
         contactStatus.Text = "Identificando contato...";
         contactStatus.ForeColor = Blue;
@@ -175,8 +181,44 @@ internal sealed class FeedbackForm : Form
         return card;
     }
 
+    private Control BuildGustavoProspectCard()
+    {
+        prospectCard.Height = 470;
+        prospectCard.Margin = new Padding(0, 0, 0, 16);
+        prospectCard.Controls.Clear();
+        prospectCard.Controls.Add(new Label { Text = "PROSPECT COMERCIAL", ForeColor = Accent, Font = new Font(Font.FontFamily, 9F, FontStyle.Bold), AutoSize = true, Location = new Point(18, 14) });
+        prospectCard.Controls.Add(new Label { Text = "Nome é obrigatório. Os demais dados podem ser corrigidos/completados aqui.", ForeColor = Muted, AutoSize = true, Location = new Point(18, 38) });
+
+        prospectName.PlaceholderText = "Digite o nome do contato";
+        prospectCompany.PlaceholderText = "Empresa / imobiliária";
+        prospectPhone.PlaceholderText = "Telefone";
+        prospectEmail.PlaceholderText = "E-mail";
+        prospectCity.PlaceholderText = "Cidade / região";
+        prospectNextStep.PlaceholderText = "Ex.: enviar proposta, agendar reunião...";
+
+        AddProspectField("Nome do contato *", prospectName, 18, 70);
+        AddProspectField("Empresa / imobiliária", prospectCompany, 306, 70);
+        AddProspectField("Telefone", prospectPhone, 18, 126);
+        AddProspectField("E-mail", prospectEmail, 306, 126);
+        AddProspectField("Cidade / região", prospectCity, 18, 182);
+        AddProspectField("Próximo passo", prospectNextStep, 18, 238);
+        AddProspectField("Data do próximo passo", prospectNextStepAt, 18, 294);
+
+        note.SetBounds(18, 371, 532, 72);
+        note.Multiline = true;
+        note.ScrollBars = ScrollBars.Vertical;
+        note.BackColor = Panel2;
+        note.ForeColor = TextMain;
+        note.BorderStyle = BorderStyle.FixedSingle;
+        note.PlaceholderText = "Observação curta, só se houver algo importante.";
+        prospectCard.Controls.Add(new Label { Text = "Observação rápida", ForeColor = Muted, AutoSize = true, Location = new Point(18, 350) });
+        prospectCard.Controls.Add(note);
+        return prospectCard;
+    }
+
     private Control BuildProspectCard()
     {
+        prospectCard.Height = 1040;
         prospectCard.Margin = new Padding(0, 0, 0, 16);
         prospectCard.Controls.Clear();
         prospectCard.Controls.Add(new Label { Text = "PROSPECT COMERCIAL", ForeColor = Accent, Font = new Font(Font.FontFamily, 9F, FontStyle.Bold), AutoSize = true, Location = new Point(18, 14) });
@@ -254,7 +296,7 @@ internal sealed class FeedbackForm : Form
         laterButton.Text = "Agora não";
         laterButton.SetBounds(24, 20, 130, 46);
         StyleSecondaryButton(laterButton);
-        saveButton.Text = "Salvar avaliação";
+        saveButton.Text = IsGustavoSdr ? "Salvar no CRM" : "Salvar avaliação";
         saveButton.SetBounds(430, 20, 172, 46);
         StylePrimaryButton(saveButton);
         laterButton.Click += async (_, _) => await SubmitAsync(true);
@@ -402,8 +444,8 @@ internal sealed class FeedbackForm : Form
                 if (context.Pending) continue;
                 if (!string.Equals(context.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase)) return;
                 feedbackContext = context;
-                ApplyProspectPrefill(context.ProspectPrefill);
-                if (!string.IsNullOrWhiteSpace(context.RemoteName) && string.IsNullOrWhiteSpace(prospectName.Text))
+                ApplyProspectPrefill(context.ProspectPrefill, includeName: !IsGustavoSdr);
+                if (!IsGustavoSdr && !string.IsNullOrWhiteSpace(context.RemoteName) && string.IsNullOrWhiteSpace(prospectName.Text))
                     prospectName.Text = context.RemoteName;
                 if (!string.IsNullOrWhiteSpace(context.RemotePhone) && string.IsNullOrWhiteSpace(prospectPhone.Text))
                     prospectPhone.Text = $"+{context.RemotePhone}";
@@ -419,11 +461,11 @@ internal sealed class FeedbackForm : Form
         }
     }
 
-    private void ApplyProspectPrefill(ProspectPrefill? value)
+    private void ApplyProspectPrefill(ProspectPrefill? value, bool includeName = true)
     {
         if (value is null) return;
         void Fill(TextBox box, string? text) { if (string.IsNullOrWhiteSpace(box.Text) && !string.IsNullOrWhiteSpace(text)) box.Text = text; }
-        Fill(prospectName, value.Name);
+        if (includeName) Fill(prospectName, value.Name);
         Fill(prospectCompany, value.Company);
         Fill(prospectEmail, value.Email);
         Fill(prospectPhone, string.IsNullOrWhiteSpace(value.Phone) ? null : $"+{value.Phone.TrimStart('+')}");
@@ -452,7 +494,7 @@ internal sealed class FeedbackForm : Form
 
     private void ApplyContext(FeedbackContext context)
     {
-        ApplyProspectPrefill(context.ProspectPrefill);
+        ApplyProspectPrefill(context.ProspectPrefill, includeName: !IsGustavoSdr);
         var phone = string.IsNullOrWhiteSpace(context.RemotePhone) ? null : $"+{context.RemotePhone}";
         var person = string.IsNullOrWhiteSpace(context.RemoteName) ? phone ?? "Contato não identificado" : context.RemoteName;
         var identity = string.Join(" · ", new[] { person, phone }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct());
@@ -461,16 +503,18 @@ internal sealed class FeedbackForm : Form
         {
             contactStatus.Text = "Prospect comercial · SDR";
             contactStatus.ForeColor = Accent;
-            contactDetail.Text = string.IsNullOrWhiteSpace(context.RemoteName)
-                ? $"{identity}\nO Relato vai completar os dados disponíveis enquanto a transcrição processa."
-                : $"{identity}\nProspect selecionado automaticamente pelo perfil SDR.";
+            contactDetail.Text = IsGustavoSdr
+                ? $"{(phone ?? "Telefone não identificado")}\nDigite o nome do contato manualmente. O restante será enriquecido pela transcrição."
+                : string.IsNullOrWhiteSpace(context.RemoteName)
+                    ? $"{identity}\nO Relato vai completar os dados disponíveis enquanto a transcrição processa."
+                    : $"{identity}\nProspect selecionado automaticamente pelo perfil SDR.";
             clientBinding.Items.Clear();
             clientBinding.Items.Add(new BindingOption(null, "Prospect comercial / possível cliente", false, true));
             clientBinding.Items.Add(new BindingOption(null, "Sem vínculo com cliente ou prospect", true));
             clientBinding.SelectedIndex = 0;
-            clientBinding.Visible = true;
+            clientBinding.Visible = !IsGustavoSdr;
             prospectCard.Visible = true;
-            if (string.IsNullOrWhiteSpace(prospectName.Text) && !string.IsNullOrWhiteSpace(context.RemoteName))
+            if (!IsGustavoSdr && string.IsNullOrWhiteSpace(prospectName.Text) && !string.IsNullOrWhiteSpace(context.RemoteName))
                 prospectName.Text = context.RemoteName;
             if (string.IsNullOrWhiteSpace(prospectPhone.Text) && !string.IsNullOrWhiteSpace(context.RemotePhone))
                 prospectPhone.Text = $"+{context.RemotePhone}";
@@ -549,7 +593,7 @@ internal sealed class FeedbackForm : Form
             submitted = false;
             saveButton.Enabled = dismissed || HasRequiredBinding();
             laterButton.Enabled = true;
-            saveButton.Text = "Salvar avaliação";
+            saveButton.Text = IsGustavoSdr ? "Salvar no CRM" : "Salvar avaliação";
             MessageBox.Show(this, ex.Message, "Relato AI", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
@@ -567,6 +611,8 @@ internal sealed class FeedbackForm : Form
             "Piorou" => "WORSENING",
             _ => "STABLE"
         };
+        if (!dismissed && IsGustavoSdr && string.IsNullOrWhiteSpace(prospectName.Text))
+            throw new InvalidOperationException("Informe o nome do contato antes de salvar no CRM.");
         if (!dismissed && !HasRequiredBinding())
             throw new InvalidOperationException("Selecione um cliente, marque como prospect comercial ou escolha 'Sem vínculo'.");
         var selected = clientBinding.SelectedItem as BindingOption;
@@ -607,13 +653,13 @@ internal sealed class FeedbackForm : Form
             is_prospect = isProspect,
             prospect,
             binding_source = isProspect ? "RELATO_COMMERCIAL" : manual ? "MANUAL" : "AUTO",
-            mood = mood.SelectedItem?.ToString(),
-            tone = tone.SelectedItem?.ToString(),
-            receptivity = (int)receptivity.Value,
-            trust_level = (int)trust.Value,
-            perceived_risk = (int)risk.Value,
-            relationship_direction = relation,
-            tags = selectedTags,
+            mood = IsGustavoSdr ? null : mood.SelectedItem?.ToString(),
+            tone = IsGustavoSdr ? null : tone.SelectedItem?.ToString(),
+            receptivity = IsGustavoSdr ? (int?)null : (int)receptivity.Value,
+            trust_level = IsGustavoSdr ? (int?)null : (int)trust.Value,
+            perceived_risk = IsGustavoSdr ? (int?)null : (int)risk.Value,
+            relationship_direction = IsGustavoSdr ? "UNKNOWN" : relation,
+            tags = IsGustavoSdr ? Array.Empty<string>() : selectedTags,
             note = note.Text.Trim(),
             dismissed
         };
