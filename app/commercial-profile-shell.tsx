@@ -188,11 +188,16 @@ export default function CommercialProfileShell() {
   }, [role, load]);
 
   useEffect(() => {
-    if (!["COMMERCIAL", "CLOSER"].includes(String(role || ""))) return;
-    document.documentElement.classList.add("leonardo-commercial-profile");
+    const currentRole = String(role || "");
+    if (!["COMMERCIAL", "CLOSER"].includes(currentRole)) return;
+    const className = currentRole === "CLOSER" ? "closer-cockpit-profile" : "leonardo-commercial-profile";
+    document.documentElement.classList.add(className);
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    return () => { document.documentElement.classList.remove("leonardo-commercial-profile"); document.body.style.overflow = previous; };
+    return () => {
+      document.documentElement.classList.remove(className);
+      document.body.style.overflow = previous;
+    };
   }, [role]);
 
   if (!["COMMERCIAL", "CLOSER"].includes(String(role || "")) || !session) return null;

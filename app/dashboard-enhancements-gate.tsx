@@ -31,6 +31,6 @@ export default function DashboardEnhancementsGate() {
     return () => { active = false; };
   }, [session?.access_token]);
 
-  if (!session || !role || role === "DESIGN" || role === "COMMERCIAL") return null;
+  if (!session || !role || role === "DESIGN" || role === "COMMERCIAL" || role === "CLOSER") return null;
   return <DashboardEnhancements />;
 }

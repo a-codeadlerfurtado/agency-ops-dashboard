@@ -87,7 +87,7 @@ async function oauthCallback(url: URL) {
   if (!tokenRes.ok || !token.access_token) return new Response("Falha ao conectar Google", { status: 400 });
   const userRes = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { authorization: `Bearer ${token.access_token}` } });
   const user = await userRes.json();
-  const { data: account, error } = await ops.from("meeting_integration_accounts").upsert({ owner_person: st.owner_person, provider_key: "GOOGLE_WORKSPACE", account_slot: "primary", external_account_id: clean(user.sub, 300), account_email: clean(user.email, 320), display_name: clean(user.name, 200), status: "ACTIVE", granted_scopes: String(token.scope || "").split(" ").filter(Boolean), enabled_capabilities: ["CALENDAR_WRITE","MEET_CONTEXT"], token_expires_at: new Date(Date.now() + Number(token.expires_in || 3600) * 1000).toISOString(), last_error: null, updated_at: new Date().toISOString() }, { onConflict: "owner_person,provider_key,account_slot" }).select("*").single();
+  const { data: account, error } = await ops.from("meeting_integration_accounts").upsert({ owner_person: st.owner_person, provider_key: "GOOGLE_WORKSPACE", account_slot: "primary", external_account_id: clean(user.sub, 300), account_email: clean(user.email, 320), display_name: clean(user.name, 200), status: "ACTIVE", granted_scopes: String(token.scope || "").split(" ").filter(Boolean), enabled_capabilities: ["CALENDAR_READ","CALENDAR_WRITE","MEET_CONTEXT"], token_expires_at: new Date(Date.now() + Number(token.expires_in || 3600) * 1000).toISOString(), last_error: null, updated_at: new Date().toISOString() }, { onConflict: "owner_person,provider_key,account_slot" }).select("*").single();
   if (error) throw error;
   const accessId = await setSecret(account.id, "access", String(token.access_token));
   let refreshId = account.refresh_secret_id;
@@ -138,7 +138,51 @@ function eventTimes(body: any) {
 }
 async function eventResult(event: any, account: any, resolved = { emails: [] as string[], unresolved: [] as string[] }) {
   const meetUrl = event?.hangoutLink || event?.conferenceData?.entryPoints?.find((x:any)=>x.entryPointType === "video")?.uri || null;
-  return { ok: true, event_id: event?.id || null, html_link: event?.htmlLink || null, meet_url: meetUrl, organizer_email: account?.account_email || null, attendee_emails: resolved.emails, unresolved_attendees: resolved.unresolved, start_time: event?.start?.dateTime || null, end_time: event?.end?.dateTime || null, title: event?.summary || null };
+  return { ok: true, event_id: event?.id || null, html_link: event?.htmlLink || null, meet_url: meetUrl, organizer_email: account?.account_email || null, attendee_emails: resolved.emails, unresolved_attendees: resolved.unresolved, start_time: event?.start?.dateTime || event?.start?.date || null, end_time: event?.end?.dateTime || event?.end?.date || null, title: event?.summary || null };
+}
+async function listEvents(req: Request, body: any) {
+  try {
+    const person = await dashboardPerson(req);
+    if (!person) return json({ error: "unauthorized" }, 401);
+    const { account, access } = await googleAccount(person);
+    const daysPast = Math.max(0, Math.min(30, Number(body?.days_past || 1) || 1));
+    const daysAhead = Math.max(1, Math.min(180, Number(body?.days_ahead || 60) || 60));
+    const maxResults = Math.max(10, Math.min(250, Number(body?.limit || 100) || 100));
+    const timeMin = new Date(Date.now() - daysPast * 86400000).toISOString();
+    const timeMax = new Date(Date.now() + daysAhead * 86400000).toISOString();
+    const u = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+    u.searchParams.set("singleEvents", "true");
+    u.searchParams.set("orderBy", "startTime");
+    u.searchParams.set("timeMin", timeMin);
+    u.searchParams.set("timeMax", timeMax);
+    u.searchParams.set("maxResults", String(maxResults));
+    u.searchParams.set("conferenceDataVersion", "1");
+    const res = await fetch(u, { headers: { authorization: `Bearer ${access}` } });
+    const payload = await res.json().catch(()=>({}));
+    if (!res.ok) {
+      await ops.from("meeting_integration_accounts").update({ last_error: clean(payload?.error?.message || `google_calendar_${res.status}`, 800), updated_at: new Date().toISOString() }).eq("id", account.id);
+      throw Object.assign(new Error(`google_calendar_${res.status}`), { status: res.status });
+    }
+    const events = (Array.isArray(payload?.items) ? payload.items : [])
+      .filter((event:any)=>event?.status !== "cancelled")
+      .map((event:any)=>({
+        id: event?.id || null,
+        title: clean(event?.summary || "Reunião", 300),
+        description: clean(event?.description || "", 2000) || null,
+        location: clean(event?.location || "", 500) || null,
+        start_time: event?.start?.dateTime || event?.start?.date || null,
+        end_time: event?.end?.dateTime || event?.end?.date || null,
+        all_day: Boolean(event?.start?.date && !event?.start?.dateTime),
+        meet_url: event?.hangoutLink || event?.conferenceData?.entryPoints?.find((x:any)=>x.entryPointType === "video")?.uri || null,
+        html_link: event?.htmlLink || null,
+        status: event?.status || null,
+        attendees: Array.isArray(event?.attendees) ? event.attendees.map((a:any)=>({ email: clean(a?.email,320), display_name: clean(a?.displayName,200) || null, response_status: a?.responseStatus || null, self: Boolean(a?.self) })) : [],
+      }));
+    await ops.from("meeting_integration_accounts").update({ last_sync_at: new Date().toISOString(), last_error: null, updated_at: new Date().toISOString() }).eq("id", account.id);
+    return json({ ok: true, person, account: { account_email: account.account_email, display_name: account.display_name, status: account.status }, events, generated_at: new Date().toISOString() });
+  } catch (e:any) {
+    return json({ error: clean(e?.message || e,1000), needs_google: Boolean(e?.needs_google) }, Number(e?.status || 500));
+  }
 }
 async function createEvent(body: any) {
   try {
@@ -193,9 +237,10 @@ Deno.serve(async (req: Request) => {
     if (action === "start_oauth") return await startOauth(req);
     if (action === "status") {
       const person = await dashboardPerson(req); if (!person) return json({ error: "unauthorized" }, 401);
-      const { data } = await ops.from("meeting_integration_accounts").select("account_email,display_name,status,granted_scopes,token_expires_at,last_error").eq("owner_person", person).eq("provider_key", "GOOGLE_WORKSPACE").eq("account_slot", "primary").maybeSingle();
+      const { data } = await ops.from("meeting_integration_accounts").select("account_email,display_name,status,granted_scopes,enabled_capabilities,token_expires_at,last_sync_at,last_error").eq("owner_person", person).eq("provider_key", "GOOGLE_WORKSPACE").eq("account_slot", "primary").maybeSingle();
       return json({ ok: true, google_configured: googleConfigured(), account: data || null });
     }
+    if (action === "list_events") return await listEvents(req, body);
     if (["create_event","update_event","cancel_event"].includes(action)) {
       if (!(await workerAuthorized(req))) return json({ error: "unauthorized" }, 401);
       if (action === "create_event") return await createEvent(body);
