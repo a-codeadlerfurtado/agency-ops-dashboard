@@ -121,7 +121,7 @@ async function moveClient(ctx: any, body: Row) {
     detail,
   });
   if (historyError) throw historyError;
-  return reply({ ok: true, client: confirmed, event_type: eventType, detail });
+  return reply({ ok: true, client: { ...(confirmed || {}), carteira: newWallet?.carteira || null }, event_type: eventType, detail });
 }
 
 Deno.serve(async (req: Request) => {

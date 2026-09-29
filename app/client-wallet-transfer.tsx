@@ -46,7 +46,7 @@ export function WalletInlineButton({ client, allowed, onClick }: { client: Row; 
 
 export default function ClientWalletTransfer({
   token, client, close, refresh,
-}: { token: string; client: Row; close: () => void; refresh?: () => Promise<void> }) {
+}: { token: string; client: Row; close: () => void; refresh?: (result?: Row) => Promise<void> | void }) {
   const [payload, setPayload] = useState<Row>({ clients: [], managers: [] });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -102,7 +102,7 @@ export default function ClientWalletTransfer({
       });
       const body = await response.json().catch(() => null);
       if (!response.ok || !body?.ok) throw new Error(body?.detail || body?.error || ("API " + response.status));
-      if (refresh) await refresh();
+      if (refresh) { try { await refresh(body); } catch { /* a troca já foi confirmada pelo backend; refresh não pode transformar sucesso em erro */ } }
       close();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Não foi possível alterar a carteira.");

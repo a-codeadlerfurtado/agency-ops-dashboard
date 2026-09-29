@@ -460,7 +460,7 @@ export async function api(view: string, _token: string, params: Record<string, s
   url.searchParams.set("view", view);
   url.searchParams.set("client", DASHBOARD_CLIENT_VERSION);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value));
-  const response = await authenticatedFetch(url, { cache: "no-store" });
+  const response = await authenticatedFetch(url, { cache: "no-store", signal: AbortSignal.timeout(view === "client" ? 30_000 : FETCH_TIMEOUT_MS) });
   if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
   const json = await response.json();
 
