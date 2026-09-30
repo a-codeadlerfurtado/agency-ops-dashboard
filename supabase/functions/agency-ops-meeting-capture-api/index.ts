@@ -1253,6 +1253,50 @@ Deno.serve(async (req: Request) => {
       }
       if (leadError || !commercialLead?.id) return respond({ error: "commercial_lead_save_failed", detail: leadError?.message }, 500);
 
+      // Keep the canonical Awave pipeline in sync with every SDR prospect. The existing
+      // Awave webhook is idempotent by normalized phone, so repeated calls update the
+      // same contact/deal instead of creating duplicates.
+      if (prospectPhone) {
+        const { data: awaveSettings } = await ops.from("automation_settings")
+          .select("key,value")
+          .in("key", ["AWAVE_DASH_OPS_FUNNEL_URL", "AWAVE_DASH_OPS_FUNNEL_SECRET"]);
+        const awaveMap = new Map((awaveSettings || []).map((r: Row) => [String(r.key), typeof r.value === "string" ? r.value : String(r.value ?? "").replace(/^\"|\"$/g, "")]));
+        const funnelUrl = clean(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_URL"), 1000);
+        const funnelSecret = clean(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_SECRET"), 500);
+        const webhookUrl = funnelUrl ? funnelUrl.replace(/\/dash-ops-funil\/?$/i, "/webhook-lead") : "";
+        if (!webhookUrl || !funnelSecret) return respond({ error: "awave_sync_not_configured" }, 500);
+        const awavePayload = {
+          nome: prospectName,
+          telefone: prospectPhone,
+          email: prospectEmail || undefined,
+          origem: "RELATO_AI_SDR",
+          notas: clean(feedback.note, 2000) || `Ligação SDR registrada pelo Relato AI em ${now}`,
+          crm_lead_id: commercialLead.id,
+          relato_session_id: session.id,
+          closer: "Vitor Feitoza",
+          sdr: device.owner_person,
+        };
+        let awaveSyncOk = false;
+        let awaveSyncDetail: any = null;
+        for (let attempt = 0; attempt < 2 && !awaveSyncOk; attempt++) {
+          try {
+            const upstream = await fetch(webhookUrl, {
+              method: "POST",
+              headers: { "content-type": "application/json", "x-webhook-secret": funnelSecret },
+              body: JSON.stringify(awavePayload),
+              signal: AbortSignal.timeout(12000),
+            });
+            const raw = await upstream.text();
+            try { awaveSyncDetail = JSON.parse(raw); } catch { awaveSyncDetail = { raw: raw.slice(0, 500) }; }
+            awaveSyncOk = upstream.ok && Boolean(awaveSyncDetail?.data?.negocio);
+          } catch (error) {
+            awaveSyncDetail = { error: error instanceof Error ? error.message : String(error) };
+          }
+          if (!awaveSyncOk && attempt === 0) await new Promise(resolve => setTimeout(resolve, 350));
+        }
+        if (!awaveSyncOk) return respond({ error: "awave_sync_failed", detail: awaveSyncDetail }, 502);
+      }
+
       const generatedCloserBriefing = [
         prospectCompany ? `Empresa: ${prospectCompany}` : null,
         prospectCity ? `Região: ${prospectCity}` : null,
