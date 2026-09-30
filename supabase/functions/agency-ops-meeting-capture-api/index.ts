@@ -4,9 +4,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 type Row = Record<string, any>;
 
 const VERSION = "meeting-capture-v1.1-audio";
-const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.4";
-const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.29.1/RelatoAI-Desktop-SDR.exe";
-const SDR_DESKTOP_SHA256 = "c51d735b14e3ee4464e2a3c4cde5efddbd11102597fd601d450e9f6d0e7cb23b";
+const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.5";
+const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.1/RelatoAI-Desktop-SDR.exe";
+const SDR_DESKTOP_SHA256 = "63c2d2e706612d60a01b073adea320c5f4dc6643cc5843fdf8f22cdc1de52ea3";
 const DASHBOARD_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
   "http://localhost:3000",
@@ -684,7 +684,7 @@ Deno.serve(async (req: Request) => {
     const remotePhoneCandidate = normalizePhone(call.remote_phone);
     const identitySource = clean(call.identity_source, 80) || null;
     const source = clean(call.source, 40).toUpperCase() === "WHATSAPP_DESKTOP" ? "WHATSAPP_DESKTOP" : "WHATSAPP_WEB";
-    const directDesktopIdentity = ["WHATSAPP_DESKTOP_UI", "WHATSAPP_DESKTOP_UIA", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
+    const directDesktopIdentity = ["WHATSAPP_DESKTOP_UI", "WHATSAPP_DESKTOP_UIA", "WHATSAPP_SCREEN_OCR", "WHATSAPP_SCREEN_OCR+UI", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
     if (!localSessionId || !startedAt || !endedAt) return respond({ error: "missing_call_data" }, 400);
     // The message-window heuristic is useful only for audit/corroboration. It must never
     // label a Desktop call by itself: an unrelated chat message can occur in the same window.
@@ -946,7 +946,14 @@ Deno.serve(async (req: Request) => {
         commercial_analysis_ready: commercialAnalysisReady,
         requires_selection: false, remote_phone: remotePhone, remote_name: remoteName,
         remote_role: "PROSPECT", client_id: null, client_name: null,
-        resolution_status: identity?.status || "UNRESOLVED", clients: [], prospect_prefill: prospectPrefill
+        resolution_status: identity?.status || "UNRESOLVED", clients: [], prospect_prefill: prospectPrefill,
+        crm_match: lead?.id ? {
+          id: lead.id,
+          name: clean(lead.name, 200) || null,
+          company: clean(lead.company, 240) || null,
+          phone: normalizePhone(lead.phone || remotePhone) || null,
+          email: clean(lead.email, 240).toLowerCase() || null
+        } : null
       });
     }
 
@@ -1169,10 +1176,17 @@ Deno.serve(async (req: Request) => {
 
       let existingLead: Row | null = null;
       const relatoExternalId = `relato-call:${session.id}`;
+      const confirmedCrmLeadId = clean(feedback.crm_lead_id, 80) || null;
+
+      if (confirmedCrmLeadId) {
+        const { data } = await crm.from("leads")
+          .select("id,owner_id,stage").eq("id", confirmedCrmLeadId).is("archived_at", null).maybeSingle();
+        existingLead = data || null;
+      }
 
       const { data: sessionLead } = await crm.from("leads")
         .select("id,owner_id,stage").eq("source", "RELATO_AI_SDR").eq("external_id", relatoExternalId).maybeSingle();
-      existingLead = sessionLead || null;
+      if (!existingLead) existingLead = sessionLead || null;
 
       if (!existingLead) {
         const { data: callRows } = await ops.from("commercial_call_records")

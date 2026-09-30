@@ -26,6 +26,10 @@ internal sealed class FeedbackForm : Form
     private readonly Button laterButton = new();
     private readonly Label contactStatus = new();
     private readonly Label contactDetail = new();
+    private readonly Button crmConfirmButton = new();
+    private readonly Button crmDifferentButton = new();
+    private bool crmMatchDecisionRequired;
+    private string? matchedCrmLeadId;
     private readonly ComboBox clientBinding = SelectBox(532);
     private readonly Panel prospectCard = Card(570, 1040);
     private readonly TextBox prospectName = Input(246);
@@ -84,7 +88,14 @@ internal sealed class FeedbackForm : Form
         tone.SelectedIndex = 2;
         direction.SelectedIndex = 1;
         BuildUi();
-        prospectCard.Visible = false;
+        prospectCard.Visible = IsGustavoSdr;
+        contextReady = IsGustavoSdr;
+        if (IsGustavoSdr)
+        {
+            contactStatus.Text = "Pós-call pronto";
+            contactStatus.ForeColor = Accent;
+            contactDetail.Text = "Preencha o nome. O telefone está sendo identificado automaticamente em segundo plano.";
+        }
         saveButton.Enabled = false;
         clientBinding.SelectedIndexChanged += (_, _) =>
         {
@@ -161,7 +172,7 @@ internal sealed class FeedbackForm : Form
 
     private Control BuildContactCard()
     {
-        var card = Card(570, IsGustavoSdr ? 104 : 150);
+        var card = Card(570, 150);
         card.Margin = new Padding(0, 0, 0, 16);
         contactStatus.Text = "Identificando contato...";
         contactStatus.ForeColor = Blue;
@@ -175,9 +186,51 @@ internal sealed class FeedbackForm : Form
         contactDetail.Location = new Point(18, 42);
         clientBinding.Location = new Point(18, 92);
         clientBinding.Visible = false;
+
+        crmConfirmButton.Text = "Sim, é ele";
+        crmConfirmButton.SetBounds(18, 88, 150, 38);
+        StylePrimaryButton(crmConfirmButton);
+        crmConfirmButton.Visible = false;
+        crmConfirmButton.Click += async (_, _) =>
+        {
+            crmMatchDecisionRequired = false;
+            crmConfirmButton.Visible = false;
+            crmDifferentButton.Visible = false;
+            contactStatus.Text = "Prospect confirmado";
+            contactDetail.Text = "Registrando esta ligação no histórico do Awave...";
+            saveButton.Enabled = CanSaveNow();
+            await SubmitAsync(false);
+        };
+
+        crmDifferentButton.Text = "Não é ele · editar";
+        crmDifferentButton.SetBounds(180, 88, 180, 38);
+        StyleSecondaryButton(crmDifferentButton);
+        crmDifferentButton.Visible = false;
+        crmDifferentButton.Click += (_, _) =>
+        {
+            crmMatchDecisionRequired = false;
+            crmConfirmButton.Visible = false;
+            crmDifferentButton.Visible = false;
+            var observedPhone = prospectPhone.Text;
+            matchedCrmLeadId = null;
+            prospectName.Clear();
+            prospectCompany.Clear();
+            prospectEmail.Clear();
+            prospectCity.Clear();
+            prospectNextStep.Clear();
+            prospectNextStepAt.Checked = false;
+            prospectPhone.Text = observedPhone;
+            contactStatus.Text = "Novo prospect";
+            contactDetail.Text = "Edite os dados abaixo. O telefone detectado foi mantido.";
+            prospectName.Focus();
+            saveButton.Enabled = CanSaveNow();
+        };
+
         card.Controls.Add(contactStatus);
         card.Controls.Add(contactDetail);
         card.Controls.Add(clientBinding);
+        card.Controls.Add(crmConfirmButton);
+        card.Controls.Add(crmDifferentButton);
         return card;
     }
 
@@ -426,6 +479,13 @@ internal sealed class FeedbackForm : Form
                 await Task.Delay(300);
             }
         }
+        if (IsGustavoSdr)
+        {
+            contactStatus.Text = "Pós-call pronto";
+            contactStatus.ForeColor = Accent;
+            contactDetail.Text = "Você pode salvar normalmente. Se o telefone for identificado, ele entra automaticamente no campo.";
+            return;
+        }
         contactStatus.Text = "Identificação pendente";
         contactStatus.ForeColor = Accent;
         contactDetail.Text = last is null
@@ -503,11 +563,34 @@ internal sealed class FeedbackForm : Form
         {
             contactStatus.Text = "Prospect comercial · SDR";
             contactStatus.ForeColor = Accent;
-            contactDetail.Text = IsGustavoSdr
-                ? $"{(phone ?? "Telefone não identificado")}\nDigite o nome do contato manualmente. O restante será enriquecido pela transcrição."
-                : string.IsNullOrWhiteSpace(context.RemoteName)
-                    ? $"{identity}\nO Relato vai completar os dados disponíveis enquanto a transcrição processa."
-                    : $"{identity}\nProspect selecionado automaticamente pelo perfil SDR.";
+            if (IsGustavoSdr && context.CrmMatch is not null)
+            {
+                crmMatchDecisionRequired = true;
+                var match = context.CrmMatch;
+                matchedCrmLeadId = match.Id;
+                if (string.IsNullOrWhiteSpace(prospectName.Text) && !string.IsNullOrWhiteSpace(match.Name)) prospectName.Text = match.Name;
+                if (string.IsNullOrWhiteSpace(prospectCompany.Text) && !string.IsNullOrWhiteSpace(match.Company)) prospectCompany.Text = match.Company;
+                if (string.IsNullOrWhiteSpace(prospectEmail.Text) && !string.IsNullOrWhiteSpace(match.Email)) prospectEmail.Text = match.Email;
+                if (string.IsNullOrWhiteSpace(prospectPhone.Text) && !string.IsNullOrWhiteSpace(match.Phone)) prospectPhone.Text = "+" + match.Phone;
+                var matchPhone = phone ?? (string.IsNullOrWhiteSpace(match.Phone) ? null : "+" + match.Phone);
+                var label = string.Join(" · ", new[] { match.Name, match.Company, matchPhone }
+                    .Where(x => !string.IsNullOrWhiteSpace(x)));
+                contactStatus.Text = "Encontrei este prospect no Awave";
+                contactDetail.Text = label + "\nConfirme se é a mesma pessoa desta ligação.";
+                crmConfirmButton.Visible = true;
+                crmDifferentButton.Visible = true;
+            }
+            else
+            {
+                crmMatchDecisionRequired = false;
+                crmConfirmButton.Visible = false;
+                crmDifferentButton.Visible = false;
+                contactDetail.Text = IsGustavoSdr
+                    ? $"{(phone ?? "Telefone não identificado")}\nDigite o nome do contato manualmente. O restante será enriquecido pela transcrição."
+                    : string.IsNullOrWhiteSpace(context.RemoteName)
+                        ? $"{identity}\nO Relato vai completar os dados disponíveis enquanto a transcrição processa."
+                        : $"{identity}\nProspect selecionado automaticamente pelo perfil SDR.";
+            }
             clientBinding.Items.Clear();
             clientBinding.Items.Add(new BindingOption(null, "Prospect comercial / possível cliente", false, true));
             clientBinding.Items.Add(new BindingOption(null, "Sem vínculo com cliente ou prospect", true));
@@ -551,6 +634,7 @@ internal sealed class FeedbackForm : Form
     private bool HasRequiredBinding()
     {
         if (!contextReady) return false;
+        if (IsGustavoSdr) return !crmMatchDecisionRequired && !string.IsNullOrWhiteSpace(prospectName.Text);
         if (string.Equals(feedbackContext?.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase))
         {
             var selected = clientBinding.SelectedItem as BindingOption;
@@ -617,7 +701,7 @@ internal sealed class FeedbackForm : Form
             throw new InvalidOperationException("Selecione um cliente, marque como prospect comercial ou escolha 'Sem vínculo'.");
         var selected = clientBinding.SelectedItem as BindingOption;
         var manual = feedbackContext?.RequiresSelection == true;
-        var sdrWorkflow = string.Equals(feedbackContext?.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase);
+        var sdrWorkflow = IsGustavoSdr || string.Equals(feedbackContext?.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase);
         var autoSdrProspect = sdrWorkflow && selected?.NoClient != true;
         var isProspect = autoSdrProspect || (manual && selected?.Prospect == true);
         var clientId = isProspect ? null : manual ? selected?.Id : feedbackContext?.ClientId;
@@ -653,6 +737,7 @@ internal sealed class FeedbackForm : Form
             is_prospect = isProspect,
             prospect,
             binding_source = isProspect ? "RELATO_COMMERCIAL" : manual ? "MANUAL" : "AUTO",
+            crm_lead_id = matchedCrmLeadId,
             mood = IsGustavoSdr ? null : mood.SelectedItem?.ToString(),
             tone = IsGustavoSdr ? null : tone.SelectedItem?.ToString(),
             receptivity = IsGustavoSdr ? (int?)null : (int)receptivity.Value,

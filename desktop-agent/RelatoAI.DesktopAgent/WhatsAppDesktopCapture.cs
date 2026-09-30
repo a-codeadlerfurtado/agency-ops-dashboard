@@ -33,6 +33,12 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     private WhatsAppDesktopUiIdentity? uiCandidate;
     private int uiCandidateHits;
     private DateTimeOffset lastUiProbe = DateTimeOffset.MinValue;
+    private WhatsAppScreenshotIdentity? screenIdentity;
+    private WhatsAppScreenshotIdentity? screenCandidate;
+    private int screenCandidateHits;
+    private int screenProbeCount;
+    private int screenProbeInFlight;
+    private DateTimeOffset lastScreenProbe = DateTimeOffset.MinValue;
     private int ticking;
     public event Action<string>? StatusChanged;
     public event Action<string, string>? CallStarted;
@@ -95,6 +101,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         }
 
         ProbeUiIdentity(now);
+        ScheduleScreenProbe(now);
 
         if (micUsage.Available && micUsage.Active)
         {
@@ -327,7 +334,14 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         uiCandidate = null;
         uiCandidateHits = 0;
         lastUiProbe = DateTimeOffset.MinValue;
+        screenIdentity = null;
+        screenCandidate = null;
+        screenCandidateHits = 0;
+        screenProbeCount = 0;
+        screenProbeInFlight = 0;
+        lastScreenProbe = DateTimeOffset.MinValue;
         ProbeUiIdentity(now, force: true);
+        ScheduleScreenProbe(now, force: true);
         var contact = uiIdentity?.Name ?? uiIdentity?.Phone ?? ResolveContactName(process);
         CallStarted?.Invoke(sessionId, contact);
         StatusChanged?.Invoke(callPrivacyObservedActive
@@ -347,6 +361,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         if (ended <= started || ended - started > TimeSpan.FromHours(12)) ended = now;
         ProbeUiIdentity(now, force: true);
         var directUiIdentity = uiIdentity;
+        var directScreenIdentity = screenIdentity;
         var contact = directUiIdentity?.Name ?? directUiIdentity?.Phone ?? ResolveContactName(target);
         lock (gate)
         {
@@ -364,13 +379,24 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         try
         {
             var cfg = AgentConfig.Load() ?? configProvider() ?? throw new InvalidOperationException("Desktop Agent não pareado");
-            var identity = directUiIdentity is not null
-                ? new WhatsAppCallIdentity(
+            WhatsAppCallIdentity identity;
+            if (directScreenIdentity is not null)
+            {
+                var uiAgrees = directUiIdentity?.Phone is not null && directUiIdentity.Phone == directScreenIdentity.Phone;
+                identity = new WhatsAppCallIdentity(
                     cfg.LocalPhone,
-                    directUiIdentity.Phone,
-                    directUiIdentity.Name,
-                    "WHATSAPP_DESKTOP_UI")
-                : await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone, contact);
+                    directScreenIdentity.Phone,
+                    directUiIdentity?.Name,
+                    uiAgrees ? "WHATSAPP_SCREEN_OCR+UI" : "WHATSAPP_SCREEN_OCR");
+            }
+            else if (directUiIdentity is not null)
+            {
+                identity = new WhatsAppCallIdentity(cfg.LocalPhone, directUiIdentity.Phone, directUiIdentity.Name, "WHATSAPP_DESKTOP_UI");
+            }
+            else
+            {
+                identity = await WhatsAppCallIdentityResolver.ResolveAsync(started, ended, cfg.LocalPhone, contact, maxAttempts: 4);
+            }
             var resolvedContact = string.IsNullOrWhiteSpace(identity.RemoteName) ? contact : identity.RemoteName.Trim();
             if (!string.IsNullOrWhiteSpace(identity.LocalPhone) && identity.LocalPhone != cfg.LocalPhone)
             {
@@ -427,6 +453,12 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             uiCandidate = null;
             uiCandidateHits = 0;
             lastUiProbe = DateTimeOffset.MinValue;
+            screenIdentity = null;
+            screenCandidate = null;
+            screenCandidateHits = 0;
+            screenProbeCount = 0;
+            screenProbeInFlight = 0;
+            lastScreenProbe = DateTimeOffset.MinValue;
         }
     }
 
@@ -466,6 +498,34 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             var label = uiIdentity.Name ?? (uiIdentity.Phone is null ? "contato" : "+" + uiIdentity.Phone);
             StatusChanged?.Invoke($"REC · WhatsApp identificou {label}");
         }
+    }
+
+    private void ScheduleScreenProbe(DateTimeOffset now, bool force = false)
+    {
+        if (!IsRecording || screenProbeCount >= 3) return;
+        if (!force && now - lastScreenProbe < TimeSpan.FromSeconds(1.5)) return;
+        if (Interlocked.CompareExchange(ref screenProbeInFlight, 1, 0) != 0) return;
+        lastScreenProbe = now;
+        screenProbeCount++;
+        var cfg = AgentConfig.Load() ?? configProvider();
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var observed = await WhatsAppScreenshotIdentityResolver.ResolveAsync(cfg?.LocalPhone);
+                if (observed is null || observed.Confidence < 0.94) return;
+                var same = screenCandidate?.Phone == observed.Phone;
+                screenCandidate = observed;
+                screenCandidateHits = same ? screenCandidateHits + 1 : 1;
+                if (screenCandidateHits >= 2)
+                {
+                    screenIdentity = observed;
+                    StatusChanged?.Invoke($"REC · número confirmado por tela: +{observed.Phone}");
+                }
+            }
+            catch { }
+            finally { Volatile.Write(ref screenProbeInFlight, 0); }
+        });
     }
 
     private static DateTimeOffset ResolvePrivacyTime(long rawFileTime, DateTimeOffset fallback)
