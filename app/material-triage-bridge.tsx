@@ -65,6 +65,11 @@ function priorityRank(item: Row) {
   return ({ CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 } as Record<string, number>)[String(item.priority || "")] ?? 9;
 }
 
+function popupKey(item: Row, role: string) {
+  const version = role === "CS" ? Number(item.metadata?.cs_notify_version || 0) : 0;
+  return `${String(item.id)}:${version}`;
+}
+
 /** "signal is aborted without reason" nao ajuda ninguem na tela. */
 function mensagemDeFalha(caught: unknown, padrao: string): string {
   const nome = caught instanceof Error ? caught.name : "";
@@ -92,7 +97,7 @@ const STYLE = `
 .material-triage-screen-close{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:8px;width:26px;height:26px;line-height:1;font-size:15px;cursor:pointer;flex:none}
 .material-triage-screen-close:hover{color:var(--text);border-color:var(--text)}
 .material-triage-screen-secondary{margin-top:8px}
-.material-triage-ack{border-color:color-mix(in srgb,var(--green) 45%,var(--line))!important;color:var(--green)!important}
+.material-triage-ack{border-color:color-mix(in srgb,var(--green) 45%,var(--line))!important;color:var(--green)!important}.material-triage-notify-cs{border-color:color-mix(in srgb,var(--blue) 55%,var(--line))!important;color:var(--blue)!important}
 .material-triage-screen-actions{margin-top:14px}.material-triage-screen-actions button{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:9px;padding:8px 10px;font-size:11px;cursor:pointer}.material-triage-screen-actions button.primary{border-color:var(--accent);background:var(--accent);color:#1a0c02}.material-triage-screen-actions button:disabled{opacity:.5;cursor:default}.material-triage-screen-error{margin:10px 0 0}
 @keyframes material-triage-in{from{opacity:0;transform:translateX(24px) scale(.98)}to{opacity:1;transform:none}}@keyframes material-triage-critical{from{box-shadow:0 28px 95px rgba(0,0,0,.55),0 0 0 0 color-mix(in srgb,var(--red) 18%,transparent)}to{box-shadow:0 28px 95px rgba(0,0,0,.55),0 0 0 7px color-mix(in srgb,var(--red) 8%,transparent)}}
 @media(max-width:850px){.material-triage-item{grid-template-columns:1fr}.material-triage-actions{justify-content:flex-start}}@media(max-width:650px){.material-triage-screen{left:12px;right:12px;bottom:74px;width:auto}.material-triage-screen-meta{flex-direction:column;gap:4px}.material-triage-screen-actions button{flex:1}.material-triage-head-actions{align-items:flex-start}.material-triage-panel .section-head{gap:9px}}
@@ -102,6 +107,7 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
   const [allowed, setAllowed] = useState(false);
   const [items, setItems] = useState<Row[]>([]);
   const [person, setPerson] = useState("");
+  const [role, setRole] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [now, setNow] = useState(Date.now());
@@ -132,6 +138,7 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
       setAllowed(true);
       setItems(body.items || []);
       setPerson(String(body.person || ""));
+      setRole(String(body.role || ""));
       setError("");
     } catch (caught) {
       setError(mensagemDeFalha(caught, "Falha ao atualizar triagem."));
@@ -174,7 +181,7 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
       void supabase.removeChannel(channel);
     };
   }, [load, session.user.id]);
-  const action = useCallback(async (item: Row, kind: "CLAIM" | "OPENED" | "SNOOZE" | "ACKNOWLEDGE", extra: Row = {}) => {
+  const action = useCallback(async (item: Row, kind: "CLAIM" | "OPENED" | "SNOOZE" | "ACKNOWLEDGE" | "NOTIFY_CS", extra: Row = {}) => {
     const key = `${item.id}:${kind}`;
     setBusy(key); setError("");
     try {
@@ -190,6 +197,10 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
         throw new Error(body.detail || body.error || `Triagem ${response.status}`);
       }
       if (body.items) setItems(body.items); else await load();
+      if (kind === "ACKNOWLEDGE") {
+        setItems((atual) => atual.filter((row) => String(row.id) !== String(item.id)));
+        setDispensados((atual) => new Set(atual).add(popupKey(item, role)));
+      }
       // Adiar precisa PARECER que funcionou. Sem esta pausa o proximo material
       // da fila toma o lugar no mesmo instante, e o popup parece nao ter
       // fechado -- reclamacao real de quem usa. A pausa e' so' de exibicao:
@@ -202,7 +213,7 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
       await load();
       return false;
     } finally { setBusy(""); }
-  }, [load, session.access_token]);
+  }, [load, role, session.access_token]);
 
   const openBriefing = useCallback((item: Row) => {
     const kind = String(item.metadata?.triage_kind || "");
@@ -258,7 +269,8 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
   }, [popupCooldownUntil]);
 
   const emPausa = popupCooldownUntil > 0 && Date.now() < popupCooldownUntil;
-  const visiveis = actionable.filter((item: Row) => !dispensados.has(String(item.id)));
+  const isAdler = person === "Adler Furtado";
+  const visiveis = actionable.filter((item: Row) => !dispensados.has(popupKey(item, role)));
   const alert = allowed && !emPausa ? visiveis[0] || null : null;
   const alertAge = alert ? age(alert, now) : null;
   const itemBusy = Boolean(alert && busy.startsWith(`${alert.id}:`));
@@ -274,7 +286,7 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
           className="material-triage-screen-close"
           aria-label="Fechar aviso deste material"
           title="Fecha só este aviso. O material continua na fila."
-          onClick={() => setDispensados((atual) => new Set(atual).add(String(alert.id)))}
+          onClick={() => setDispensados((atual) => new Set(atual).add(popupKey(alert, role)))}
         >×</button>
       </div>
       <div className="material-triage-screen-title">{String(alert.client_display_name || "Cliente")}</div>
@@ -287,6 +299,12 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
         <button disabled={itemBusy} onClick={() => void action(alert, "SNOOZE", { minutes: 15 })}>Adiar 15 min</button>
       </div>
       <div className="material-triage-screen-actions material-triage-screen-secondary">
+        {isAdler && <button
+          disabled={itemBusy || Boolean(alert.metadata?.cs_notified_at)}
+          className="material-triage-notify-cs"
+          title="Envia este alerta para o CS responsável; sem CS definido, notifica o time de CS."
+          onClick={() => void action(alert, "NOTIFY_CS")}
+        >{busy === `${alert.id}:NOTIFY_CS` ? "Notificando…" : alert.metadata?.cs_notified_at ? "CS notificado ✓" : "Notificar CS"}</button>}
         <button
           disabled={itemBusy}
           className="material-triage-ack"

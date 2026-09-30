@@ -55,7 +55,7 @@ Deno.serve(async(req:Request)=>{
     if(req.method==="GET") return json({ok:true,items:await list(),person,role,generated_at:new Date().toISOString()});
     const body=await req.json().catch(()=>({}));
     const id=clean(body.id,80), action=clean(body.action,30).toUpperCase();
-    if(!id||!["CLAIM","OPENED","SNOOZE","COMPLETE","RELEASE","ACKNOWLEDGE"].includes(action)) return json({ok:false,error:"invalid_action"},400);
+    if(!id||!["CLAIM","OPENED","SNOOZE","COMPLETE","RELEASE","ACKNOWLEDGE","NOTIFY_CS"].includes(action)) return json({ok:false,error:"invalid_action"},400);
     const {data:current,error:ce}=await ops.from("work_items").select("*").eq("id",id).eq("type","MATERIAL_TRIAGE").maybeSingle();
     if(ce) throw ce; if(!current) return json({ok:false,error:"not_found"},404);
     const owner=clean(current.target_person,160), canControl=isAdler||!owner||owner===person;
@@ -68,7 +68,24 @@ Deno.serve(async(req:Request)=>{
     let patch:Record<string,unknown>={metadata:meta,updated_at:now};
     let eventType=action;
 
-    if(action==="OPENED"){
+    let csNotifyTarget = "";
+    let csNotifyVersion = 0;
+    if(action==="NOTIFY_CS"){
+      if(!isAdler) return json({ok:false,error:"forbidden"},403);
+      const {data:clientRow}=current.client_id
+        ? await ops.from("clients").select("cs_owner").eq("id",current.client_id).maybeSingle()
+        : {data:null} as any;
+      const candidate=clean(clientRow?.cs_owner,160);
+      if(candidate){
+        const {data:activeCs}=await ops.from("team_roster").select("person").eq("person",candidate).eq("role","CS").eq("is_former",false).maybeSingle();
+        if(activeCs?.person) csNotifyTarget=candidate;
+      }
+      csNotifyVersion=Math.max(0,Number(meta.cs_notify_version)||0)+1;
+      meta.cs_notify_version=csNotifyVersion;
+      meta.cs_notified_at=now;
+      meta.cs_notified_by=person;
+      meta.cs_notified_to=csNotifyTarget||"CS";
+    }else if(action==="OPENED"){
       meta.opened_by=person; meta.opened_at=now;
     }else if(action==="CLAIM"){
       if(current.status==="IN_PROGRESS"&&owner===person) return json({ok:true,item:current,idempotent:true});
@@ -118,10 +135,39 @@ Deno.serve(async(req:Request)=>{
       updated=data;
     }
 
+    if(action==="ACKNOWLEDGE"){
+      const {error:clearError}=await ops.from("platform_notifications")
+        .delete()
+        .contains("metadata",{work_item_id:id})
+        .like("type","WORK_ITEM_MATERIAL_TRIAGE_%");
+      if(clearError) throw clearError;
+    }
+
+    if(action==="NOTIFY_CS"){
+      const notificationMeta:Record<string,unknown>={
+        work_item_id:id,target_role:"CS",triage_kind:meta.triage_kind||null,
+        manual_cs_notify:true,cs_notify_version:csNotifyVersion
+      };
+      if(csNotifyTarget) notificationMeta.target_person=csNotifyTarget;
+      const {error:notifyError}=await ops.from("platform_notifications").insert({
+        event_key:`material-triage-cs-notify:${id}:${csNotifyVersion}`,
+        type:"WORK_ITEM_MATERIAL_TRIAGE_MANUAL_CS",
+        level:"ATTENTION",
+        title:"Adler notificou: material novo — ação necessária",
+        description:clean(current.title||current.description||"Há material novo aguardando triagem.",500),
+        client_id:current.client_id||null,
+        source:"material_triage",
+        actor:person,
+        occurred_at:now,
+        metadata:notificationMeta
+      });
+      if(notifyError) throw notifyError;
+    }
+
     await ops.from("work_item_events").insert({
       work_item_id:id,event_type:eventType,actor_user_key:userKey,actor_person:person,
       previous_status:current.status,new_status:updated.status,
-      detail:action==="SNOOZE"?`Adiado por ${Number(body.minutes)||15} min`:action==="OPENED"?"Material aberto para revisão":action==="ACKNOWLEDGE"?"Ciente — triagem encerrada sem ação adicional":null,
+      detail:action==="SNOOZE"?`Adiado por ${Number(body.minutes)||15} min`:action==="OPENED"?"Material aberto para revisão":action==="ACKNOWLEDGE"?"Ciente — triagem encerrada sem ação adicional":action==="NOTIFY_CS"?`CS notificado${csNotifyTarget?` (${csNotifyTarget})`:""}`:null,
       metadata:{action,triage_kind:meta.triage_kind||null}
     });
     return json({ok:true,item:updated,items:await list()});
