@@ -544,7 +544,6 @@ export default function SdrProfileShell() {
   const unreadNotifications=Number(data.summary?.notifications_unread||0);
   const agent:Row=data.agent||{};
   const agentReleaseUrl=String(agent.release_url||"").trim();
-  const agentCurrentVersion=String(agent.current_version||"").replace(/^desktop-/,"")||"não detectada";
   const agentRequiredVersion=String(agent.required_version||"").replace(/^desktop-/,"")||"mais recente";
   const openNotificationCall=(item:Row)=>{
     const meta=item.metadata||{};
@@ -566,11 +565,7 @@ export default function SdrProfileShell() {
       {error&&<div className="sdr-error">{error}</div>}
       <section className="sdr-content">
         <DailyReflection token={session.access_token}/>
-        {view!=="notifications"&&<><RelatoPairingCard/>
-        <div className="sdr-agent-download">
-          <div><span>RELATO AI · DESKTOP</span><b>Última versão {agentRequiredVersion}</b><small>Instalada neste PC: {agentCurrentVersion}. Baixe aqui sempre a versão mais nova do Relato para ligações.</small></div>
-          {agentReleaseUrl?<a href={agentReleaseUrl}>Baixar última versão</a>:<button type="button" disabled>Download indisponível</button>}
-        </div>
+        {view!=="notifications"&&<><RelatoPairingCard downloadUrl={agentReleaseUrl} version={agentRequiredVersion}/>
         <div className="sdr-kpis"><article><span>Ligações</span><b>{Number(data.summary?.calls||0)}</b></article>
         <article><span>Reuniões</span><b>{Number(data.summary?.meetings||0)}</b></article></div></>}
         {view==="calls"
