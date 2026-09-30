@@ -1446,7 +1446,39 @@ Deno.serve(async (req) => {
             : await crm.from("lead_activities").insert(activityPatch);
           if (activityResult.error) throw activityResult.error;
 
-          commercialSync = { status: "SYNCED", lead_id: leadId, activity_external_id: activityExternalId };
+          let awaveSummarySync: Row = { status: "SKIPPED", reason: remotePhone ? "not_configured" : "missing_phone" };
+          if (remotePhone) {
+            try {
+              const { data: awaveSettings } = await sb.from("automation_settings")
+                .select("key,value")
+                .in("key", ["AWAVE_DASH_OPS_FUNNEL_URL", "AWAVE_DASH_OPS_FUNNEL_SECRET"]);
+              const awaveMap = new Map((awaveSettings || []).map((r: Row) => [String(r.key), typeof r.value === "string" ? r.value : String(r.value ?? "").replace(/^"|"$/g, "")]));
+              const funnelUrl = String(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_URL") || "").trim();
+              const funnelSecret = String(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_SECRET") || "").trim();
+              const relatoCallUrl = funnelUrl ? funnelUrl.replace(/\/dash-ops-funil\/?$/i, "/relato-call") : "";
+              if (relatoCallUrl && funnelSecret) {
+                const upstream = await fetch(relatoCallUrl, {
+                  method: "POST",
+                  headers: { "content-type": "application/json", "x-dash-ops-secret": funnelSecret },
+                  body: JSON.stringify({
+                    telefone: remotePhone,
+                    resumo: activityContent,
+                    relato_session_id: captureSessionId,
+                    transcript_id: transcriptId,
+                  }),
+                  signal: AbortSignal.timeout(12000),
+                });
+                const raw = await upstream.text();
+                let parsed: Row = {};
+                try { parsed = JSON.parse(raw); } catch { parsed = { raw: raw.slice(0, 500) }; }
+                awaveSummarySync = upstream.ok ? { status: "SYNCED", ...parsed } : { status: "ERROR", http_status: upstream.status, ...parsed };
+              }
+            } catch (error) {
+              awaveSummarySync = { status: "ERROR", error: error instanceof Error ? error.message : String(error) };
+            }
+          }
+
+          commercialSync = { status: "SYNCED", lead_id: leadId, activity_external_id: activityExternalId, awave_summary: awaveSummarySync };
         } else {
           commercialSync = commercialSkipReason
             ? { status: "SKIPPED_NOT_COMMERCIAL", reason: commercialSkipReason, identity_status: identityStatus || null, identity_side: identitySide || null, classification: reviewClassification || null }
