@@ -6,7 +6,7 @@ type Row = Record<string, any>;
 const VERSION = "meeting-capture-v1.1-audio";
 const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.6";
 const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.2/RelatoAI-Desktop-SDR.exe";
-const SDR_DESKTOP_SHA256 = "6fc3a6488857ff5e39372a6e5913bbcb96ac64ce6675c72ef685a94e98333cc1";
+const SDR_DESKTOP_SHA256 = "9d37ca95156c72a827f0a9ae5973f08c9b4fb727f177b88db867f690bf0a5e06";
 const DASHBOARD_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
   "http://localhost:3000",
