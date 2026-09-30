@@ -29,6 +29,7 @@ internal sealed class FeedbackForm : Form
     private readonly Button crmConfirmButton = new();
     private readonly Button crmDifferentButton = new();
     private bool crmMatchDecisionRequired;
+    private bool crmMatchRejected;
     private string? matchedCrmLeadId;
     private readonly ComboBox clientBinding = SelectBox(532);
     private readonly Panel prospectCard = Card(570, 1040);
@@ -191,18 +192,18 @@ internal sealed class FeedbackForm : Form
         crmConfirmButton.SetBounds(18, 88, 150, 38);
         StylePrimaryButton(crmConfirmButton);
         crmConfirmButton.Visible = false;
-        crmConfirmButton.Click += async (_, _) =>
+        crmConfirmButton.Click += (_, _) =>
         {
+            crmMatchRejected = false;
             crmMatchDecisionRequired = false;
             crmConfirmButton.Visible = false;
             crmDifferentButton.Visible = false;
-            contactStatus.Text = "Prospect confirmado";
-            contactDetail.Text = "Registrando esta ligação no histórico do Awave...";
+            contactStatus.Text = "Prospect do Awave confirmado";
+            contactDetail.Text = "Dados carregados. Complete apenas o que mudou na ligação e salve.";
             saveButton.Enabled = CanSaveNow();
-            await SubmitAsync(false);
         };
 
-        crmDifferentButton.Text = "Não é ele · editar";
+        crmDifferentButton.Text = "Não é ele · preencher do zero";
         crmDifferentButton.SetBounds(180, 88, 180, 38);
         StyleSecondaryButton(crmDifferentButton);
         crmDifferentButton.Visible = false;
@@ -211,17 +212,29 @@ internal sealed class FeedbackForm : Form
             crmMatchDecisionRequired = false;
             crmConfirmButton.Visible = false;
             crmDifferentButton.Visible = false;
-            var observedPhone = prospectPhone.Text;
+            crmMatchRejected = true;
             matchedCrmLeadId = null;
             prospectName.Clear();
             prospectCompany.Clear();
             prospectEmail.Clear();
+            prospectPhone.Clear();
             prospectCity.Clear();
+            prospectInstagram.Clear();
+            prospectMarketing.Clear();
+            prospectPain.Clear();
+            prospectGoals.Clear();
+            prospectInterest.Clear();
+            prospectObjections.Clear();
+            prospectUrgency.Clear();
+            prospectDecisionRole.Clear();
+            prospectStructure.Clear();
+            prospectBuyingSignals.Clear();
+            prospectClosingRisks.Clear();
+            prospectBriefing.Clear();
             prospectNextStep.Clear();
             prospectNextStepAt.Checked = false;
-            prospectPhone.Text = observedPhone;
-            contactStatus.Text = "Novo prospect";
-            contactDetail.Text = "Edite os dados abaixo. O telefone detectado foi mantido.";
+            contactStatus.Text = "Cadastrar outro prospect";
+            contactDetail.Text = "Preencha os dados do zero. O vínculo encontrado no Awave foi descartado.";
             prospectName.Focus();
             saveButton.Enabled = CanSaveNow();
         };
@@ -565,18 +578,21 @@ internal sealed class FeedbackForm : Form
             contactStatus.ForeColor = Accent;
             if (IsGustavoSdr && context.CrmMatch is not null)
             {
+                crmMatchRejected = false;
                 crmMatchDecisionRequired = true;
                 var match = context.CrmMatch;
-                matchedCrmLeadId = match.Id;
+                matchedCrmLeadId = string.IsNullOrWhiteSpace(match.Id) ? null : match.Id;
                 if (string.IsNullOrWhiteSpace(prospectName.Text) && !string.IsNullOrWhiteSpace(match.Name)) prospectName.Text = match.Name;
                 if (string.IsNullOrWhiteSpace(prospectCompany.Text) && !string.IsNullOrWhiteSpace(match.Company)) prospectCompany.Text = match.Company;
                 if (string.IsNullOrWhiteSpace(prospectEmail.Text) && !string.IsNullOrWhiteSpace(match.Email)) prospectEmail.Text = match.Email;
                 if (string.IsNullOrWhiteSpace(prospectPhone.Text) && !string.IsNullOrWhiteSpace(match.Phone)) prospectPhone.Text = "+" + match.Phone;
                 var matchPhone = phone ?? (string.IsNullOrWhiteSpace(match.Phone) ? null : "+" + match.Phone);
+                var funnel = string.Join(" · ", new[] { match.Pipeline, match.Stage }
+                    .Where(x => !string.IsNullOrWhiteSpace(x)));
                 var label = string.Join(" · ", new[] { match.Name, match.Company, matchPhone }
                     .Where(x => !string.IsNullOrWhiteSpace(x)));
-                contactStatus.Text = "Encontrei este prospect no Awave";
-                contactDetail.Text = label + "\nConfirme se é a mesma pessoa desta ligação.";
+                contactStatus.Text = "Já existe um prospect com este número no Awave";
+                contactDetail.Text = label + (string.IsNullOrWhiteSpace(funnel) ? "" : "\n" + funnel) + "\nÉ esta pessoa?";
                 crmConfirmButton.Visible = true;
                 crmDifferentButton.Visible = true;
             }
@@ -586,7 +602,7 @@ internal sealed class FeedbackForm : Form
                 crmConfirmButton.Visible = false;
                 crmDifferentButton.Visible = false;
                 contactDetail.Text = IsGustavoSdr
-                    ? $"{(phone ?? "Telefone não identificado")}\nDigite o nome do contato manualmente. O restante será enriquecido pela transcrição."
+                    ? $"{(phone ?? "Telefone não identificado")}\nNão encontrei esse número no Awave. Preencha os dados para criar um novo prospect."
                     : string.IsNullOrWhiteSpace(context.RemoteName)
                         ? $"{identity}\nO Relato vai completar os dados disponíveis enquanto a transcrição processa."
                         : $"{identity}\nProspect selecionado automaticamente pelo perfil SDR.";
@@ -738,6 +754,7 @@ internal sealed class FeedbackForm : Form
             prospect,
             binding_source = isProspect ? "RELATO_COMMERCIAL" : manual ? "MANUAL" : "AUTO",
             crm_lead_id = matchedCrmLeadId,
+            crm_match_rejected = crmMatchRejected,
             mood = IsGustavoSdr ? null : mood.SelectedItem?.ToString(),
             tone = IsGustavoSdr ? null : tone.SelectedItem?.ToString(),
             receptivity = IsGustavoSdr ? (int?)null : (int)receptivity.Value,

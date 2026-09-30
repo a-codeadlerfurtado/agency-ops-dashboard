@@ -4,9 +4,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 type Row = Record<string, any>;
 
 const VERSION = "meeting-capture-v1.1-audio";
-const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.7";
-const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.3/RelatoAI-Desktop-SDR.exe";
-const SDR_DESKTOP_SHA256 = "982760234324ddceccaef6fb7288a56132a5984aae1511b7e32eb6682aed9c47";
+const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.8";
+const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.4/RelatoAI-Desktop-SDR.exe";
+const SDR_DESKTOP_SHA256 = "b4b9e38ab514d1847f9c405f126ac4dbaed76f39322aec594055957fab4bebd3";
 const DASHBOARD_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
   "http://localhost:3000",
@@ -665,7 +665,7 @@ Deno.serve(async (req: Request) => {
     const extensionVersion = clean(call.extension_version, 40) || "";
     const { data: roster } = await ops.from("team_roster")
       .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
-    const supportedSdrDesktopVersions = new Set([REQUIRED_SDR_DESKTOP_VERSION, "desktop-0.5.6", "desktop-0.5.5", "desktop-0.5.4", "desktop-0.5.2", "desktop-0.5.1"]);
+    const supportedSdrDesktopVersions = new Set([REQUIRED_SDR_DESKTOP_VERSION, "desktop-0.5.7", "desktop-0.5.6", "desktop-0.5.5", "desktop-0.5.4", "desktop-0.5.2", "desktop-0.5.1"]);
     if (String(roster?.role || "").toUpperCase() === "SDR" && !supportedSdrDesktopVersions.has(extensionVersion)) {
       return respond({
         error: "desktop_agent_upgrade_required",
@@ -867,11 +867,65 @@ Deno.serve(async (req: Request) => {
           .eq("id", leadId).maybeSingle();
         lead = data || null;
       }
+      let awaveMatch: Row | null = null;
       if (!lead && remotePhone) {
-        const variants = [remotePhone, "+" + remotePhone];
+        const suffix = remotePhone.slice(-8);
+        const { data: candidates } = await crm.from("leads")
+          .select("id,name,company,email,phone,instagram,orcamento_mkt,atuacao,notes,source,updated_at")
+          .is("archived_at", null)
+          .ilike("phone", `%${suffix}%`)
+          .order("updated_at", { ascending: false }).limit(40);
+        lead = (candidates || []).find((row: Row) => normalizePhone(row.phone) === remotePhone) || null;
+      }
+
+      if (remotePhone) {
+        try {
+          const { data: awaveSettings } = await ops.from("automation_settings")
+            .select("key,value")
+            .in("key", ["AWAVE_DASH_OPS_FUNNEL_URL", "AWAVE_DASH_OPS_FUNNEL_SECRET"]);
+          const awaveMap = new Map((awaveSettings || []).map((r: Row) => [
+            String(r.key),
+            typeof r.value === "string" ? r.value : String(r.value ?? "").replace(/^"|"$/g, "")
+          ]));
+          const funnelUrl = clean(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_URL"), 1000);
+          const funnelSecret = clean(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_SECRET"), 500);
+          if (funnelUrl && funnelSecret) {
+            const upstream = await fetch(funnelUrl, {
+              method: "GET",
+              headers: { "x-dash-ops-secret": funnelSecret },
+              signal: AbortSignal.timeout(4500),
+            });
+            if (upstream.ok) {
+              const payload = await upstream.json().catch(() => ({})) as Row;
+              const deals = Array.isArray(payload?.deals) ? payload.deals : [];
+              const deal = deals.find((item: Row) => {
+                const candidate = normalizePhone(item?.contato?.telefone || item?.contato?.chave_externa || item?.chave_externa);
+                return Boolean(candidate && candidate === remotePhone);
+              }) || null;
+              if (deal) {
+                awaveMatch = {
+                  deal_id: clean(deal.id, 100) || null,
+                  contact_id: clean(deal?.contato?.id, 100) || null,
+                  name: clean(deal?.contato?.nome || deal?.titulo, 200) || null,
+                  company: clean(deal?.empresa?.nome, 240) || null,
+                  phone: normalizePhone(deal?.contato?.telefone || deal?.contato?.chave_externa || remotePhone) || remotePhone,
+                  email: clean(deal?.contato?.email, 240).toLowerCase() || null,
+                  pipeline: clean(deal?.pipeline?.nome, 160) || null,
+                  stage: clean(deal?.etapa?.nome, 160) || null,
+                  source: "AWAVE",
+                };
+              }
+            }
+          }
+        } catch {
+          // Awave canonical lookup is best-effort; the mirrored CRM remains the fallback.
+        }
+      }
+
+      if (!lead && awaveMatch?.email) {
         const { data } = await crm.from("leads")
-          .select("id,name,company,email,phone,instagram,orcamento_mkt,atuacao,notes")
-          .in("phone", variants).is("archived_at", null)
+          .select("id,name,company,email,phone,instagram,orcamento_mkt,atuacao,notes,source")
+          .eq("email", awaveMatch.email).is("archived_at", null)
           .order("updated_at", { ascending: false }).limit(1).maybeSingle();
         lead = data || null;
       }
@@ -917,10 +971,10 @@ Deno.serve(async (req: Request) => {
         ...aiArray(aiSignals.pain_points),
       ].filter(Boolean);
       prospectPrefill = {
-        name: clean(lead?.name || remoteName, 200) || null,
-        company: clean(lead?.company, 240) || null,
-        email: clean(lead?.email || emailMatch?.[0], 240).toLowerCase() || null,
-        phone: normalizePhone(lead?.phone || remotePhone) || null,
+        name: clean(awaveMatch?.name || lead?.name || remoteName, 200) || null,
+        company: clean(awaveMatch?.company || lead?.company, 240) || null,
+        email: clean(awaveMatch?.email || lead?.email || emailMatch?.[0], 240).toLowerCase() || null,
+        phone: normalizePhone(awaveMatch?.phone || lead?.phone || remotePhone) || null,
         city: clean(profile?.city || lead?.atuacao, 200) || null,
         instagram: clean(lead?.instagram || profile?.website || (instagramMatch ? "@" + instagramMatch[1] : null), 500) || null,
         marketing_investment: clean(aiSignals.marketing_investment || profile?.marketing_investment || lead?.orcamento_mkt || investmentMatch?.[1], 240) || null,
@@ -947,12 +1001,16 @@ Deno.serve(async (req: Request) => {
         requires_selection: false, remote_phone: remotePhone, remote_name: remoteName,
         remote_role: "PROSPECT", client_id: null, client_name: null,
         resolution_status: identity?.status || "UNRESOLVED", clients: [], prospect_prefill: prospectPrefill,
-        crm_match: lead?.id ? {
-          id: lead.id,
-          name: clean(lead.name, 200) || null,
-          company: clean(lead.company, 240) || null,
-          phone: normalizePhone(lead.phone || remotePhone) || null,
-          email: clean(lead.email, 240).toLowerCase() || null
+        crm_match: (awaveMatch || lead?.id) ? {
+          id: clean(lead?.id, 100) || "",
+          name: clean(awaveMatch?.name || lead?.name, 200) || null,
+          company: clean(awaveMatch?.company || lead?.company, 240) || null,
+          phone: normalizePhone(awaveMatch?.phone || lead?.phone || remotePhone) || null,
+          email: clean(awaveMatch?.email || lead?.email, 240).toLowerCase() || null,
+          source: awaveMatch ? "AWAVE" : clean(lead?.source, 80) || "CRM_MIRROR",
+          awave_deal_id: clean(awaveMatch?.deal_id, 100) || null,
+          pipeline: clean(awaveMatch?.pipeline, 160) || null,
+          stage: clean(awaveMatch?.stage, 160) || null
         } : null
       });
     }
@@ -1177,8 +1235,9 @@ Deno.serve(async (req: Request) => {
       let existingLead: Row | null = null;
       const relatoExternalId = `relato-call:${session.id}`;
       const confirmedCrmLeadId = clean(feedback.crm_lead_id, 80) || null;
+      const crmMatchRejected = feedback.crm_match_rejected === true;
 
-      if (confirmedCrmLeadId) {
+      if (confirmedCrmLeadId && !crmMatchRejected) {
         const { data } = await crm.from("leads")
           .select("id,owner_id,stage").eq("id", confirmedCrmLeadId).is("archived_at", null).maybeSingle();
         existingLead = data || null;
@@ -1207,28 +1266,26 @@ Deno.serve(async (req: Request) => {
           existingLead = data || null;
         }
       }
-      if (!existingLead && prospectEmail) {
-        const { data } = await crm.from("leads").select("id,owner_id,stage").eq("owner_id", closerProfile.id).eq("email", prospectEmail).is("archived_at", null).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+      if (!existingLead && !crmMatchRejected && prospectEmail) {
+        const { data } = await crm.from("leads").select("id,owner_id,stage")
+          .eq("email", prospectEmail).is("archived_at", null)
+          .order("updated_at", { ascending: false }).limit(1).maybeSingle();
         existingLead = data || null;
       }
-      if (!existingLead && prospectPhone) {
-        const variants = [prospectPhone, "+" + prospectPhone];
-        const { data } = await crm.from("leads").select("id,owner_id,stage").eq("owner_id", closerProfile.id).in("phone", variants).is("archived_at", null).order("updated_at", { ascending: false }).limit(1).maybeSingle();
-        existingLead = data || null;
-      }
-      if (!existingLead && prospectName) {
-        const { data } = await crm.from("leads")
-          .select("id,owner_id,stage,name,company")
-          .eq("owner_id", closerProfile.id)
-          .ilike("name", prospectName)
-          .is("archived_at", null)
-          .order("updated_at", { ascending: false })
-          .limit(2);
-        if ((data || []).length === 1) existingLead = data?.[0] || null;
+      if (!existingLead && !crmMatchRejected && prospectPhone) {
+        const normalizedProspectPhone = normalizePhone(prospectPhone);
+        const suffix = normalizedProspectPhone.slice(-8);
+        if (suffix) {
+          const { data: candidates } = await crm.from("leads")
+            .select("id,owner_id,stage,phone")
+            .is("archived_at", null).ilike("phone", `%${suffix}%`)
+            .order("updated_at", { ascending: false }).limit(40);
+          existingLead = (candidates || []).find((row: Row) => normalizePhone(row.phone) === normalizedProspectPhone) || null;
+        }
       }
 
       const leadPatch: Row = {
-        owner_id: closerProfile.id,
+        owner_id: existingLead?.owner_id || closerProfile.id,
         name: prospectName,
         updated_at: now,
       };

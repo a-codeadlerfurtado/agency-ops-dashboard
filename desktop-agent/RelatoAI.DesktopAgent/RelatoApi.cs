@@ -15,7 +15,7 @@ internal sealed record ProspectPrefill(
     string? Urgency, string? DecisionRole, string? CurrentStructure,
     IReadOnlyList<string> BuyingSignals, IReadOnlyList<string> ClosingRisks,
     string? CloserBriefing, string? AiSummary, string? NextStep, string? NextStepAt);
-internal sealed record CrmProspectMatch(string Id, string? Name, string? Company, string? Phone, string? Email);
+internal sealed record CrmProspectMatch(string Id, string? Name, string? Company, string? Phone, string? Email, string? Source, string? Pipeline, string? Stage);
 internal sealed record FeedbackContext(
     bool Pending, bool RequiresSelection, string? RemotePhone, string? RemoteName, string? RemoteRole,
     string? ClientId, string? ClientName, string? ResolutionStatus, IReadOnlyList<ClientOption> Clients,
@@ -168,7 +168,10 @@ internal sealed partial class RelatoApi
                 ReadFrom(cm, "name"),
                 ReadFrom(cm, "company"),
                 ReadFrom(cm, "phone"),
-                ReadFrom(cm, "email"));
+                ReadFrom(cm, "email"),
+                ReadFrom(cm, "source"),
+                ReadFrom(cm, "pipeline"),
+                ReadFrom(cm, "stage"));
         }
 
         var transcriptReady = root.TryGetProperty("transcript_ready", out var tr)
