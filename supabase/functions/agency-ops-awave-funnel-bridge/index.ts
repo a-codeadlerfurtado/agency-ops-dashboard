@@ -8,6 +8,15 @@ const clean=(v:unknown)=>String(v??"").trim();
 const normPhone=(v:unknown)=>clean(v).replace(/\D/g,"");
 const normEmail=(v:unknown)=>clean(v).toLowerCase();
 const money=(v:unknown)=>{const n=Number(v);return Number.isFinite(n)?n:0};
+const readable=(v:unknown,fallback="Falha temporária no Awave")=>{
+  if(typeof v==="string"&&v.trim())return v.trim();
+  if(v&&typeof v==="object"){
+    const row=v as Row;
+    for(const key of ["message","detail","error","hint","code"]){const nested=readable(row[key],"");if(nested)return nested;}
+    try{const json=JSON.stringify(v);if(json&&json!=="{}")return json.slice(0,500)}catch{}
+  }
+  return fallback;
+};
 
 Deno.serve(async(req:Request)=>{
   if(req.method==="OPTIONS")return new Response(null,{status:204,headers:CORS});
@@ -45,16 +54,32 @@ Deno.serve(async(req:Request)=>{
     const body=await req.json().catch(()=>({}));
     const action=clean(body?.action);
     if(!["move_stage","update_value","mark_won","mark_lost"].includes(action))return reply({error:"action_not_allowed"},400);
-    const upstream=await fetch(url,{method:"POST",headers:{"content-type":"application/json","x-dash-ops-secret":secret},body:JSON.stringify(body),signal:AbortSignal.timeout(12000)});
-    const raw=await upstream.text();
-    let parsed:unknown;try{parsed=JSON.parse(raw)}catch{parsed={error:"awave_invalid_response",detail:raw.slice(0,300)}}
-    return reply(parsed,upstream.status);
+    try{
+      const upstream=await fetch(url,{method:"POST",headers:{"content-type":"application/json","x-dash-ops-secret":secret},body:JSON.stringify(body),signal:AbortSignal.timeout(12000)});
+      const raw=await upstream.text();
+      let parsed:Row;try{parsed=JSON.parse(raw)}catch{parsed={error:"awave_invalid_response",detail:raw.slice(0,300)}}
+      if(!upstream.ok||parsed?.ok===false)return reply({error:"awave_unavailable",detail:readable(parsed),upstream_status:upstream.status},upstream.status>=400?upstream.status:502);
+      return reply(parsed,upstream.status);
+    }catch(error){
+      return reply({error:"awave_unavailable",detail:readable(error)},502);
+    }
   }
 
-  const upstream=await fetch(url,{headers:{"x-dash-ops-secret":secret},signal:AbortSignal.timeout(12000)});
-  const raw=await upstream.text();
-  let awave:Row;try{awave=JSON.parse(raw)}catch{return reply({error:"awave_invalid_response"},502)}
-  if(!upstream.ok||!awave?.ok)return reply({error:"awave_unavailable",detail:awave},upstream.status>=400?upstream.status:502);
+  let awave:Row|null=null;
+  let upstreamStatus=502;
+  let lastDetail="";
+  for(let attempt=0;attempt<2;attempt++){
+    try{
+      const upstream=await fetch(url,{headers:{"x-dash-ops-secret":secret},signal:AbortSignal.timeout(12000)});
+      upstreamStatus=upstream.status;
+      const raw=await upstream.text();
+      let parsed:Row;try{parsed=JSON.parse(raw)}catch{parsed={error:"awave_invalid_response",detail:raw.slice(0,300)}}
+      if(upstream.ok&&parsed?.ok){awave=parsed;break;}
+      lastDetail=readable(parsed);
+    }catch(error){lastDetail=readable(error)}
+    if(attempt===0)await new Promise(resolve=>setTimeout(resolve,500));
+  }
+  if(!awave)return reply({error:"awave_unavailable",detail:lastDetail||"Awave indisponível no momento",upstream_status:upstreamStatus},upstreamStatus>=400?upstreamStatus:502);
 
   const {data:crmRows}=await crm.from("leads").select("id,name,company,email,phone,stage,estimated_value,source,created_at,updated_at,closed_at").eq("owner_id",userData.user.id).is("archived_at",null).limit(3000);
   const leads:Row[]=crmRows||[];

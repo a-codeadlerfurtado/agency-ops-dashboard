@@ -24,6 +24,15 @@ const day=(v:unknown)=>{if(!v)return"—";const s=String(v).slice(0,10),p=s.spli
 const list=(v:unknown)=>Array.isArray(v)?v.join(", "):txt(v,"");
 const split=(v:string)=>v.split(/[,;\n]+/).map(x=>x.trim()).filter(Boolean);
 const phone=(v:unknown)=>String(v??"").replace(/\D/g,"");
+const errorText=(value:unknown,fallback:string)=>{
+  if(typeof value==="string"&&value.trim())return value.trim();
+  if(value&&typeof value==="object"){
+    const row=value as Row;
+    for(const key of ["message","detail","error","hint","code"]){const nested=errorText(row[key],"");if(nested)return nested;}
+    try{const json=JSON.stringify(value);if(json&&json!=="{}")return json;}catch{}
+  }
+  return fallback;
+};
 
 async function post(body:Row){
   const response=await authenticatedFetch(API,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
@@ -34,7 +43,7 @@ async function post(body:Row){
 async function postAwave(body:Row){
   const response=await authenticatedFetch(AWAVE_API,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)});
   const data=await response.json().catch(()=>({}));
-  if(!response.ok)throw new Error(data?.detail||data?.error||("Awave "+response.status));
+  if(!response.ok||data?.ok===false)throw new Error(errorText(data?.detail||data?.error||data,"Awave "+response.status));
   return data;
 }
 async function postCalendar(body:Row){
@@ -167,7 +176,7 @@ export default function CloserCockpit({session}:{session:Session}){
   const [clientFilter,setClientFilter]=useState<"ACTIVE"|"ONBOARDING"|"CHURNED"|"ALL">("ACTIVE");
 
   const load=useCallback(async()=>{setLoading(true);setError("");try{const r=await authenticatedFetch(API,{cache:"no-store"}),j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j?.detail||j?.error||("API "+r.status));setData(j);}catch(e){setError(e instanceof Error?e.message:"Falha ao carregar o cockpit.");}finally{setLoading(false);}},[]);
-  const loadAwave=useCallback(async()=>{setAwaveLoading(true);setAwaveError("");try{const r=await authenticatedFetch(AWAVE_API,{cache:"no-store"}),j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j?.detail||j?.error||("Awave "+r.status));setAwave(j);setPipelineId((old)=>old||String(j.primary_pipeline_id||j.pipelines?.[0]?.id||""));}catch(e){setAwaveError(e instanceof Error?e.message:"Falha ao sincronizar Awave.");}finally{setAwaveLoading(false);}},[]);
+  const loadAwave=useCallback(async()=>{setAwaveLoading(true);setAwaveError("");let lastError="";try{for(let attempt=0;attempt<2;attempt++){try{const r=await authenticatedFetch(AWAVE_API,{cache:"no-store"}),j=await r.json().catch(()=>({}));if(!r.ok||j?.ok===false)throw new Error(errorText(j?.detail||j?.error||j,"Awave "+r.status));setAwave(j);setPipelineId((old)=>old||String(j.primary_pipeline_id||j.pipelines?.[0]?.id||""));lastError="";break;}catch(e){lastError=e instanceof Error?e.message:"Falha ao sincronizar Awave.";if(attempt===0)await new Promise(resolve=>window.setTimeout(resolve,650));}}if(lastError)throw new Error(lastError);}catch(e){setAwaveError(e instanceof Error?e.message:"Falha ao sincronizar Awave.");}finally{setAwaveLoading(false);}},[]);
   const loadCalendar=useCallback(async()=>{setCalendarLoading(true);setCalendarError("");try{const status=await postCalendar({action:"status"});if(status?.account?.status!=="ACTIVE"){setCalendar({...status,events:[]});return;}const listing=await postCalendar({action:"list_events",days_past:1,days_ahead:90,limit:150});setCalendar({...status,...listing,account:listing.account||status.account,events:Array.isArray(listing.events)?listing.events:[]});}catch(e){const message=e instanceof Error?e.message:"Falha ao carregar o Google Agenda.";setCalendarError(message);setCalendar((current:Row)=>({...current,events:current.events||[]}));}finally{setCalendarLoading(false);}},[]);
   const connectCalendar=useCallback(async()=>{setCalendarLoading(true);setCalendarError("");const popup=window.open("about:blank","google-calendar-oauth","popup,width=620,height=760");try{const start=await postCalendar({action:"start_oauth"});if(!start?.url)throw new Error("Google OAuth sem URL.");if(popup)popup.location.href=String(start.url);else window.open(String(start.url),"_blank");let tries=0;const id=window.setInterval(async()=>{tries++;try{const status=await postCalendar({action:"status"});if(status?.account?.status==="ACTIVE"){window.clearInterval(id);try{popup?.close();}catch{}await loadCalendar();return;}}catch{}if(tries>=60){window.clearInterval(id);setCalendarLoading(false);setCalendarError("A conexão do Google não foi concluída.");}},2000);}catch(e){const message=e instanceof Error?e.message:"Falha ao conectar o Google Agenda.";if(popup&&!popup.closed){try{popup.document.title="Google Agenda";popup.document.body.style.fontFamily="system-ui";popup.document.body.style.padding="32px";popup.document.body.textContent="Não foi possível iniciar a conexão com o Google Agenda: "+message;}catch{}}setCalendarLoading(false);setCalendarError(message);}},[loadCalendar]);
   useEffect(()=>{void load();const id=window.setInterval(()=>void load(),60000);return()=>window.clearInterval(id);},[load]);
