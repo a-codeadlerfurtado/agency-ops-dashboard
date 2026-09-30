@@ -72,6 +72,7 @@ Deno.serve(async(req:Request)=>{
 
     let csNotifyTarget = "";
     let csNotifyVersion = 0;
+    let delegatedItemCount = 1;
     if(action==="NOTIFY_CS"){
       if(!isAdler) return json({ok:false,error:"forbidden"},403);
       const {data:clientRow}=current.client_id
@@ -137,6 +138,29 @@ Deno.serve(async(req:Request)=>{
       updated=data;
     }
 
+    if(action==="NOTIFY_CS" && current.client_id){
+      const {data:siblings,error:siblingError}=await ops.from("work_items")
+        .select("id,metadata")
+        .eq("client_id",current.client_id)
+        .eq("type","MATERIAL_TRIAGE")
+        .in("status",["OPEN","IN_PROGRESS","SNOOZED"]);
+      if(siblingError) throw siblingError;
+      const pending=(siblings||[]).filter((row:any)=>String(row.id)!==id && !row.metadata?.cs_notified_at);
+      delegatedItemCount=1+pending.length;
+      for(const row of pending){
+        const siblingMeta={...(row.metadata||{})} as Record<string,unknown>;
+        siblingMeta.cs_notify_version=Math.max(0,Number(siblingMeta.cs_notify_version)||0)+1;
+        siblingMeta.cs_notified_at=now;
+        siblingMeta.cs_notified_by=person;
+        siblingMeta.cs_notified_to=csNotifyTarget||"CS";
+        siblingMeta.cs_notify_batch_root_id=id;
+        const {error:siblingUpdateError}=await ops.from("work_items")
+          .update({metadata:siblingMeta,updated_at:now})
+          .eq("id",row.id);
+        if(siblingUpdateError) throw siblingUpdateError;
+      }
+    }
+
     if(action==="ACKNOWLEDGE"){
       const {error:clearError}=await ops.from("platform_notifications")
         .delete()
@@ -148,7 +172,8 @@ Deno.serve(async(req:Request)=>{
     if(action==="NOTIFY_CS"){
       const notificationMeta:Record<string,unknown>={
         work_item_id:id,target_role:"CS",triage_kind:meta.triage_kind||null,
-        manual_cs_notify:true,cs_notify_version:csNotifyVersion
+        manual_cs_notify:true,cs_notify_version:csNotifyVersion,
+        delegated_item_count:delegatedItemCount
       };
       if(csNotifyTarget) notificationMeta.target_person=csNotifyTarget;
       const {error:notifyError}=await ops.from("platform_notifications").insert({
@@ -156,7 +181,7 @@ Deno.serve(async(req:Request)=>{
         type:"WORK_ITEM_MATERIAL_TRIAGE_MANUAL_CS",
         level:"ATTENTION",
         title:"Adler notificou: material novo — ação necessária",
-        description:clean(current.title||current.description||"Há material novo aguardando triagem.",500),
+        description:delegatedItemCount>1?`${delegatedItemCount} materiais deste cliente foram encaminhados ao CS.`:clean(current.title||current.description||"Há material novo aguardando triagem.",500),
         client_id:current.client_id||null,
         source:"material_triage",
         actor:person,

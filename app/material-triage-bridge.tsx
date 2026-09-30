@@ -184,6 +184,10 @@ export default function MaterialTriageBridge({ session }: { session: Session }) 
   const action = useCallback(async (item: Row, kind: "CLAIM" | "OPENED" | "SNOOZE" | "ACKNOWLEDGE" | "NOTIFY_CS", extra: Row = {}) => {
     const key = `${item.id}:${kind}`;
     setBusy(key); setError("");
+    if (kind === "NOTIFY_CS") {
+      const clientId = String(item.client_id || "");
+      setItems((atual) => atual.filter((row) => clientId ? String(row.client_id || "") !== clientId : String(row.id) !== String(item.id)));
+    }
     try {
       const response = await fetch(API, {
         method: "POST",
