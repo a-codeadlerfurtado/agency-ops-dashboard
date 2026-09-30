@@ -42,7 +42,9 @@ Deno.serve(async(req:Request)=>{
       .order("created_at",{ascending:false}).limit(120);
     if(error) throw error;
     const rank:Record<string,number>={CRITICAL:0,HIGH:1,MEDIUM:2,LOW:3};
-    return (data||[]).map((item:any)=>({
+    return (data||[])
+      .filter((item:any)=>!isAdler || !item.metadata?.cs_notified_at)
+      .map((item:any)=>({
       ...item,
       client_display_name:item.clients?.display_name||null,
       cs_owner:item.clients?.cs_owner||null,
