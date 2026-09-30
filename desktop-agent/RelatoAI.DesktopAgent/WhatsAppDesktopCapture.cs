@@ -361,6 +361,18 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         if (ended <= started || ended - started > TimeSpan.FromHours(12)) ended = now;
         ProbeUiIdentity(now, force: true);
         var directUiIdentity = uiIdentity;
+        var cfgAtEnd = AgentConfig.Load() ?? configProvider();
+        var finalScreenIdentity = await WhatsAppScreenshotIdentityResolver.ResolveAsync(cfgAtEnd?.LocalPhone);
+        if (finalScreenIdentity is null)
+        {
+            await Task.Delay(250);
+            finalScreenIdentity = await WhatsAppScreenshotIdentityResolver.ResolveAsync(cfgAtEnd?.LocalPhone);
+        }
+        if (finalScreenIdentity is not null && finalScreenIdentity.Confidence >= 0.94)
+        {
+            screenIdentity = finalScreenIdentity;
+            StatusChanged?.Invoke($"Número confirmado pela tela no fim da call: +{finalScreenIdentity.Phone}");
+        }
         var directScreenIdentity = screenIdentity;
         var contact = directUiIdentity?.Name ?? directUiIdentity?.Phone ?? ResolveContactName(target);
         lock (gate)
@@ -503,8 +515,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
 
     private void ScheduleScreenProbe(DateTimeOffset now, bool force = false)
     {
-        if (!IsRecording || screenProbeCount >= 3) return;
-        if (!force && now - lastScreenProbe < TimeSpan.FromSeconds(1.5)) return;
+        if (!IsRecording || screenProbeCount >= 8) return;
+        if (!force && now - lastScreenProbe < TimeSpan.FromSeconds(2)) return;
         if (Interlocked.CompareExchange(ref screenProbeInFlight, 1, 0) != 0) return;
         lastScreenProbe = now;
         screenProbeCount++;

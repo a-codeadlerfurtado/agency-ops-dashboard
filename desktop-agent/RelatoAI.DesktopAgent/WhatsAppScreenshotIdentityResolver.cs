@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Drawing.Imaging;
+using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Windows.Graphics.Imaging;
@@ -23,10 +24,12 @@ internal static class WhatsAppScreenshotIdentityResolver
     {
         var local = NormalizePhone(knownLocalPhone);
         var scores = new Dictionary<string, int>(StringComparer.Ordinal);
+        var inspected = 0;
         foreach (var window in GetWhatsAppWindows())
         {
             var rect = GetRect(window);
-            if (rect is null || rect.Value.Width < 360 || rect.Value.Height < 220) continue;
+            if (rect is null || rect.Value.Width < 220 || rect.Value.Height < 150) continue;
+            inspected++;
             try
             {
                 var textRows = await CaptureAndOcrHeaderAsync(rect.Value);
@@ -42,32 +45,46 @@ internal static class WhatsAppScreenshotIdentityResolver
                     }
                 }
             }
-            catch { }
+            catch (Exception ex) { AppendDiagnostic($"ocr-error {ex.GetType().Name}: {ex.Message}"); }
         }
 
-        if (scores.Count == 0) return null;
+        if (scores.Count == 0)
+        {
+            AppendDiagnostic($"no-phone windows={inspected}");
+            return null;
+        }
         var ranked = scores.OrderByDescending(x => x.Value).ToArray();
         var top = ranked[0];
         var margin = ranked.Length == 1 ? top.Value : top.Value - ranked[1].Value;
         if (top.Value < 135 || (ranked.Length > 1 && margin < 45)) return null;
         var confidence = top.Value >= 300 ? 0.995 : top.Value >= 180 ? 0.98 : 0.95;
+        AppendDiagnostic($"phone=+{top.Key} confidence={confidence:0.000} score={top.Value} windows={inspected}");
         return new WhatsAppScreenshotIdentity(top.Key, confidence, "WHATSAPP_SCREEN_OCR");
     }
     private static async Task<List<OcrRow>> CaptureAndOcrHeaderAsync(Rectangle rect)
     {
-        var left = rect.Left + (int)Math.Round(rect.Width * 0.24);
-        var width = Math.Max(240, rect.Right - left);
-        var height = Math.Max(160, (int)Math.Round(rect.Height * 0.36));
+        var isMainWindow = rect.Width >= 700;
+        var left = isMainWindow ? rect.Left + (int)Math.Round(rect.Width * 0.27) : rect.Left;
+        var width = isMainWindow ? Math.Max(320, rect.Right - left) : rect.Width;
+        var heightRatio = isMainWindow ? 0.42 : 0.68;
+        var height = Math.Max(150, (int)Math.Round(rect.Height * heightRatio));
         var crop = new Rectangle(left, rect.Top, width, Math.Min(height, rect.Height));
         var path = Path.Combine(Path.GetTempPath(), "RelatoAI", $"wa-ocr-{Guid.NewGuid():N}.png");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        const int scale = 2;
         try
         {
-            using (var bitmap = new Bitmap(crop.Width, crop.Height, PixelFormat.Format32bppArgb))
+            using var bitmap = new Bitmap(crop.Width, crop.Height, PixelFormat.Format32bppArgb);
             using (var graphics = Graphics.FromImage(bitmap))
-            {
                 graphics.CopyFromScreen(crop.Left, crop.Top, 0, 0, crop.Size, CopyPixelOperation.SourceCopy);
-                bitmap.Save(path, ImageFormat.Png);
+
+            using (var scaled = new Bitmap(crop.Width * scale, crop.Height * scale, PixelFormat.Format32bppArgb))
+            using (var graphics = Graphics.FromImage(scaled))
+            {
+                graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                graphics.DrawImage(bitmap, new Rectangle(0, 0, scaled.Width, scaled.Height));
+                scaled.Save(path, ImageFormat.Png);
             }
 
             var file = await StorageFile.GetFileFromPathAsync(path);
@@ -83,7 +100,7 @@ internal static class WhatsAppScreenshotIdentityResolver
                 if (string.IsNullOrWhiteSpace(line.Text)) continue;
                 var words = line.Words;
                 var y = words.Count > 0 ? words.Min(w => w.BoundingRect.Y) : 0;
-                rows.Add(new OcrRow(line.Text, y, crop.Height));
+                rows.Add(new OcrRow(line.Text, y, crop.Height * scale));
             }
             return rows;
         }
@@ -91,6 +108,18 @@ internal static class WhatsAppScreenshotIdentityResolver
         {
             try { if (File.Exists(path)) File.Delete(path); } catch { }
         }
+    }
+
+    private static void AppendDiagnostic(string message)
+    {
+        try
+        {
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "RelatoAI");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(Path.Combine(dir, "screen-identity.log"),
+                $"{DateTimeOffset.Now:O}\t{message}{Environment.NewLine}");
+        }
+        catch { }
     }
 
     private sealed record OcrRow(string Text, double Y, int ImageHeight);

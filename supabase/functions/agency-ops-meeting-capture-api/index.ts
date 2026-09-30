@@ -4,9 +4,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 type Row = Record<string, any>;
 
 const VERSION = "meeting-capture-v1.1-audio";
-const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.6";
-const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.2/RelatoAI-Desktop-SDR.exe";
-const SDR_DESKTOP_SHA256 = "9d37ca95156c72a827f0a9ae5973f08c9b4fb727f177b88db867f690bf0a5e06";
+const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.7";
+const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.3/RelatoAI-Desktop-SDR.exe";
+const SDR_DESKTOP_SHA256 = "982760234324ddceccaef6fb7288a56132a5984aae1511b7e32eb6682aed9c47";
 const DASHBOARD_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
   "http://localhost:3000",
@@ -665,7 +665,7 @@ Deno.serve(async (req: Request) => {
     const extensionVersion = clean(call.extension_version, 40) || "";
     const { data: roster } = await ops.from("team_roster")
       .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
-    const supportedSdrDesktopVersions = new Set([REQUIRED_SDR_DESKTOP_VERSION, "desktop-0.5.5", "desktop-0.5.4", "desktop-0.5.2", "desktop-0.5.1"]);
+    const supportedSdrDesktopVersions = new Set([REQUIRED_SDR_DESKTOP_VERSION, "desktop-0.5.6", "desktop-0.5.5", "desktop-0.5.4", "desktop-0.5.2", "desktop-0.5.1"]);
     if (String(roster?.role || "").toUpperCase() === "SDR" && !supportedSdrDesktopVersions.has(extensionVersion)) {
       return respond({
         error: "desktop_agent_upgrade_required",
