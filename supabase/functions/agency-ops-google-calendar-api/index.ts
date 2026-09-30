@@ -6,7 +6,7 @@ const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_OAUTH_CLIENT_ID") || "";
 const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_OAUTH_CLIENT_SECRET") || "";
 const WORKER_TOKEN_SHA256 = "48a435ee5c28bb73b44aeacfb8308da0f115979eda14ec9616fce4f493a5515a";
-const REDIRECT_URI = Deno.env.get("GOOGLE_OAUTH_REDIRECT_URI") || `${SUPABASE_URL}/functions/v1/agency-ops-google-calendar-api`;
+const REDIRECT_URI = Deno.env.get("GOOGLE_OAUTH_REDIRECT_URI")?.trim() || `${SUPABASE_URL}/functions/v1/agency-ops-google-calendar-api`;
 const DASHBOARD_URL = Deno.env.get("MEETING_DASHBOARD_URL") || "https://agency-ops-dashboard.lakassessoriadigital.workers.dev";
 const SCOPES = ["openid", "email", "profile", "https://www.googleapis.com/auth/calendar.events"];
 const ops = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession: false }, db: { schema: "agency_ops" } });
@@ -222,6 +222,8 @@ async function cancelEvent(body: any) {
   } catch (e:any) { return json({ error: clean(e?.message || e,1000), needs_google: Boolean(e?.needs_google) }, Number(e?.status || 500)); }
 }
 
+// The Google OAuth callback is an unauthenticated GET. Deploy this function with verify_jwt=false;
+// authenticated dashboard routes still enforce dashboardPerson(), and worker mutations enforce workerAuthorized().
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: json({}).headers });
   const url = new URL(req.url);
