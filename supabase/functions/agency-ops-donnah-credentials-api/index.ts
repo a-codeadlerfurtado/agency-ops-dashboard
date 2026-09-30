@@ -12,11 +12,15 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
   headers: { ...cors, "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
 });
 
-const allowed = new Map<string, string>([
-  ["Gustavo Lima", "DONNAH_MCP_GUSTAVO_LIMA"],
-  ["Yuri Melo", "DONNAH_MCP_YURI_MELO"],
-  ["Rodrigo Cavalheiro", "DONNAH_MCP_RODRIGO_CAVALHEIRO"],
-]);
+function secretNameFor(person: string) {
+  const slug = person
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return `DONNAH_MCP_${slug}`;
+}
 
 function parseWire(text: string) {
   const trimmed = text.trim();
@@ -151,33 +155,60 @@ Deno.serve(async (req) => {
     if (person !== "Adler Furtado") return json({ ok: false, error: "FORBIDDEN" }, 403);
 
     if (req.method === "GET") {
-      const { data: accounts, error } = await admin
-        .schema("agency_ops")
-        .from("donnah_mcp_accounts")
-        .select("person,enabled,last_probe_at,last_probe_status,last_probe_detail,last_sync_at,last_sync_status,last_sync_detail,transcripts_seen,transcripts_ingested")
-        .in("person", [...allowed.keys()])
-        .order("person");
-      if (error) return json({ ok: false, error: error.message }, 500);
+      const [{ data: roster, error: rosterError }, { data: accounts, error: accountsError }] = await Promise.all([
+        admin.schema("agency_ops").from("team_roster").select("person,role,access_level").eq("is_former", false).order("person"),
+        admin.schema("agency_ops").from("donnah_mcp_accounts").select("person,secret_name,enabled,last_probe_at,last_probe_status,last_probe_detail,last_sync_at,last_sync_status,last_sync_detail,transcripts_seen,transcripts_ingested"),
+      ]);
+      if (rosterError) return json({ ok: false, error: rosterError.message }, 500);
+      if (accountsError) return json({ ok: false, error: accountsError.message }, 500);
 
+      const accountByPerson = new Map((accounts || []).map((row: any) => [String(row.person), row]));
       const secrets = await sql<{ name: string }[]>`
-        select name from vault.secrets
-        where name in ('DONNAH_MCP_GUSTAVO_LIMA','DONNAH_MCP_YURI_MELO','DONNAH_MCP_RODRIGO_CAVALHEIRO')
+        select name from vault.secrets where name like 'DONNAH_MCP_%'
       `;
       const configured = new Set(secrets.map((row) => row.name));
+
       return json({
         ok: true,
-        items: (accounts || []).map((row: any) => ({
-          ...row,
-          secret_configured: configured.has(allowed.get(String(row.person)) || ""),
-        })),
+        items: (roster || []).map((member: any) => {
+          const account = accountByPerson.get(String(member.person)) || {};
+          const secretName = String(account.secret_name || secretNameFor(String(member.person)));
+          return {
+            ...account,
+            person: member.person,
+            role: member.role,
+            access_level: member.access_level,
+            secret_name: secretName,
+            enabled: Boolean(account.enabled),
+            secret_configured: configured.has(secretName),
+          };
+        }),
       });
     }
 
     const body = await req.json().catch(() => ({}));
     const targetPerson = String(body?.person || "").trim();
     const token = normalizeToken(body?.token);
-    const secretName = allowed.get(targetPerson);
-    if (!secretName) return json({ ok: false, error: "PERSON_NOT_ALLOWED" }, 400);
+
+    const { data: activeMember, error: memberError } = await admin
+      .schema("agency_ops")
+      .from("team_roster")
+      .select("person")
+      .eq("person", targetPerson)
+      .eq("is_former", false)
+      .maybeSingle();
+    if (memberError) return json({ ok: false, error: memberError.message }, 500);
+    if (!activeMember) return json({ ok: false, error: "PERSON_NOT_ACTIVE" }, 400);
+
+    const { data: existingAccount, error: accountError } = await admin
+      .schema("agency_ops")
+      .from("donnah_mcp_accounts")
+      .select("secret_name")
+      .eq("person", targetPerson)
+      .maybeSingle();
+    if (accountError) return json({ ok: false, error: accountError.message }, 500);
+    const secretName = String(existingAccount?.secret_name || secretNameFor(targetPerson));
+
     if (!token || token.length < 16 || token.length > 1000) {
       return json({ ok: false, error: "DONNAH_TOKEN_MISSING" }, 400);
     }
