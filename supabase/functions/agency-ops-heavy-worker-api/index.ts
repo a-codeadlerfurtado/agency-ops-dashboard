@@ -743,19 +743,33 @@ Deno.serve(async (req) => {
           },
         };
         if (lowConfidence) {
+          const { data: confirmedCall } = await sb.from("commercial_call_records")
+            .select("notes,closer_briefing")
+            .eq("capture_session_id", session.id)
+            .maybeSingle();
+          const confirmedNote = String(confirmedCall?.notes || "").trim().slice(0, 2000);
+          const safeSummary = confirmedNote
+            ? `Ligação com transcrição de baixa confiança. Nota confirmada pelo SDR: ${confirmedNote}`
+            : canonicalTranscriptText.replace(/\s+/g, " ").trim().slice(0, 1200);
+          const reviewMetadata = {
+            ...transcriptMetadata,
+            commercial_analysis_status: "LOW_CONFIDENCE_HUMAN_REVIEW",
+            transcript_ready_at: now,
+          };
           const { error: rejectedError } = await sb.from("meeting_transcripts").update({
-            summary: null,
+            summary: safeSummary || null,
             processing_status: "REJECTED",
             transcript_quality: avgConfidence,
             processed_at: now,
-            metadata: transcriptMetadata,
+            metadata: reviewMetadata,
             updated_at: now,
           }).eq("id", transcriptId);
           if (rejectedError) throw rejectedError;
-          await mergeCaptureSessionMetadata(sb, String(session.id), transcriptMetadata, { state: "NEEDS_REVIEW" });
+          await mergeCaptureSessionMetadata(sb, String(session.id), reviewMetadata, { state: "NEEDS_REVIEW" });
           return json({
             ok: true, transcript_id: transcriptId, segments: segments.length, job_id: null,
             postprocess: "SDR_LOW_CONFIDENCE_REVIEW", transcript_quality: avgConfidence,
+            summary: safeSummary || null,
           });
         }
         const extractiveSummary = canonicalTranscriptText.replace(/\s+/g, " ").trim().slice(0, 1200);
