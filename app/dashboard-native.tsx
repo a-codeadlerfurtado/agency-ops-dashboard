@@ -318,7 +318,8 @@ export default function Dashboard() {
   const isDesignRestricted = data?.profile?.role === "DESIGN";
   const isAdlerAccount = session?.user?.id === "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
   const isAdlerIdentity = Boolean(isAdlerAccount || data?.profile?.person === "Adler Furtado" || data?.preferences?.collaborator_person === "Adler Furtado" || data?.preferences?.name === "Adler Furtado");
-  const canAssignWallets = Boolean(walletManagementAllowed || isAdlerIdentity);
+  const isCsProfile = ["CS", "CUSTOMER SUCCESS"].includes(String(data?.profile?.role || data?.preferences?.role || "").trim().toUpperCase());
+  const canAssignWallets = Boolean(walletManagementAllowed || isAdlerIdentity || isCsProfile);
   const canManageWallets = Boolean(isAdlerIdentity);
   const canMaterialTriage = Boolean(isAdlerIdentity || data?.profile?.role === "CS");
 
