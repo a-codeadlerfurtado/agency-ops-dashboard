@@ -374,7 +374,6 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         StatusChanged?.Invoke(reason == "windows_mic_released"
             ? "Ligação encerrada automaticamente pelo Windows"
             : $"Ligação encerrada ({reason})");
-        CallEnded?.Invoke(id, contact);
         var success = false; string? error = null;
         try
         {
@@ -415,6 +414,8 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             var prepared = await api.PrepareCallAsync(
                 id, started, ended, resolvedContact, roles, durationMs,
                 identity.LocalPhone, identity.RemotePhone, identity.Source);
+
+            CallEnded?.Invoke(id, resolvedContact);
 
             var uploadTasks = prepared.Uploads.Select(async targetUpload =>
             {

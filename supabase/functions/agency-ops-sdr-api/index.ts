@@ -617,7 +617,7 @@ Deno.serve(async(req:Request)=>{
     source_url:r.source_url||null
   }));
 
-  const requiredAgentVersion="desktop-0.5.5";
+  const requiredAgentVersion="desktop-0.5.6";
   let latestDevice:Row|null=null;
   if(isOwnSdr){
     const {data}=await ops.from("meeting_capture_devices")
@@ -646,7 +646,7 @@ Deno.serve(async(req:Request)=>{
       update_required:currentAgentVersion!==requiredAgentVersion,
       last_seen_at:latestDevice?.last_seen_at||null,
       device_name:latestDevice?.device_name||null,
-      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.1/RelatoAI-Desktop-SDR.exe"
+      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.2/RelatoAI-Desktop-SDR.exe"
     }:null,
     sdr_options:isLeonardoViewer?targetPeople:[],
     summary:{meetings:meetings.length,calls:enrichedCalls.length,notifications_unread:ownNotifications.unread},

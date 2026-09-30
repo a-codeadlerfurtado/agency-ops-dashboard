@@ -8,7 +8,7 @@ internal sealed partial class RelatoApi
 {
     private const string SttEndpoint =
         "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/api/jarvis/stt";
-    private const string DesktopVersion = "desktop-0.5.0";
+    private const string DesktopVersion = AgentUpdater.CurrentVersion;
 
     public async Task<string> TranscribeAudioAsync(byte[] wavBytes)
     {
