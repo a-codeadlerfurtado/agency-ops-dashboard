@@ -104,27 +104,10 @@ export default function ManagerAttentionRadarWarning() {
   }, [sessionUserId, load, sortRows]);
 
   useEffect(() => {
-    if (!alerts.length) return;
+    if (!alerts.length || sessionUserId === ADLER_USER_ID) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const handleEscape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (sessionUserId === ADLER_USER_ID) {
-        // Fecha somente a interface. Os registros continuam OPEN no banco e
-        // nenhuma ação gerencial é registrada.
-        setAlerts([]);
-        setIndex(0);
-        setActionMode(null);
-        setNote("");
-        setUntil("");
-        setError("");
-      }
-    };
-    window.addEventListener("keydown", handleEscape, true);
-    return () => { document.body.style.overflow = previous; window.removeEventListener("keydown", handleEscape, true); };
+    return () => { document.body.style.overflow = previous; };
   }, [alerts.length, sessionUserId]);
 
   useEffect(() => {
@@ -172,6 +155,29 @@ export default function ManagerAttentionRadarWarning() {
   if (!current) return null;
   const repeated = Number(current.occurrence_count || 1) > 1;
   const adlerCanDismiss = sessionUserId === ADLER_USER_ID;
+
+  if (adlerCanDismiss) {
+    const responsible = current.owner_person || current.owner_area || "responsável";
+    return (
+      <>
+        <style>{styles}</style>
+        <aside className="mgr-radar-adler-notification" role="status" aria-live="polite">
+          <button
+            className="mgr-radar-adler-close"
+            type="button"
+            aria-label="Fechar notificação"
+            onClick={() => setAlerts((rows) => rows.filter((row) => row.id !== current.id))}
+          >
+            ×
+          </button>
+          <div className="mgr-radar-adler-kicker">🧭 RADAR GERENCIAL</div>
+          <strong>Aviso enviado para {responsible}</strong>
+          <span>{current.client_name} · {label(current.level)}</span>
+          {alerts.length > 1 && <small>{alerts.length} avisos abertos no radar</small>}
+        </aside>
+      </>
+    );
+  }
 
   return (
     <div className="mgr-radar-shield" role="alertdialog" aria-modal="true" aria-labelledby="mgr-radar-title">
@@ -250,5 +256,6 @@ const styles = `
 .mgr-radar-actions{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-top:20px}.mgr-radar-actions button,.mgr-radar-form-actions button,.mgr-radar-nav button{border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:12px 10px;background:#111d2e;color:#dbe7f7;font-weight:800;font-size:11px;cursor:pointer}.mgr-radar-actions .charge{background:#1c5fbd;border-color:#337bd8}.mgr-radar-actions .resolve{background:#176b4c;border-color:#298564}.mgr-radar-actions .false{color:#b7c2d2}.mgr-radar-actions button:hover,.mgr-radar-form-actions button:hover,.mgr-radar-nav button:hover{filter:brightness(1.13)}
 .mgr-radar-form{margin-top:18px;padding:16px;border:1px solid rgba(255,255,255,.12);border-radius:13px;background:#0b1421}.mgr-radar-form strong{display:block;margin-bottom:9px}.mgr-radar-form textarea{width:100%;min-height:90px;resize:vertical;border:1px solid rgba(255,255,255,.13);border-radius:10px;background:#07101c;color:#eef4ff;padding:11px;font:inherit}.mgr-radar-form input{width:100%;margin-top:9px;border:1px solid rgba(255,255,255,.13);border-radius:10px;background:#07101c;color:#eef4ff;padding:11px}.mgr-radar-form-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:10px}.mgr-radar-form-actions .primary{background:#246dcc}.mgr-radar-error{margin-top:12px;padding:10px 12px;border-radius:9px;background:rgba(255,90,90,.12);color:#ffadad;font-size:12px}
 .mgr-radar-nav{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-top:15px;padding-top:13px;border-top:1px solid rgba(255,255,255,.08)}.mgr-radar-nav span{font-size:10px;color:#7587a1;text-align:center}.mgr-radar-nav button{padding:8px 10px;background:transparent}
+.mgr-radar-adler-notification{position:fixed;right:22px;top:22px;z-index:49000;width:min(390px,calc(100vw - 24px));padding:16px 44px 16px 16px;border:1px solid rgba(95,160,255,.35);border-radius:14px;background:linear-gradient(180deg,#111d2d,#0a111d);box-shadow:0 18px 55px rgba(0,0,0,.45);color:#eef4ff;font-family:Inter,ui-sans-serif,system-ui,sans-serif}.mgr-radar-adler-notification strong{display:block;margin-top:5px;font-size:14px;line-height:1.35}.mgr-radar-adler-notification span{display:block;margin-top:5px;color:#b7c7dc;font-size:12px}.mgr-radar-adler-notification small{display:block;margin-top:7px;color:#7f93b1;font-size:10px}.mgr-radar-adler-kicker{color:#79b4ff;font-size:9px;font-weight:850;letter-spacing:.13em}.mgr-radar-adler-close{position:absolute;right:10px;top:9px;width:28px;height:28px;border:0;border-radius:8px;background:rgba(255,255,255,.06);color:#c8d7eb;font-size:20px;line-height:1;cursor:pointer}.mgr-radar-adler-close:hover{background:rgba(255,255,255,.11)}
 @media(max-width:760px){.mgr-radar-shield{padding:10px}.mgr-radar-card{padding:20px}.mgr-radar-grid{grid-template-columns:1fr}.mgr-radar-actions{grid-template-columns:1fr 1fr}.mgr-radar-actions .false{grid-column:1/-1}.mgr-radar-head h1{font-size:34px}.mgr-radar-nav span{display:none}.mgr-radar-esc-hint{margin-left:0;width:100%}}
 `;
