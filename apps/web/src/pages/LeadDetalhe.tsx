@@ -3,7 +3,7 @@ import { irPara } from "../App";
 import { dataHora, linkWhatsapp, relativo, rotuloOrigem } from "../lib/format";
 import {
   atividades, corretores, corretoresAtribuiveis, criarTarefa, etapas, historicoWhatsapp,
-  integracaoWhatsappAtiva, moverEtapa, oportunidade, registrarAtividade, trocarCorretor,
+  integracaoWhatsappAtiva, moverEtapa, oportunidade, registrarAtividade, respostasFormulario, trocarCorretor,
 } from "../lib/queries";
 import { mensagemDeErro } from "../lib/supabase";
 import { abrirWhatsapp, compartilharLead, impactoLeve } from "../lib/native";
@@ -33,6 +33,18 @@ const ROTULO_ATIVIDADE: Record<ActivityType, string> = {
   PROPOSAL: "Proposta", SYSTEM: "Sistema",
 };
 
+function textoFormulario(valor: unknown) {
+  return String(valor ?? "")
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function rotuloPergunta(valor: unknown) {
+  const t = textoFormulario(valor);
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : "Pergunta";
+}
+
 export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: string }) {
   const avisar = useToast();
   const [salvando, setSalvando] = useState(false);
@@ -44,6 +56,7 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
   const dados = useAsync(
     async () => ({
       opp: await oportunidade(oppId),
+      formulario: await respostasFormulario(oppId),
       hist: await atividades(oppId),
       whats: await historicoWhatsapp(oppId),
       whatsAtivo: await integracaoWhatsappAtiva(sessao.tenant.id),
@@ -65,7 +78,11 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
     );
   }
 
-  const { opp, hist, whats, whatsAtivo, etapas: listaEtapas, pessoas, atribuiveis } = dados.dado;
+  const { opp, formulario, hist, whats, whatsAtivo, etapas: listaEtapas, pessoas, atribuiveis } = dados.dado;
+  const respostasFormularioLead = (formulario?.answers ?? [])
+    .filter((a) => !["NOME", "TELEFONE", "EMAIL"].includes(String(a.category ?? "").toUpperCase()))
+    .filter((a) => !["full_name", "first_name", "last_name", "phone", "phone_number", "email"].includes(String(a.key ?? "").toLowerCase()))
+    .sort((a, b) => Number(a.order ?? 0) - Number(b.order ?? 0));
   const etapaAtual = listaEtapas.find((e) => e.id === opp.stage_id);
   const nomePorId = new Map(pessoas.map((p) => [p.id, p.full_name ?? "--"]));
   const wa = linkWhatsapp(opp.contact?.phone_normalized ?? opp.contact?.phone);
@@ -269,6 +286,29 @@ export default function LeadDetalhe({ sessao, oppId }: { sessao: Sessao; oppId: 
             sessao={sessao} oppId={oppId}
             aoSalvar={() => setChaveMatch((k) => k + 1)}
           />
+
+          {respostasFormularioLead.length > 0 && (
+            <Card>
+              <div className="card-head">
+                <h2>Perguntas do formulario</h2>
+                <span className="badge">{respostasFormularioLead.length}</span>
+              </div>
+              <div className="card-body">
+                <div className="col" style={{ gap: 12 }}>
+                  {respostasFormularioLead.map((a) => (
+                    <div key={`${a.order}-${a.key}`} style={{ borderBottom: "1px solid var(--line-soft)", paddingBottom: 10 }}>
+                      <div style={{ fontSize: 12, color: "var(--text-subtle)", lineHeight: 1.4 }}>
+                        {rotuloPergunta(a.label || a.key)}
+                      </div>
+                      <div style={{ marginTop: 3, fontSize: 14, fontWeight: 600, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>
+                        {textoFormulario(a.text || a.values?.join(", ")) || "--"}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Card>
+          )}
 
           <Card>
             <div className="card-head"><h2>Origem</h2></div>

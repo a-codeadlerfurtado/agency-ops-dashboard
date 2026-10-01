@@ -1,5 +1,5 @@
 import { supabase } from "./supabase";
-import type { Activity, Opportunity, Profile, Stage, StageKind, Task, WhatsAppHistoryMessage } from "./types";
+import type { Activity, LeadFormSubmission, Opportunity, Profile, Stage, StageKind, Task, WhatsAppHistoryMessage } from "./types";
 
 const OPP_COLS =
   "id, tenant_id, contact_id, assigned_user_id, stage_id, status, source, source_detail," +
@@ -223,6 +223,18 @@ export async function oportunidade(id: string): Promise<Opportunity> {
   // vazar a existencia de um lead que a RLS corretamente ocultou.
   if (!data) throw new Error("Lead nao encontrado ou sem permissao.");
   return data as unknown as Opportunity;
+}
+
+export async function respostasFormulario(oppId: string): Promise<LeadFormSubmission | null> {
+  const { data, error } = await supabase
+    .from("lead_form_submissions")
+    .select("id, opportunity_id, form_id, answers, created_at")
+    .eq("opportunity_id", oppId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return (data ?? null) as LeadFormSubmission | null;
 }
 
 export async function atividades(oppId: string): Promise<Activity[]> {

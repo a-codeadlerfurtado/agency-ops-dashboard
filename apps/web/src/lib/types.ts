@@ -47,6 +47,23 @@ export interface Contact {
   email: string | null;
 }
 
+export interface LeadFormAnswer {
+  key: string;
+  text: string;
+  label: string;
+  order: number;
+  values: string[];
+  category: string;
+}
+
+export interface LeadFormSubmission {
+  id: string;
+  opportunity_id: string;
+  form_id: string | null;
+  answers: LeadFormAnswer[];
+  created_at: string;
+}
+
 export interface Opportunity {
   id: string;
   tenant_id: string;
