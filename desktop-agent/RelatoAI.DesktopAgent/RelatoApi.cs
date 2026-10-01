@@ -16,11 +16,15 @@ internal sealed record ProspectPrefill(
     IReadOnlyList<string> BuyingSignals, IReadOnlyList<string> ClosingRisks,
     string? CloserBriefing, string? AiSummary, string? NextStep, string? NextStepAt);
 internal sealed record CrmProspectMatch(string Id, string? Name, string? Company, string? Phone, string? Email, string? Source, string? Pipeline, string? Stage);
+internal sealed record OpsPrefill(
+    string? Summary, IReadOnlyList<string> Problems, IReadOnlyList<string> Decisions,
+    IReadOnlyList<string> ActionItems, IReadOnlyList<string> Commitments,
+    string? NextStep, string? Health, bool ChurnRisk);
 internal sealed record FeedbackContext(
     bool Pending, bool RequiresSelection, string? RemotePhone, string? RemoteName, string? RemoteRole,
     string? ClientId, string? ClientName, string? ResolutionStatus, IReadOnlyList<ClientOption> Clients,
-    string Workflow, bool TranscriptReady, bool CommercialAnalysisReady, ProspectPrefill? ProspectPrefill,
-    CrmProspectMatch? CrmMatch);
+    string Workflow, string? OwnerRole, bool TranscriptReady, bool CommercialAnalysisReady,
+    ProspectPrefill? ProspectPrefill, OpsPrefill? OpsPrefill, CrmProspectMatch? CrmMatch);
 internal sealed record AgentUpdateInfo(
     bool UpdateRequired, string CurrentVersion, string RequiredVersion,
     string DownloadUrl, string Sha256);
@@ -130,7 +134,7 @@ internal sealed partial class RelatoApi
         using var doc = await SendAsync(new { action = "call_feedback_context", local_session_id = localSessionId });
         var root = doc.RootElement;
         if (root.TryGetProperty("pending", out var pendingEl) && pendingEl.GetBoolean())
-            return new FeedbackContext(true, false, null, null, null, null, null, null, Array.Empty<ClientOption>(), "PENDING", false, false, null, null);
+            return new FeedbackContext(true, false, null, null, null, null, null, null, Array.Empty<ClientOption>(), "PENDING", null, false, false, null, null, null);
         var clients = new List<ClientOption>();
         if (root.TryGetProperty("clients", out var clientEl) && clientEl.ValueKind == JsonValueKind.Array)
             foreach (var item in clientEl.EnumerateArray())
@@ -160,6 +164,18 @@ internal sealed partial class RelatoApi
                 ReadFrom(p, "next_step"), ReadFrom(p, "next_step_at"));
         }
 
+        OpsPrefill? opsPrefill = null;
+        if (root.TryGetProperty("ops_prefill", out var op) && op.ValueKind == JsonValueKind.Object)
+        {
+            var churnRisk = op.TryGetProperty("churn_risk", out var churnEl)
+                && churnEl.ValueKind is JsonValueKind.True or JsonValueKind.False
+                && churnEl.GetBoolean();
+            opsPrefill = new OpsPrefill(
+                ReadFrom(op, "summary"), ReadArray(op, "problems"), ReadArray(op, "decisions"),
+                ReadArray(op, "action_items"), ReadArray(op, "commitments"),
+                ReadFrom(op, "next_step"), ReadFrom(op, "health"), churnRisk);
+        }
+
         CrmProspectMatch? crmMatch = null;
         if (root.TryGetProperty("crm_match", out var cm) && cm.ValueKind == JsonValueKind.Object)
         {
@@ -184,7 +200,8 @@ internal sealed partial class RelatoApi
             false, root.GetProperty("requires_selection").GetBoolean(),
             Read("remote_phone"), Read("remote_name"), Read("remote_role"),
             Read("client_id"), Read("client_name"), Read("resolution_status"), clients,
-            Read("workflow") ?? "CLIENT_REVIEW", transcriptReady, commercialAnalysisReady, prefill, crmMatch);
+            Read("workflow") ?? "CLIENT_REVIEW", Read("owner_role"), transcriptReady, commercialAnalysisReady,
+            prefill, opsPrefill, crmMatch);
     }
 
     public async Task UploadAsync(string signedUrl, string filePath, string mimeType = "audio/wav")

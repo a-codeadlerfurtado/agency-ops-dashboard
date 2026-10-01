@@ -1,15 +1,31 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { authenticatedFetch, SUPABASE_URL } from "./shared";
 
 type PairingResult = { code?: string; expires_at?: string; owner_person?: string; error?: string };
 
 export function RelatoPairingCard({downloadUrl="",version=""}:{downloadUrl?:string;version?:string}) {
   const [pairing,setPairing]=useState<PairingResult|null>(null);
+  const [releaseUrl,setReleaseUrl]=useState(downloadUrl);
+  const [releaseVersion,setReleaseVersion]=useState(version.replace(/^desktop-/,""));
   const [busy,setBusy]=useState(false);
   const [copied,setCopied]=useState(false);
   const [error,setError]=useState("");
+
+  useEffect(()=>{
+    if(downloadUrl){ setReleaseUrl(downloadUrl); setReleaseVersion(version.replace(/^desktop-/,"")); return; }
+    let active=true;
+    authenticatedFetch(SUPABASE_URL+"/functions/v1/agency-ops-meeting-capture-api",{
+      method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({action:"desktop_release_info"})
+    }).then(async response=>{
+      const json=await response.json().catch(()=>({})) as {download_url?:string;required_version?:string};
+      if(!active||!response.ok)return;
+      setReleaseUrl(String(json.download_url||""));
+      setReleaseVersion(String(json.required_version||"").replace(/^desktop-/,""));
+    }).catch(()=>{});
+    return()=>{active=false;};
+  },[downloadUrl,version]);
 
   async function createPairing(){
     setBusy(true); setError(""); setCopied(false);
@@ -41,6 +57,6 @@ export function RelatoPairingCard({downloadUrl="",version=""}:{downloadUrl?:stri
       .relato-pair-card button,.relato-download{border:0;border-radius:11px;padding:10px 14px;font-weight:800;cursor:pointer;background:#eef2ff;color:#11182a;font-size:13px;line-height:1;text-decoration:none;display:inline-flex;align-items:center;gap:7px;min-height:36px;box-sizing:border-box}.relato-pair-card button.secondary{background:rgba(255,255,255,.07);color:#dfe6f7;border:1px solid rgba(255,255,255,.1)}.relato-download{background:#6f82ff;color:#fff;box-shadow:0 8px 22px rgba(92,112,255,.24)}.relato-download small{font-size:9px;opacity:.72}.relato-pair-card button:disabled{opacity:.55;cursor:wait}.relato-pair-error{color:#ff9a9a;font-size:11px;margin-top:7px}
     `}</style>
     <div className="relato-pair-copy"><span>RELATO AI · DISPOSITIVO</span><h3>Vincular o Relato Desktop</h3><p>Baixe a versão atual, gere um código e informe no Relato neste computador. O código expira em 15 minutos.</p>{error&&<div className="relato-pair-error">{error}</div>}</div>
-    <div className="relato-pair-actions">{downloadUrl&&<a className="relato-download" href={downloadUrl}>Baixar Relato Desktop {version&&<small>v{version}</small>}</a>}{pairing?.code&&<div className="relato-pair-code"><b>{pairing.code}</b><small>{pairing.owner_person||"Perfil"} · {minutes>0?minutes+" min restantes":"expirado"}</small></div>}{pairing?.code&&<button className="secondary" type="button" onClick={copyCode}>{copied?"Copiado":"Copiar código"}</button>}<button type="button" onClick={createPairing} disabled={busy}>{busy?"Gerando...":pairing?.code?"Gerar novo código":"Gerar código"}</button></div>
+    <div className="relato-pair-actions">{releaseUrl&&<a className="relato-download" href={releaseUrl}>Baixar Relato Desktop {releaseVersion&&<small>v{releaseVersion}</small>}</a>}{pairing?.code&&<div className="relato-pair-code"><b>{pairing.code}</b><small>{pairing.owner_person||"Perfil"} · {minutes>0?minutes+" min restantes":"expirado"}</small></div>}{pairing?.code&&<button className="secondary" type="button" onClick={copyCode}>{copied?"Copiado":"Copiar código"}</button>}<button type="button" onClick={createPairing} disabled={busy}>{busy?"Gerando...":pairing?.code?"Gerar novo código":"Gerar código"}</button></div>
   </section>;
 }

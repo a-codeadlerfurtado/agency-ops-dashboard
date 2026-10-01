@@ -1,0 +1,50 @@
+name: Relato OPS Desktop Release
+
+on:
+  push:
+    branches:
+      - "relato-ops-release-*"
+    paths:
+      - "desktop-agent/RelatoAI.DesktopAgent/**"
+      - ".github/workflows/relato-ops-release.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Publish OPS executable
+        shell: pwsh
+        run: |
+          dotnet publish desktop-agent/RelatoAI.DesktopAgent/RelatoAI.DesktopAgent.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -o publish
+          Copy-Item publish/RelatoAI.DesktopAgent.exe publish/RelatoAI-Desktop-OPS.exe
+          (Get-FileHash publish/RelatoAI-Desktop-OPS.exe -Algorithm SHA256).Hash.ToLower() |
+            Out-File -Encoding ascii publish/RelatoAI-Desktop-OPS.exe.sha256
+
+      - name: Create or update OPS release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "relato-ops-v2026.10.01.1"
+          gh release delete $tag --yes 2>$null
+          git push origin ":refs/tags/$tag" 2>$null
+          gh release create $tag `
+            publish/RelatoAI-Desktop-OPS.exe `
+            publish/RelatoAI-Desktop-OPS.exe.sha256 `
+            --target "${{ github.sha }}" `
+            --title "Relato AI Operacional 0.5.9" `
+            --notes "Primeira versão operacional para CS e GT. Pós-call por função, vínculo com cliente, saúde/risco para CS e decisões de tráfego para GT."

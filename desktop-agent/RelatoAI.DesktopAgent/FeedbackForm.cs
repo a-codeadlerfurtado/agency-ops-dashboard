@@ -53,10 +53,36 @@ internal sealed class FeedbackForm : Form
     private readonly TextBox prospectBriefing = new() { Width = 516, Height = 86, Multiline = true, ScrollBars = ScrollBars.Vertical, BackColor = Panel2, ForeColor = TextMain, BorderStyle = BorderStyle.FixedSingle };
     private readonly TextBox prospectNextStep = Input(516);
     private readonly DateTimePicker prospectNextStepAt = new() { Width = 246, ShowCheckBox = true, Checked = false, Format = DateTimePickerFormat.Custom, CustomFormat = "dd/MM/yyyy HH:mm", CalendarMonthBackground = Panel2 };
+
+    private static readonly HashSet<string> CsPeople = new(StringComparer.OrdinalIgnoreCase) { "Gustavo Lima", "Joel Antoniete" };
+    private static readonly HashSet<string> GtPeople = new(StringComparer.OrdinalIgnoreCase) { "Breno Oliveira", "Danilo Oliveira Santos", "Felipe Oliveira", "João Margiotta", "Rodrigo Cavalheiro", "Yuri Melo" };
+    private readonly TextBox opsSummary = MultiInput(532, 82);
+    private readonly TextBox opsProblems = MultiInput(532, 70);
+    private readonly TextBox opsResponsible = Input(246);
+    private readonly DateTimePicker opsDeadline = DatePicker(246);
+    private readonly TextBox opsNextStep = Input(532);
+    private readonly ComboBox csHealth = SelectBox(246);
+    private readonly CheckBox csChurnRisk = new() { Text = "Risco de churn", AutoSize = true, ForeColor = TextMain, BackColor = Panel };
+    private readonly TextBox csRiskReason = MultiInput(532, 58);
+    private readonly TextBox csAgencyCommitments = MultiInput(532, 70);
+    private readonly TextBox csClientCommitments = MultiInput(532, 70);
+    private readonly DateTimePicker csNextContact = DatePicker(246);
+    private readonly TextBox gtProduct = Input(246);
+    private readonly TextBox gtCampaign = Input(246);
+    private readonly TextBox gtBudgetChange = Input(532);
+    private readonly TextBox gtAudienceRegion = Input(532);
+    private readonly TextBox gtCreative = Input(532);
+    private readonly TextBox gtPerformanceIssue = MultiInput(532, 62);
+    private readonly TextBox gtDecisions = MultiInput(532, 70);
+    private readonly TextBox gtActions = MultiInput(532, 70);
+
     private FeedbackContext? feedbackContext;
     private bool contextReady;
     private bool submitted;
     private bool IsGustavoSdr => string.Equals(config?.OwnerPerson?.Trim(), "Gustavo Royce", StringComparison.OrdinalIgnoreCase);
+    private bool IsCsOperator => config?.OwnerPerson is { } owner && CsPeople.Contains(owner.Trim());
+    private bool IsGtOperator => config?.OwnerPerson is { } owner && GtPeople.Contains(owner.Trim());
+    private bool IsOpsRole => IsCsOperator || IsGtOperator;
 
     private sealed record BindingOption(string? Id, string Name, bool NoClient = false, bool Prospect = false)
     {
@@ -85,9 +111,26 @@ internal sealed class FeedbackForm : Form
         mood.Items.AddRange(["Ótimo", "Bom", "Neutro", "Preocupado", "Irritado"]);
         tone.Items.AddRange(["Animado", "Receptivo", "Neutro", "Frio", "Defensivo", "Impaciente"]);
         direction.Items.AddRange(["Melhorou", "Igual", "Piorou"]);
+        csHealth.Items.AddRange(["Não definido", "Verde", "Amarelo", "Vermelho"]);
         mood.SelectedIndex = 2;
         tone.SelectedIndex = 2;
         direction.SelectedIndex = 1;
+        csHealth.SelectedIndex = 0;
+        opsSummary.PlaceholderText = "Resumo objetivo da conversa";
+        opsProblems.PlaceholderText = "Separe por ;";
+        opsResponsible.PlaceholderText = "Quem ficou responsável";
+        opsNextStep.PlaceholderText = "Próximo passo";
+        csRiskReason.PlaceholderText = "Por que existe risco / atenção";
+        csAgencyCommitments.PlaceholderText = "O que a agência ficou de fazer · separe por ;";
+        csClientCommitments.PlaceholderText = "O que o cliente ficou de fazer · separe por ;";
+        gtProduct.PlaceholderText = "Produto / empreendimento";
+        gtCampaign.PlaceholderText = "Campanha / conjunto / anúncio";
+        gtBudgetChange.PlaceholderText = "Ex.: R$ 100/dia → R$ 150/dia";
+        gtAudienceRegion.PlaceholderText = "Público, cidade, região ou segmentação";
+        gtCreative.PlaceholderText = "Criativo / oferta / CTA mencionado";
+        gtPerformanceIssue.PlaceholderText = "Problema de performance, lead, CPL, CTR, saldo...";
+        gtDecisions.PlaceholderText = "Decisões tomadas · separe por ;";
+        gtActions.PlaceholderText = "Ações que precisam ser executadas · separe por ;";
         BuildUi();
         prospectCard.Visible = IsGustavoSdr;
         contextReady = IsGustavoSdr;
@@ -131,10 +174,17 @@ internal sealed class FeedbackForm : Form
         var header = new Panel { Dock = DockStyle.Fill, BackColor = Panel2, Padding = new Padding(28, 20, 28, 16) };
         header.Controls.Add(new Panel { Dock = DockStyle.Left, Width = 4, BackColor = Accent });
         var brand = new Label { Text = "RELATO AI  •  OPS", ForeColor = Accent, Font = new Font(Font.FontFamily, 9F, FontStyle.Bold), AutoSize = true, Location = new Point(28, 18) };
-        var titleText = IsGustavoSdr ? "Registrar prospect" : "Como essa call terminou?";
+        var titleText = IsGustavoSdr ? "Registrar prospect"
+            : IsCsOperator ? "Registrar acompanhamento do cliente"
+            : IsGtOperator ? "Registrar decisões de tráfego"
+            : "Como essa call terminou?";
         var subtitleText = IsGustavoSdr
             ? "Digite o nome manualmente e confirme só o essencial. O Relato completa o CRM Awave com a transcrição."
-            : "Sua leitura humana complementa a transcrição e ajuda a detectar risco, confiança e próximos passos.";
+            : IsCsOperator
+                ? "O Relato organiza saúde, risco, compromissos e próximos passos do cliente."
+                : IsGtOperator
+                    ? "O Relato transforma a conversa em decisões, alterações de campanha e ações executáveis."
+                    : "Sua leitura humana complementa a transcrição e ajuda a detectar risco, confiança e próximos passos.";
         var title = new Label { Text = titleText, ForeColor = TextMain, Font = new Font(Font.FontFamily, 18F, FontStyle.Bold), AutoSize = true, Location = new Point(28, 43) };
         var sub = new Label { Text = subtitleText, ForeColor = Muted, Font = new Font(Font.FontFamily, 9.5F), AutoSize = true, MaximumSize = new Size(570, 40), Location = new Point(30, 78) };
         header.Controls.Add(brand);
@@ -156,8 +206,22 @@ internal sealed class FeedbackForm : Form
         };
 
         body.Controls.Add(BuildContactCard());
-        body.Controls.Add(IsGustavoSdr ? BuildGustavoProspectCard() : BuildProspectCard());
-        if (IsGustavoSdr) return body;
+        if (IsGustavoSdr)
+        {
+            body.Controls.Add(BuildGustavoProspectCard());
+            return body;
+        }
+        if (IsCsOperator)
+        {
+            body.Controls.Add(BuildCsOpsCard());
+            return body;
+        }
+        if (IsGtOperator)
+        {
+            body.Controls.Add(BuildGtOpsCard());
+            return body;
+        }
+        body.Controls.Add(BuildProspectCard());
         body.Controls.Add(SectionTitle("Leitura da conversa", "Percepção geral da call"));
         body.Controls.Add(FieldRow("Humor", mood));
         body.Controls.Add(FieldRow("Tom de voz", tone));
@@ -282,6 +346,69 @@ internal sealed class FeedbackForm : Form
         return prospectCard;
     }
 
+    private Control BuildCsOpsCard()
+    {
+        var card = Card(570, 850);
+        card.Margin = new Padding(0, 0, 0, 16);
+        card.Controls.Add(new Label { Text = "CS · ACOMPANHAMENTO DO CLIENTE", ForeColor = Accent, Font = new Font(Font.FontFamily, 9F, FontStyle.Bold), AutoSize = true, Location = new Point(18, 14) });
+        card.Controls.Add(new Label { Text = "Revise o que a transcrição preencheu e ajuste só o que precisar.", ForeColor = Muted, AutoSize = true, Location = new Point(18, 38) });
+
+        AddOpsField(card, "Resumo da conversa", opsSummary, 70);
+        card.Controls.Add(new Label { Text = "Saúde após a call", ForeColor = Muted, AutoSize = true, Location = new Point(18, 182) });
+        csHealth.Location = new Point(18, 202);
+        card.Controls.Add(csHealth);
+        csChurnRisk.Location = new Point(306, 207);
+        card.Controls.Add(csChurnRisk);
+        AddOpsField(card, "Motivo de risco / atenção", csRiskReason, 246);
+        AddOpsField(card, "Problemas e pendências · separe por ;", opsProblems, 334);
+        AddOpsField(card, "A agência ficou de · separe por ;", csAgencyCommitments, 434);
+        AddOpsField(card, "O cliente ficou de · separe por ;", csClientCommitments, 534);
+
+        card.Controls.Add(new Label { Text = "Responsável", ForeColor = Muted, AutoSize = true, Location = new Point(18, 634) });
+        opsResponsible.Location = new Point(18, 653); card.Controls.Add(opsResponsible);
+        card.Controls.Add(new Label { Text = "Prazo", ForeColor = Muted, AutoSize = true, Location = new Point(306, 634) });
+        opsDeadline.Location = new Point(306, 653); card.Controls.Add(opsDeadline);
+        card.Controls.Add(new Label { Text = "Próximo contato", ForeColor = Muted, AutoSize = true, Location = new Point(18, 700) });
+        csNextContact.Location = new Point(18, 719); card.Controls.Add(csNextContact);
+        AddOpsField(card, "Próximo passo", opsNextStep, 764);
+        return card;
+    }
+
+    private Control BuildGtOpsCard()
+    {
+        var card = Card(570, 1010);
+        card.Margin = new Padding(0, 0, 0, 16);
+        card.Controls.Add(new Label { Text = "GT · DECISÕES DE TRÁFEGO", ForeColor = Accent, Font = new Font(Font.FontFamily, 9F, FontStyle.Bold), AutoSize = true, Location = new Point(18, 14) });
+        card.Controls.Add(new Label { Text = "Consolide produto, campanha, alteração e execução sem reescrever a reunião.", ForeColor = Muted, AutoSize = true, Location = new Point(18, 38) });
+
+        AddOpsField(card, "Resumo da conversa", opsSummary, 70);
+        card.Controls.Add(new Label { Text = "Produto / empreendimento", ForeColor = Muted, AutoSize = true, Location = new Point(18, 182) });
+        gtProduct.Location = new Point(18, 201); card.Controls.Add(gtProduct);
+        card.Controls.Add(new Label { Text = "Campanha / anúncio", ForeColor = Muted, AutoSize = true, Location = new Point(306, 182) });
+        gtCampaign.Location = new Point(306, 201); card.Controls.Add(gtCampaign);
+        AddOpsField(card, "Alteração de orçamento", gtBudgetChange, 246);
+        AddOpsField(card, "Público / região / segmentação", gtAudienceRegion, 302);
+        AddOpsField(card, "Criativo / oferta / CTA", gtCreative, 358);
+        AddOpsField(card, "Problema de performance / leads", gtPerformanceIssue, 414);
+        AddOpsField(card, "Decisões tomadas · separe por ;", gtDecisions, 506);
+        AddOpsField(card, "Ações a executar · separe por ;", gtActions, 606);
+
+        card.Controls.Add(new Label { Text = "Responsável", ForeColor = Muted, AutoSize = true, Location = new Point(18, 706) });
+        opsResponsible.Location = new Point(18, 725); card.Controls.Add(opsResponsible);
+        card.Controls.Add(new Label { Text = "Prazo", ForeColor = Muted, AutoSize = true, Location = new Point(306, 706) });
+        opsDeadline.Location = new Point(306, 725); card.Controls.Add(opsDeadline);
+        AddOpsField(card, "Próximo passo", opsNextStep, 774);
+        AddOpsField(card, "Outros problemas / observações · separe por ;", opsProblems, 830);
+        return card;
+    }
+
+    private static void AddOpsField(Panel card, string label, TextBox box, int y)
+    {
+        card.Controls.Add(new Label { Text = label, ForeColor = Muted, AutoSize = true, Location = new Point(18, y) });
+        box.Location = new Point(18, y + 19);
+        card.Controls.Add(box);
+    }
+
     private Control BuildProspectCard()
     {
         prospectCard.Height = 1040;
@@ -362,7 +489,7 @@ internal sealed class FeedbackForm : Form
         laterButton.Text = "Agora não";
         laterButton.SetBounds(24, 20, 130, 46);
         StyleSecondaryButton(laterButton);
-        saveButton.Text = IsGustavoSdr ? "Salvar no CRM" : "Salvar avaliação";
+        saveButton.Text = IsGustavoSdr ? "Salvar no CRM" : IsOpsRole ? "Salvar operação" : "Salvar avaliação";
         saveButton.SetBounds(430, 20, 172, 46);
         StylePrimaryButton(saveButton);
         laterButton.Click += async (_, _) => await SubmitAsync(true);
@@ -430,6 +557,27 @@ internal sealed class FeedbackForm : Form
         BorderStyle = BorderStyle.FixedSingle
     };
 
+    private static TextBox MultiInput(int width, int height) => new()
+    {
+        Width = width,
+        Height = height,
+        Multiline = true,
+        ScrollBars = ScrollBars.Vertical,
+        BackColor = Panel2,
+        ForeColor = TextMain,
+        BorderStyle = BorderStyle.FixedSingle
+    };
+
+    private static DateTimePicker DatePicker(int width) => new()
+    {
+        Width = width,
+        ShowCheckBox = true,
+        Checked = false,
+        Format = DateTimePickerFormat.Custom,
+        CustomFormat = "dd/MM/yyyy HH:mm",
+        CalendarMonthBackground = Panel2
+    };
+
     private static NumericUpDown Score() => new()
     {
         Minimum = 1,
@@ -484,6 +632,10 @@ internal sealed class FeedbackForm : Form
                 ApplyContext(context);
                 if (string.Equals(context.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase) && !context.CommercialAnalysisReady)
                     _ = RefreshProspectSuggestionsAsync(api);
+                if ((string.Equals(context.Workflow, "OPS_CS", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(context.Workflow, "OPS_GT", StringComparison.OrdinalIgnoreCase))
+                    && !context.TranscriptReady)
+                    _ = RefreshOpsSuggestionsAsync(api);
                 return;
             }
             catch (Exception ex)
@@ -565,9 +717,61 @@ internal sealed class FeedbackForm : Form
         }
     }
 
+    private void ApplyOpsPrefill(OpsPrefill? value)
+    {
+        if (value is null) return;
+        void Fill(TextBox box, string? text)
+        {
+            if (string.IsNullOrWhiteSpace(box.Text) && !string.IsNullOrWhiteSpace(text)) box.Text = text;
+        }
+        Fill(opsSummary, value.Summary);
+        Fill(opsProblems, string.Join("; ", value.Problems));
+        Fill(opsNextStep, value.NextStep);
+        if (IsCsOperator)
+        {
+            Fill(csAgencyCommitments, string.Join("; ", value.Commitments));
+            if (csHealth.SelectedIndex == 0 && !string.IsNullOrWhiteSpace(value.Health))
+            {
+                csHealth.SelectedItem = value.Health.ToUpperInvariant() switch
+                {
+                    "GREEN" => "Verde",
+                    "YELLOW" => "Amarelo",
+                    "RED" => "Vermelho",
+                    _ => "Não definido"
+                };
+            }
+            if (value.ChurnRisk) csChurnRisk.Checked = true;
+        }
+        if (IsGtOperator)
+        {
+            Fill(gtDecisions, string.Join("; ", value.Decisions));
+            Fill(gtActions, string.Join("; ", value.ActionItems));
+        }
+    }
+
+    private async Task RefreshOpsSuggestionsAsync(RelatoApi api)
+    {
+        for (var attempt = 0; attempt < 45 && !IsDisposed; attempt++)
+        {
+            await Task.Delay(1000);
+            try
+            {
+                var context = await api.GetFeedbackContextAsync(sessionId);
+                if (context.Pending) continue;
+                if (!string.Equals(context.Workflow, "OPS_CS", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(context.Workflow, "OPS_GT", StringComparison.OrdinalIgnoreCase)) return;
+                feedbackContext = context;
+                ApplyOpsPrefill(context.OpsPrefill);
+                if (context.TranscriptReady) return;
+            }
+            catch { }
+        }
+    }
+
     private void ApplyContext(FeedbackContext context)
     {
         ApplyProspectPrefill(context.ProspectPrefill, includeName: !IsGustavoSdr);
+        ApplyOpsPrefill(context.OpsPrefill);
         var phone = string.IsNullOrWhiteSpace(context.RemotePhone) ? null : $"+{context.RemotePhone}";
         var person = string.IsNullOrWhiteSpace(context.RemoteName) ? phone ?? "Contato não identificado" : context.RemoteName;
         var identity = string.Join(" · ", new[] { person, phone }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct());
@@ -640,8 +844,9 @@ internal sealed class FeedbackForm : Form
         clientBinding.Items.Add(new BindingOption(null, "Selecione o vínculo..."));
         foreach (var client in context.Clients)
             clientBinding.Items.Add(new BindingOption(client.Id, client.Name));
-        clientBinding.Items.Add(new BindingOption(null, "Prospect comercial / possível cliente", false, true));
-        clientBinding.Items.Add(new BindingOption(null, "Sem vínculo com cliente ou prospect", true));
+        if (!IsOpsRole)
+            clientBinding.Items.Add(new BindingOption(null, "Prospect comercial / possível cliente", false, true));
+        clientBinding.Items.Add(new BindingOption(null, IsOpsRole ? "Sem vínculo / conversa interna" : "Sem vínculo com cliente ou prospect", true));
         clientBinding.SelectedIndex = 0;
         clientBinding.Visible = true;
         saveButton.Enabled = false;
@@ -693,7 +898,7 @@ internal sealed class FeedbackForm : Form
             submitted = false;
             saveButton.Enabled = dismissed || HasRequiredBinding();
             laterButton.Enabled = true;
-            saveButton.Text = IsGustavoSdr ? "Salvar no CRM" : "Salvar avaliação";
+            saveButton.Text = IsGustavoSdr ? "Salvar no CRM" : IsOpsRole ? "Salvar operação" : "Salvar avaliação";
             MessageBox.Show(this, ex.Message, "Relato AI", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
     }
@@ -714,7 +919,11 @@ internal sealed class FeedbackForm : Form
         if (!dismissed && IsGustavoSdr && string.IsNullOrWhiteSpace(prospectName.Text))
             throw new InvalidOperationException("Informe o nome do contato antes de salvar no CRM.");
         if (!dismissed && !HasRequiredBinding())
-            throw new InvalidOperationException("Selecione um cliente, marque como prospect comercial ou escolha 'Sem vínculo'.");
+            throw new InvalidOperationException(IsOpsRole
+                ? "Selecione o cliente desta conversa ou escolha 'Sem vínculo / conversa interna'."
+                : "Selecione um cliente, marque como prospect comercial ou escolha 'Sem vínculo'.");
+        if (!dismissed && IsCsOperator && csChurnRisk.Checked && string.IsNullOrWhiteSpace(csRiskReason.Text))
+            throw new InvalidOperationException("Descreva rapidamente o motivo do risco de churn.");
         var selected = clientBinding.SelectedItem as BindingOption;
         var manual = feedbackContext?.RequiresSelection == true;
         var sdrWorkflow = IsGustavoSdr || string.Equals(feedbackContext?.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase);
@@ -745,6 +954,51 @@ internal sealed class FeedbackForm : Form
             next_step = prospectNextStep.Text.Trim(),
             next_step_at = prospectNextStepAt.Checked ? prospectNextStepAt.Value.ToUniversalTime().ToString("O") : null
         } : null;
+        var healthCode = csHealth.SelectedItem?.ToString() switch
+        {
+            "Verde" => "GREEN",
+            "Amarelo" => "YELLOW",
+            "Vermelho" => "RED",
+            _ => "UNKNOWN"
+        };
+        object? operational = null;
+        if (IsCsOperator)
+        {
+            operational = new
+            {
+                summary = opsSummary.Text.Trim(),
+                health = healthCode,
+                churn_risk = csChurnRisk.Checked,
+                risk_reason = csRiskReason.Text.Trim(),
+                problems = SplitEntries(opsProblems.Text),
+                agency_commitments = SplitEntries(csAgencyCommitments.Text),
+                client_commitments = SplitEntries(csClientCommitments.Text),
+                responsible = opsResponsible.Text.Trim(),
+                deadline = opsDeadline.Checked ? opsDeadline.Value.ToUniversalTime().ToString("O") : null,
+                next_contact = csNextContact.Checked ? csNextContact.Value.ToUniversalTime().ToString("O") : null,
+                next_step = opsNextStep.Text.Trim()
+            };
+        }
+        else if (IsGtOperator)
+        {
+            operational = new
+            {
+                summary = opsSummary.Text.Trim(),
+                product = gtProduct.Text.Trim(),
+                campaign = gtCampaign.Text.Trim(),
+                budget_change = gtBudgetChange.Text.Trim(),
+                audience_region = gtAudienceRegion.Text.Trim(),
+                creative = gtCreative.Text.Trim(),
+                performance_issue = gtPerformanceIssue.Text.Trim(),
+                decisions = SplitEntries(gtDecisions.Text),
+                action_items = SplitEntries(gtActions.Text),
+                responsible = opsResponsible.Text.Trim(),
+                deadline = opsDeadline.Checked ? opsDeadline.Value.ToUniversalTime().ToString("O") : null,
+                next_step = opsNextStep.Text.Trim(),
+                problems = SplitEntries(opsProblems.Text)
+            };
+        }
+
         var feedback = new
         {
             channel = interactionChannel,
@@ -755,13 +1009,14 @@ internal sealed class FeedbackForm : Form
             binding_source = isProspect ? "RELATO_COMMERCIAL" : manual ? "MANUAL" : "AUTO",
             crm_lead_id = matchedCrmLeadId,
             crm_match_rejected = crmMatchRejected,
-            mood = IsGustavoSdr ? null : mood.SelectedItem?.ToString(),
-            tone = IsGustavoSdr ? null : tone.SelectedItem?.ToString(),
-            receptivity = IsGustavoSdr ? (int?)null : (int)receptivity.Value,
-            trust_level = IsGustavoSdr ? (int?)null : (int)trust.Value,
-            perceived_risk = IsGustavoSdr ? (int?)null : (int)risk.Value,
-            relationship_direction = IsGustavoSdr ? "UNKNOWN" : relation,
-            tags = IsGustavoSdr ? Array.Empty<string>() : selectedTags,
+            operational,
+            mood = (IsGustavoSdr || IsOpsRole) ? null : mood.SelectedItem?.ToString(),
+            tone = (IsGustavoSdr || IsOpsRole) ? null : tone.SelectedItem?.ToString(),
+            receptivity = (IsGustavoSdr || IsOpsRole) ? (int?)null : (int)receptivity.Value,
+            trust_level = (IsGustavoSdr || IsOpsRole) ? (int?)null : (int)trust.Value,
+            perceived_risk = (IsGustavoSdr || IsOpsRole) ? (int?)null : (int)risk.Value,
+            relationship_direction = (IsGustavoSdr || IsOpsRole) ? "UNKNOWN" : relation,
+            tags = (IsGustavoSdr || IsOpsRole) ? Array.Empty<string>() : selectedTags,
             note = note.Text.Trim(),
             dismissed
         };

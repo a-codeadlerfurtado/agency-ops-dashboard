@@ -7,6 +7,9 @@ const VERSION = "meeting-capture-v1.1-audio";
 const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.8";
 const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.4/RelatoAI-Desktop-SDR.exe";
 const SDR_DESKTOP_SHA256 = "2c205795ef5d1c968714754d10643ecc0ab926e671b5d90988dd8423c50ab170";
+const OPS_DESKTOP_VERSION = "desktop-0.5.9";
+const OPS_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-ops-v2026.10.01.1/RelatoAI-Desktop-OPS.exe";
+const OPS_DESKTOP_SHA256 = "3e32938a040ddea48b27c65b781829c0289f23d787319bed233866035aa3b028";
 const DASHBOARD_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
   "http://localhost:3000",
@@ -381,6 +384,22 @@ Deno.serve(async (req: Request) => {
   catch { return respond({ error: "invalid_json" }, 400); }
   const action = clean(body?.action, 60).toLowerCase();
 
+  if (action === "desktop_release_info") {
+    const identity = await resolveDashboardPerson(req.headers.get("authorization") || "", supabaseUrl, anonKey, ops);
+    if (!identity) return respond({ error: "unauthorized" }, 401);
+    const { data: roster } = await ops.from("team_roster")
+      .select("role").eq("person", identity.person).eq("is_former", false).maybeSingle();
+    const role = clean(roster?.role, 20).toUpperCase();
+    const isOps = role === "CS" || role === "GT";
+    return respond({
+      ok: true,
+      role,
+      required_version: isOps ? OPS_DESKTOP_VERSION : REQUIRED_SDR_DESKTOP_VERSION,
+      download_url: isOps ? OPS_DESKTOP_DOWNLOAD_URL : SDR_DESKTOP_DOWNLOAD_URL,
+      sha256: isOps ? OPS_DESKTOP_SHA256 : SDR_DESKTOP_SHA256,
+    });
+  }
+
   if (action === "pair_create") {
     const identity = await resolveDashboardPerson(req.headers.get("authorization") || "", supabaseUrl, anonKey, ops);
     if (!identity) return respond({ error: "unauthorized" }, 401);
@@ -433,13 +452,21 @@ Deno.serve(async (req: Request) => {
         updated_at: new Date().toISOString()
       }).eq("id", device.id);
     }
+    const { data: roster } = await ops.from("team_roster")
+      .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
+    const role = clean(roster?.role, 20).toUpperCase();
+    const isOps = role === "CS" || role === "GT";
+    const requiredVersion = isOps ? OPS_DESKTOP_VERSION : REQUIRED_SDR_DESKTOP_VERSION;
+    const downloadUrl = isOps ? OPS_DESKTOP_DOWNLOAD_URL : SDR_DESKTOP_DOWNLOAD_URL;
+    const sha256 = isOps ? OPS_DESKTOP_SHA256 : SDR_DESKTOP_SHA256;
     return respond({
       ok: true,
       current_version: currentVersion,
-      required_version: REQUIRED_SDR_DESKTOP_VERSION,
-      update_required: currentVersion !== REQUIRED_SDR_DESKTOP_VERSION,
-      download_url: SDR_DESKTOP_DOWNLOAD_URL,
-      sha256: SDR_DESKTOP_SHA256,
+      required_version: requiredVersion,
+      update_required: currentVersion !== requiredVersion,
+      download_url: downloadUrl,
+      sha256,
+      role,
     });
   }
 
@@ -665,8 +692,9 @@ Deno.serve(async (req: Request) => {
     const extensionVersion = clean(call.extension_version, 40) || "";
     const { data: roster } = await ops.from("team_roster")
       .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
+    const rosterRole = String(roster?.role || "").toUpperCase();
     const supportedSdrDesktopVersions = new Set([REQUIRED_SDR_DESKTOP_VERSION, "desktop-0.5.7", "desktop-0.5.6", "desktop-0.5.5", "desktop-0.5.4", "desktop-0.5.2", "desktop-0.5.1"]);
-    if (String(roster?.role || "").toUpperCase() === "SDR" && !supportedSdrDesktopVersions.has(extensionVersion)) {
+    if (rosterRole === "SDR" && !supportedSdrDesktopVersions.has(extensionVersion)) {
       return respond({
         error: "desktop_agent_upgrade_required",
         message: "Atualize o Relato AI Desktop antes de gravar novas ligações.",
@@ -674,6 +702,16 @@ Deno.serve(async (req: Request) => {
         required_version: REQUIRED_SDR_DESKTOP_VERSION,
         download_url: SDR_DESKTOP_DOWNLOAD_URL,
         sha256: SDR_DESKTOP_SHA256,
+      }, 426);
+    }
+    if ((rosterRole === "CS" || rosterRole === "GT") && extensionVersion !== OPS_DESKTOP_VERSION) {
+      return respond({
+        error: "desktop_agent_upgrade_required",
+        message: "Atualize o Relato AI Operacional antes de gravar novas ligações.",
+        current_version: extensionVersion || null,
+        required_version: OPS_DESKTOP_VERSION,
+        download_url: OPS_DESKTOP_DOWNLOAD_URL,
+        sha256: OPS_DESKTOP_SHA256,
       }, 426);
     }
     const localSessionId = clean(call.local_session_id, 180);
@@ -831,7 +869,8 @@ Deno.serve(async (req: Request) => {
 
     const { data: roster } = await ops.from("team_roster")
       .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
-    const isSdr = String(roster?.role || "").toUpperCase() === "SDR";
+    const ownerRole = String(roster?.role || "").toUpperCase();
+    const isSdr = ownerRole === "SDR";
     const identitySide = String(identity?.side || "").toUpperCase();
     const identityStatus = String(identity?.status || "").toUpperCase();
     const knownNonProspect = identitySide === "TEAM"
@@ -1015,6 +1054,52 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    let opsPrefill: Row | null = null;
+    if ((ownerRole === "CS" || ownerRole === "GT") && session.transcript_id) {
+      const { data: transcript } = await ops.from("meeting_transcripts")
+        .select("summary,transcript_text,decisions,commitments,ai_signals,processing_status")
+        .eq("id", session.transcript_id).maybeSingle();
+      if (transcript) {
+        const textValue = (value: unknown, max = 1000) => clean(
+          typeof value === "string" ? value : (
+            value && typeof value === "object"
+              ? (value as Row).text || (value as Row).title || (value as Row).description || (value as Row).action || ""
+              : ""
+          ), max
+        );
+        const listValue = (value: unknown, max = 20) => Array.isArray(value)
+          ? value.map((item: unknown) => textValue(item, 700)).filter(Boolean).slice(0, max)
+          : [];
+        const ai = transcript.ai_signals && typeof transcript.ai_signals === "object" ? transcript.ai_signals : {};
+        const highlights = ai?.highlights && typeof ai.highlights === "object" ? ai.highlights : {};
+        const summary = clean(transcript.summary, 6000) || null;
+        const rawEvidence = `${summary || ""} ${clean(transcript.transcript_text, 30000)}`
+          .normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        const churnRisk = ownerRole === "CS" && /(cancelar|cancelamento|churn|encerrar contrato|sair da agencia|insatisfeit|sem resultado|nao estou vendo resultado|decepcion)/.test(rawEvidence);
+        const attentionRisk = /(problema|reclam|preocup|atras|cobranc|lead ruim|sem lead|aguardando|nao respondeu|dificuldade)/.test(rawEvidence);
+        const problems = [
+          ...listValue(highlights?.problems),
+          ...listValue(ai?.pain_points),
+          textValue(ai?.primary_pain, 700),
+        ].filter(Boolean);
+        const decisions = listValue(transcript.decisions);
+        const commitments = listValue(transcript.commitments);
+        const actionItems = [...listValue(ai?.action_items), ...commitments]
+          .filter((v, i, arr) => arr.indexOf(v) === i).slice(0, 20);
+        opsPrefill = {
+          summary,
+          problems: [...new Set(problems)].slice(0, 20),
+          decisions,
+          action_items: actionItems,
+          commitments,
+          next_step: clean(ai?.follow_up, 2000) || null,
+          health: ownerRole === "CS" ? (churnRisk ? "RED" : attentionRisk ? "YELLOW" : "GREEN") : null,
+          churn_risk: churnRisk,
+          transcript_ready: ["READY","REJECTED"].includes(clean(transcript.processing_status, 40).toUpperCase()),
+        };
+      }
+    }
+
     const requiresSelection = !Boolean(identity?.auto) || (!identity?.client_id && String(identity?.side || "").toUpperCase() !== "TEAM");
     let clients: Row[] = [];
     if (requiresSelection) {
@@ -1023,11 +1108,12 @@ Deno.serve(async (req: Request) => {
       if (error) return respond({ error: "feedback_clients_failed", detail: error.message }, 500);
       clients = data || [];
     }
-    return respond({ ok: true, pending: false, workflow: "CLIENT_REVIEW", transcript_ready: transcriptReady,
+    const workflow = ownerRole === "CS" ? "OPS_CS" : ownerRole === "GT" ? "OPS_GT" : "CLIENT_REVIEW";
+    return respond({ ok: true, pending: false, workflow, owner_role: ownerRole, transcript_ready: transcriptReady,
       requires_selection: requiresSelection, remote_phone: remotePhone, remote_name: remoteName,
       remote_role: clean(identity?.role || session.metadata?.remote_role, 80) || null,
       client_id: identity?.client_id || null, client_name: identity?.client_name || null,
-      resolution_status: identity?.status || "UNRESOLVED", prospect_prefill: null,
+      resolution_status: identity?.status || "UNRESOLVED", prospect_prefill: null, ops_prefill: opsPrefill,
       clients: clients.map((c: Row) => ({ id: c.id, name: c.display_name })) });
   }
 
@@ -1146,6 +1232,12 @@ Deno.serve(async (req: Request) => {
     const feedbackProspectName = clean(prospectInput.name, 200) || null;
     const feedbackProspectPhone = normalizePhone(prospectInput.phone) || null;
     const requestedBindingSource = clean(feedback.binding_source, 40).toUpperCase();
+    const { data: feedbackRoster } = await ops.from("team_roster")
+      .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
+    const feedbackOwnerRole = clean(feedbackRoster?.role, 20).toUpperCase();
+    const operationalInput = feedback.operational && typeof feedback.operational === "object"
+      ? feedback.operational as Row
+      : null;
 
     if (isProspect) {
       bindingSource = "RELATO_COMMERCIAL";
@@ -1546,6 +1638,14 @@ Deno.serve(async (req: Request) => {
           closer_person: "Vitor Feitoza", sdr_person: device.owner_person,
         }} : {}),
         feedback_binding: { source: bindingSource, prospect_name: postCallName, confirmed_by: device.owner_person, confirmed_at: confirmedAt },
+        ...((feedbackOwnerRole === "CS" || feedbackOwnerRole === "GT") && operationalInput ? {
+          operational_feedback: {
+            role: feedbackOwnerRole,
+            payload: operationalInput,
+            confirmed_by: device.owner_person,
+            confirmed_at: confirmedAt,
+          }
+        } : {}),
       };
       await ops.from("meeting_capture_sessions").update({ metadata: nextMetadata, updated_at: new Date().toISOString() }).eq("id", session.id);
       session.metadata = nextMetadata;
@@ -1556,6 +1656,62 @@ Deno.serve(async (req: Request) => {
           updated_at: new Date().toISOString(),
         }).eq("id", session.transcript_id);
       }
+    }
+
+    if (!dismissed && operationalInput && (feedbackOwnerRole === "CS" || feedbackOwnerRole === "GT")) {
+      const cleanList = (value: unknown, max = 30) => Array.isArray(value)
+        ? value.map((v: unknown) => clean(v, 1000)).filter(Boolean).slice(0, max)
+        : [];
+      const isoOrNull = (value: unknown) => {
+        const raw = clean(value, 100);
+        return raw && Number.isFinite(Date.parse(raw)) ? new Date(raw).toISOString() : null;
+      };
+      const health = feedbackOwnerRole === "CS"
+        ? (["GREEN","YELLOW","RED","UNKNOWN"].includes(clean(operationalInput.health, 20).toUpperCase())
+          ? clean(operationalInput.health, 20).toUpperCase() : "UNKNOWN")
+        : null;
+      const normalizedOperational: Row = feedbackOwnerRole === "CS" ? {
+        summary: clean(operationalInput.summary, 6000) || null,
+        health,
+        churn_risk: Boolean(operationalInput.churn_risk),
+        risk_reason: clean(operationalInput.risk_reason, 3000) || null,
+        problems: cleanList(operationalInput.problems),
+        agency_commitments: cleanList(operationalInput.agency_commitments),
+        client_commitments: cleanList(operationalInput.client_commitments),
+        responsible: clean(operationalInput.responsible, 300) || null,
+        deadline: isoOrNull(operationalInput.deadline),
+        next_contact: isoOrNull(operationalInput.next_contact),
+        next_step: clean(operationalInput.next_step, 3000) || null,
+      } : {
+        summary: clean(operationalInput.summary, 6000) || null,
+        product: clean(operationalInput.product, 500) || null,
+        campaign: clean(operationalInput.campaign, 500) || null,
+        budget_change: clean(operationalInput.budget_change, 1000) || null,
+        audience_region: clean(operationalInput.audience_region, 1500) || null,
+        creative: clean(operationalInput.creative, 1500) || null,
+        performance_issue: clean(operationalInput.performance_issue, 3000) || null,
+        decisions: cleanList(operationalInput.decisions),
+        action_items: cleanList(operationalInput.action_items),
+        responsible: clean(operationalInput.responsible, 300) || null,
+        deadline: isoOrNull(operationalInput.deadline),
+        next_step: clean(operationalInput.next_step, 3000) || null,
+      };
+      const { error: operationalError } = await ops.from("relato_operational_call_records").upsert({
+        capture_session_id: session.id,
+        transcript_id: Number(session.transcript_id || 0) || null,
+        owner_person: device.owner_person,
+        owner_role: feedbackOwnerRole,
+        client_id: selectedClientId,
+        client_name: selectedClientName,
+        channel: interactionChannel,
+        summary: clean(normalizedOperational.summary, 6000) || null,
+        health,
+        churn_risk: feedbackOwnerRole === "CS" ? Boolean(normalizedOperational.churn_risk) : false,
+        operational: normalizedOperational,
+        submitted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "capture_session_id" });
+      if (operationalError) return respond({ error: "operational_feedback_save_failed", detail: operationalError.message }, 500);
     }
 
     const asScore = (value: unknown) => {
