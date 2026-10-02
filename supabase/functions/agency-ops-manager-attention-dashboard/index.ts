@@ -17,7 +17,7 @@ async function setting(name: string): Promise<string | null> {
 
 Deno.serve(async (req) => {
   const url = new URL(req.url);
-  if (url.searchParams.get("health") === "1") return json({ ok: true, service: "agency-ops-manager-attention-dashboard", version: 2, channel: "DASHBOARD_ONLY" });
+  if (url.searchParams.get("health") === "1") return json({ ok: true, service: "agency-ops-manager-attention-dashboard", version: 2, channel: "DASHBOARD_AND_ADLER_NOTIFICATIONS" });
   if (req.method !== "GET" && req.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
 
   const expected = await setting("MANAGER_RADAR_CRON_SECRET");
@@ -39,7 +39,7 @@ Deno.serve(async (req) => {
   const items = Array.isArray(radar?.analysis?.items) ? radar.analysis.items : [];
   const actionable = items.filter((item: any) => ['COBRAR_AGORA','ACOMPANHAR_HOJE','VERIFICAR_INTERNO'].includes(String(item?.level || "")));
 
-  if (dryRun) return json({ ok: true, dry_run: true, channel: "DASHBOARD_ONLY", slot, run_id: runId, alert_count: actionable.length });
+  if (dryRun) return json({ ok: true, dry_run: true, channel: "DASHBOARD_AND_ADLER_NOTIFICATIONS", slot, run_id: runId, alert_count: actionable.length });
 
   const alertIds: string[] = [];
   for (const item of actionable) {
@@ -64,5 +64,5 @@ Deno.serve(async (req) => {
     }).eq("id", runId);
   }
 
-  return json({ ok: true, channel: "DASHBOARD_ONLY", slot, run_id: runId, alert_count: alertIds.length, alert_ids: alertIds });
+  return json({ ok: true, channel: "DASHBOARD_AND_ADLER_NOTIFICATIONS", slot, run_id: runId, alert_count: alertIds.length, alert_ids: alertIds });
 });
