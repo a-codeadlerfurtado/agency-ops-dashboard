@@ -10,7 +10,6 @@ import { ViewErrorBoundary } from "./view-error-boundary";
 import AdlerWalletManagement from "./adler-wallet-management";
 import ClientWalletTransfer, { WalletInlineButton, WalletInlineStyles } from "./client-wallet-transfer";
 import { DailyReflection } from "./daily-reflection";
-import { RelatoPairingCard } from "./relato-pairing-card";
 import { PortfolioCenter } from "./views/portfolio";
 import { DiaryCenter as StructuredDiaryCenter } from "./views/diary";
 // A aba de contratos entra por import dinamico de proposito: assim o codigo da
@@ -546,7 +545,6 @@ export default function Dashboard() {
       </header>
 
       {view === "overview" && <DailyReflection token={session.access_token} />}
-      {view === "overview" && ["CS","GT"].includes(String(data?.profile?.role || "").toUpperCase()) && <RelatoPairingCard />}
 
       <div className="source-banner"><span>O dashboard prioriza e diagnostica.</span> O ClickUp continua sendo a fonte oficial para executar e concluir tarefas.</div>
 
