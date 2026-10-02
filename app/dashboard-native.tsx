@@ -9,6 +9,7 @@ import { TabHelp } from "./tab-help";
 import { PasswordRecoveryScreen } from "./password-recovery-screen";
 import { ViewErrorBoundary } from "./view-error-boundary";
 import AdlerWalletManagement from "./adler-wallet-management";
+import { DailyReflection } from "./daily-reflection";
 import { PortfolioCenter } from "./views/portfolio";
 import { DiaryCenter as StructuredDiaryCenter } from "./views/diary";
 // A aba de contratos entra por import dinamico de proposito: assim o codigo da
@@ -684,6 +685,8 @@ export default function Dashboard() {
             <Metric label="Compromissos vencidos" value={formatNumber(kpis.overdue_commitments)} tone={kpis.overdue_commitments ? "red" : "green"} hint="em aberto" loading={!data} />
             {data?.profile?.can_view_operational_alerts && <Metric label="Alertas abertos" value={formatNumber(kpis.open_alerts)} tone={kpis.critical_alerts ? "red" : "yellow"} hint={`${formatNumber(kpis.critical_alerts)} críticos/altos`} loading={!data} />}
           </section>}
+
+      {view === "overview" && <DailyReflection token={session.access_token} />}
 
       {view === "focus" && (isDesignRestricted
         ? <DesignFocusCenter focus={data?.operations?.design_focus || {}} />

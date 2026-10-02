@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { BrandMark, SUPABASE_URL, authenticatedFetch, loadProfileLite, supabase } from "./shared";
 
 import { RelatoPairingCard } from "./relato-pairing-card";
+import { DailyReflection } from "./daily-reflection";
 
 type Row = Record<string, any>;
 
@@ -295,6 +296,7 @@ export default function SdrProfileShell() {
       <button onClick={load} disabled={loading}>Atualizar</button><button className="ghost" onClick={()=>supabase.auth.signOut({scope:"local"})}>Sair</button></div></header>
       {error&&<div className="sdr-error">{error}</div>}
       <section className="sdr-content">
+        <DailyReflection token={session.access_token}/>
         <RelatoPairingCard/>
         <div className="sdr-kpis"><article><span>Ligações</span><b>{Number(data.summary?.calls||0)}</b></article>
         <article><span>Reuniões</span><b>{Number(data.summary?.meetings||0)}</b></article></div>
