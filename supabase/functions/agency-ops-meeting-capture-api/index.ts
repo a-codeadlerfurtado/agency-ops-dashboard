@@ -1117,6 +1117,31 @@ Deno.serve(async (req: Request) => {
       clients: clients.map((c: Row) => ({ id: c.id, name: c.display_name })) });
   }
 
+  if (action === "call_upload_failed") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const localSessionId = clean(body?.local_session_id, 180);
+    const message = clean(body?.error, 1000) || "desktop_audio_upload_failed";
+    if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
+    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
+      .select("id,state,metadata").eq("device_id",device.id).eq("local_session_id",localSessionId).maybeSingle();
+    if (sessionError || !session) return respond({ error: "call_session_not_found" }, 404);
+    const now = new Date().toISOString();
+    const { error: updateError } = await ops.from("meeting_capture_sessions").update({
+      state: "UPLOAD_FAILED",
+      audio_status: "UPLOAD_FAILED",
+      audio_last_error: message,
+      metadata: {
+        ...(session.metadata || {}),
+        upload_failure: { error: message, failed_at: now, source: "DESKTOP_AGENT" },
+      },
+      updated_at: now,
+      audio_updated_at: now,
+    }).eq("id",session.id);
+    if (updateError) return respond({ error: "call_upload_failure_save_failed", detail: updateError.message }, 500);
+    return respond({ ok: true, session_id: session.id, state: "UPLOAD_FAILED" });
+  }
+
   if (action === "call_mixed_ready") {
     const device = await resolveDevice(req, ops);
     if (!device) return respond({ error: "invalid_device" }, 401);
