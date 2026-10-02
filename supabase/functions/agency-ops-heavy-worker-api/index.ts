@@ -47,7 +47,8 @@ function weakCallSpeech(value: unknown) {
   if (!words.length) return true;
   if (likelyWhisperHallucination(value)) return true;
   const observedHallucinationWords = new Set([
-    "tchau","e","ai","obrigado","obrigada","o","que","isso","a","cidade","no","brasil","beleza","valeu"
+    "tchau","e","ai","obrigado","obrigada","o","que","isso","a","cidade","no","brasil","beleza","valeu",
+    "oi","alo","sim","nao","amem"
   ]);
   if (words.every((word) => observedHallucinationWords.has(word))) return true;
   if (words.length >= 6 && new Set(words).size / words.length <= 0.45) return true;
@@ -481,7 +482,7 @@ async function getControl() {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 16 });
+  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 17 });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return json({ error: "server_not_configured" }, 500);
 
@@ -812,6 +813,46 @@ Deno.serve(async (req) => {
           : remoteSpeechObserved
             ? "ANSWERED_CONFIRMED_BY_REMOTE_SPEECH"
             : (explicitCallOutcome || "UNKNOWN");
+
+      const isDesktopCall = String(session.capture_mode || "").toUpperCase() === "WHATSAPP_DESKTOP_AUDIO";
+      const explicitAnsweredEvidence = explicitCallOutcome.startsWith("ANSWERED")
+        || session.metadata?.answered === true
+        || session.metadata?.call_ui_connected_observed === true;
+      if (isDesktopCall && !explicitAnsweredEvidence && !remoteSpeechObserved) {
+        const now = new Date().toISOString();
+        if (session.transcript_id) {
+          await sb.from("meeting_transcript_segments").delete().eq("session_id", session.id);
+          await sb.from("meeting_transcripts").update({
+            processing_status: "REJECTED",
+            metadata: {
+              ...(session.metadata || {}),
+              transcript_quality: {
+                status: "NO_ANSWER_OR_NO_REMOTE_SPEECH",
+                reason: "NO_VALID_REMOTE_SPEECH",
+                rejected_at: now,
+              },
+            },
+            updated_at: now,
+          }).eq("id", session.transcript_id);
+        }
+        await sb.from("meeting_capture_sessions").update({
+          state: "READY",
+          transcript_id: null,
+          metadata: {
+            ...(session.metadata || {}),
+            call_outcome: "NO_ANSWER",
+            answered: false,
+            transcript_quality: {
+              status: "NO_ANSWER_OR_NO_REMOTE_SPEECH",
+              source: "CHANNEL_SEPARATED_TRANSCRIPT_VALIDATION",
+              evaluated_at: now,
+            },
+          },
+          updated_at: now,
+        }).eq("id", session.id);
+        return json({ ok: true, no_answer: true, rejected: true, reason: "NO_VALID_REMOTE_SPEECH", transcript_id: null, segments: 0 });
+      }
+
       const durationSeconds = session.started_at && session.ended_at
         ? Math.max(0, Math.round((Date.parse(String(session.ended_at)) - Date.parse(String(session.started_at))) / 1000)) : null;
       const clock = (value: unknown) => {

@@ -23,6 +23,8 @@ const invariants = [
   [heavy.includes("tryWorkersAiCallFallback"), "terminal empty transcripts must use Workers AI fallback before NEEDS_REVIEW"],
   [heavy.includes('recovered_by: "CLOUDFLARE_WORKERS_AI"'), "fallback-recovered calls must close their heavy job as SUCCEEDED"],
   [heavy.includes('"NO_SPEECH_OR_UNINTELLIGIBLE"'), "true no-speech audio must not pollute NEEDS_REVIEW"],
+  [heavy.includes('"NO_VALID_REMOTE_SPEECH"'), "desktop calls without valid remote speech must resolve as NO_ANSWER"],
+  [heavy.includes('"oi","alo","sim","nao","amem"'), "one-word ringing/noise hallucinations must stay in weak-speech filtering"],
   [heavy.includes('action === "worker_probe"'), "Workers AI fallback authentication probe must remain available"],
   [heavy.includes('"LOW_CONFIDENCE_PENDING"'), "low-confidence SDR transcripts must stay usable instead of being rejected"],
   [jarvis.includes('x-agency-worker-token'), "Jarvis STT must accept authenticated Relato worker fallback requests"],
