@@ -24,11 +24,11 @@ const day=(v:unknown)=>{if(!v)return"—";const s=String(v).slice(0,10),p=s.spli
 const list=(v:unknown)=>Array.isArray(v)?v.join(", "):txt(v,"");
 const split=(v:string)=>v.split(/[,;\n]+/).map(x=>x.trim()).filter(Boolean);
 const phone=(v:unknown)=>String(v??"").replace(/\D/g,"");
-const errorText=(value:unknown,fallback:string)=>{
+const errorText=(value:unknown,fallback:string):string=>{
   if(typeof value==="string"&&value.trim())return value.trim();
   if(value&&typeof value==="object"){
     const row=value as Row;
-    for(const key of ["message","detail","error","hint","code"]){const nested=errorText(row[key],"");if(nested)return nested;}
+    for(const key of ["message","detail","error","hint","code"]){const nested:string=errorText(row[key],"");if(nested)return nested;}
     try{const json=JSON.stringify(value);if(json&&json!=="{}")return json;}catch{}
   }
   return fallback;
