@@ -713,7 +713,7 @@ Deno.serve(async(req:Request)=>{
       update_required:currentAgentVersion!==requiredAgentVersion,
       last_seen_at:latestDevice?.last_seen_at||null,
       device_name:latestDevice?.device_name||null,
-      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.10.02.1/RelatoAI-Desktop-SDR.exe"
+      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.10.02.2/RelatoAI-Desktop-SDR.exe"
     }:null,
     sdr_options:isLeonardoViewer?targetPeople:[],
     summary:{meetings:meetings.length,calls:enrichedCalls.length,notifications_unread:ownNotifications.unread},
