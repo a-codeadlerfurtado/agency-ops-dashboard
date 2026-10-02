@@ -24,6 +24,8 @@ export default function OnboardingRequiredAlerts() {
   const [scheduledDate, setScheduledDate] = useState("");
   const [scheduledTime, setScheduledTime] = useState("");
   const [meetUrl, setMeetUrl] = useState("");
+  const [profilePerson, setProfilePerson] = useState("");
+  const [explicitAlertId, setExplicitAlertId] = useState("");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -39,6 +41,7 @@ export default function OnboardingRequiredAlerts() {
       if (!response.ok || !body?.ok) return;
       setPending(Array.isArray(body.pending) ? body.pending : []);
       setHistory(Array.isArray(body.history) ? body.history : []);
+      setProfilePerson(String(body?.profile?.person || ""));
       setError("");
     } catch {
       // Aviso auxiliar: nunca derruba o dashboard principal.
@@ -59,7 +62,10 @@ export default function OnboardingRequiredAlerts() {
     return () => observer.disconnect();
   }, []);
 
-  const current = pending[0] || null;
+  const isAdler = profilePerson === "Adler Furtado";
+  const current = isAdler
+    ? (explicitAlertId ? pending.find((item) => String(item.id) === explicitAlertId) || null : null)
+    : (pending[0] || null);
   const canSchedule = Boolean(current?.alert_type === "ONBOARDING_MEETING_HANDOFF" && current?.metadata?.action_type === "SCHEDULE_MEETING");
 
   useEffect(() => {
@@ -94,6 +100,7 @@ export default function OnboardingRequiredAlerts() {
       const body = await response.json().catch(() => null);
       if (!response.ok || !body?.ok) throw new Error(body?.detail || body?.error || "Não foi possível registrar a ação.");
       await load();
+      setExplicitAlertId("");
       window.dispatchEvent(new CustomEvent("ops-onboarding-updated", { detail: body }));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Não foi possível registrar a ação.");
@@ -106,7 +113,9 @@ export default function OnboardingRequiredAlerts() {
         <div style={{ color: "#73aee0", fontSize: 9.5, fontWeight: 900, letterSpacing: ".11em" }}>ONBOARDING · AVISOS DE CIÊNCIA</div>
         {history.slice(0, 20).map((item) => {
           const scheduled = item.metadata?.ack_action === "MEETING_SCHEDULED" && item.metadata?.scheduled_for;
-          return <div key={String(item.id)} style={{ border: "1px solid rgba(92,145,183,.2)", background: "rgba(8,25,39,.56)", borderRadius: 9, padding: "8px 9px", display: "grid", gap: 3 }}>
+          const clickable = isAdler && !item.acknowledged_at && item.ack_required !== false;
+          const Tag = clickable ? "button" : "div";
+          return <Tag key={String(item.id)} {...(clickable ? { type: "button" as const, onClick: () => setExplicitAlertId(String(item.id)) } : {})} style={{ border: "1px solid rgba(92,145,183,.2)", background: "rgba(8,25,39,.56)", borderRadius: 9, padding: "8px 9px", display: "grid", gap: 3, width: "100%", textAlign: "left", color: "inherit", font: "inherit", cursor: clickable ? "pointer" : "default" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "center" }}>
               <b style={{ color: "#dcebfa", fontSize: 11 }}>{String(item.title || "Aviso de onboarding")}</b>
               <span style={{ color: item.acknowledged_at ? "#76cfa0" : "#f2c06b", fontSize: 9, fontWeight: 800, whiteSpace: "nowrap" }}>{item.acknowledged_at ? "CIENTE" : "AGUARDANDO CIÊNCIA"}</span>
@@ -118,7 +127,7 @@ export default function OnboardingRequiredAlerts() {
               {item.metadata?.meet_url && <a href={String(item.metadata.meet_url)} target="_blank" rel="noreferrer" style={{ color: "#74bdf0", fontSize: 9.5, width: "fit-content" }}>Abrir Google Meet</a>}
             </div>}
             <small style={{ color: "#637f94", fontSize: 9 }}>{when(item.occurred_at)}</small>
-          </div>;
+          </Tag>;
         })}
       </section>,
       panelTarget
