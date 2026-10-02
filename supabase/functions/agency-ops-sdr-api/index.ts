@@ -684,7 +684,7 @@ Deno.serve(async(req:Request)=>{
     source_url:r.source_url||null
   }));
 
-  const requiredAgentVersion="desktop-0.5.10";
+  const requiredAgentVersion="desktop-0.5.11";
   let latestDevice:Row|null=null;
   if(isOwnSdr){
     const {data}=await ops.from("meeting_capture_devices")
