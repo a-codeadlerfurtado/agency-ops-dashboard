@@ -962,13 +962,49 @@ Deno.serve(async (req: Request) => {
     if (sessionError) return respond({ error: "feedback_context_failed", detail: sessionError.message }, 500);
     if (!session) return respond({ ok: true, pending: true });
 
-    const remotePhone = normalizePhone(session.metadata?.remote_phone);
-    const identity = session.metadata?.identity_resolution?.auto === true
-      ? session.metadata.identity_resolution
+    const metadata = (session.metadata || {}) as Row;
+    const genericNames = new Set(["contato","contato whatsapp","contato whatsapp desktop","whatsapp","participante","prospect"]);
+    const validName = (value: unknown) => {
+      const name = safeContactName(value);
+      return name && !genericNames.has(name.toLowerCase()) ? name : null;
+    };
+    const nameKey = (value: unknown) => clean(value,160)
+      .normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+    const rejectedCandidate = (metadata?.rejected_remote_candidate || {}) as Row;
+    const directCandidate = (metadata?.untrusted_direct_chat_candidate || {}) as Row;
+    const rejectedName = validName(rejectedCandidate?.resolved_name);
+    const directName = validName(directCandidate?.name);
+    const candidateNamesAgree = Boolean(
+      rejectedName && directName
+      && nameKey(rejectedName) === nameKey(directName)
+      && clean(rejectedCandidate?.source,120).toUpperCase() !== clean(directCandidate?.source,120).toUpperCase()
+    );
+    const rejectedPhone = normalizePhone(rejectedCandidate?.phone);
+    const directPhone = normalizePhone(directCandidate?.phone);
+    const candidatePhoneConsensus = rejectedPhone && directPhone && rejectedPhone === directPhone ? rejectedPhone : null;
+
+    const remotePhone = normalizePhone(
+      metadata?.remote_phone
+      || metadata?.identity_resolution?.phone
+      || metadata?.name_evidence?.post_call?.phone
+      || metadata?.name_evidence?.whatsapp?.phone
+      || candidatePhoneConsensus
+    );
+    const identity = metadata?.identity_resolution?.auto === true
+      ? metadata.identity_resolution
       : await resolveCallIdentity(ops, remotePhone);
-    const genericNames = new Set(["contato","contato whatsapp","contato whatsapp desktop","whatsapp"]);
-    const rawName = clean(identity?.name || session.metadata?.remote_name || session.metadata?.contact_name, 160);
-    const remoteName = rawName && !genericNames.has(rawName.toLowerCase()) ? rawName : null;
+    const remoteName = validName(
+      metadata?.name_evidence?.post_call?.name
+      || metadata?.post_call_name
+      || metadata?.name_evidence?.whatsapp?.name
+      || metadata?.whatsapp_name
+      || metadata?.commercial_prospect?.name
+      || identity?.name
+      || metadata?.remote_name
+      || (candidateNamesAgree ? rejectedName : null)
+      || metadata?.transcript_inferred_name
+      || metadata?.contact_name
+    );
 
     const { data: roster } = await ops.from("team_roster")
       .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
