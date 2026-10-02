@@ -12,10 +12,20 @@ const reply=(body:unknown,status=200)=>new Response(JSON.stringify(body),{
 });
 const clean=(v:unknown)=>String(v??"").trim();
 const phoneDigits=(v:unknown)=>clean(v).replace(/\D/g,"");
+const plausiblePhone=(v:unknown)=>{
+  const digits=phoneDigits(v);
+  return digits.length>=10&&digits.length<=15?digits:"";
+};
+const metadataPhone=(metadata:Row={})=>
+  plausiblePhone(metadata?.remote_phone)||
+  plausiblePhone(metadata?.contact_name)||
+  plausiblePhone(metadata?.remote_name)||
+  "";
 const GENERIC_CONTACT_NAMES=new Set(["contato","contato whatsapp","contato whatsapp desktop","whatsapp"]);
 const safeContactName=(v:unknown)=>{
   const name=clean(v);
   if(!name||GENERIC_CONTACT_NAMES.has(name.toLowerCase())) return null;
+  if(/^(?:contato\s+)?whatsapp\s*\+?\d{8,15}$/i.test(name)) return null;
   if(/[\u0000-\u001f\u007f-\u009f]/.test(name)) return null;
   const letters=name.match(/\p{L}/gu)?.length||0;
   return letters>=2?name:null;
@@ -24,6 +34,9 @@ const nameEvidence=(metadata:Row={},lead:Row|null=null,record:Row|null=null)=>{
   const identity:Row=metadata?.identity_resolution||{};
   const source=clean(identity?.source||metadata?.identity_source).toUpperCase();
   const explicit=metadata?.name_evidence||{};
+  const commercial:Row=metadata?.commercial_prospect||{};
+  const commercialName=safeContactName(commercial?.name);
+  const commercialSource=clean(commercial?.name_source).toUpperCase();
   const whatsappSource =
     source.startsWith("WHATSAPP_") ||
     source.includes("PARTICIPANT_IDENTITY") ||
@@ -39,6 +52,7 @@ const nameEvidence=(metadata:Row={},lead:Row|null=null,record:Row|null=null)=>{
   const whatsappName=safeContactName(
     explicit?.whatsapp?.name ||
     metadata?.whatsapp_name ||
+    (commercialSource==="WHATSAPP"?commercialName:null) ||
     (whatsappSource?identity?.name:null) ||
     ((clean(metadata?.source).toUpperCase()==="WHATSAPP_WEB" || clean(metadata?.identity_source).toUpperCase()==="WHATSAPP_DESKTOP_UI")
       ? metadata?.contact_name : null)
@@ -46,21 +60,24 @@ const nameEvidence=(metadata:Row={},lead:Row|null=null,record:Row|null=null)=>{
   const postCallName=safeContactName(
     explicit?.post_call?.name ||
     metadata?.post_call_name ||
+    (commercialSource==="POST_CALL"?commercialName:null) ||
     (postCallSource?identity?.name:null)
   );
   const autoName=safeContactName(
     explicit?.transcript?.name ||
     metadata?.transcript_inferred_name ||
+    (commercialSource==="TRANSCRIPT"?commercialName:null) ||
     (transcriptSource?identity?.name:null)
   );
   const crmName=safeContactName(
     lead?.company || lead?.name ||
     explicit?.crm?.name ||
-    metadata?.crm_name
+    metadata?.crm_name ||
+    (commercialSource==="CRM"?commercialName:null)
   );
   const legacyName=safeContactName(record?.remote_name);
-  const primaryName=whatsappName||postCallName||crmName||autoName||legacyName||null;
-  const primarySource=whatsappName?"WHATSAPP":postCallName?"POST_CALL":crmName?"CRM":autoName?"TRANSCRIPT":legacyName?"LEGACY":null;
+  const primaryName=postCallName||whatsappName||crmName||autoName||commercialName||legacyName||null;
+  const primarySource=postCallName?"POST_CALL":whatsappName?"WHATSAPP":crmName?"CRM":autoName?"TRANSCRIPT":commercialName?(commercialSource||"COMMERCIAL"):legacyName?"LEGACY":null;
   return {
     whatsapp_name:whatsappName,
     post_call_name:postCallName,
@@ -473,7 +490,7 @@ Deno.serve(async(req:Request)=>{
       || (Number.isFinite(startedMs)&&Number.isFinite(endedMs)?Math.max(0,Math.round((endedMs-startedMs)/1000)):0)
       || Math.max(0,Math.round(Number(sessionRow.audio_duration_ms||0)/1000));
 
-    const detailPhone=phoneDigits(sessionRow.metadata?.remote_phone);
+    const detailPhone=metadataPhone(sessionRow.metadata||{});
     const commercialLeadId=clean(sessionRow.metadata?.commercial_prospect?.lead_id);
     let detailLead:Row|null=null;
     if(commercialLeadId){
@@ -494,7 +511,7 @@ Deno.serve(async(req:Request)=>{
         state:sessionRow.state,capture_mode:sessionRow.capture_mode,
         sdr_person:sessionRow.owner_person||null,
         owner_person:sessionRow.owner_person||null,
-        remote_phone:sessionRow.metadata?.remote_phone||null,
+        remote_phone:sessionRow.metadata?.remote_phone||detailPhone||null,
         remote_name:safeContactName(sessionRow.metadata?.remote_name),
         whatsapp_name:detailNames.whatsapp_name,
         post_call_name:detailNames.post_call_name,
@@ -542,7 +559,10 @@ Deno.serve(async(req:Request)=>{
   if(failed?.error) return reply({error:"query_failed",detail:failed.error.message},500);
 
   const calls=(callRes.data||[]) as Row[];
-  const leadIds=[...new Set(calls.map(r=>String(r.lead_id||"")).filter(Boolean))];
+  const leadIds=[...new Set([
+    ...calls.map(r=>String(r.lead_id||"")),
+    ...(sessionRes.data||[]).map((r:Row)=>clean(r.metadata?.commercial_prospect?.lead_id))
+  ].filter(Boolean))];
   let leadMap=new Map<string,Row>();
   if(leadIds.length){
     const {data:leadRows,error:leadError}=await crm.from("leads")
@@ -578,7 +598,7 @@ Deno.serve(async(req:Request)=>{
     if(reviewRowsError) return reply({error:"manager_reviews_failed",detail:reviewRowsError.message},500);
     for(const row of reviewRows||[]) managerReviewMap.set(String(row.session_id),String(row.reviewed_at||""));
   }
-  const sessionPhones=[...new Set(callSessions.map((r:Row)=>phoneDigits(r.metadata?.remote_phone)).filter(Boolean))];
+  const sessionPhones=[...new Set(callSessions.map((r:Row)=>metadataPhone(r.metadata||{})).filter(Boolean))];
   const phoneLeadMap=new Map<string,Row>();
   if(sessionPhones.length){
     const variants=[...new Set(sessionPhones.flatMap((p:string)=>[p,"+"+p]))];
@@ -595,10 +615,11 @@ Deno.serve(async(req:Request)=>{
     const record:any=callBySession.get(String(session.id))||callByTranscript.get(String(session.transcript_id||""))||null;
     const transcript:any=session.transcript_id?transcriptMap.get(String(session.transcript_id)):null;
     const recordLead:any=record?.lead_id?leadMap.get(String(record.lead_id))||null:null;
-    const remotePhone=record?.remote_phone||session.metadata?.remote_phone||null;
-    const phoneLead:any=phoneLeadMap.get(phoneDigits(remotePhone))||null;
     const metadataLeadId=clean(session.metadata?.commercial_prospect?.lead_id);
-    const lead:any=recordLead||phoneLead||null;
+    const metadataLead:any=metadataLeadId?leadMap.get(metadataLeadId)||null:null;
+    const remotePhone=record?.remote_phone||session.metadata?.remote_phone||metadataPhone(session.metadata||{})||null;
+    const phoneLead:any=phoneLeadMap.get(phoneDigits(remotePhone))||null;
+    const lead:any=recordLead||metadataLead||phoneLead||null;
     const names=nameEvidence(session.metadata||{},lead,record);
     const startedMs=Date.parse(String(session.started_at||""));
     const endedMs=Date.parse(String(session.ended_at||""));
