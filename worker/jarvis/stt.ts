@@ -32,21 +32,33 @@ export async function transcrever(request: Request, env: EnvJarvis): Promise<Res
     // implementacao otimizada do runtime (nodejs_compat), conforme o caminho
     // recomendado pela Cloudflare para Whisper.
     const audio = Buffer.from(buffer).toString("base64");
-    const resultado: any = await env.AI.run(MODELO, {
+    const limpar = (valor: unknown) => {
+      let texto = normalizarTranscricaoOperacional(valor).trim();
+      if (/^(?:transcri[cç][aã]o e )?legendas?(?: por)?\s+[\p{L} .'-]{2,}$/iu.test(texto)) texto = "";
+      if (/^(?:legenda|subt[ií]tulos?)\s+[\p{L} .'-]{2,}$/iu.test(texto)) texto = "";
+      return texto;
+    };
+    const executar = async (relaxed: boolean) => env.AI!.run(MODELO, {
       audio,
       language: "pt",
       task: "transcribe",
-      vad_filter: true,
+      vad_filter: relaxed ? false : true,
       condition_on_previous_text: false,
-      no_speech_threshold: 0.48,
-      compression_ratio_threshold: 2.2,
-      log_prob_threshold: -0.8,
-      hallucination_silence_threshold: 0.6,
+      no_speech_threshold: relaxed ? 0.92 : 0.48,
+      compression_ratio_threshold: relaxed ? 2.8 : 2.2,
+      log_prob_threshold: relaxed ? -1.6 : -0.8,
+      hallucination_silence_threshold: relaxed ? 1.2 : 0.6,
+      beam_size: relaxed ? 5 : 3,
     });
-    let texto = normalizarTranscricaoOperacional(resultado?.text ?? resultado?.result?.text).trim();
-    if (/^(?:transcri[cç][aã]o e )?legendas?(?: por)?\s+[\p{L} .'-]{2,}$/iu.test(texto)) texto = "";
-    if (/^(?:legenda|subt[ií]tulos?)\s+[\p{L} .'-]{2,}$/iu.test(texto)) texto = "";
-    return Response.json({ ok: true, text: texto });
+    let resultado: any = await executar(false);
+    let texto = limpar(resultado?.text ?? resultado?.result?.text);
+    let pass = "primary";
+    if (!texto) {
+      resultado = await executar(true);
+      texto = limpar(resultado?.text ?? resultado?.result?.text);
+      pass = "relaxed";
+    }
+    return Response.json({ ok: true, text: texto, pass });
   } catch (erro) {
     return Response.json(
       { ok: false, error: erro instanceof Error ? erro.message : "stt_falhou" },

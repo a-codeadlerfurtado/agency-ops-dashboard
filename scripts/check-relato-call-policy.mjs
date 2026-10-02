@@ -24,6 +24,7 @@ const invariants = [
   [heavy.includes('action === "worker_probe"'), "Workers AI fallback authentication probe must remain available"],
   [heavy.includes('"LOW_CONFIDENCE_PENDING"'), "low-confidence SDR transcripts must stay usable instead of being rejected"],
   [jarvis.includes('x-agency-worker-token'), "Jarvis STT must accept authenticated Relato worker fallback requests"],
+  [fs.readFileSync("worker/jarvis/stt.ts", "utf8").includes('pass = "relaxed"'), "Workers AI STT must retry empty audio with relaxed decoding"],
   [processor.includes('body.text || body.transcription'), "local Whisper worker must preserve text-only verbose responses"],
 ];
 
