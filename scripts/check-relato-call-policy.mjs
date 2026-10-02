@@ -19,7 +19,7 @@ const invariants = [
   [pairing.includes('action:"desktop_release_info"'), "SDR pairing card must load the canonical desktop release dynamically"],
   [!pairing.includes("relato-package-v2026.10.02.1"), "SDR pairing card must not regress to the 0.5.10 hardcoded release"],
   [meetings.includes('action: "desktop_release_info"'), "Relato workspace must expose the role-specific desktop release"],
-  [sdr.includes("relato-package-v2026.10.02.2/RelatoAI-Desktop-SDR.exe"), "SDR API must expose the current 0.5.11 release"],
+  [sdr.includes("relato-package-v2026.10.02.3/RelatoAI-Desktop-SDR.exe"), "SDR API must expose the current 0.5.12 release"],
   [heavy.includes("tryWorkersAiCallFallback"), "terminal empty transcripts must use Workers AI fallback before NEEDS_REVIEW"],
   [heavy.includes('recovered_by: "CLOUDFLARE_WORKERS_AI"'), "fallback-recovered calls must close their heavy job as SUCCEEDED"],
   [heavy.includes('"NO_SPEECH_OR_UNINTELLIGIBLE"'), "true no-speech audio must not pollute NEEDS_REVIEW"],

@@ -4,9 +4,9 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 type Row = Record<string, any>;
 
 const VERSION = "meeting-capture-v1.1-audio";
-const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.11";
-const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.10.02.2/RelatoAI-Desktop-SDR.exe";
-const SDR_DESKTOP_SHA256 = "65cc610f778a332fb1949f77137a1e80b6709674832e5eefe802e5af6348ae5b";
+const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.12";
+const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.10.02.3/RelatoAI-Desktop-SDR.exe";
+const SDR_DESKTOP_SHA256 = "64db9eb141b1adf47c82a57632e658dbbaf589fc95572a398517b9480e453549";
 const OPS_DESKTOP_VERSION = "desktop-0.5.9";
 const OPS_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-ops-v2026.10.01.1/RelatoAI-Desktop-OPS.exe";
 const OPS_DESKTOP_SHA256 = "3e32938a040ddea48b27c65b781829c0289f23d787319bed233866035aa3b028";
