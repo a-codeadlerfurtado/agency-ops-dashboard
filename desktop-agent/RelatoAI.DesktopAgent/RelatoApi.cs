@@ -4,8 +4,9 @@ using System.Text.Json;
 namespace RelatoAI.DesktopAgent;
 
 internal sealed record PairResult(string DeviceToken, string DeviceId, string OwnerPerson);
-internal sealed record UploadTarget(string Role, string Path, string SignedUrl);
+internal sealed record UploadTarget(string Role, string Path, string SignedUrl, string? Token = null);
 internal sealed record PreparedCall(string SessionId, IReadOnlyList<UploadTarget> Uploads);
+internal sealed record PreparedRetryCall(string SessionId, IReadOnlyList<UploadTarget> Uploads, long DurationMs, bool Skip, bool SafeToDeleteLocal);
 internal sealed record PreparedMeetingAudio(string SessionId, IReadOnlyList<UploadTarget> Uploads, string State);
 internal sealed record ClientOption(string Id, string Name);
 internal sealed record ProspectPrefill(
@@ -79,7 +80,7 @@ internal sealed partial class RelatoApi
             action = "pair_redeem",
             code = code.Trim().ToUpperInvariant(),
             device_name = Environment.MachineName + " · Relato AI Desktop Agent",
-            extension_version = "desktop-0.5.1"
+            extension_version = AgentUpdater.CurrentVersion
         }, withToken: false);
         var root = doc.RootElement;
         return new PairResult(
@@ -107,7 +108,7 @@ internal sealed partial class RelatoApi
                 identity_source = identitySource,
                 duration_ms = durationMs,
                 finish_reason = "desktop_audio_session_ended",
-                extension_version = "desktop-0.5.1",
+                extension_version = AgentUpdater.CurrentVersion,
                 source = "WHATSAPP_DESKTOP",
                 audio_ext = "wav"
             },
@@ -119,8 +120,41 @@ internal sealed partial class RelatoApi
             uploads.Add(new UploadTarget(
                 item.GetProperty("role").GetString() ?? "",
                 item.GetProperty("path").GetString() ?? "",
-                item.GetProperty("signed_url").GetString() ?? ""));
+                item.GetProperty("signed_url").GetString() ?? "",
+                item.TryGetProperty("token", out var tokenEl) && tokenEl.ValueKind != JsonValueKind.Null ? tokenEl.GetString() : null));
         return new PreparedCall(root.GetProperty("session_id").GetString() ?? "", uploads);
+    }
+
+    public async Task<PreparedRetryCall> PrepareRetryCallAsync(string localSessionId, IReadOnlyList<string> roles)
+    {
+        using var doc = await SendAsync(new
+        {
+            action = "call_retry_prepare",
+            local_session_id = localSessionId,
+            roles
+        });
+        var root = doc.RootElement;
+        var skip = root.TryGetProperty("skip", out var skipEl) && skipEl.ValueKind == JsonValueKind.True;
+        var safeToDeleteLocal = root.TryGetProperty("safe_to_delete_local", out var cleanupEl) && cleanupEl.ValueKind == JsonValueKind.True;
+        var durationMs = root.TryGetProperty("duration_ms", out var durationEl) && durationEl.TryGetInt64(out var duration)
+            ? Math.Max(0L, duration)
+            : 0L;
+        var uploads = new List<UploadTarget>();
+        if (root.TryGetProperty("uploads", out var uploadEl) && uploadEl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in uploadEl.EnumerateArray())
+                uploads.Add(new UploadTarget(
+                    item.GetProperty("role").GetString() ?? "",
+                    item.GetProperty("path").GetString() ?? "",
+                    item.GetProperty("signed_url").GetString() ?? "",
+                    item.TryGetProperty("token", out var tokenEl) && tokenEl.ValueKind != JsonValueKind.Null ? tokenEl.GetString() : null));
+        }
+        return new PreparedRetryCall(
+            root.TryGetProperty("session_id", out var sessionEl) ? sessionEl.GetString() ?? "" : "",
+            uploads,
+            durationMs,
+            skip,
+            safeToDeleteLocal);
     }
 
     public async Task<FeedbackContext> GetFeedbackContextAsync(string localSessionId)

@@ -849,6 +849,97 @@ Deno.serve(async (req: Request) => {
     return respond({ ok: true, session_id: session.id, owner_person: device.owner_person, uploads });
   }
 
+  if (action === "call_retry_prepare") {
+    const device = await resolveDevice(req, ops);
+    if (!device) return respond({ error: "invalid_device" }, 401);
+    const localSessionId = clean(body?.local_session_id, 180);
+    if (!localSessionId) return respond({ error: "local_session_id_required" }, 400);
+
+    const requestedRoles = Array.isArray(body?.roles)
+      ? [...new Set(body.roles.map((value: unknown) => clean(value, 20).toLowerCase())
+          .filter((value: string) => ["local","remote"].includes(value)))]
+      : [];
+
+    const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions")
+      .select("id,state,transcript_id,metadata,audio_status,audio_local_path,audio_remote_path,audio_mixed_path,audio_duration_ms,started_at,ended_at")
+      .eq("device_id", device.id).eq("local_session_id", localSessionId).maybeSingle();
+    if (sessionError || !session) return respond({ error: "call_session_not_found" }, 404);
+
+    const audioStatus = clean(session.audio_status, 40).toUpperCase();
+    const state = clean(session.state, 40).toUpperCase();
+    const alreadyComplete = audioStatus === "READY" && Boolean(session.audio_mixed_path);
+    if (alreadyComplete) {
+      return respond({
+        ok: true,
+        skip: true,
+        safe_to_delete_local: true,
+        session_id: session.id,
+        duration_ms: Math.max(0, Math.round(Number(session.audio_duration_ms || 0))),
+        uploads: []
+      });
+    }
+
+    const audioPaths: Row = {
+      local: clean(session.audio_local_path || session.metadata?.audio_paths?.local, 1000) || null,
+      remote: clean(session.audio_remote_path || session.metadata?.audio_paths?.remote, 1000) || null,
+    };
+    const roles = requestedRoles.length
+      ? requestedRoles
+      : Object.keys(audioPaths).filter((role) => Boolean(audioPaths[role]));
+    const uploads: Row[] = [];
+    for (const role of roles) {
+      const path = clean(audioPaths[role], 1000);
+      if (!path) continue;
+      const { data, error } = await db.storage.from("relato-call-audio").createSignedUploadUrl(path, { upsert: true });
+      if (error || !data?.signedUrl) return respond({ error: "call_retry_upload_url_failed", role, detail: error?.message }, 500);
+      uploads.push({ role, path, signed_url: data.signedUrl, token: data.token || null });
+    }
+    if (!uploads.length) return respond({ error: "call_retry_audio_paths_missing" }, 400);
+
+    const durationMs = Math.max(
+      0,
+      Math.round(
+        Number(session.audio_duration_ms || 0)
+        || (session.started_at && session.ended_at ? Date.parse(session.ended_at) - Date.parse(session.started_at) : 0)
+      )
+    );
+    const now = new Date().toISOString();
+    const previousRetry = session.metadata?.upload_retry && typeof session.metadata.upload_retry === "object"
+      ? session.metadata.upload_retry
+      : {};
+    const attemptCount = Math.max(0, Number(previousRetry?.attempt_count || 0)) + 1;
+    const nextMetadata = {
+      ...(session.metadata || {}),
+      previous_upload_failure: session.metadata?.upload_failure || session.metadata?.previous_upload_failure || null,
+      upload_failure: null,
+      upload_retry: {
+        attempt_count: attemptCount,
+        last_attempt_at: now,
+        source: "DESKTOP_AGENT_TEMP_RECOVERY",
+        previous_state: state || null,
+        previous_audio_status: audioStatus || null,
+      },
+    };
+    const { error: updateError } = await ops.from("meeting_capture_sessions").update({
+      state: "PROCESSING",
+      audio_status: "UPLOADING",
+      audio_last_error: null,
+      audio_updated_at: now,
+      metadata: nextMetadata,
+      updated_at: now,
+    }).eq("id", session.id);
+    if (updateError) return respond({ error: "call_retry_state_failed", detail: updateError.message }, 500);
+
+    return respond({
+      ok: true,
+      skip: false,
+      safe_to_delete_local: false,
+      session_id: session.id,
+      duration_ms: durationMs,
+      uploads
+    });
+  }
+
   if (action === "call_feedback_context") {
     const device = await resolveDevice(req, ops);
     if (!device) return respond({ error: "invalid_device" }, 401);

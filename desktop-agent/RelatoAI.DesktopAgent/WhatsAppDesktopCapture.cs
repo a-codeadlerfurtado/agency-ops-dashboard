@@ -337,6 +337,107 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
 
     public Task FinishManualAsync() => FinishCallAsync("manual_stop");
 
+    public async Task<int> RetryPendingUploadsAsync()
+    {
+        var cfg = AgentConfig.Load() ?? configProvider();
+        if (cfg is null) return 0;
+
+        var root = Path.Combine(Path.GetTempPath(), "RelatoAI");
+        if (!Directory.Exists(root)) return 0;
+
+        var recovered = 0;
+        var directories = Directory.EnumerateDirectories(root, "wa-desktop-*", SearchOption.TopDirectoryOnly)
+            .OrderByDescending(path =>
+            {
+                try { return Directory.GetLastWriteTimeUtc(path); }
+                catch { return DateTime.MinValue; }
+            })
+            .Take(30)
+            .ToArray();
+
+        foreach (var dir in directories)
+        {
+            if (disposed) break;
+            var id = Path.GetFileName(dir);
+            if (string.IsNullOrWhiteSpace(id) || string.Equals(id, sessionId, StringComparison.OrdinalIgnoreCase)) continue;
+
+            var retryLocal = Path.Combine(dir, "local.wav");
+            var retryRemote = Path.Combine(dir, "remote.wav");
+            var roles = new List<string>();
+            if (File.Exists(retryRemote) && new FileInfo(retryRemote).Length > 1000) roles.Add("remote");
+            if (File.Exists(retryLocal) && new FileInfo(retryLocal).Length > 1000) roles.Add("local");
+            if (roles.Count == 0) continue;
+
+            try
+            {
+                while (IsRecording && !disposed)
+                    await Task.Delay(TimeSpan.FromSeconds(3));
+                if (disposed) break;
+
+                var api = new RelatoApi(cfg);
+                var prepared = await api.PrepareRetryCallAsync(id, roles);
+                if (prepared.Skip)
+                {
+                    if (prepared.SafeToDeleteLocal)
+                        _ = Task.Run(() => CleanupFiles(retryRemote, retryLocal, Path.Combine(dir, "meeting.mp3")));
+                    continue;
+                }
+
+                var uploaded = new List<object>();
+                var errors = new List<string>();
+                foreach (var targetUpload in prepared.Uploads)
+                {
+                    var file = targetUpload.Role switch
+                    {
+                        "local" => retryLocal,
+                        "remote" => retryRemote,
+                        _ => null
+                    };
+                    if (file is null || !File.Exists(file))
+                    {
+                        errors.Add($"{targetUpload.Role}: arquivo local ausente");
+                        continue;
+                    }
+                    try
+                    {
+                        await api.UploadAsync(targetUpload.SignedUrl, file, "audio/wav");
+                        uploaded.Add(new
+                        {
+                            role = targetUpload.Role,
+                            path = targetUpload.Path,
+                            bytes = new FileInfo(file).Length,
+                            mime_type = "audio/wav"
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        errors.Add($"{targetUpload.Role}: {ex.Message}");
+                    }
+                }
+
+                if (uploaded.Count == 0)
+                    throw new InvalidOperationException(errors.Count > 0
+                        ? string.Join(" | ", errors)
+                        : "Nenhum canal pendente pôde ser reenviado.");
+
+                await api.FinalizeCallAsync(id, uploaded, prepared.DurationMs);
+                recovered++;
+                StatusChanged?.Invoke($"Call antiga recuperada ({recovered})");
+                _ = Task.Run(() => CleanupFiles(retryRemote, retryLocal, Path.Combine(dir, "meeting.mp3")));
+            }
+            catch (Exception ex)
+            {
+                try { await new RelatoApi(cfg).MarkCallUploadFailedAsync(id, "retry_failed: " + ex.Message); }
+                catch { }
+                StatusChanged?.Invoke("Reenvio pendente falhou; WAV preservado para nova tentativa.");
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2));
+        }
+
+        return recovered;
+    }
+
     private async Task FinishCallAsync(string reason, long privacyStop = 0)
     {
         if (!IsRecording || sessionId is null || callStarted is null) return;

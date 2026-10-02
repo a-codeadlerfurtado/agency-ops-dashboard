@@ -13,6 +13,7 @@ internal sealed class AgentContext : ApplicationContext
     private readonly AgentUpdater updater;
     private readonly Control dispatcher = new();
     private RecordingIndicatorForm? recordingIndicator;
+    private int recoveringUploads;
 
     public AgentContext()
     {
@@ -45,6 +46,33 @@ internal sealed class AgentContext : ApplicationContext
         exitItem.Click += (_, _) => ExitThread();
         UpdateStatus(config is null ? "Não pareado" : $"Conectado · {config.OwnerPerson}");
         if (config is null) BeginInvokePairing();
+        else _ = RecoverPendingUploadsAsync();
+    }
+
+    private async Task RecoverPendingUploadsAsync()
+    {
+        if (config is null || Interlocked.Exchange(ref recoveringUploads, 1) != 0) return;
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            var recovered = await capture.RetryPendingUploadsAsync();
+            if (recovered > 0)
+            {
+                Post(() =>
+                {
+                    UpdateStatus($"Recuperadas {recovered} call(s) pendente(s)");
+                    tray.ShowBalloonTip(3500, "Relato AI", $"{recovered} call(s) antiga(s) reenviada(s) para processamento.", ToolTipIcon.Info);
+                });
+            }
+        }
+        catch (Exception ex)
+        {
+            Post(() => UpdateStatus("Falha no reenvio automático: " + ex.Message));
+        }
+        finally
+        {
+            Interlocked.Exchange(ref recoveringUploads, 0);
+        }
     }
 
     private void WireEvents()
@@ -117,6 +145,7 @@ internal sealed class AgentContext : ApplicationContext
             config.Save();
             UpdateStatus($"Conectado · {config.OwnerPerson}");
             tray.ShowBalloonTip(2000, "Relato AI", "Desktop Agent conectado.", ToolTipIcon.Info);
+            _ = RecoverPendingUploadsAsync();
         }
         catch (Exception ex)
         {
