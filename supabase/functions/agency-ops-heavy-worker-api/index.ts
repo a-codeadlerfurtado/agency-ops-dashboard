@@ -423,7 +423,7 @@ async function getControl() {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 14 });
+  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 15 });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return json({ error: "server_not_configured" }, 500);
 
@@ -477,24 +477,58 @@ Deno.serve(async (req) => {
             const fallback = terminalError.includes("call_transcript_empty")
               ? await tryWorkersAiCallFallback(sessionId, workerToken).catch((error) => ({ ok: false, error: String(error instanceof Error ? error.message : error) }))
               : { ok: false, error: "fallback_not_applicable" };
-            if (!fallback.ok) {
+            if (fallback.ok) {
+              const recoveredAt = new Date().toISOString();
+              await sb.from("heavy_jobs").update({
+                status: "SUCCEEDED",
+                last_error: null,
+                completed_at: recoveredAt,
+                locked_at: null,
+                locked_by: null,
+                result: {
+                  recovered_by: "CLOUDFLARE_WORKERS_AI",
+                  transcript_id: (fallback as any)?.transcript_id || null,
+                },
+                updated_at: recoveredAt,
+              }).eq("id", body.job_id);
+            } else {
               const { data: session } = await sb.from("meeting_capture_sessions")
                 .select("id,state,metadata").eq("id",sessionId).maybeSingle();
               if (session && String(session.state || "").toUpperCase() === "PROCESSING") {
                 const now = new Date().toISOString();
+                const fallbackError = String((fallback as any)?.error || "").slice(0,1000) || null;
+                const noUsableSpeech = fallbackError === "fallback_transcript_empty";
                 await sb.from("meeting_capture_sessions").update({
-                  state: "NEEDS_REVIEW",
+                  state: noUsableSpeech ? "READY" : "NEEDS_REVIEW",
                   metadata: {
                     ...(session.metadata || {}),
+                    ...(noUsableSpeech ? {
+                      transcript_quality: {
+                        status: "NO_SPEECH_OR_UNINTELLIGIBLE",
+                        source: "LOCAL_AND_WORKERS_AI",
+                        evaluated_at: now,
+                      },
+                    } : {}),
                     transcription_failure: {
                       error: terminalError.slice(0,1000),
-                      terminal: true,
-                      fallback_error: String((fallback as any)?.error || "").slice(0,1000) || null,
+                      terminal: !noUsableSpeech,
+                      fallback_error: fallbackError,
                       failed_at: now,
                     },
                   },
                   updated_at: now,
                 }).eq("id",sessionId);
+                if (noUsableSpeech) {
+                  await sb.from("heavy_jobs").update({
+                    status: "SUCCEEDED",
+                    last_error: null,
+                    completed_at: now,
+                    locked_at: null,
+                    locked_by: null,
+                    result: { resolved_as: "NO_SPEECH_OR_UNINTELLIGIBLE" },
+                    updated_at: now,
+                  }).eq("id", body.job_id);
+                }
               }
             }
           }
