@@ -390,13 +390,13 @@ Deno.serve(async (req: Request) => {
     const { data: roster } = await ops.from("team_roster")
       .select("role").eq("person", identity.person).eq("is_former", false).maybeSingle();
     const role = clean(roster?.role, 20).toUpperCase();
-    const isOps = role === "CS" || role === "GT";
+    const isSdrRelease = role === "SDR";
     return respond({
       ok: true,
       role,
-      required_version: isOps ? OPS_DESKTOP_VERSION : REQUIRED_SDR_DESKTOP_VERSION,
-      download_url: isOps ? OPS_DESKTOP_DOWNLOAD_URL : SDR_DESKTOP_DOWNLOAD_URL,
-      sha256: isOps ? OPS_DESKTOP_SHA256 : SDR_DESKTOP_SHA256,
+      required_version: isSdrRelease ? REQUIRED_SDR_DESKTOP_VERSION : OPS_DESKTOP_VERSION,
+      download_url: isSdrRelease ? SDR_DESKTOP_DOWNLOAD_URL : OPS_DESKTOP_DOWNLOAD_URL,
+      sha256: isSdrRelease ? SDR_DESKTOP_SHA256 : OPS_DESKTOP_SHA256,
     });
   }
 
