@@ -4,9 +4,12 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 type Row = Record<string, any>;
 
 const VERSION = "meeting-capture-v1.1-audio";
-const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.4";
-const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.29.1/RelatoAI-Desktop-SDR.exe";
-const SDR_DESKTOP_SHA256 = "c51d735b14e3ee4464e2a3c4cde5efddbd11102597fd601d450e9f6d0e7cb23b";
+const REQUIRED_SDR_DESKTOP_VERSION = "desktop-0.5.8";
+const SDR_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.4/RelatoAI-Desktop-SDR.exe";
+const SDR_DESKTOP_SHA256 = "2c205795ef5d1c968714754d10643ecc0ab926e671b5d90988dd8423c50ab170";
+const OPS_DESKTOP_VERSION = "desktop-0.5.9";
+const OPS_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-ops-v2026.10.01.1/RelatoAI-Desktop-OPS.exe";
+const OPS_DESKTOP_SHA256 = "3e32938a040ddea48b27c65b781829c0289f23d787319bed233866035aa3b028";
 const DASHBOARD_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
   "http://localhost:3000",
@@ -381,6 +384,22 @@ Deno.serve(async (req: Request) => {
   catch { return respond({ error: "invalid_json" }, 400); }
   const action = clean(body?.action, 60).toLowerCase();
 
+  if (action === "desktop_release_info") {
+    const identity = await resolveDashboardPerson(req.headers.get("authorization") || "", supabaseUrl, anonKey, ops);
+    if (!identity) return respond({ error: "unauthorized" }, 401);
+    const { data: roster } = await ops.from("team_roster")
+      .select("role").eq("person", identity.person).eq("is_former", false).maybeSingle();
+    const role = clean(roster?.role, 20).toUpperCase();
+    const isSdrRelease = role === "SDR";
+    return respond({
+      ok: true,
+      role,
+      required_version: isSdrRelease ? REQUIRED_SDR_DESKTOP_VERSION : OPS_DESKTOP_VERSION,
+      download_url: isSdrRelease ? SDR_DESKTOP_DOWNLOAD_URL : OPS_DESKTOP_DOWNLOAD_URL,
+      sha256: isSdrRelease ? SDR_DESKTOP_SHA256 : OPS_DESKTOP_SHA256,
+    });
+  }
+
   if (action === "pair_create") {
     const identity = await resolveDashboardPerson(req.headers.get("authorization") || "", supabaseUrl, anonKey, ops);
     if (!identity) return respond({ error: "unauthorized" }, 401);
@@ -433,13 +452,21 @@ Deno.serve(async (req: Request) => {
         updated_at: new Date().toISOString()
       }).eq("id", device.id);
     }
+    const { data: roster } = await ops.from("team_roster")
+      .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
+    const role = clean(roster?.role, 20).toUpperCase();
+    const isOps = role === "CS" || role === "GT";
+    const requiredVersion = isOps ? OPS_DESKTOP_VERSION : REQUIRED_SDR_DESKTOP_VERSION;
+    const downloadUrl = isOps ? OPS_DESKTOP_DOWNLOAD_URL : SDR_DESKTOP_DOWNLOAD_URL;
+    const sha256 = isOps ? OPS_DESKTOP_SHA256 : SDR_DESKTOP_SHA256;
     return respond({
       ok: true,
       current_version: currentVersion,
-      required_version: REQUIRED_SDR_DESKTOP_VERSION,
-      update_required: currentVersion !== REQUIRED_SDR_DESKTOP_VERSION,
-      download_url: SDR_DESKTOP_DOWNLOAD_URL,
-      sha256: SDR_DESKTOP_SHA256,
+      required_version: requiredVersion,
+      update_required: currentVersion !== requiredVersion,
+      download_url: downloadUrl,
+      sha256,
+      role,
     });
   }
 
@@ -665,8 +692,9 @@ Deno.serve(async (req: Request) => {
     const extensionVersion = clean(call.extension_version, 40) || "";
     const { data: roster } = await ops.from("team_roster")
       .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
-    const supportedSdrDesktopVersions = new Set([REQUIRED_SDR_DESKTOP_VERSION, "desktop-0.5.2"]);
-    if (String(roster?.role || "").toUpperCase() === "SDR" && !supportedSdrDesktopVersions.has(extensionVersion)) {
+    const rosterRole = String(roster?.role || "").toUpperCase();
+    const supportedSdrDesktopVersions = new Set([REQUIRED_SDR_DESKTOP_VERSION, "desktop-0.5.7", "desktop-0.5.6", "desktop-0.5.5", "desktop-0.5.4", "desktop-0.5.2", "desktop-0.5.1"]);
+    if (rosterRole === "SDR" && !supportedSdrDesktopVersions.has(extensionVersion)) {
       return respond({
         error: "desktop_agent_upgrade_required",
         message: "Atualize o Relato AI Desktop antes de gravar novas ligações.",
@@ -674,6 +702,16 @@ Deno.serve(async (req: Request) => {
         required_version: REQUIRED_SDR_DESKTOP_VERSION,
         download_url: SDR_DESKTOP_DOWNLOAD_URL,
         sha256: SDR_DESKTOP_SHA256,
+      }, 426);
+    }
+    if ((rosterRole === "CS" || rosterRole === "GT") && extensionVersion !== OPS_DESKTOP_VERSION) {
+      return respond({
+        error: "desktop_agent_upgrade_required",
+        message: "Atualize o Relato AI Operacional antes de gravar novas ligações.",
+        current_version: extensionVersion || null,
+        required_version: OPS_DESKTOP_VERSION,
+        download_url: OPS_DESKTOP_DOWNLOAD_URL,
+        sha256: OPS_DESKTOP_SHA256,
       }, 426);
     }
     const localSessionId = clean(call.local_session_id, 180);
@@ -684,7 +722,7 @@ Deno.serve(async (req: Request) => {
     const remotePhoneCandidate = normalizePhone(call.remote_phone);
     const identitySource = clean(call.identity_source, 80) || null;
     const source = clean(call.source, 40).toUpperCase() === "WHATSAPP_DESKTOP" ? "WHATSAPP_DESKTOP" : "WHATSAPP_WEB";
-    const directDesktopIdentity = ["WHATSAPP_DESKTOP_UI", "WHATSAPP_DESKTOP_UIA", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
+    const directDesktopIdentity = ["WHATSAPP_DESKTOP_UI", "WHATSAPP_DESKTOP_UIA", "WHATSAPP_SCREEN_OCR", "WHATSAPP_SCREEN_OCR+UI", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
     if (!localSessionId || !startedAt || !endedAt) return respond({ error: "missing_call_data" }, 400);
     // The message-window heuristic is useful only for audit/corroboration. It must never
     // label a Desktop call by itself: an unrelated chat message can occur in the same window.
@@ -831,7 +869,8 @@ Deno.serve(async (req: Request) => {
 
     const { data: roster } = await ops.from("team_roster")
       .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
-    const isSdr = String(roster?.role || "").toUpperCase() === "SDR";
+    const ownerRole = String(roster?.role || "").toUpperCase();
+    const isSdr = ownerRole === "SDR";
     const identitySide = String(identity?.side || "").toUpperCase();
     const identityStatus = String(identity?.status || "").toUpperCase();
     const knownNonProspect = identitySide === "TEAM"
@@ -867,11 +906,65 @@ Deno.serve(async (req: Request) => {
           .eq("id", leadId).maybeSingle();
         lead = data || null;
       }
+      let awaveMatch: Row | null = null;
       if (!lead && remotePhone) {
-        const variants = [remotePhone, "+" + remotePhone];
+        const suffix = remotePhone.slice(-8);
+        const { data: candidates } = await crm.from("leads")
+          .select("id,name,company,email,phone,instagram,orcamento_mkt,atuacao,notes,source,updated_at")
+          .is("archived_at", null)
+          .ilike("phone", `%${suffix}%`)
+          .order("updated_at", { ascending: false }).limit(40);
+        lead = (candidates || []).find((row: Row) => normalizePhone(row.phone) === remotePhone) || null;
+      }
+
+      if (remotePhone) {
+        try {
+          const { data: awaveSettings } = await ops.from("automation_settings")
+            .select("key,value")
+            .in("key", ["AWAVE_DASH_OPS_FUNNEL_URL", "AWAVE_DASH_OPS_FUNNEL_SECRET"]);
+          const awaveMap = new Map((awaveSettings || []).map((r: Row) => [
+            String(r.key),
+            typeof r.value === "string" ? r.value : String(r.value ?? "").replace(/^"|"$/g, "")
+          ]));
+          const funnelUrl = clean(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_URL"), 1000);
+          const funnelSecret = clean(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_SECRET"), 500);
+          if (funnelUrl && funnelSecret) {
+            const upstream = await fetch(funnelUrl, {
+              method: "GET",
+              headers: { "x-dash-ops-secret": funnelSecret },
+              signal: AbortSignal.timeout(4500),
+            });
+            if (upstream.ok) {
+              const payload = await upstream.json().catch(() => ({})) as Row;
+              const deals = Array.isArray(payload?.deals) ? payload.deals : [];
+              const deal = deals.find((item: Row) => {
+                const candidate = normalizePhone(item?.contato?.telefone || item?.contato?.chave_externa || item?.chave_externa);
+                return Boolean(candidate && candidate === remotePhone);
+              }) || null;
+              if (deal) {
+                awaveMatch = {
+                  deal_id: clean(deal.id, 100) || null,
+                  contact_id: clean(deal?.contato?.id, 100) || null,
+                  name: clean(deal?.contato?.nome || deal?.titulo, 200) || null,
+                  company: clean(deal?.empresa?.nome, 240) || null,
+                  phone: normalizePhone(deal?.contato?.telefone || deal?.contato?.chave_externa || remotePhone) || remotePhone,
+                  email: clean(deal?.contato?.email, 240).toLowerCase() || null,
+                  pipeline: clean(deal?.pipeline?.nome, 160) || null,
+                  stage: clean(deal?.etapa?.nome, 160) || null,
+                  source: "AWAVE",
+                };
+              }
+            }
+          }
+        } catch {
+          // Awave canonical lookup is best-effort; the mirrored CRM remains the fallback.
+        }
+      }
+
+      if (!lead && awaveMatch?.email) {
         const { data } = await crm.from("leads")
-          .select("id,name,company,email,phone,instagram,orcamento_mkt,atuacao,notes")
-          .in("phone", variants).is("archived_at", null)
+          .select("id,name,company,email,phone,instagram,orcamento_mkt,atuacao,notes,source")
+          .eq("email", awaveMatch.email).is("archived_at", null)
           .order("updated_at", { ascending: false }).limit(1).maybeSingle();
         lead = data || null;
       }
@@ -917,10 +1010,10 @@ Deno.serve(async (req: Request) => {
         ...aiArray(aiSignals.pain_points),
       ].filter(Boolean);
       prospectPrefill = {
-        name: clean(lead?.name || remoteName, 200) || null,
-        company: clean(lead?.company, 240) || null,
-        email: clean(lead?.email || emailMatch?.[0], 240).toLowerCase() || null,
-        phone: normalizePhone(lead?.phone || remotePhone) || null,
+        name: clean(awaveMatch?.name || lead?.name || remoteName, 200) || null,
+        company: clean(awaveMatch?.company || lead?.company, 240) || null,
+        email: clean(awaveMatch?.email || lead?.email || emailMatch?.[0], 240).toLowerCase() || null,
+        phone: normalizePhone(awaveMatch?.phone || lead?.phone || remotePhone) || null,
         city: clean(profile?.city || lead?.atuacao, 200) || null,
         instagram: clean(lead?.instagram || profile?.website || (instagramMatch ? "@" + instagramMatch[1] : null), 500) || null,
         marketing_investment: clean(aiSignals.marketing_investment || profile?.marketing_investment || lead?.orcamento_mkt || investmentMatch?.[1], 240) || null,
@@ -946,8 +1039,65 @@ Deno.serve(async (req: Request) => {
         commercial_analysis_ready: commercialAnalysisReady,
         requires_selection: false, remote_phone: remotePhone, remote_name: remoteName,
         remote_role: "PROSPECT", client_id: null, client_name: null,
-        resolution_status: identity?.status || "UNRESOLVED", clients: [], prospect_prefill: prospectPrefill
+        resolution_status: identity?.status || "UNRESOLVED", clients: [], prospect_prefill: prospectPrefill,
+        crm_match: (awaveMatch || lead?.id) ? {
+          id: clean(lead?.id, 100) || "",
+          name: clean(awaveMatch?.name || lead?.name, 200) || null,
+          company: clean(awaveMatch?.company || lead?.company, 240) || null,
+          phone: normalizePhone(awaveMatch?.phone || lead?.phone || remotePhone) || null,
+          email: clean(awaveMatch?.email || lead?.email, 240).toLowerCase() || null,
+          source: awaveMatch ? "AWAVE" : clean(lead?.source, 80) || "CRM_MIRROR",
+          awave_deal_id: clean(awaveMatch?.deal_id, 100) || null,
+          pipeline: clean(awaveMatch?.pipeline, 160) || null,
+          stage: clean(awaveMatch?.stage, 160) || null
+        } : null
       });
+    }
+
+    let opsPrefill: Row | null = null;
+    if ((ownerRole === "CS" || ownerRole === "GT") && session.transcript_id) {
+      const { data: transcript } = await ops.from("meeting_transcripts")
+        .select("summary,transcript_text,decisions,commitments,ai_signals,processing_status")
+        .eq("id", session.transcript_id).maybeSingle();
+      if (transcript) {
+        const textValue = (value: unknown, max = 1000) => clean(
+          typeof value === "string" ? value : (
+            value && typeof value === "object"
+              ? (value as Row).text || (value as Row).title || (value as Row).description || (value as Row).action || ""
+              : ""
+          ), max
+        );
+        const listValue = (value: unknown, max = 20) => Array.isArray(value)
+          ? value.map((item: unknown) => textValue(item, 700)).filter(Boolean).slice(0, max)
+          : [];
+        const ai = transcript.ai_signals && typeof transcript.ai_signals === "object" ? transcript.ai_signals : {};
+        const highlights = ai?.highlights && typeof ai.highlights === "object" ? ai.highlights : {};
+        const summary = clean(transcript.summary, 6000) || null;
+        const rawEvidence = `${summary || ""} ${clean(transcript.transcript_text, 30000)}`
+          .normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        const churnRisk = ownerRole === "CS" && /(cancelar|cancelamento|churn|encerrar contrato|sair da agencia|insatisfeit|sem resultado|nao estou vendo resultado|decepcion)/.test(rawEvidence);
+        const attentionRisk = /(problema|reclam|preocup|atras|cobranc|lead ruim|sem lead|aguardando|nao respondeu|dificuldade)/.test(rawEvidence);
+        const problems = [
+          ...listValue(highlights?.problems),
+          ...listValue(ai?.pain_points),
+          textValue(ai?.primary_pain, 700),
+        ].filter(Boolean);
+        const decisions = listValue(transcript.decisions);
+        const commitments = listValue(transcript.commitments);
+        const actionItems = [...listValue(ai?.action_items), ...commitments]
+          .filter((v, i, arr) => arr.indexOf(v) === i).slice(0, 20);
+        opsPrefill = {
+          summary,
+          problems: [...new Set(problems)].slice(0, 20),
+          decisions,
+          action_items: actionItems,
+          commitments,
+          next_step: clean(ai?.follow_up, 2000) || null,
+          health: ownerRole === "CS" ? (churnRisk ? "RED" : attentionRisk ? "YELLOW" : "GREEN") : null,
+          churn_risk: churnRisk,
+          transcript_ready: ["READY","REJECTED"].includes(clean(transcript.processing_status, 40).toUpperCase()),
+        };
+      }
     }
 
     const requiresSelection = !Boolean(identity?.auto) || (!identity?.client_id && String(identity?.side || "").toUpperCase() !== "TEAM");
@@ -958,11 +1108,12 @@ Deno.serve(async (req: Request) => {
       if (error) return respond({ error: "feedback_clients_failed", detail: error.message }, 500);
       clients = data || [];
     }
-    return respond({ ok: true, pending: false, workflow: "CLIENT_REVIEW", transcript_ready: transcriptReady,
+    const workflow = ownerRole === "CS" ? "OPS_CS" : ownerRole === "GT" ? "OPS_GT" : "CLIENT_REVIEW";
+    return respond({ ok: true, pending: false, workflow, owner_role: ownerRole, transcript_ready: transcriptReady,
       requires_selection: requiresSelection, remote_phone: remotePhone, remote_name: remoteName,
       remote_role: clean(identity?.role || session.metadata?.remote_role, 80) || null,
       client_id: identity?.client_id || null, client_name: identity?.client_name || null,
-      resolution_status: identity?.status || "UNRESOLVED", prospect_prefill: null,
+      resolution_status: identity?.status || "UNRESOLVED", prospect_prefill: null, ops_prefill: opsPrefill,
       clients: clients.map((c: Row) => ({ id: c.id, name: c.display_name })) });
   }
 
@@ -1013,6 +1164,7 @@ Deno.serve(async (req: Request) => {
     const uploaded = Array.isArray(body?.uploaded) ? body.uploaded : [];
     let totalBytes = 0;
     let mixedBytes = 0;
+    const uploadedAudioPaths: Row = {};
     for (const raw of uploaded) {
       const role = clean(raw?.role,20).toLowerCase();
       if (!["local","remote","mixed"].includes(role)) continue;
@@ -1022,8 +1174,10 @@ Deno.serve(async (req: Request) => {
       const bytes = Math.max(0, Math.round(Number(raw?.bytes || 0)));
       if (!bytes) return respond({ error: "call_audio_empty_upload", role }, 400);
       totalBytes += bytes;
+      uploadedAudioPaths[role] = path;
       if (role === "mixed") mixedBytes = bytes;
     }
+    if (!Object.keys(uploadedAudioPaths).length) return respond({ error: "call_audio_no_successful_uploads" }, 400);
     const durationMs = Number.isFinite(Number(body?.duration_ms))
       ? Math.max(0, Math.round(Number(body.duration_ms)))
       : Math.max(0, Math.round(Number(session.audio_duration_ms || 0)));
@@ -1039,6 +1193,7 @@ Deno.serve(async (req: Request) => {
       audio_last_error: partialMixedAudio ? "audio_capture_shorter_than_call" : null,
       metadata: {
         ...(session.metadata || {}),
+        audio_paths: uploadedAudioPaths,
         audio_integrity: mixedBytes > 0 ? {
           status: partialMixedAudio ? "PARTIAL" : "OK",
           expected_min_bytes: expectedMixedBytes,
@@ -1081,6 +1236,12 @@ Deno.serve(async (req: Request) => {
     const feedbackProspectName = clean(prospectInput.name, 200) || null;
     const feedbackProspectPhone = normalizePhone(prospectInput.phone) || null;
     const requestedBindingSource = clean(feedback.binding_source, 40).toUpperCase();
+    const { data: feedbackRoster } = await ops.from("team_roster")
+      .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
+    const feedbackOwnerRole = clean(feedbackRoster?.role, 20).toUpperCase();
+    const operationalInput = feedback.operational && typeof feedback.operational === "object"
+      ? feedback.operational as Row
+      : null;
 
     if (isProspect) {
       bindingSource = "RELATO_COMMERCIAL";
@@ -1169,10 +1330,18 @@ Deno.serve(async (req: Request) => {
 
       let existingLead: Row | null = null;
       const relatoExternalId = `relato-call:${session.id}`;
+      const confirmedCrmLeadId = clean(feedback.crm_lead_id, 80) || null;
+      const crmMatchRejected = feedback.crm_match_rejected === true;
+
+      if (confirmedCrmLeadId && !crmMatchRejected) {
+        const { data } = await crm.from("leads")
+          .select("id,owner_id,stage").eq("id", confirmedCrmLeadId).is("archived_at", null).maybeSingle();
+        existingLead = data || null;
+      }
 
       const { data: sessionLead } = await crm.from("leads")
         .select("id,owner_id,stage").eq("source", "RELATO_AI_SDR").eq("external_id", relatoExternalId).maybeSingle();
-      existingLead = sessionLead || null;
+      if (!existingLead) existingLead = sessionLead || null;
 
       if (!existingLead) {
         const { data: callRows } = await ops.from("commercial_call_records")
@@ -1193,28 +1362,26 @@ Deno.serve(async (req: Request) => {
           existingLead = data || null;
         }
       }
-      if (!existingLead && prospectEmail) {
-        const { data } = await crm.from("leads").select("id,owner_id,stage").eq("owner_id", closerProfile.id).eq("email", prospectEmail).is("archived_at", null).order("updated_at", { ascending: false }).limit(1).maybeSingle();
+      if (!existingLead && !crmMatchRejected && prospectEmail) {
+        const { data } = await crm.from("leads").select("id,owner_id,stage")
+          .eq("email", prospectEmail).is("archived_at", null)
+          .order("updated_at", { ascending: false }).limit(1).maybeSingle();
         existingLead = data || null;
       }
-      if (!existingLead && prospectPhone) {
-        const variants = [prospectPhone, "+" + prospectPhone];
-        const { data } = await crm.from("leads").select("id,owner_id,stage").eq("owner_id", closerProfile.id).in("phone", variants).is("archived_at", null).order("updated_at", { ascending: false }).limit(1).maybeSingle();
-        existingLead = data || null;
-      }
-      if (!existingLead && prospectName) {
-        const { data } = await crm.from("leads")
-          .select("id,owner_id,stage,name,company")
-          .eq("owner_id", closerProfile.id)
-          .ilike("name", prospectName)
-          .is("archived_at", null)
-          .order("updated_at", { ascending: false })
-          .limit(2);
-        if ((data || []).length === 1) existingLead = data?.[0] || null;
+      if (!existingLead && !crmMatchRejected && prospectPhone) {
+        const normalizedProspectPhone = normalizePhone(prospectPhone);
+        const suffix = normalizedProspectPhone.slice(-8);
+        if (suffix) {
+          const { data: candidates } = await crm.from("leads")
+            .select("id,owner_id,stage,phone")
+            .is("archived_at", null).ilike("phone", `%${suffix}%`)
+            .order("updated_at", { ascending: false }).limit(40);
+          existingLead = (candidates || []).find((row: Row) => normalizePhone(row.phone) === normalizedProspectPhone) || null;
+        }
       }
 
       const leadPatch: Row = {
-        owner_id: closerProfile.id,
+        owner_id: existingLead?.owner_id || closerProfile.id,
         name: prospectName,
         updated_at: now,
       };
@@ -1238,6 +1405,50 @@ Deno.serve(async (req: Request) => {
         }
       }
       if (leadError || !commercialLead?.id) return respond({ error: "commercial_lead_save_failed", detail: leadError?.message }, 500);
+
+      // Keep the canonical Awave pipeline in sync with every SDR prospect. The existing
+      // Awave webhook is idempotent by normalized phone, so repeated calls update the
+      // same contact/deal instead of creating duplicates.
+      if (prospectPhone) {
+        const { data: awaveSettings } = await ops.from("automation_settings")
+          .select("key,value")
+          .in("key", ["AWAVE_DASH_OPS_FUNNEL_URL", "AWAVE_DASH_OPS_FUNNEL_SECRET"]);
+        const awaveMap = new Map((awaveSettings || []).map((r: Row) => [String(r.key), typeof r.value === "string" ? r.value : String(r.value ?? "").replace(/^\"|\"$/g, "")]));
+        const funnelUrl = clean(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_URL"), 1000);
+        const funnelSecret = clean(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_SECRET"), 500);
+        const webhookUrl = funnelUrl ? funnelUrl.replace(/\/dash-ops-funil\/?$/i, "/webhook-lead") : "";
+        if (!webhookUrl || !funnelSecret) return respond({ error: "awave_sync_not_configured" }, 500);
+        const awavePayload = {
+          nome: prospectName,
+          telefone: prospectPhone,
+          email: prospectEmail || undefined,
+          origem: "RELATO_AI_SDR",
+          notas: clean(feedback.note, 2000) || `Ligação SDR registrada pelo Relato AI em ${now}`,
+          crm_lead_id: commercialLead.id,
+          relato_session_id: session.id,
+          closer: "Vitor Feitoza",
+          sdr: device.owner_person,
+        };
+        let awaveSyncOk = false;
+        let awaveSyncDetail: any = null;
+        for (let attempt = 0; attempt < 2 && !awaveSyncOk; attempt++) {
+          try {
+            const upstream = await fetch(webhookUrl, {
+              method: "POST",
+              headers: { "content-type": "application/json", "x-webhook-secret": funnelSecret },
+              body: JSON.stringify(awavePayload),
+              signal: AbortSignal.timeout(12000),
+            });
+            const raw = await upstream.text();
+            try { awaveSyncDetail = JSON.parse(raw); } catch { awaveSyncDetail = { raw: raw.slice(0, 500) }; }
+            awaveSyncOk = upstream.ok && Boolean(awaveSyncDetail?.data?.negocio);
+          } catch (error) {
+            awaveSyncDetail = { error: error instanceof Error ? error.message : String(error) };
+          }
+          if (!awaveSyncOk && attempt === 0) await new Promise(resolve => setTimeout(resolve, 350));
+        }
+        if (!awaveSyncOk) return respond({ error: "awave_sync_failed", detail: awaveSyncDetail }, 502);
+      }
 
       const generatedCloserBriefing = [
         prospectCompany ? `Empresa: ${prospectCompany}` : null,
@@ -1431,6 +1642,14 @@ Deno.serve(async (req: Request) => {
           closer_person: "Vitor Feitoza", sdr_person: device.owner_person,
         }} : {}),
         feedback_binding: { source: bindingSource, prospect_name: postCallName, confirmed_by: device.owner_person, confirmed_at: confirmedAt },
+        ...((feedbackOwnerRole === "CS" || feedbackOwnerRole === "GT") && operationalInput ? {
+          operational_feedback: {
+            role: feedbackOwnerRole,
+            payload: operationalInput,
+            confirmed_by: device.owner_person,
+            confirmed_at: confirmedAt,
+          }
+        } : {}),
       };
       await ops.from("meeting_capture_sessions").update({ metadata: nextMetadata, updated_at: new Date().toISOString() }).eq("id", session.id);
       session.metadata = nextMetadata;
@@ -1441,6 +1660,62 @@ Deno.serve(async (req: Request) => {
           updated_at: new Date().toISOString(),
         }).eq("id", session.transcript_id);
       }
+    }
+
+    if (!dismissed && operationalInput && (feedbackOwnerRole === "CS" || feedbackOwnerRole === "GT")) {
+      const cleanList = (value: unknown, max = 30) => Array.isArray(value)
+        ? value.map((v: unknown) => clean(v, 1000)).filter(Boolean).slice(0, max)
+        : [];
+      const isoOrNull = (value: unknown) => {
+        const raw = clean(value, 100);
+        return raw && Number.isFinite(Date.parse(raw)) ? new Date(raw).toISOString() : null;
+      };
+      const health = feedbackOwnerRole === "CS"
+        ? (["GREEN","YELLOW","RED","UNKNOWN"].includes(clean(operationalInput.health, 20).toUpperCase())
+          ? clean(operationalInput.health, 20).toUpperCase() : "UNKNOWN")
+        : null;
+      const normalizedOperational: Row = feedbackOwnerRole === "CS" ? {
+        summary: clean(operationalInput.summary, 6000) || null,
+        health,
+        churn_risk: Boolean(operationalInput.churn_risk),
+        risk_reason: clean(operationalInput.risk_reason, 3000) || null,
+        problems: cleanList(operationalInput.problems),
+        agency_commitments: cleanList(operationalInput.agency_commitments),
+        client_commitments: cleanList(operationalInput.client_commitments),
+        responsible: clean(operationalInput.responsible, 300) || null,
+        deadline: isoOrNull(operationalInput.deadline),
+        next_contact: isoOrNull(operationalInput.next_contact),
+        next_step: clean(operationalInput.next_step, 3000) || null,
+      } : {
+        summary: clean(operationalInput.summary, 6000) || null,
+        product: clean(operationalInput.product, 500) || null,
+        campaign: clean(operationalInput.campaign, 500) || null,
+        budget_change: clean(operationalInput.budget_change, 1000) || null,
+        audience_region: clean(operationalInput.audience_region, 1500) || null,
+        creative: clean(operationalInput.creative, 1500) || null,
+        performance_issue: clean(operationalInput.performance_issue, 3000) || null,
+        decisions: cleanList(operationalInput.decisions),
+        action_items: cleanList(operationalInput.action_items),
+        responsible: clean(operationalInput.responsible, 300) || null,
+        deadline: isoOrNull(operationalInput.deadline),
+        next_step: clean(operationalInput.next_step, 3000) || null,
+      };
+      const { error: operationalError } = await ops.from("relato_operational_call_records").upsert({
+        capture_session_id: session.id,
+        transcript_id: Number(session.transcript_id || 0) || null,
+        owner_person: device.owner_person,
+        owner_role: feedbackOwnerRole,
+        client_id: selectedClientId,
+        client_name: selectedClientName,
+        channel: interactionChannel,
+        summary: clean(normalizedOperational.summary, 6000) || null,
+        health,
+        churn_risk: feedbackOwnerRole === "CS" ? Boolean(normalizedOperational.churn_risk) : false,
+        operational: normalizedOperational,
+        submitted_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "capture_session_id" });
+      if (operationalError) return respond({ error: "operational_feedback_save_failed", detail: operationalError.message }, 500);
     }
 
     const asScore = (value: unknown) => {
