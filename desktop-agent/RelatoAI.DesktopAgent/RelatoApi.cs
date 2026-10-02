@@ -173,16 +173,47 @@ internal sealed partial class RelatoApi
 
     public async Task UploadAsync(string signedUrl, string filePath, string mimeType = "audio/wav")
     {
-        using var fs = File.OpenRead(filePath);
-        using var req = new HttpRequestMessage(HttpMethod.Put, signedUrl)
+        Exception? lastError = null;
+        for (var attempt = 1; attempt <= 4; attempt++)
         {
-            Content = new StreamContent(fs)
-        };
-        req.Content.Headers.ContentType = new(mimeType);
-        req.Headers.TryAddWithoutValidation("x-upsert", "true");
-        using var res = await http.SendAsync(req);
-        if (!res.IsSuccessStatusCode)
-            throw new InvalidOperationException($"Upload falhou: {(int)res.StatusCode} {await res.Content.ReadAsStringAsync()}");
+            try
+            {
+                using var fs = File.OpenRead(filePath);
+                using var req = new HttpRequestMessage(HttpMethod.Put, signedUrl)
+                {
+                    Content = new StreamContent(fs)
+                };
+                req.Content.Headers.ContentType = new(mimeType);
+                req.Headers.TryAddWithoutValidation("x-upsert", "true");
+
+                // Long calls generate large raw WAV channels. Do not let the generic
+                // three-minute API timeout abort a valid Storage upload.
+                using var uploadHttp = new HttpClient { Timeout = TimeSpan.FromMinutes(30) };
+                using var res = await uploadHttp.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+                if (res.IsSuccessStatusCode) return;
+
+                var response = await res.Content.ReadAsStringAsync();
+                lastError = new InvalidOperationException($"Upload falhou: {(int)res.StatusCode} {response}");
+            }
+            catch (Exception ex) when (attempt < 4)
+            {
+                lastError = ex;
+            }
+
+            if (attempt < 4)
+                await Task.Delay(TimeSpan.FromSeconds(attempt switch { 1 => 2, 2 => 5, _ => 12 }));
+        }
+        throw new InvalidOperationException("Upload do áudio falhou após 4 tentativas.", lastError);
+    }
+
+    public async Task MarkCallUploadFailedAsync(string localSessionId, string error)
+    {
+        using var _ = await SendAsync(new
+        {
+            action = "call_upload_failed",
+            local_session_id = localSessionId,
+            error
+        });
     }
 
     public async Task MarkMixedAudioReadyAsync(string localSessionId, string path, long bytes, long durationMs)
