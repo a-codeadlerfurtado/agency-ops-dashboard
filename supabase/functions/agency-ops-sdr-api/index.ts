@@ -224,6 +224,25 @@ Deno.serve(async(req:Request)=>{
     if(sessionError) return reply({error:"call_session_failed",detail:sessionError.message},500);
     if(!session||!String(session.capture_mode||"").toUpperCase().includes("WHATSAPP")) return reply({error:"call_not_found"},404);
 
+    if(action==="call_review_set"){
+      if(!isLeonardoViewer) return reply({error:"manager_only"},403);
+      const reviewed=body.reviewed!==false;
+      if(reviewed){
+        const reviewedAt=new Date().toISOString();
+        const {error:reviewError}=await ops.from("relato_call_manager_reviews").upsert({
+          session_id:session.id,
+          reviewer_person:person,
+          reviewed_at:reviewedAt,
+        },{onConflict:"session_id,reviewer_person"});
+        if(reviewError) return reply({error:"call_review_save_failed",detail:reviewError.message},500);
+        return reply({ok:true,session_id:session.id,manager_reviewed:true,manager_reviewed_at:reviewedAt});
+      }
+      const {error:reviewDeleteError}=await ops.from("relato_call_manager_reviews")
+        .delete().eq("session_id",session.id).eq("reviewer_person",person);
+      if(reviewDeleteError) return reply({error:"call_review_delete_failed",detail:reviewDeleteError.message},500);
+      return reply({ok:true,session_id:session.id,manager_reviewed:false,manager_reviewed_at:null});
+    }
+
     if(action==="coaching_point_create"){
       if(!isLeonardoViewer) return reply({error:"manager_only"},403);
       const rawNote=clean(body.note);
@@ -403,6 +422,14 @@ Deno.serve(async(req:Request)=>{
       .order("timestamp_ms",{ascending:true})
       .order("created_at",{ascending:true});
     if(coachingError) return reply({error:"detail_coaching_failed",detail:coachingError.message},500);
+    let managerReview:Row|null=null;
+    if(isLeonardoViewer){
+      const {data:reviewRow,error:reviewError}=await ops.from("relato_call_manager_reviews")
+        .select("reviewed_at,reviewer_person")
+        .eq("session_id",sessionRow.id).eq("reviewer_person",person).maybeSingle();
+      if(reviewError) return reply({error:"detail_review_failed",detail:reviewError.message},500);
+      managerReview=reviewRow||null;
+    }
     const safeSegments=(segments||[]).filter((row:Row)=>!likelyWhisperHallucination(row?.text));
     const clock=(value:unknown)=>{
       const total=Math.max(0,Math.floor(Number(value||0)/1000));
@@ -483,6 +510,8 @@ Deno.serve(async(req:Request)=>{
         segments:safeSegments,
         coaching_points:coachingPoints||[],
         coaching_can_write:isLeonardoViewer,
+        manager_reviewed:Boolean(managerReview),
+        manager_reviewed_at:managerReview?.reviewed_at||null,
         audio,
         audio_status:sessionRow.audio_status||null,
         audio_last_error:sessionRow.audio_last_error||null,
@@ -533,6 +562,14 @@ Deno.serve(async(req:Request)=>{
       const key=String(row.session_id||"");
       if(key&&visibleSessionIds.has(key)) coachingCountMap.set(key,(coachingCountMap.get(key)||0)+1);
     }
+  }
+  const managerReviewMap=new Map<string,string>();
+  if(isLeonardoViewer&&callSessions.length){
+    const visibleSessionIds=callSessions.map((r:Row)=>String(r.id)).filter(Boolean);
+    const {data:reviewRows,error:reviewRowsError}=await ops.from("relato_call_manager_reviews")
+      .select("session_id,reviewed_at").eq("reviewer_person",person).in("session_id",visibleSessionIds);
+    if(reviewRowsError) return reply({error:"manager_reviews_failed",detail:reviewRowsError.message},500);
+    for(const row of reviewRows||[]) managerReviewMap.set(String(row.session_id),String(row.reviewed_at||""));
   }
   const sessionPhones=[...new Set(callSessions.map((r:Row)=>phoneDigits(r.metadata?.remote_phone)).filter(Boolean))];
   const phoneLeadMap=new Map<string,Row>();
@@ -597,6 +634,8 @@ Deno.serve(async(req:Request)=>{
       review_reason:session.metadata?.backfill_review?.reason||null,
       commercial_sync_status:session.metadata?.commercial_sync?.status||null,
       coaching_count:coachingCountMap.get(String(session.id))||0,
+      manager_reviewed:managerReviewMap.has(String(session.id)),
+      manager_reviewed_at:managerReviewMap.get(String(session.id))||null,
       transcript_summary:transcript?.metadata?.donnah_summary||transcript?.summary||record?.ai_summary||null,
       decisions:transcript?.decisions||[],commitments:transcript?.commitments||[],ai_signals:transcript?.ai_signals||{}
     };
@@ -617,7 +656,7 @@ Deno.serve(async(req:Request)=>{
     source_url:r.source_url||null
   }));
 
-  const requiredAgentVersion="desktop-0.5.3";
+  const requiredAgentVersion="desktop-0.5.8";
   let latestDevice:Row|null=null;
   if(isOwnSdr){
     const {data}=await ops.from("meeting_capture_devices")
@@ -646,7 +685,7 @@ Deno.serve(async(req:Request)=>{
       update_required:currentAgentVersion!==requiredAgentVersion,
       last_seen_at:latestDevice?.last_seen_at||null,
       device_name:latestDevice?.device_name||null,
-      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.28.1/RelatoAI-Desktop-SDR.exe"
+      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.4/RelatoAI-Desktop-SDR.exe"
     }:null,
     sdr_options:isLeonardoViewer?targetPeople:[],
     summary:{meetings:meetings.length,calls:enrichedCalls.length,notifications_unread:ownNotifications.unread},
