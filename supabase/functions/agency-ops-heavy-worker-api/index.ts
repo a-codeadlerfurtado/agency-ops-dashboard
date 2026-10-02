@@ -327,6 +327,90 @@ async function confirmRelatoDelivery(messageId: string, recipientPhone: string, 
   throw new Error(`relato_zapi_delivery_unconfirmed:${messageId}`);
 }
 
+const RELATO_WORKERS_AI_STT_URL = "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/api/jarvis/stt";
+const RELATO_WORKERS_AI_MAX_BYTES = 8 * 1024 * 1024;
+
+async function tryWorkersAiCallFallback(sessionId: string, workerToken: string) {
+  if (!workerToken || workerToken.length < 32) return { ok: false, error: "fallback_worker_token_missing" };
+  const sb = client("agency_ops");
+  const { data: session, error: sessionError } = await sb.from("meeting_capture_sessions")
+    .select("id,owner_person,state,metadata,audio_mixed_path,audio_status")
+    .eq("id", sessionId).maybeSingle();
+  if (sessionError || !session) return { ok: false, error: "fallback_session_not_found" };
+  const mixedPath = String(session.audio_mixed_path || session.metadata?.audio_player?.path || "").trim();
+  if (!mixedPath || String(session.audio_status || "").toUpperCase() !== "READY")
+    return { ok: false, error: "fallback_mixed_audio_not_ready" };
+
+  const storage = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } }).storage.from("relato-call-audio");
+  const { data: signed, error: signedError } = await storage.createSignedUrl(mixedPath, 600);
+  if (signedError || !signed?.signedUrl) return { ok: false, error: "fallback_audio_sign_failed" };
+  const audioResponse = await fetch(signed.signedUrl, { signal: AbortSignal.timeout(30_000) }).catch(() => null);
+  if (!audioResponse?.ok) return { ok: false, error: "fallback_audio_download_failed" };
+  const bytes = await audioResponse.arrayBuffer();
+  if (!bytes.byteLength) return { ok: false, error: "fallback_audio_empty" };
+  if (bytes.byteLength > RELATO_WORKERS_AI_MAX_BYTES) return { ok: false, error: "fallback_audio_too_large" };
+
+  const sttResponse = await fetch(RELATO_WORKERS_AI_STT_URL, {
+    method: "POST",
+    headers: {
+      "content-type": "audio/mpeg",
+      "x-agency-worker-token": workerToken,
+    },
+    body: bytes,
+    signal: AbortSignal.timeout(120_000),
+  }).catch(() => null);
+  if (!sttResponse?.ok) return { ok: false, error: `fallback_stt_${sttResponse?.status || "network"}` };
+  const sttBody = await sttResponse.json().catch(() => ({})) as Record<string, unknown>;
+  const transcriptText = String(sttBody?.text || "").trim();
+  if (!transcriptText || likelyWhisperHallucination(transcriptText))
+    return { ok: false, error: "fallback_transcript_empty" };
+
+  const now = new Date().toISOString();
+  await sb.from("meeting_capture_sessions").update({
+    metadata: {
+      ...(session.metadata || {}),
+      transcription_fallback: {
+        provider: "CLOUDFLARE_WORKERS_AI",
+        model: "@cf/openai/whisper-large-v3-turbo",
+        source: "MIXED_MP3",
+        recovered_at: now,
+      },
+    },
+    updated_at: now,
+  }).eq("id", sessionId);
+
+  const commitResponse = await fetch(`${SUPABASE_URL}/functions/v1/agency-ops-heavy-worker-api`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-agency-worker-token": workerToken,
+    },
+    body: JSON.stringify({
+      action: "call_commit",
+      worker: "workers-ai-stt-fallback",
+      session_id: sessionId,
+      transcript_text: `[00:00:00] Ligação (áudio misto): ${transcriptText}`,
+      segments: [{
+        sequence_no: 0,
+        started_ms: 0,
+        ended_ms: null,
+        speaker_key: "MIXED_FALLBACK",
+        speaker_name: "Ligação (áudio misto)",
+        text: transcriptText,
+        confidence: null,
+        source: "WORKERS_AI_MIXED_FALLBACK",
+      }],
+    }),
+    signal: AbortSignal.timeout(120_000),
+  }).catch(() => null);
+  if (!commitResponse?.ok) {
+    const detail = await commitResponse?.text().catch(() => "") || "";
+    return { ok: false, error: `fallback_commit_${commitResponse?.status || "network"}:${detail.slice(0,200)}` };
+  }
+  const committed = await commitResponse.json().catch(() => ({})) as Record<string, unknown>;
+  return { ok: true, transcript_id: committed?.transcript_id || null, provider: "CLOUDFLARE_WORKERS_AI" };
+}
+
 async function getControl() {
   const sb = client("agency_ops");
   const { data, error } = await sb.from("worker_runtime_config").select("value").eq("key", "check_overdue").single();
@@ -339,7 +423,7 @@ async function getControl() {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 13 });
+  if (req.method === "GET") return json({ ok: true, service: "agency-ops-heavy-worker-api", version: 14 });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return json({ error: "server_not_configured" }, 500);
 
@@ -353,6 +437,9 @@ Deno.serve(async (req) => {
     const worker = String(body.worker ?? (commercialAuthorized ? "relato-commercial-edge" : "")).trim().slice(0, 120);
     if (!worker) return json({ error: "worker_required" }, 400);
 
+    if (action === "worker_probe") {
+      return json({ ok: true, worker, authorized: true });
+    }
     if (action === "claim") {
       return json({ ok: true, jobs: await rpc("claim_heavy_jobs", {
         p_worker: worker,
@@ -385,22 +472,30 @@ Deno.serve(async (req) => {
         if (String(failedJob?.job_type || "").toUpperCase() === "CALL_TRANSCRIBE") {
           const sessionId = String(failedJob?.payload?.session_id || "").trim();
           if (sessionId) {
-            const { data: session } = await sb.from("meeting_capture_sessions")
-              .select("id,state,metadata").eq("id",sessionId).maybeSingle();
-            if (session && String(session.state || "").toUpperCase() === "PROCESSING") {
-              const now = new Date().toISOString();
-              await sb.from("meeting_capture_sessions").update({
-                state: "NEEDS_REVIEW",
-                metadata: {
-                  ...(session.metadata || {}),
-                  transcription_failure: {
-                    error: String(failedJob?.last_error || body.error || "worker_failed").slice(0,1000),
-                    terminal: true,
-                    failed_at: now,
+            const terminalError = String(failedJob?.last_error || body.error || "worker_failed");
+            const workerToken = req.headers.get("x-agency-worker-token") || "";
+            const fallback = terminalError.includes("call_transcript_empty")
+              ? await tryWorkersAiCallFallback(sessionId, workerToken).catch((error) => ({ ok: false, error: String(error instanceof Error ? error.message : error) }))
+              : { ok: false, error: "fallback_not_applicable" };
+            if (!fallback.ok) {
+              const { data: session } = await sb.from("meeting_capture_sessions")
+                .select("id,state,metadata").eq("id",sessionId).maybeSingle();
+              if (session && String(session.state || "").toUpperCase() === "PROCESSING") {
+                const now = new Date().toISOString();
+                await sb.from("meeting_capture_sessions").update({
+                  state: "NEEDS_REVIEW",
+                  metadata: {
+                    ...(session.metadata || {}),
+                    transcription_failure: {
+                      error: terminalError.slice(0,1000),
+                      terminal: true,
+                      fallback_error: String((fallback as any)?.error || "").slice(0,1000) || null,
+                      failed_at: now,
+                    },
                   },
-                },
-                updated_at: now,
-              }).eq("id",sessionId);
+                  updated_at: now,
+                }).eq("id",sessionId);
+              }
             }
           }
         }
@@ -588,18 +683,19 @@ Deno.serve(async (req) => {
       const segments = rawSegments.map((seg: Record<string, unknown>, index: number) => {
         const rawKey = String(seg.speaker_key || "").slice(0,180);
         const rawName = String(seg.speaker_name || "Participante").slice(0,160);
-        const isLocal = rawKey === ownerName || rawName === ownerName;
+        const isMixedFallback = String(seg.source || "").toUpperCase() === "WORKERS_AI_MIXED_FALLBACK";
+        const isLocal = !isMixedFallback && (rawKey === ownerName || rawName === ownerName);
         return {
           sequence_no: Number.isFinite(Number(seg.sequence_no)) ? Number(seg.sequence_no) : index,
           started_ms: Number.isFinite(Number(seg.started_ms)) ? Math.max(0, Math.round(Number(seg.started_ms))) : null,
           ended_ms: Number.isFinite(Number(seg.ended_ms)) ? Math.max(0, Math.round(Number(seg.ended_ms))) : null,
-          speaker_key: isLocal ? (localPhone || rawKey || ownerName) : (remotePhone || rawKey || remoteBase),
-          speaker_name: isLocal ? localLabel : remoteLabel,
+          speaker_key: isMixedFallback ? "MIXED_FALLBACK" : (isLocal ? (localPhone || rawKey || ownerName) : (remotePhone || rawKey || remoteBase)),
+          speaker_name: isMixedFallback ? "Ligação (áudio misto)" : (isLocal ? localLabel : remoteLabel),
           text: String(seg.text || "").trim().slice(0,8000),
           confidence: seg.confidence == null || seg.confidence === ""
             ? null
             : (Number.isFinite(Number(seg.confidence)) ? Math.max(0, Math.min(1, Number(seg.confidence))) : null),
-          source: transcriptSource,
+          source: isMixedFallback ? "WORKERS_AI_MIXED_FALLBACK" : transcriptSource,
         };
       }).filter((seg: Record<string, unknown>) => {
         const text = String(seg.text || "").trim();
@@ -771,39 +867,12 @@ Deno.serve(async (req) => {
           },
         };
         if (lowConfidence) {
-          const { data: confirmedCall } = await sb.from("commercial_call_records")
-            .select("notes,closer_briefing")
-            .eq("capture_session_id", session.id)
-            .maybeSingle();
-          const confirmedNote = String(confirmedCall?.notes || "").trim().slice(0, 2000);
-          const safeSummary = confirmedNote
-            ? `Ligação com transcrição de baixa confiança. Nota confirmada pelo SDR: ${confirmedNote}`
-            : canonicalTranscriptText.replace(/\s+/g, " ").trim().slice(0, 1200);
-          const reviewMetadata = {
-            ...transcriptMetadata,
-            commercial_analysis_status: "LOW_CONFIDENCE_HUMAN_REVIEW",
-            transcript_ready_at: now,
-          };
-          const { error: rejectedError } = await sb.from("meeting_transcripts").update({
-            summary: safeSummary || null,
-            processing_status: "REJECTED",
-            transcript_quality: avgConfidence,
-            processed_at: now,
-            metadata: reviewMetadata,
-            updated_at: now,
-          }).eq("id", transcriptId);
-          if (rejectedError) throw rejectedError;
-          await mergeCaptureSessionMetadata(sb, String(session.id), reviewMetadata, { state: "NEEDS_REVIEW" });
-          return json({
-            ok: true, transcript_id: transcriptId, segments: segments.length, job_id: null,
-            postprocess: "SDR_LOW_CONFIDENCE_REVIEW", transcript_quality: avgConfidence,
-            summary: safeSummary || null,
-          });
+          transcriptMetadata.transcript_quality.status = "LOW_CONFIDENCE";
         }
         const extractiveSummary = canonicalTranscriptText.replace(/\s+/g, " ").trim().slice(0, 1200);
         const readyMetadata = {
           ...transcriptMetadata,
-          commercial_analysis_status: "PENDING",
+          commercial_analysis_status: lowConfidence ? "LOW_CONFIDENCE_PENDING" : "PENDING",
           transcript_ready_at: now,
         };
         const { error: readyError } = await sb.from("meeting_transcripts").update({

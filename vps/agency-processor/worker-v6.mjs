@@ -283,7 +283,7 @@ async function whisperTranscribe(audio, speakerName, transcriptSource = "WHATSAP
     if (!response.ok) throw new Error(`whisper_${response.status}:${raw.slice(0,500)}`);
     const body = JSON.parse(raw || "{}");
     const segments = Array.isArray(body.segments) ? body.segments : [];
-    return segments.map((seg, index) => ({
+    const mapped = segments.map((seg, index) => ({
       sequence_no: index,
       started_ms: Math.max(0, Math.round(Number(seg.start || 0) * 1000)),
       ended_ms: Math.max(0, Math.round(Number(seg.end || seg.start || 0) * 1000)),
@@ -291,9 +291,25 @@ async function whisperTranscribe(audio, speakerName, transcriptSource = "WHATSAP
       speaker_name: speakerName,
       device_id: null,
       text: String(seg.text || "").trim(),
-      confidence: null,
+      confidence: Number.isFinite(Number(seg.avg_logprob))
+        ? Math.max(0, Math.min(1, Math.exp(Number(seg.avg_logprob))))
+        : null,
       source: transcriptSource,
     })).filter((seg) => seg.text);
+    if (mapped.length) return mapped;
+    const fallbackText = String(body.text || body.transcription || "").trim();
+    if (!fallbackText) return [];
+    return [{
+      sequence_no: 0,
+      started_ms: 0,
+      ended_ms: null,
+      speaker_key: speakerName,
+      speaker_name: speakerName,
+      device_id: null,
+      text: fallbackText,
+      confidence: null,
+      source: transcriptSource + "_TEXT_FALLBACK",
+    }];
   } finally {
     clearTimeout(timeout);
   }

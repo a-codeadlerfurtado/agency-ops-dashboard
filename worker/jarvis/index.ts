@@ -127,6 +127,17 @@ export async function rotearJarvis(request: Request, env: EnvJarvis & { JARVIS_S
   // validado no backend do Relato antes de gastar Workers AI. Nenhum segredo
   // de infraestrutura e distribuido no executavel.
   if (acao === "stt" && request.method === "POST") {
+    const workerToken = (request.headers.get("x-agency-worker-token") ?? "").trim();
+    if (workerToken) {
+      const probe = await fetch("https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-heavy-worker-api", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-agency-worker-token": workerToken },
+        body: JSON.stringify({ action: "worker_probe", worker: "jarvis-stt-fallback" }),
+        signal: AbortSignal.timeout(5_000),
+      }).catch(() => null);
+      if (!probe?.ok) return json({ ok: false, error: "invalid_relato_worker" }, 401);
+      return transcrever(request, env);
+    }
     const authHeader = request.headers.get("authorization") ?? "";
     const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
     const deviceToken = (request.headers.get("x-meeting-device-token") ?? bearerToken).trim();
