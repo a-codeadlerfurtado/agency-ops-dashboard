@@ -5,8 +5,8 @@ import { authenticatedFetch, SUPABASE_URL } from "./shared";
 
 type PairingResult = { code?: string; expires_at?: string; owner_person?: string; error?: string };
 
-const RELATO_DESKTOP_VERSION = "0.5.4";
-const RELATO_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.29.1/RelatoAI-Desktop-SDR.exe";
+const RELATO_DESKTOP_VERSION = "0.5.10";
+const RELATO_DESKTOP_DOWNLOAD_URL = "https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.10.02.1/RelatoAI-Desktop-SDR.exe";
 
 export function RelatoPairingCard() {
   const [pairing,setPairing]=useState<PairingResult|null>(null);
