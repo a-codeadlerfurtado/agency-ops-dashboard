@@ -109,7 +109,8 @@ function bestName(participant: Row, contact?: Row | null) {
     || contact?.name || contact?.notify || contact?.vname || contact?.short, 160) || null;
 }
 async function groupClient(ops: any, chatId: string, subject: string) {
-  const { data: reg } = await ops.from("whatsapp_chat_registry").select("client_id,reason").eq("chat_id", chatId).maybeSingle();
+  const { data: reg } = await ops.from("whatsapp_chat_registry").select("client_id,reason,scope").eq("chat_id", chatId).maybeSingle();
+  if (reg?.scope === "COMMERCIAL") return null;
   if (reg?.client_id) return String(reg.client_id);
   const { data: integ } = await ops.from("client_integrations").select("client_id").eq("system", "WHATSAPP_GROUP").eq("external_id", chatId).limit(2);
   if (integ?.length === 1) return String(integ[0].client_id);
@@ -163,7 +164,7 @@ async function syncGroupOnInstance(ops: any, instance: Instance, chatId: string,
     .select("chat_id,reason,scope,client_id,first_seen_at,message_count").eq("chat_id", chatId).maybeSingle();
   if (!String(existingChat?.reason || "").startsWith("MANUAL:")) {
     await ops.from("whatsapp_chat_registry").upsert({
-      chat_id: chatId, chat_name: subject, scope: clientId ? "CLIENT" : (existingChat?.scope === "INTERNAL" || existingChat?.scope === "TEST" ? existingChat.scope : "UNKNOWN"),
+      chat_id: chatId, chat_name: subject, scope: clientId ? "CLIENT" : (["INTERNAL","TEST","COMMERCIAL"].includes(String(existingChat?.scope || "")) ? existingChat.scope : "UNKNOWN"),
       client_id: clientId, confidence: clientId ? "CONFIRMED" : "LOW",
       reason: clientId ? "zapi_group_snapshot_client_link" : "zapi_group_snapshot_unresolved",
       first_seen_at: existingChat?.first_seen_at || now, last_seen_at: now,
@@ -263,8 +264,12 @@ async function syncGroupOnInstance(ops: any, instance: Instance, chatId: string,
   const activeDbKeys = new Set((auditRows || []).filter((r: Row) => r.metadata?.active_in_group === true).map((r: Row) => String(r.identity_key)));
   const missing = [...currentKeys].filter((key) => !activeDbKeys.has(key));
   const extra = [...activeDbKeys].filter((key) => !currentKeys.has(key));
+  const registryScope = String(existingChat?.scope || "");
   const { error: stateError } = await ops.from("whatsapp_group_identity_sync_state").upsert({
-    chat_id: chatId, instance_id: instance.instanceId, subject, client_id: clientId,
+    chat_id: chatId, instance_id: instance.instanceId, subject, client_id: registryScope === "COMMERCIAL" ? null : clientId,
+    classification: registryScope === "COMMERCIAL" ? "COMMERCIAL" : (clientId ? "CLIENT" : null),
+    classification_confirmed: registryScope === "COMMERCIAL" || Boolean(clientId),
+    classification_source: registryScope === "COMMERCIAL" ? "manual_commercial_scope" : (clientId ? "client_link" : null),
     provider_participant_count: currentKeys.size, db_participant_count: activeDbKeys.size,
     named_count: names, unresolved_count: identityRows.filter((r) => !r.canonical_name).length,
     last_synced_at: now, last_error: null,
