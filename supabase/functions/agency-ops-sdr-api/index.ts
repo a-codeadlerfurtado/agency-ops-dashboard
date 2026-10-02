@@ -392,21 +392,14 @@ Deno.serve(async(req:Request)=>{
       const storage=db.storage.from("relato-call-audio");
       const {data:signed,error:signedError}=await storage.createSignedUrl(String(sessionRow.audio_mixed_path),120);
       if(signedError||!signed?.signedUrl) return reply({error:"audio_sign_failed",detail:signedError?.message},500);
-      const range=req.headers.get("range")||"";
-      const upstream=await fetch(signed.signedUrl,{headers:{
-        accept:"audio/mpeg",
-        ...(range?{range}:{})
-      }});
+      const upstream=await fetch(signed.signedUrl,{headers:{accept:"audio/mpeg"}});
       if(!upstream.ok||!upstream.body) return reply({error:"audio_fetch_failed",status:upstream.status},502);
       const headers=new Headers(CORS);
-      headers.set("content-type",upstream.headers.get("content-type")||sessionRow.audio_mime_type||"audio/mpeg");
+      headers.set("content-type",sessionRow.audio_mime_type||"audio/mpeg");
       headers.set("cache-control","private, no-store");
-      headers.set("accept-ranges",upstream.headers.get("accept-ranges")||"bytes");
-      for(const name of ["content-length","content-range","etag","last-modified"]){
-        const value=upstream.headers.get(name);
-        if(value) headers.set(name,value);
-      }
-      return new Response(upstream.body,{status:upstream.status,headers});
+      const length=upstream.headers.get("content-length");
+      if(length) headers.set("content-length",length);
+      return new Response(upstream.body,{status:200,headers});
     }
 
     let transcript:Row|null=null;
@@ -663,7 +656,7 @@ Deno.serve(async(req:Request)=>{
     source_url:r.source_url||null
   }));
 
-  const requiredAgentVersion="desktop-0.5.8";
+  const requiredAgentVersion="desktop-0.5.10";
   let latestDevice:Row|null=null;
   if(isOwnSdr){
     const {data}=await ops.from("meeting_capture_devices")
@@ -692,7 +685,7 @@ Deno.serve(async(req:Request)=>{
       update_required:currentAgentVersion!==requiredAgentVersion,
       last_seen_at:latestDevice?.last_seen_at||null,
       device_name:latestDevice?.device_name||null,
-      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.09.30.4/RelatoAI-Desktop-SDR.exe"
+      release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.10.02.1/RelatoAI-Desktop-SDR.exe"
     }:null,
     sdr_options:isLeonardoViewer?targetPeople:[],
     summary:{meetings:meetings.length,calls:enrichedCalls.length,notifications_unread:ownNotifications.unread},
