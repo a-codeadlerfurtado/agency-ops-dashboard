@@ -373,11 +373,39 @@ Deno.serve(async (req) => {
       }) });
     }
     if (action === "fail") {
-      return json({ ok: true, result: await rpc("fail_heavy_job", {
+      const failureResult = await rpc("fail_heavy_job", {
         p_job_id: body.job_id, p_message_id: body.message_id, p_worker: worker,
         p_error: String(body.error ?? "worker_failed").slice(0, 4000),
         p_retry_delay_seconds: Math.max(5, Math.min(Number(body.retry_delay_seconds ?? 60), 86400)),
-      }) });
+      });
+      if (failureResult === "FAILED") {
+        const sb = client("agency_ops");
+        const { data: failedJob } = await sb.from("heavy_jobs")
+          .select("id,job_type,payload,last_error").eq("id",body.job_id).maybeSingle();
+        if (String(failedJob?.job_type || "").toUpperCase() === "CALL_TRANSCRIBE") {
+          const sessionId = String(failedJob?.payload?.session_id || "").trim();
+          if (sessionId) {
+            const { data: session } = await sb.from("meeting_capture_sessions")
+              .select("id,state,metadata").eq("id",sessionId).maybeSingle();
+            if (session && String(session.state || "").toUpperCase() === "PROCESSING") {
+              const now = new Date().toISOString();
+              await sb.from("meeting_capture_sessions").update({
+                state: "NEEDS_REVIEW",
+                metadata: {
+                  ...(session.metadata || {}),
+                  transcription_failure: {
+                    error: String(failedJob?.last_error || body.error || "worker_failed").slice(0,1000),
+                    terminal: true,
+                    failed_at: now,
+                  },
+                },
+                updated_at: now,
+              }).eq("id",sessionId);
+            }
+          }
+        }
+      }
+      return json({ ok: true, result: failureResult });
     }
 
     if (action === "meeting_audio_snapshot") {
@@ -743,19 +771,33 @@ Deno.serve(async (req) => {
           },
         };
         if (lowConfidence) {
+          const { data: confirmedCall } = await sb.from("commercial_call_records")
+            .select("notes,closer_briefing")
+            .eq("capture_session_id", session.id)
+            .maybeSingle();
+          const confirmedNote = String(confirmedCall?.notes || "").trim().slice(0, 2000);
+          const safeSummary = confirmedNote
+            ? `Ligação com transcrição de baixa confiança. Nota confirmada pelo SDR: ${confirmedNote}`
+            : canonicalTranscriptText.replace(/\s+/g, " ").trim().slice(0, 1200);
+          const reviewMetadata = {
+            ...transcriptMetadata,
+            commercial_analysis_status: "LOW_CONFIDENCE_HUMAN_REVIEW",
+            transcript_ready_at: now,
+          };
           const { error: rejectedError } = await sb.from("meeting_transcripts").update({
-            summary: null,
+            summary: safeSummary || null,
             processing_status: "REJECTED",
             transcript_quality: avgConfidence,
             processed_at: now,
-            metadata: transcriptMetadata,
+            metadata: reviewMetadata,
             updated_at: now,
           }).eq("id", transcriptId);
           if (rejectedError) throw rejectedError;
-          await mergeCaptureSessionMetadata(sb, String(session.id), transcriptMetadata, { state: "NEEDS_REVIEW" });
+          await mergeCaptureSessionMetadata(sb, String(session.id), reviewMetadata, { state: "NEEDS_REVIEW" });
           return json({
             ok: true, transcript_id: transcriptId, segments: segments.length, job_id: null,
             postprocess: "SDR_LOW_CONFIDENCE_REVIEW", transcript_quality: avgConfidence,
+            summary: safeSummary || null,
           });
         }
         const extractiveSummary = canonicalTranscriptText.replace(/\s+/g, " ").trim().slice(0, 1200);
@@ -1119,6 +1161,25 @@ Deno.serve(async (req) => {
       const substantiveCommercialEvidence = hasPainEvidence || hasGoalEvidence || hasInvestmentEvidence || hasBrokerEvidence
         || hasDecisionEvidence || hasServiceEvidence || hasBuyingEvidence;
 
+      if (evidence.length > 0 && evidence.length < 1200 && !substantiveCommercialEvidence) {
+        summary = "Ligação curta sem qualificação comercial suficiente. Consulte a transcrição completa para o conteúdo literal da conversa.";
+        analysis.primary_pain = "";
+        analysis.secondary_pains = [];
+        analysis.pain_points = [];
+        analysis.goals = [];
+        analysis.urgency = "";
+        analysis.decision_role = "";
+        analysis.current_structure = "";
+        analysis.marketing_investment = "";
+        analysis.broker_count = 0;
+        analysis.services_interest = [];
+        analysis.objections = [];
+        analysis.buying_signals = [];
+        analysis.closing_risks = [];
+        analysis.follow_up = "";
+        analysis.closer_briefing = "Call curta sem evidência suficiente para inferir qualificação comercial.";
+      }
+
       if (!hasBrokerEvidence) analysis.broker_count = 0;
       if (!hasInvestmentEvidence) analysis.marketing_investment = "";
       if (!hasDecisionEvidence) analysis.decision_role = "";
@@ -1446,7 +1507,85 @@ Deno.serve(async (req) => {
             : await crm.from("lead_activities").insert(activityPatch);
           if (activityResult.error) throw activityResult.error;
 
-          commercialSync = { status: "SYNCED", lead_id: leadId, activity_external_id: activityExternalId };
+          let awaveSummarySync: Row = { status: "SKIPPED", reason: remotePhone ? "not_configured" : "missing_phone" };
+          if (remotePhone) {
+            try {
+              const { data: awaveSettings } = await sb.from("automation_settings")
+                .select("key,value")
+                .in("key", ["AWAVE_DASH_OPS_FUNNEL_URL", "AWAVE_DASH_OPS_FUNNEL_SECRET"]);
+              const awaveMap = new Map((awaveSettings || []).map((r: Row) => [String(r.key), typeof r.value === "string" ? r.value : String(r.value ?? "").replace(/^"|"$/g, "")]));
+              const funnelUrl = String(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_URL") || "").trim();
+              const funnelSecret = String(awaveMap.get("AWAVE_DASH_OPS_FUNNEL_SECRET") || "").trim();
+              const relatoCallUrl = funnelUrl ? funnelUrl.replace(/\/dash-ops-funil\/?$/i, "/relato-call") : "";
+              const webhookLeadUrl = funnelUrl ? funnelUrl.replace(/\/dash-ops-funil\/?$/i, "/webhook-lead") : "";
+              const fullTranscript = String(evidenceTranscript?.transcript_text || "").trim();
+              const awaveNotes = [
+                "— RELATO AI · RESUMO DA LIGAÇÃO —",
+                summary,
+                followUp ? `Próximo passo: ${followUp}` : null,
+                objections.length ? `Objeções: ${objections.join(" · ")}` : null,
+                "",
+                "— TRANSCRIÇÃO DA LIGAÇÃO —",
+                fullTranscript || "Transcrição ainda não disponível.",
+              ].filter((v) => v !== null).join("\n").slice(0, 30000);
+
+              const syncResults: Row = {};
+              if (relatoCallUrl && funnelSecret) {
+                try {
+                  const upstream = await fetch(relatoCallUrl, {
+                    method: "POST",
+                    headers: { "content-type": "application/json", "x-dash-ops-secret": funnelSecret },
+                    body: JSON.stringify({
+                      telefone: remotePhone,
+                      resumo: activityContent,
+                      transcricao: fullTranscript,
+                      relato_session_id: captureSessionId,
+                      transcript_id: transcriptId,
+                    }),
+                    signal: AbortSignal.timeout(12000),
+                  });
+                  const raw = await upstream.text();
+                  let parsed: Row = {};
+                  try { parsed = JSON.parse(raw); } catch { parsed = { raw: raw.slice(0, 500) }; }
+                  syncResults.activity = upstream.ok ? { status: "SYNCED", ...parsed } : { status: "ERROR", http_status: upstream.status, ...parsed };
+                } catch (error) {
+                  syncResults.activity = { status: "ERROR", error: error instanceof Error ? error.message : String(error) };
+                }
+              }
+
+              // This route already exists in the canonical Awave deployment. Keeping the
+              // latest Relato summary + transcript in the contact/deal notes makes the
+              // information visible immediately even before the richer Awave card is deployed.
+              if (webhookLeadUrl && funnelSecret) {
+                const leadRow = await crm.from("leads").select("name,company,email,phone").eq("id", leadId).maybeSingle();
+                const upstream = await fetch(webhookLeadUrl, {
+                  method: "POST",
+                  headers: { "content-type": "application/json", "x-webhook-secret": funnelSecret },
+                  body: JSON.stringify({
+                    nome: leadRow.data?.name || remoteName || "Prospect Relato AI",
+                    empresa: leadRow.data?.company || undefined,
+                    email: leadRow.data?.email || undefined,
+                    telefone: leadRow.data?.phone || remotePhone,
+                    origem: "RELATO_AI_SDR",
+                    notas: awaveNotes,
+                    crm_lead_id: leadId,
+                    relato_session_id: captureSessionId,
+                    transcript_id: transcriptId,
+                  }),
+                  signal: AbortSignal.timeout(12000),
+                });
+                const raw = await upstream.text();
+                let parsed: Row = {};
+                try { parsed = JSON.parse(raw); } catch { parsed = { raw: raw.slice(0, 500) }; }
+                syncResults.notes = upstream.ok ? { status: "SYNCED", ...parsed } : { status: "ERROR", http_status: upstream.status, ...parsed };
+              }
+              awaveSummarySync = Object.keys(syncResults).length ? syncResults : { status: "SKIPPED", reason: "awave_urls_missing" };
+            } catch (error) {
+              awaveSummarySync = { status: "ERROR", error: error instanceof Error ? error.message : String(error) };
+            }
+          }
+
+          commercialSync = { status: "SYNCED", lead_id: leadId, activity_external_id: activityExternalId, awave_summary: awaveSummarySync };
         } else {
           commercialSync = commercialSkipReason
             ? { status: "SKIPPED_NOT_COMMERCIAL", reason: commercialSkipReason, identity_status: identityStatus || null, identity_side: identitySide || null, classification: reviewClassification || null }
