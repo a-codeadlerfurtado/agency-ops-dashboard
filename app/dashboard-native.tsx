@@ -677,6 +677,7 @@ export default function Dashboard() {
       {error && <div className="error-box">{error}</div>}
 
       {isDesignRestricted && view === "focus" && <DesignFocusMetrics focus={data?.operations?.design_focus || {}} loading={!data} />}
+      {view === "overview" && <DailyReflection token={session.access_token} />}
       {view === "overview" && !isDesignRestricted && <section className="grid kpis">
             <Metric label="Clientes ativos" value={formatNumber(kpis.active_clients)} tone="blue" hint="Ativos + onboarding" loading={!data} />
             <Metric label="Atenção agora" value={formatNumber(kpis.attention_now)} tone="red" hint="prioridade operacional" loading={!data} />
@@ -685,8 +686,6 @@ export default function Dashboard() {
             <Metric label="Compromissos vencidos" value={formatNumber(kpis.overdue_commitments)} tone={kpis.overdue_commitments ? "red" : "green"} hint="em aberto" loading={!data} />
             {data?.profile?.can_view_operational_alerts && <Metric label="Alertas abertos" value={formatNumber(kpis.open_alerts)} tone={kpis.critical_alerts ? "red" : "yellow"} hint={`${formatNumber(kpis.critical_alerts)} críticos/altos`} loading={!data} />}
           </section>}
-
-      {view === "overview" && <DailyReflection token={session.access_token} />}
 
       {view === "focus" && (isDesignRestricted
         ? <DesignFocusCenter focus={data?.operations?.design_focus || {}} />
@@ -800,15 +799,6 @@ export default function Dashboard() {
         </section>
 
         <aside className="stack">
-          <section className="card section">
-            <div className="section-head"><div className="section-title">Saúde das fontes</div></div>
-            <div className="health">
-              <Health name="WhatsApp" status={health.latest_whatsapp_message ? `Ativo · ${formatDate(health.latest_whatsapp_message.received_at)}` : "Sem mensagens"} tone="green" />
-              <Health name="Automação" status={failedJobs ? `Falhas: ${failedJobs}` : "Rotinas executando normalmente"} tone={failedJobs ? "red" : "green"} />
-              <Health name="Notion" status={notion ? `${text(notion.status).toUpperCase()} · ${formatDate(notion.finished_at || notion.started_at)}` : "Sem sincronização"} tone={notion && text(notion.status).toUpperCase() === "SUCCESS" ? "green" : "yellow"} />
-              <Health name="Meta Ads" status={media.latest_date ? `${media.is_stale ? "Desatualizado" : "Atualizado"} · ${media.latest_date}` : "Sem carga"} tone={media.is_stale ? "yellow" : "green"} />
-            </div>
-          </section>
           <section className="card section">
             <div className="section-head"><div className="section-title">Alertas abertos</div><span className="chip">{data?.alerts?.length || 0}</span></div>
             {(data?.alerts || []).slice(0, 12).map((alert) => <div className="alert" key={alert.id}><Chip value={alert.severity} /><div className="alert-title">{text(alert.title)}</div><div className="small">{text(alert.description)}</div></div>)}
