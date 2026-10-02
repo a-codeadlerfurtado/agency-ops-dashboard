@@ -11,6 +11,11 @@ internal sealed record WhatsAppDesktopUiIdentity(
     double Confidence,
     string Evidence);
 
+internal sealed record WhatsAppDesktopCallUiState(
+    string Status,
+    double Confidence,
+    string Evidence);
+
 internal static class WhatsAppDesktopUiIdentityResolver
 {
     private sealed record Candidate(int Score, string? Name, string? Phone, string Evidence);
@@ -32,6 +37,27 @@ internal static class WhatsAppDesktopUiIdentityResolver
         "câmera", "camera", "vídeo", "video", "alto-falante", "speaker"
     ];
 
+    private static readonly Regex CallDurationRegex = new(
+        @"^(?:\d{1,2}:)?\d{1,2}:\d{2}$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly string[] RingingTerms =
+    [
+        "chamando", "ligando", "calling", "ringing", "conectando", "connecting"
+    ];
+
+    private static readonly string[] NoAnswerTerms =
+    [
+        "não atendida", "nao atendida", "sem resposta", "no answer",
+        "recusada", "recusado", "declined", "ocupado", "busy",
+        "indisponível", "indisponivel", "unavailable"
+    ];
+
+    private static readonly string[] ConnectedTerms =
+    [
+        "conectado", "connected"
+    ];
+
     private static readonly HashSet<string> GenericNames = new(StringComparer.OrdinalIgnoreCase)
     {
         "whatsapp", "chamada", "chamadas", "ligação", "ligações", "voice call", "video call",
@@ -43,6 +69,74 @@ internal static class WhatsAppDesktopUiIdentityResolver
         "nova conversa", "new chat", "configurações", "settings", "perfil", "profile",
         "adicionar participante", "add participant", "minimizar", "maximize", "maximizar"
     };
+
+    public static WhatsAppDesktopCallUiState? ResolveCallState()
+    {
+        object? automationObject = null;
+        try
+        {
+            var automationType = Type.GetTypeFromProgID("UIAutomationClient.CUIAutomation");
+            if (automationType is null) return null;
+            automationObject = Activator.CreateInstance(automationType);
+            if (automationObject is null) return null;
+            dynamic automation = automationObject;
+
+            var processes = Process.GetProcesses()
+                .Where(p => p.ProcessName.StartsWith("WhatsApp", StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            if (processes.Length == 0) return null;
+
+            dynamic trueCondition = automation.CreateTrueCondition();
+            var names = new List<string>();
+            var inspectedHandles = new HashSet<nint>();
+            foreach (var process in processes.OrderByDescending(p => p.MainWindowHandle != IntPtr.Zero))
+            {
+                try
+                {
+                    if (process.MainWindowHandle == IntPtr.Zero || !inspectedHandles.Add(process.MainWindowHandle)) continue;
+                    dynamic window = automation.ElementFromHandle(process.MainWindowHandle);
+                    names.AddRange(ReadNamedElements(window, trueCondition, 1800).Select(x => x.Name));
+                }
+                catch { }
+            }
+            if (names.Count == 0) return null;
+
+            var visible = names.Select(Clean).Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            var hasCallAnchor = visible.Any(name => CallAnchorTerms.Any(term => name.Contains(term, StringComparison.OrdinalIgnoreCase)));
+
+            var noAnswer = visible.FirstOrDefault(name => NoAnswerTerms.Any(term => name.Contains(term, StringComparison.OrdinalIgnoreCase)));
+            if (!string.IsNullOrWhiteSpace(noAnswer))
+                return new("NO_ANSWER", 0.995, noAnswer);
+
+            var duration = hasCallAnchor ? visible.FirstOrDefault(name => CallDurationRegex.IsMatch(name)) : null;
+            if (!string.IsNullOrWhiteSpace(duration))
+                return new("CONNECTED", 0.995, "timer:" + duration);
+
+            var connected = hasCallAnchor
+                ? visible.FirstOrDefault(name => ConnectedTerms.Any(term => name.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                : null;
+            if (!string.IsNullOrWhiteSpace(connected))
+                return new("CONNECTED", 0.98, connected);
+
+            var ringing = visible.FirstOrDefault(name => RingingTerms.Any(term => name.Contains(term, StringComparison.OrdinalIgnoreCase)));
+            if (!string.IsNullOrWhiteSpace(ringing))
+                return new("RINGING", 0.97, ringing);
+
+            return hasCallAnchor ? new("ACTIVE_UNKNOWN", 0.75, "call-controls-visible") : null;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            if (automationObject is not null && Marshal.IsComObject(automationObject))
+            {
+                try { Marshal.FinalReleaseComObject(automationObject); } catch { }
+            }
+        }
+    }
 
     // Uses the native Windows UI Automation COM API through late binding.
     // This keeps the agent dependency-free while reading the actual WhatsApp Desktop/WebView2 accessibility tree.

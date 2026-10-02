@@ -92,7 +92,10 @@ internal sealed partial class RelatoApi
     public async Task<PreparedCall> PrepareCallAsync(
         string localSessionId, DateTimeOffset started, DateTimeOffset ended,
         string contactName, IReadOnlyList<string> roles, long durationMs,
-        string? localPhone = null, string? remotePhone = null, string? identitySource = null)
+        string? localPhone = null, string? remotePhone = null, string? identitySource = null,
+        string? callOutcome = null, string? callUiState = null,
+        bool callUiConnectedObserved = false, bool callUiRingingObserved = false,
+        bool callUiNoAnswerObserved = false, string? callUiEvidence = null)
     {
         using var doc = await SendAsync(new
         {
@@ -106,6 +109,12 @@ internal sealed partial class RelatoApi
                 local_phone = localPhone,
                 remote_phone = remotePhone,
                 identity_source = identitySource,
+                call_outcome = callOutcome,
+                call_ui_state = callUiState,
+                call_ui_connected_observed = callUiConnectedObserved,
+                call_ui_ringing_observed = callUiRingingObserved,
+                call_ui_no_answer_observed = callUiNoAnswerObserved,
+                call_ui_evidence = callUiEvidence,
                 duration_ms = durationMs,
                 finish_reason = "desktop_audio_session_ended",
                 extension_version = AgentUpdater.CurrentVersion,

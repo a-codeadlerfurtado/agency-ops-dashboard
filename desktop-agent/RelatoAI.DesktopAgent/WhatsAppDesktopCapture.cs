@@ -33,6 +33,12 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
     private WhatsAppDesktopUiIdentity? uiCandidate;
     private int uiCandidateHits;
     private DateTimeOffset lastUiProbe = DateTimeOffset.MinValue;
+    private DateTimeOffset lastUiCallStateProbe = DateTimeOffset.MinValue;
+    private bool callUiConnectedObserved;
+    private bool callUiRingingObserved;
+    private bool callUiNoAnswerObserved;
+    private string? callUiLastState;
+    private string? callUiEvidence;
     private int ticking;
     public event Action<string>? StatusChanged;
     public event Action<string, string>? CallStarted;
@@ -95,6 +101,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         }
 
         ProbeUiIdentity(now);
+        ProbeUiCallState(now);
 
         if (micUsage.Available && micUsage.Active)
         {
@@ -327,7 +334,14 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         uiCandidate = null;
         uiCandidateHits = 0;
         lastUiProbe = DateTimeOffset.MinValue;
+        lastUiCallStateProbe = DateTimeOffset.MinValue;
+        callUiConnectedObserved = false;
+        callUiRingingObserved = false;
+        callUiNoAnswerObserved = false;
+        callUiLastState = null;
+        callUiEvidence = null;
         ProbeUiIdentity(now, force: true);
+        ProbeUiCallState(now, force: true);
         var contact = uiIdentity?.Name ?? uiIdentity?.Phone ?? ResolveContactName(process);
         CallStarted?.Invoke(sessionId, contact);
         StatusChanged?.Invoke(callPrivacyObservedActive
@@ -447,7 +461,11 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         var ended = ResolvePrivacyTime(privacyStop, now);
         if (ended <= started || ended - started > TimeSpan.FromHours(12)) ended = now;
         ProbeUiIdentity(now, force: true);
+        ProbeUiCallState(now, force: true);
         var directUiIdentity = uiIdentity;
+        var callOutcome = callUiConnectedObserved
+            ? "ANSWERED"
+            : (callUiNoAnswerObserved || callUiRingingObserved ? "NO_ANSWER" : "UNKNOWN");
         var contact = directUiIdentity?.Name ?? directUiIdentity?.Phone ?? ResolveContactName(target);
         lock (gate)
         {
@@ -490,7 +508,10 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             // channels immediately; the heavy worker mixes them with ffmpeg before STT.
             var prepared = await api.PrepareCallAsync(
                 id, started, ended, resolvedContact, roles, durationMs,
-                identity.LocalPhone, identity.RemotePhone, identity.Source);
+                identity.LocalPhone, identity.RemotePhone, identity.Source,
+                callOutcome, callUiLastState,
+                callUiConnectedObserved, callUiRingingObserved, callUiNoAnswerObserved,
+                callUiEvidence);
 
             var uploadTasks = prepared.Uploads.Select(async targetUpload =>
             {
@@ -549,7 +570,27 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             uiCandidate = null;
             uiCandidateHits = 0;
             lastUiProbe = DateTimeOffset.MinValue;
+            lastUiCallStateProbe = DateTimeOffset.MinValue;
+            callUiConnectedObserved = false;
+            callUiRingingObserved = false;
+            callUiNoAnswerObserved = false;
+            callUiLastState = null;
+            callUiEvidence = null;
         }
+    }
+
+    private void ProbeUiCallState(DateTimeOffset now, bool force = false)
+    {
+        if (!IsRecording) return;
+        if (!force && now - lastUiCallStateProbe < TimeSpan.FromMilliseconds(500)) return;
+        lastUiCallStateProbe = now;
+        var observed = WhatsAppDesktopUiIdentityResolver.ResolveCallState();
+        if (observed is null) return;
+        callUiLastState = observed.Status;
+        callUiEvidence = observed.Evidence;
+        if (observed.Status == "CONNECTED") callUiConnectedObserved = true;
+        if (observed.Status == "RINGING") callUiRingingObserved = true;
+        if (observed.Status == "NO_ANSWER") callUiNoAnswerObserved = true;
     }
 
     private void ProbeUiIdentity(DateTimeOffset now, bool force = false)
