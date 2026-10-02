@@ -392,14 +392,21 @@ Deno.serve(async(req:Request)=>{
       const storage=db.storage.from("relato-call-audio");
       const {data:signed,error:signedError}=await storage.createSignedUrl(String(sessionRow.audio_mixed_path),120);
       if(signedError||!signed?.signedUrl) return reply({error:"audio_sign_failed",detail:signedError?.message},500);
-      const upstream=await fetch(signed.signedUrl,{headers:{accept:"audio/mpeg"}});
+      const range=req.headers.get("range")||"";
+      const upstream=await fetch(signed.signedUrl,{headers:{
+        accept:"audio/mpeg",
+        ...(range?{range}:{})
+      }});
       if(!upstream.ok||!upstream.body) return reply({error:"audio_fetch_failed",status:upstream.status},502);
       const headers=new Headers(CORS);
-      headers.set("content-type",sessionRow.audio_mime_type||"audio/mpeg");
+      headers.set("content-type",upstream.headers.get("content-type")||sessionRow.audio_mime_type||"audio/mpeg");
       headers.set("cache-control","private, no-store");
-      const length=upstream.headers.get("content-length");
-      if(length) headers.set("content-length",length);
-      return new Response(upstream.body,{status:200,headers});
+      headers.set("accept-ranges",upstream.headers.get("accept-ranges")||"bytes");
+      for(const name of ["content-length","content-range","etag","last-modified"]){
+        const value=upstream.headers.get(name);
+        if(value) headers.set(name,value);
+      }
+      return new Response(upstream.body,{status:upstream.status,headers});
     }
 
     let transcript:Row|null=null;
