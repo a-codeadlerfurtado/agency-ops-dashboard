@@ -4,6 +4,7 @@ using Microsoft.Win32;
 
 namespace RelatoAI.DesktopAgent;
 
+// Release build 0.5.10: resilient long-call audio uploads.
 internal sealed class AgentUpdater : IDisposable
 {
     public const string CurrentVersion = "desktop-0.5.10";
