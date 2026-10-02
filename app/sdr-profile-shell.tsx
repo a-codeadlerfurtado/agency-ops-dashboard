@@ -244,6 +244,7 @@ export function CallsView({data,managerMode=false,focus,onFocusConsumed}:{data:R
   const sdrOptions=useMemo(()=>Array.from(new Set(calls.map(row=>String(row.sdr_person||row.owner_person||"").trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b,"pt-BR")),[calls]);
 
   const visible=useMemo(()=>calls.filter(row=>{
+    if(String(row.call_outcome||"").toUpperCase()==="NO_ANSWER")return false;
     const rowSdr=String(row.sdr_person||row.owner_person||"").trim();
     if(managerMode&&sdrPerson!=="all"&&rowSdr!==sdrPerson)return false;
     const q=norm(query);
@@ -288,8 +289,8 @@ export function CallsView({data,managerMode=false,focus,onFocusConsumed}:{data:R
   }),[calls,query,period,dateFrom,dateTo,status,identity,transcript,recording,durationBand,channel,managerMode,sdrPerson]);
 
   const metrics=useMemo(()=>{
-    const answeredRows=visible.filter(r=>r.answered===true||String(r.call_outcome||"").toUpperCase().startsWith("ANSWERED"));
-    const attempts=visible.filter(r=>String(r.call_outcome||"").toUpperCase()==="NO_ANSWER").length;
+    const answeredRows=visible.filter(r=>String(r.call_outcome||"").toUpperCase()!=="NO_ANSWER");
+    const attempts=Math.max(0,Number(data?.summary?.attempts||0));
     const secs=answeredRows.map(r=>Math.max(0,Number(r.duration_seconds||0))).filter(n=>n>0);
     const total=secs.reduce((a,b)=>a+b,0);
     const uniqueProspects=new Set(answeredRows.map(r=>String(r.prospect_lead_id||r.prospect_name||r.remote_phone||"")).filter(Boolean)).size;
@@ -305,7 +306,7 @@ export function CallsView({data,managerMode=false,focus,onFocusConsumed}:{data:R
       identifiedPct:pct(answeredRows.filter(r=>r.prospect_identified||r.prospect_name).length,answeredRows.length),
       uniqueProspects
     };
-  },[visible]);
+  },[visible,data?.summary?.attempts]);
 
   const clearFilters=()=>{setQuery("");setSdrPerson("all");setPeriod("30d");setDateFrom("");setDateTo("");setStatus("all");setIdentity("all");setTranscript("all");setRecording("all");setDurationBand("all");setChannel("all");};
 

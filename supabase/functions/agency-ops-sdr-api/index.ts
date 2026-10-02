@@ -677,6 +677,9 @@ Deno.serve(async(req:Request)=>{
       decisions:transcript?.decisions||[],commitments:transcript?.commitments||[],ai_signals:transcript?.ai_signals||{}
     };
   });
+  const answeredCalls=enrichedCalls.filter((row:Row)=>String(row.call_outcome||"").toUpperCase()!=="NO_ANSWER");
+  const noAnswerAttempts=enrichedCalls.filter((row:Row)=>String(row.call_outcome||"").toUpperCase()==="NO_ANSWER");
+
   const meetings=(transcriptRes.data||[]).map((r:Row)=>({
     id:r.id,
     owner_person:r.owner_person||null,
@@ -725,9 +728,9 @@ Deno.serve(async(req:Request)=>{
       release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.10.02.3/RelatoAI-Desktop-SDR.exe"
     }:null,
     sdr_options:isLeonardoViewer?targetPeople:[],
-    summary:{meetings:meetings.length,calls:enrichedCalls.length,notifications_unread:ownNotifications.unread},
+    summary:{meetings:meetings.length,calls:answeredCalls.length,attempts:noAnswerAttempts.length,notifications_unread:ownNotifications.unread},
     notifications:ownNotifications.items,
-    meetings,calls:enrichedCalls,sessions,
+    meetings,calls:answeredCalls,sessions,
     generated_at:new Date().toISOString()
   });
 });

@@ -29,6 +29,8 @@ const invariants = [
   [fs.readFileSync("worker/jarvis/stt.ts", "utf8").includes('pass = "relaxed"'), "Workers AI STT must retry empty audio with relaxed decoding"],
   [fs.readFileSync("worker/jarvis/stt.ts", "utf8").includes("compactarWavParaStt"), "Workers AI STT must compact large raw WAV channels before transcription"],
   [processor.includes('body.text || body.transcription'), "local Whisper worker must preserve text-only verbose responses"],
+  [fs.readFileSync("supabase/functions/agency-ops-sdr-api/index.ts", "utf8").includes("const answeredCalls=enrichedCalls.filter"), "SDR calls payload must exclude NO_ANSWER attempts"],
+  [fs.readFileSync("app/sdr-profile-shell.tsx", "utf8").includes('if(String(row.call_outcome||"").toUpperCase()==="NO_ANSWER")return false;'), "Calls UI must never render NO_ANSWER attempts as calls"],
   [heavy.includes("SEPARATE_WAV_CHANNELS"), "Workers AI fallback must transcribe local/remote channels separately"],
   [heavy.includes("64 * 1024 * 1024"), "Workers AI fallback must allow raw WAV channels through to the STT compactor"],
   [heavy.includes("fallback_no_remote_speech"), "fallback must not treat ringback audio as an answered call"],
