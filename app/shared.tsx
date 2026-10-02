@@ -158,6 +158,12 @@ export function healthScore(client: Row) {
 // para o elemento que abriu.
 export function useDialogFocus(close: () => void) {
   const ref = useRef<HTMLElement | null>(null);
+  const closeRef = useRef(close);
+
+  useEffect(() => {
+    closeRef.current = close;
+  }, [close]);
+
   useEffect(() => {
     const anterior = document.activeElement as HTMLElement | null;
     const focaveis = () => Array.from(
@@ -167,7 +173,7 @@ export function useDialogFocus(close: () => void) {
     ).filter((el) => el.offsetParent !== null);
     focaveis()[0]?.focus();
     function aoTeclar(evento: KeyboardEvent) {
-      if (evento.key === "Escape") { evento.stopPropagation(); close(); return; }
+      if (evento.key === "Escape") { evento.stopPropagation(); closeRef.current(); return; }
       if (evento.key !== "Tab") return;
       const itens = focaveis();
       if (!itens.length) return;
@@ -177,7 +183,7 @@ export function useDialogFocus(close: () => void) {
     }
     document.addEventListener("keydown", aoTeclar);
     return () => { document.removeEventListener("keydown", aoTeclar); anterior?.focus?.(); };
-  }, [close]);
+  }, []);
   return ref;
 }
 
