@@ -341,7 +341,7 @@ async function confirmRelatoDelivery(messageId: string, recipientPhone: string, 
 }
 
 const RELATO_WORKERS_AI_STT_URL = "https://agency-ops-dashboard.lakassessoriadigital.workers.dev/api/jarvis/stt";
-const RELATO_WORKERS_AI_MAX_BYTES = 8 * 1024 * 1024;
+const RELATO_WORKERS_AI_MAX_BYTES = 64 * 1024 * 1024;
 
 async function tryWorkersAiCallFallback(sessionId: string, workerToken: string) {
   if (!workerToken || workerToken.length < 32) return { ok: false, error: "fallback_worker_token_missing" };
@@ -366,7 +366,7 @@ async function tryWorkersAiCallFallback(sessionId: string, workerToken: string) 
     if (!audioResponse?.ok) throw new Error(`fallback_${role}_download_failed`);
     const bytes = await audioResponse.arrayBuffer();
     if (!bytes.byteLength) return { role, text: "", pass: null };
-    if (bytes.byteLength > RELATO_WORKERS_AI_MAX_BYTES) throw new Error(`fallback_${role}_audio_too_large`);
+    if (bytes.byteLength > RELATO_WORKERS_AI_MAX_BYTES) throw new Error(`fallback_${role}_raw_audio_too_large`);
     const sttResponse = await fetch(RELATO_WORKERS_AI_STT_URL, {
       method: "POST",
       headers: {

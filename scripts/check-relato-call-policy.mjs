@@ -30,6 +30,7 @@ const invariants = [
   [fs.readFileSync("worker/jarvis/stt.ts", "utf8").includes("compactarWavParaStt"), "Workers AI STT must compact large raw WAV channels before transcription"],
   [processor.includes('body.text || body.transcription'), "local Whisper worker must preserve text-only verbose responses"],
   [heavy.includes("SEPARATE_WAV_CHANNELS"), "Workers AI fallback must transcribe local/remote channels separately"],
+  [heavy.includes("64 * 1024 * 1024"), "Workers AI fallback must allow raw WAV channels through to the STT compactor"],
   [heavy.includes("fallback_no_remote_speech"), "fallback must not treat ringback audio as an answered call"],
   [heavy.includes("canonicalSegments"), "legacy mixed fallback must never become canonical transcript evidence"],
   [fs.readFileSync("supabase/functions/agency-ops-meeting-capture-api/index.ts","utf8").includes('state: noAnswer ? "READY" : "PROCESSING"'), "known no-answer attempts must skip transcription queue"],
