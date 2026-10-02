@@ -194,7 +194,7 @@ def _make_text(text, start, duration, y, size, role, subtype="kinetic_text"):
 
 def build_timeline(w, job, inputs, analyses):
     strategy = job.get("edit_strategy") or {}
-    target = max(12.0, min(45.0, _num(strategy.get("target_duration_seconds"), 18.0)))
+    target = max(12.0, min(60.0, _num(strategy.get("target_duration_seconds"), 18.0)))
     style = _style(job)
     profile = STYLE_PROFILES[style]
     pool = _candidate_pool(w, inputs, analyses, style)

@@ -1,0 +1,44 @@
+name: Video V4.5 Approved DNA CI
+
+on:
+  push:
+    branches: [feat/video-approved-dna-v45, feat/video-engine-v4]
+    paths:
+      - 'vps/video-worker-v4/**'
+      - 'supabase/functions/agency-ops-video-v4-worker-api/**'
+      - 'supabase/migrations/*video*v45*.sql'
+      - '.github/workflows/video-v45-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-v45:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      VIDEO_WORK_DIR: /tmp/video-v45-work
+      VIDEO_MUSIC_LIBRARY_DIR: /tmp/video-v45-music
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install runtime dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip
+          python -m pip install 'numpy>=1.26,<3' 'opencv-contrib-python-headless>=4.10,<5'
+
+      - name: Compile V4.5 modules
+        run: |
+          python -m py_compile vps/video-worker-v4/*.py
+
+      - name: Validate approved-reference DNA
+        working-directory: vps/video-worker-v4
+        run: |
+          python smoke_v45.py
+
+      - name: Ensure production image starts V4.5
+        run: |
+          grep -q 'worker_v45.py' vps/video-worker-v4/Dockerfile
+          grep -q 'smoke_v45.py' vps/video-worker-v4/Dockerfile
