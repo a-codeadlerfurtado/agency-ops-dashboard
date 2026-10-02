@@ -7,6 +7,7 @@ import { SUPABASE_URL, authenticatedFetch, supabase } from "./shared";
 import type { Row } from "./shared";
 
 const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-required-alerts-api`;
+const ADLER_USER_ID = "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
 
 function when(value: unknown) {
   if (!value) return "";
@@ -62,7 +63,7 @@ export default function OnboardingRequiredAlerts() {
     return () => observer.disconnect();
   }, []);
 
-  const isAdler = profilePerson === "Adler Furtado";
+  const isAdler = session?.user?.id === ADLER_USER_ID || profilePerson === "Adler Furtado";
   const current = isAdler
     ? (explicitAlertId ? pending.find((item) => String(item.id) === explicitAlertId) || null : null)
     : (pending[0] || null);
@@ -75,6 +76,17 @@ export default function OnboardingRequiredAlerts() {
     setMeetUrl("");
     setError("");
   }, [current?.id]);
+
+  useEffect(() => {
+    if (!isAdler) return;
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ alertId?: string }>).detail;
+      const alertId = String(detail?.alertId || "").trim();
+      if (alertId) setExplicitAlertId(alertId);
+    };
+    window.addEventListener("open-onboarding-required-alert", handler as EventListener);
+    return () => window.removeEventListener("open-onboarding-required-alert", handler as EventListener);
+  }, [isAdler]);
 
   async function resolveAlert(alert: Row, action: "ACK" | "MEETING_SCHEDULED") {
     if (busy) return;
