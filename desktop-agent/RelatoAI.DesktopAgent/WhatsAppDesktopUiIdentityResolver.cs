@@ -87,44 +87,84 @@ internal static class WhatsAppDesktopUiIdentityResolver
             if (processes.Length == 0) return null;
 
             dynamic trueCondition = automation.CreateTrueCondition();
-            var names = new List<string>();
+            dynamic walker = automation.ControlViewWalker;
+            var candidates = new List<WhatsAppDesktopCallUiState>();
             var inspectedHandles = new HashSet<nint>();
+
             foreach (var process in processes.OrderByDescending(p => p.MainWindowHandle != IntPtr.Zero))
             {
                 try
                 {
                     if (process.MainWindowHandle == IntPtr.Zero || !inspectedHandles.Add(process.MainWindowHandle)) continue;
                     dynamic window = automation.ElementFromHandle(process.MainWindowHandle);
-                    var windowNames = (List<NamedElement>)ReadNamedElements(window, trueCondition, 1800);
-                    names.AddRange(windowNames.Select(x => x.Name));
+                    var windowNodes = (List<NamedElement>)ReadNamedElements(window, trueCondition, 1800);
+                    var anchors = windowNodes
+                        .Where(node => CallAnchorTerms.Any(term => node.Name.Contains(term, StringComparison.OrdinalIgnoreCase)))
+                        .Take(16)
+                        .ToArray();
+                    if (anchors.Length == 0) continue;
+
+                    foreach (var anchor in anchors)
+                    {
+                        dynamic current = anchor.Element;
+                        for (var depth = 0; depth < 5; depth++)
+                        {
+                            try
+                            {
+                                current = walker.GetParentElement(current);
+                                if (current is null) break;
+                            }
+                            catch { break; }
+
+                            var localNodes = (List<NamedElement>)ReadNamedElements(current, trueCondition, 220);
+                            if (localNodes.Count == 0) continue;
+                            // An entire chat/window contains message timestamps such as 14:32.
+                            // Never use those as call duration: only compact call-control subtrees qualify.
+                            if (localNodes.Count > 140) continue;
+
+                            var visible = localNodes.Select(x => Clean(x.Name))
+                                .Where(x => !string.IsNullOrWhiteSpace(x))
+                                .Distinct(StringComparer.OrdinalIgnoreCase)
+                                .ToArray();
+                            var depthPenalty = depth * 0.02;
+                            var compactBonus = localNodes.Count <= 40 ? 0.01 : 0.0;
+
+                            var noAnswer = visible.FirstOrDefault(name =>
+                                NoAnswerTerms.Any(term => name.Contains(term, StringComparison.OrdinalIgnoreCase)));
+                            if (!string.IsNullOrWhiteSpace(noAnswer))
+                                candidates.Add(new("NO_ANSWER", Math.Min(0.999, 0.98 - depthPenalty + compactBonus), noAnswer));
+
+                            var duration = visible.FirstOrDefault(name => CallDurationRegex.IsMatch(name));
+                            if (!string.IsNullOrWhiteSpace(duration))
+                                candidates.Add(new("CONNECTED", Math.Min(0.999, 0.985 - depthPenalty + compactBonus), "timer:" + duration));
+
+                            var connected = visible.FirstOrDefault(name =>
+                                ConnectedTerms.Any(term => name.Contains(term, StringComparison.OrdinalIgnoreCase)));
+                            if (!string.IsNullOrWhiteSpace(connected))
+                                candidates.Add(new("CONNECTED", Math.Min(0.995, 0.97 - depthPenalty + compactBonus), connected));
+
+                            var ringing = visible.FirstOrDefault(name =>
+                                RingingTerms.Any(term => name.Contains(term, StringComparison.OrdinalIgnoreCase)));
+                            if (!string.IsNullOrWhiteSpace(ringing))
+                                candidates.Add(new("RINGING", Math.Min(0.99, 0.95 - depthPenalty + compactBonus), ringing));
+                        }
+                    }
                 }
                 catch { }
             }
-            if (names.Count == 0) return null;
 
-            var visible = names.Select(Clean).Where(x => !string.IsNullOrWhiteSpace(x))
-                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-            var hasCallAnchor = visible.Any(name => CallAnchorTerms.Any(term => name.Contains(term, StringComparison.OrdinalIgnoreCase)));
-
-            var noAnswer = visible.FirstOrDefault(name => NoAnswerTerms.Any(term => name.Contains(term, StringComparison.OrdinalIgnoreCase)));
-            if (!string.IsNullOrWhiteSpace(noAnswer))
-                return new("NO_ANSWER", 0.995, noAnswer);
-
-            var duration = hasCallAnchor ? visible.FirstOrDefault(name => CallDurationRegex.IsMatch(name)) : null;
-            if (!string.IsNullOrWhiteSpace(duration))
-                return new("CONNECTED", 0.995, "timer:" + duration);
-
-            var connected = hasCallAnchor
-                ? visible.FirstOrDefault(name => ConnectedTerms.Any(term => name.Contains(term, StringComparison.OrdinalIgnoreCase)))
-                : null;
-            if (!string.IsNullOrWhiteSpace(connected))
-                return new("CONNECTED", 0.98, connected);
-
-            var ringing = visible.FirstOrDefault(name => RingingTerms.Any(term => name.Contains(term, StringComparison.OrdinalIgnoreCase)));
-            if (!string.IsNullOrWhiteSpace(ringing))
-                return new("RINGING", 0.97, ringing);
-
-            return hasCallAnchor ? new("ACTIVE_UNKNOWN", 0.75, "call-controls-visible") : null;
+            if (candidates.Count == 0) return null;
+            var priority = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["NO_ANSWER"] = 4,
+                ["CONNECTED"] = 3,
+                ["RINGING"] = 2,
+                ["ACTIVE_UNKNOWN"] = 1,
+            };
+            return candidates
+                .OrderByDescending(x => x.Confidence)
+                .ThenByDescending(x => priority.TryGetValue(x.Status, out var p) ? p : 0)
+                .FirstOrDefault();
         }
         catch
         {
