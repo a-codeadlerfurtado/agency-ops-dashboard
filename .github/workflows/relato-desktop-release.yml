@@ -39,12 +39,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "relato-package-v2026.09.28.1"
+          $tag = "relato-package-v2026.10.02.1"
           gh release delete $tag --yes 2>$null
           git push origin ":refs/tags/$tag" 2>$null
           gh release create $tag `
             publish/RelatoAI-Desktop-SDR.exe `
             publish/RelatoAI-Desktop-SDR.exe.sha256 `
             --target "${{ github.sha }}" `
-            --title "Relato AI Desktop 0.5.3" `
-            --notes "Correção de identificação de calls SDR: leitura UIA robusta no WhatsApp Desktop/WebView2, fallback LevelDB endurecido e identificação por transcrição mais segura."
+            --title "Relato AI Desktop 0.5.10" `
+            --notes "Correção de calls longas: upload de áudio com timeout dedicado de 30 minutos, quatro tentativas com backoff, finalização com canais enviados com sucesso e falha terminal explícita em vez de processamento infinito."
