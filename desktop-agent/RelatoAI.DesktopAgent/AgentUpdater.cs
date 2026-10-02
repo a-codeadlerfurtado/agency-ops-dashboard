@@ -6,7 +6,7 @@ namespace RelatoAI.DesktopAgent;
 
 internal sealed class AgentUpdater : IDisposable
 {
-    public const string CurrentVersion = "desktop-0.5.12";
+    public const string CurrentVersion = "desktop-0.5.12"; // release trigger 0.5.12
     private readonly Func<AgentConfig?> configProvider;
     private readonly Action<string> status;
     private readonly Action exitAgent;
