@@ -27,6 +27,7 @@ const invariants = [
   [heavy.includes('"LOW_CONFIDENCE_PENDING"'), "low-confidence SDR transcripts must stay usable instead of being rejected"],
   [jarvis.includes('x-agency-worker-token'), "Jarvis STT must accept authenticated Relato worker fallback requests"],
   [fs.readFileSync("worker/jarvis/stt.ts", "utf8").includes('pass = "relaxed"'), "Workers AI STT must retry empty audio with relaxed decoding"],
+  [fs.readFileSync("worker/jarvis/stt.ts", "utf8").includes("compactarWavParaStt"), "Workers AI STT must compact large raw WAV channels before transcription"],
   [processor.includes('body.text || body.transcription'), "local Whisper worker must preserve text-only verbose responses"],
   [heavy.includes("SEPARATE_WAV_CHANNELS"), "Workers AI fallback must transcribe local/remote channels separately"],
   [heavy.includes("fallback_no_remote_speech"), "fallback must not treat ringback audio as an answered call"],
