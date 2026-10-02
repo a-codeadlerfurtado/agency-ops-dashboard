@@ -18,6 +18,7 @@ type Warning = {
 };
 
 const ENDPOINT = `${SUPABASE_URL}/functions/v1/agency-ops-churned-client-message-warning`;
+const ADLER_USER_ID = "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
 
 function when(value: string | null | undefined) {
   if (!value) return "agora";
@@ -38,6 +39,7 @@ export default function ChurnedClientMessageWarning() {
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [explicitOpen, setExplicitOpen] = useState(false);
   const loadingRef = useRef(false);
 
   const claim = useCallback(async () => {
@@ -46,6 +48,12 @@ export default function ChurnedClientMessageWarning() {
     if (!session?.access_token) {
       setWarning(null);
       setEnabled(null);
+      return;
+    }
+    if (session.user.id === ADLER_USER_ID) {
+      setWarning(null);
+      setEnabled(true);
+      setExplicitOpen(false);
       return;
     }
     loadingRef.current = true;
@@ -91,7 +99,7 @@ export default function ChurnedClientMessageWarning() {
   }, []);
 
   useEffect(() => {
-    if (!sessionUserId) return;
+    if (!sessionUserId || sessionUserId === ADLER_USER_ID) return;
     let disposed = false;
     const channel = supabase
       .channel(`churned-client-message-warning:${sessionUserId}`)
@@ -123,6 +131,31 @@ export default function ChurnedClientMessageWarning() {
   }, [sessionUserId, claim]);
 
   useEffect(() => {
+    if (sessionUserId !== ADLER_USER_ID) return;
+    const openById = async (warningId: string | undefined) => {
+      if (!warningId) return;
+      const { data, error: queryError } = await supabase
+        .schema("agency_ops")
+        .from("churned_client_message_warnings")
+        .select("id,client_name,chat_name,target_person,actor_name,message_type,message_text,message_at,churned_at,is_good_morning,acknowledged_at")
+        .eq("id", warningId)
+        .eq("target_person", "Adler Furtado")
+        .maybeSingle();
+      if (queryError || !data || data.acknowledged_at) return;
+      setWarning(data as Warning);
+      setEnabled(true);
+      setError("");
+      setExplicitOpen(true);
+    };
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ warningId?: string }>).detail;
+      void openById(detail?.warningId);
+    };
+    window.addEventListener("open-churned-client-message-warning", handler as EventListener);
+    return () => window.removeEventListener("open-churned-client-message-warning", handler as EventListener);
+  }, [sessionUserId]);
+
+  useEffect(() => {
     if (!warning) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -130,6 +163,10 @@ export default function ChurnedClientMessageWarning() {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
+        if (sessionUserId === ADLER_USER_ID) {
+          setWarning(null);
+          setExplicitOpen(false);
+        }
       }
     };
     window.addEventListener("keydown", blockEscape, true);
@@ -137,7 +174,7 @@ export default function ChurnedClientMessageWarning() {
       document.body.style.overflow = previous;
       window.removeEventListener("keydown", blockEscape, true);
     };
-  }, [warning]);
+  }, [warning, sessionUserId]);
 
   async function acknowledge() {
     if (!warning || busy) return;
@@ -158,6 +195,7 @@ export default function ChurnedClientMessageWarning() {
       const body = await response.json().catch(() => null);
       if (!response.ok || !body?.ok) throw new Error(body?.error || `HTTP ${response.status}`);
       setWarning(null);
+      setExplicitOpen(false);
       // Não é polling: esta leitura só acontece depois da confirmação para puxar outro aviso já pendente, se existir.
       void claim();
     } catch {
@@ -167,7 +205,7 @@ export default function ChurnedClientMessageWarning() {
     }
   }
 
-  if (!warning || enabled === false) return null;
+  if (!warning || enabled === false || (sessionUserId === ADLER_USER_ID && !explicitOpen)) return null;
 
   const goodMorning = Boolean(warning.is_good_morning);
   return (
