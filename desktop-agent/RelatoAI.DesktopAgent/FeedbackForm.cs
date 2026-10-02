@@ -92,7 +92,7 @@ internal sealed class FeedbackForm : Form
             prospectCard.Visible = option?.Prospect == true;
             if (option?.Prospect == true)
             {
-                if (!IsGustavoSdr && string.IsNullOrWhiteSpace(prospectName.Text)) prospectName.Text = feedbackContext?.RemoteName ?? "";
+                if (string.IsNullOrWhiteSpace(prospectName.Text)) prospectName.Text = feedbackContext?.RemoteName ?? "";
                 if (string.IsNullOrWhiteSpace(prospectPhone.Text) && !string.IsNullOrWhiteSpace(feedbackContext?.RemotePhone)) prospectPhone.Text = $"+{feedbackContext.RemotePhone}";
             }
             if (feedbackContext?.RequiresSelection == true)
@@ -121,7 +121,7 @@ internal sealed class FeedbackForm : Form
         var brand = new Label { Text = "RELATO AI  •  OPS", ForeColor = Accent, Font = new Font(Font.FontFamily, 9F, FontStyle.Bold), AutoSize = true, Location = new Point(28, 18) };
         var titleText = IsGustavoSdr ? "Registrar prospect" : "Como essa call terminou?";
         var subtitleText = IsGustavoSdr
-            ? "Digite o nome manualmente e confirme só o essencial. O Relato completa o CRM Awave com a transcrição."
+            ? "Nome e telefone entram automaticamente quando o WhatsApp identifica o prospect. Revise e corrija só se necessário."
             : "Sua leitura humana complementa a transcrição e ajuda a detectar risco, confiança e próximos passos.";
         var title = new Label { Text = titleText, ForeColor = TextMain, Font = new Font(Font.FontFamily, 18F, FontStyle.Bold), AutoSize = true, Location = new Point(28, 43) };
         var sub = new Label { Text = subtitleText, ForeColor = Muted, Font = new Font(Font.FontFamily, 9.5F), AutoSize = true, MaximumSize = new Size(570, 40), Location = new Point(30, 78) };
@@ -444,8 +444,8 @@ internal sealed class FeedbackForm : Form
                 if (context.Pending) continue;
                 if (!string.Equals(context.Workflow, "SDR_PROSPECT", StringComparison.OrdinalIgnoreCase)) return;
                 feedbackContext = context;
-                ApplyProspectPrefill(context.ProspectPrefill, includeName: !IsGustavoSdr);
-                if (!IsGustavoSdr && !string.IsNullOrWhiteSpace(context.RemoteName) && string.IsNullOrWhiteSpace(prospectName.Text))
+                ApplyProspectPrefill(context.ProspectPrefill, includeName: true);
+                if (!string.IsNullOrWhiteSpace(context.RemoteName) && string.IsNullOrWhiteSpace(prospectName.Text))
                     prospectName.Text = context.RemoteName;
                 if (!string.IsNullOrWhiteSpace(context.RemotePhone) && string.IsNullOrWhiteSpace(prospectPhone.Text))
                     prospectPhone.Text = $"+{context.RemotePhone}";
@@ -494,7 +494,7 @@ internal sealed class FeedbackForm : Form
 
     private void ApplyContext(FeedbackContext context)
     {
-        ApplyProspectPrefill(context.ProspectPrefill, includeName: !IsGustavoSdr);
+        ApplyProspectPrefill(context.ProspectPrefill, includeName: true);
         var phone = string.IsNullOrWhiteSpace(context.RemotePhone) ? null : $"+{context.RemotePhone}";
         var person = string.IsNullOrWhiteSpace(context.RemoteName) ? phone ?? "Contato não identificado" : context.RemoteName;
         var identity = string.Join(" · ", new[] { person, phone }.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct());
@@ -503,18 +503,16 @@ internal sealed class FeedbackForm : Form
         {
             contactStatus.Text = "Prospect comercial · SDR";
             contactStatus.ForeColor = Accent;
-            contactDetail.Text = IsGustavoSdr
-                ? $"{(phone ?? "Telefone não identificado")}\nDigite o nome do contato manualmente. O restante será enriquecido pela transcrição."
-                : string.IsNullOrWhiteSpace(context.RemoteName)
-                    ? $"{identity}\nO Relato vai completar os dados disponíveis enquanto a transcrição processa."
-                    : $"{identity}\nProspect selecionado automaticamente pelo perfil SDR.";
+            contactDetail.Text = string.IsNullOrWhiteSpace(context.RemoteName) && string.IsNullOrWhiteSpace(context.RemotePhone)
+                ? "Contato ainda não identificado automaticamente. Preencha somente o que faltar; o Relato continua tentando enriquecer em segundo plano."
+                : $"{identity}\nNome e telefone foram preenchidos automaticamente quando disponíveis. Revise apenas se necessário.";
             clientBinding.Items.Clear();
             clientBinding.Items.Add(new BindingOption(null, "Prospect comercial / possível cliente", false, true));
             clientBinding.Items.Add(new BindingOption(null, "Sem vínculo com cliente ou prospect", true));
             clientBinding.SelectedIndex = 0;
             clientBinding.Visible = !IsGustavoSdr;
             prospectCard.Visible = true;
-            if (!IsGustavoSdr && string.IsNullOrWhiteSpace(prospectName.Text) && !string.IsNullOrWhiteSpace(context.RemoteName))
+            if (string.IsNullOrWhiteSpace(prospectName.Text) && !string.IsNullOrWhiteSpace(context.RemoteName))
                 prospectName.Text = context.RemoteName;
             if (string.IsNullOrWhiteSpace(prospectPhone.Text) && !string.IsNullOrWhiteSpace(context.RemotePhone))
                 prospectPhone.Text = $"+{context.RemotePhone}";
