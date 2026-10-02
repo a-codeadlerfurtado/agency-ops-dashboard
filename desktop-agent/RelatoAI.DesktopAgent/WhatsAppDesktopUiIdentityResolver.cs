@@ -95,7 +95,8 @@ internal static class WhatsAppDesktopUiIdentityResolver
                 {
                     if (process.MainWindowHandle == IntPtr.Zero || !inspectedHandles.Add(process.MainWindowHandle)) continue;
                     dynamic window = automation.ElementFromHandle(process.MainWindowHandle);
-                    names.AddRange(ReadNamedElements(window, trueCondition, 1800).Select(x => x.Name));
+                    var windowNames = (List<NamedElement>)ReadNamedElements(window, trueCondition, 1800);
+                    names.AddRange(windowNames.Select(x => x.Name));
                 }
                 catch { }
             }
