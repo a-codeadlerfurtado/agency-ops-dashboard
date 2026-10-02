@@ -278,17 +278,31 @@ export default function NotificationDetailBridge() {
         item = matchItem(rows, card);
       }
       if (!item) throw new Error("Não consegui vincular esta linha a uma ocorrência única. A notificação não foi redirecionada para evitar abrir o contexto errado.");
-      setSelected(item);
       if (item.kind === "NOTIFICATION" && !item.read_at && session?.access_token) {
         try {
           await apiPost("notifications-read", session.access_token, { id: item.id });
           item.read_at = new Date().toISOString();
           item.status = "READ";
-          setSelected({ ...item });
         } catch {
-          // Abrir o detalhe continua funcionando mesmo que a marcação como lida falhe.
+          // Abrir a ocorrência continua funcionando mesmo que a marcação como lida falhe.
         }
       }
+
+      const managerAlertId = String(item.metadata?.manager_attention_alert_id || "").trim();
+      if (String(item.type || "") === "MANAGER_ATTENTION_RADAR" && managerAlertId) {
+        setSelected(null);
+        window.dispatchEvent(new CustomEvent("open-manager-attention-alert", { detail: { alertId: managerAlertId, notificationId: item.id } }));
+        return;
+      }
+
+      const churnWarningId = String(item.metadata?.churned_warning_id || "").trim();
+      if (String(item.type || "") === "CHURNED_CLIENT_MESSAGE_WARNING" && churnWarningId) {
+        setSelected(null);
+        window.dispatchEvent(new CustomEvent("open-churned-client-message-warning", { detail: { warningId: churnWarningId, notificationId: item.id } }));
+        return;
+      }
+
+      setSelected({ ...item });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Não foi possível carregar o contexto desta notificação.");
     } finally {
