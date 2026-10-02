@@ -56,12 +56,16 @@ export default function ManagerAttentionRadarWarning() {
   const [actionMode, setActionMode] = useState<ActionMode>(null);
   const [note, setNote] = useState("");
   const [until, setUntil] = useState("");
+  const [explicitOpen, setExplicitOpen] = useState(false);
 
   const sortRows = useCallback((rows: AlertRow[]) => [...rows].sort((a, b) => rank(a) - rank(b) || new Date(a.first_seen_at).getTime() - new Date(b.first_seen_at).getTime()), []);
 
   const load = useCallback(async () => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.user?.id) { setAlerts([]); return; }
+    // Política do Adler: nunca carregar aviso bloqueante automaticamente.
+    // Ele recebe a ocorrência na Central de Notificações e só abre a tela ao clicar nela.
+    if (session.user.id === ADLER_USER_ID) { setAlerts([]); setExplicitOpen(false); return; }
     const { data, error: queryError } = await supabase
       .schema("agency_ops")
       .from("manager_attention_alerts")
@@ -84,7 +88,7 @@ export default function ManagerAttentionRadarWarning() {
   }, []);
 
   useEffect(() => {
-    if (!sessionUserId) return;
+    if (!sessionUserId || sessionUserId === ADLER_USER_ID) return;
     let disposed = false;
     const channel = supabase
       .channel(`manager-attention-radar:${sessionUserId}`)
@@ -104,6 +108,33 @@ export default function ManagerAttentionRadarWarning() {
   }, [sessionUserId, load, sortRows]);
 
   useEffect(() => {
+    if (sessionUserId !== ADLER_USER_ID) return;
+    const openById = async (alertId: string | undefined) => {
+      if (!alertId) return;
+      const { data, error: queryError } = await supabase
+        .schema("agency_ops")
+        .from("manager_attention_alerts")
+        .select("id,client_name,level,priority,owner_area,owner_person,context,situation,charge_action,confidence,occurrence_count,status,first_seen_slot,last_seen_slot,first_seen_at,last_seen_at")
+        .eq("id", alertId)
+        .maybeSingle();
+      if (queryError || !data || data.status !== "OPEN") return;
+      setAlerts([data as AlertRow]);
+      setIndex(0);
+      setActionMode(null);
+      setNote("");
+      setUntil("");
+      setError("");
+      setExplicitOpen(true);
+    };
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ alertId?: string }>).detail;
+      void openById(detail?.alertId);
+    };
+    window.addEventListener("open-manager-attention-alert", handler as EventListener);
+    return () => window.removeEventListener("open-manager-attention-alert", handler as EventListener);
+  }, [sessionUserId]);
+
+  useEffect(() => {
     if (!alerts.length) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -116,6 +147,7 @@ export default function ManagerAttentionRadarWarning() {
         // Fecha somente a interface. Os registros continuam OPEN no banco e
         // nenhuma ação gerencial é registrada.
         setAlerts([]);
+        setExplicitOpen(false);
         setIndex(0);
         setActionMode(null);
         setNote("");
@@ -153,6 +185,7 @@ export default function ManagerAttentionRadarWarning() {
       return;
     }
     setAlerts((rows) => rows.filter((x) => x.id !== current.id));
+    if (sessionUserId === ADLER_USER_ID) setExplicitOpen(false);
     setActionMode(null); setNote(""); setUntil(""); setBusy(false);
   }
 
@@ -169,7 +202,7 @@ export default function ManagerAttentionRadarWarning() {
     await act(actionMode, note.trim(), parsed.toISOString());
   }
 
-  if (!current) return null;
+  if (!current || (sessionUserId === ADLER_USER_ID && !explicitOpen)) return null;
   const repeated = Number(current.occurrence_count || 1) > 1;
   const adlerCanDismiss = sessionUserId === ADLER_USER_ID;
 
