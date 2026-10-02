@@ -61,7 +61,7 @@ async function buildSnapshot() {
   const control = await getControl();
   const ops = client("agency_ops");
   const [{ data: registry, error: regErr }, { data: cases, error: caseErr }, { data: identities, error: identErr }] = await Promise.all([
-    ops.from("whatsapp_chat_registry").select("chat_id,chat_name,first_seen_at,last_seen_at,scope,reason,client_id").is("client_id", null).not("scope", "in", "(INTERNAL,TEST)"),
+    ops.from("whatsapp_chat_registry").select("chat_id,chat_name,first_seen_at,last_seen_at,scope,reason,client_id").is("client_id", null).not("scope", "in", "(INTERNAL,TEST,COMMERCIAL)"),
     ops.from("onboarding_cases").select("*").eq("status", "OPEN"),
     ops.from("whatsapp_team_identities").select("identity_type,identity_value").eq("active", true),
   ]);
