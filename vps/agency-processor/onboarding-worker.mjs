@@ -120,6 +120,10 @@ function onboardingEvidence(messages) {
     if (/formularios?/.test(t)) types.add("FORMULARIO");
     if (/(apresentar o projeto|apresentacao do projeto|novo projeto)/.test(t)) types.add("INICIO_PROJETO");
   }
+  // "formulário", link de Meet ou "integração" isolados também aparecem em grupos comerciais.
+  // Só materialize onboarding quando houver evidência explícita de onboarding/início de projeto.
+  const strongEvidence = types.has("ONBOARDING_EXPLICITO") || types.has("INICIO_PROJETO");
+  if (!strongEvidence) return null;
   const first = hits.sort((a, b) => eventDate(a) - eventDate(b))[0];
   return { evidence_at: eventDate(first).toISOString(), evidence_types: [...types] };
 }
