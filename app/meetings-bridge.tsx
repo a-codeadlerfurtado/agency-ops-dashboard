@@ -79,22 +79,34 @@ const STYLE = `
   .meeting-audio-file-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:10px;color:#9fb0ba;}
   .meeting-audio-file audio{width:100%;height:34px;}
   .meetings-meta{max-width:1440px;margin:0 auto 10px;color:#8f9da8;font-size:11px;display:flex;gap:12px;flex-wrap:wrap;}
-  .meetings-grid{max-width:1440px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px;}
-  .meeting-card{border:1px solid #2e3a43;background:linear-gradient(180deg,#151b20,#11171b);border-radius:14px;padding:15px;text-align:left;color:inherit;cursor:pointer;min-height:210px;display:flex;flex-direction:column;gap:9px;box-shadow:0 8px 20px rgba(0,0,0,.12);}
-  .meeting-card:hover{border-color:#4d6576;transform:translateY(-1px);}
-  .meeting-card-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;}
-  .meeting-client{font-size:11px;font-weight:900;letter-spacing:.07em;color:#8fd2ff;text-transform:uppercase;}
+  .meetings-grid{max-width:1440px;margin:0 auto;display:grid;gap:8px;}
+  .meeting-card{border:1px solid #2b3740;background:linear-gradient(180deg,#12191e,#0f1519);border-radius:14px;padding:14px 16px;text-align:left;color:inherit;cursor:pointer;display:grid;grid-template-columns:minmax(220px,.8fr) minmax(320px,1.7fr) auto;gap:18px;align-items:center;box-shadow:0 6px 18px rgba(0,0,0,.1);}
+  .meeting-card:hover{border-color:#536b7a;background:#151e24;transform:translateY(-1px);}
+  .meeting-card-main{min-width:0;display:grid;gap:6px;}
+  .meeting-card-top{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+  .meeting-client{font-size:10px;font-weight:900;letter-spacing:.07em;color:#8fd2ff;text-transform:uppercase;}
   .meeting-date{font-size:10px;color:#82909a;white-space:nowrap;}
-  .meeting-title{font:750 16px/1.2 Inter,sans-serif;color:#f1f6f8;}
-  .meeting-summary{font-size:12px;line-height:1.5;color:#b4c0c8;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;}
-  .meeting-card-footer{margin-top:auto;display:flex;gap:7px;flex-wrap:wrap;}
+  .meeting-title{font:760 15px/1.25 Inter,sans-serif;color:#f1f6f8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .meeting-summary{font-size:12px;line-height:1.5;color:#b4c0c8;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+  .meeting-card-side{display:grid;gap:8px;justify-items:end;min-width:150px;}
+  .meeting-card-footer{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;}
   .meeting-pill{font-size:10px;font-weight:800;border:1px solid #33414b;background:#0e1418;border-radius:999px;padding:4px 7px;color:#a9b6bf;}
   .meeting-empty{max-width:1440px;margin:28px auto;border:1px dashed #35434d;border-radius:14px;padding:28px;color:#9baab4;text-align:center;}
   .meeting-more{display:flex;justify-content:center;max-width:1440px;margin:16px auto 0;}
   .meeting-drawer-backdrop{position:fixed;inset:0 0 0 var(--sidenav-width,224px);z-index:2147482500;background:rgba(0,0,0,.46);display:flex;justify-content:flex-end;}
-  .meeting-drawer{width:min(620px,92vw);height:100%;background:#0d1317;border-left:1px solid #33414b;overflow:auto;padding:22px;box-shadow:-18px 0 50px rgba(0,0,0,.35);}
-  .meeting-drawer-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;position:sticky;top:-22px;background:#0d1317;padding:22px 0 14px;z-index:2;border-bottom:1px solid #28333a;}
-  .meeting-drawer h2{margin:4px 0 4px;font:800 22px/1.15 Inter Tight,Inter,sans-serif;}
+  .meeting-drawer{width:min(980px,calc(100vw - var(--sidenav-width,224px) - 24px));height:100%;background:#0d1317;border-left:1px solid #33414b;overflow:auto;padding:22px 26px 32px;box-shadow:-18px 0 50px rgba(0,0,0,.35);}
+  .meeting-drawer-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;position:sticky;top:-22px;background:#0d1317;padding:22px 0 14px;z-index:4;border-bottom:1px solid #28333a;}
+  .meeting-drawer h2{margin:4px 0 4px;font:800 24px/1.15 Inter Tight,Inter,sans-serif;}
+  .meeting-detail-tabs{position:sticky;top:73px;z-index:3;display:flex;gap:7px;flex-wrap:wrap;padding:12px 0;background:#0d1317;border-bottom:1px solid #202c33;}
+  .meeting-detail-tabs button{border:1px solid #2e3b44;background:#11181d;color:#94a4ae;border-radius:999px;padding:8px 12px;font:800 10px Inter,sans-serif;cursor:pointer;}
+  .meeting-detail-tabs button.active{background:#2b1a11;border-color:#ff934f;color:#ffc19a;}
+  .meeting-overview-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:16px;}
+  .meeting-overview-card{border:1px solid #26343c;background:#10171b;border-radius:12px;padding:13px;}
+  .meeting-overview-card h3{margin:0 0 8px;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#ff9a61;}
+  .meeting-overview-card p{margin:0;color:#c4ced4;font-size:12px;line-height:1.6;white-space:pre-wrap;}
+  .meeting-participant-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;}
+  .meeting-participant-card{border:1px solid #293840;background:#10171b;border-radius:10px;padding:10px 12px;display:grid;gap:3px;}
+  .meeting-participant-card b{font-size:12px;color:#eaf2f6}.meeting-participant-card span{font-size:10px;color:#83939e;}
   .meeting-section{margin-top:18px;}
   .meeting-section h3{margin:0 0 8px;font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:#ff9a61;}
   .meeting-section p,.meeting-section li{color:#bec9d0;font-size:12px;line-height:1.6;}
@@ -114,7 +126,8 @@ const STYLE = `
   .meeting-transcript-time:hover{background:#203441;color:#c7eaff;}
   .meeting-transcript-speaker{font-size:10px;font-weight:900;color:#ff9a61;margin-bottom:3px;}
   .meeting-transcript-text{font-size:11px;line-height:1.5;color:#b8c4cb;white-space:pre-wrap;}
-  @media(max-width:720px){.meetings-shell{left:58px;padding:18px 14px 34px}.meetings-head{flex-direction:column}.meetings-toolbar{grid-template-columns:1fr 1fr}.meetings-toolbar input{grid-column:1/-1}.meetings-grid{grid-template-columns:1fr}.meeting-drawer-backdrop{left:58px}.meeting-drawer{width:100%}}
+  @media(max-width:900px){.meeting-card{grid-template-columns:1fr;gap:10px}.meeting-card-side{justify-items:start;min-width:0}.meeting-card-footer{justify-content:flex-start}.meeting-overview-grid{grid-template-columns:1fr}}
+  @media(max-width:720px){.meetings-shell{left:58px;padding:18px 14px 34px}.meetings-head{flex-direction:column}.meetings-toolbar{grid-template-columns:1fr 1fr}.meetings-toolbar input{grid-column:1/-1}.meeting-drawer-backdrop{left:58px}.meeting-drawer{width:100%;padding:18px 14px 28px}.meeting-detail-tabs{top:66px;overflow-x:auto;flex-wrap:nowrap}.meeting-detail-tabs button{white-space:nowrap}.meeting-transcript-row{grid-template-columns:48px minmax(0,1fr)}}
 `;
 
 export default function MeetingsBridge() {
@@ -128,6 +141,7 @@ export default function MeetingsBridge() {
   const [activeQuery, setActiveQuery] = useState("");
   const [detail, setDetail] = useState<Row | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailTab, setDetailTab] = useState<"overview" | "transcript" | "participants" | "actions">("overview");
   const [recordType, setRecordType] = useState<"ALL" | "CALL" | "MEETING">("ALL");
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -243,6 +257,7 @@ export default function MeetingsBridge() {
   };
 
   const openDetail = async (row: Row) => {
+    setDetailTab("overview");
     setDetailLoading(true);
     setDetail(null);
     try {
@@ -321,19 +336,24 @@ export default function MeetingsBridge() {
           const isCall = String(row.record_type || "").toUpperCase() === "CALL";
           const callLabel = String(row.contact_name || row.remote_phone || row.client_name_raw || "Contato não identificado");
           return <button className="meeting-card" key={String(row.id)} onClick={() => openDetail(row)}>
-            <div className="meeting-card-top">
-              <span className="meeting-client">{isCall ? callLabel : String(row.client_name_raw || "Cliente não vinculado")}</span>
-              <span className="meeting-date">{fmtDate(row.meeting_started_at || row.created_at)}</span>
+            <div className="meeting-card-main">
+              <div className="meeting-card-top">
+                <span className="relato-record-kind">{isCall ? "Ligação" : "Reunião"}</span>
+                <span className="meeting-date">{fmtDate(row.meeting_started_at || row.created_at)}</span>
+              </div>
+              <div className="meeting-client">{isCall ? callLabel : String(row.client_name_raw || "Cliente não vinculado")}</div>
+              <div className="meeting-title">{isCall ? callLabel : cleanTitle(row)}</div>
+              {isCall && <div className="relato-call-meta"><span>{Number(row.duration_seconds || 0) ? fmtTimestamp(Number(row.duration_seconds || 0) * 1000) : "Duração não informada"}</span><span>{row.has_audio ? "Gravação disponível" : "Sem áudio"}</span></div>}
             </div>
-            <span className="relato-record-kind">{isCall ? "Ligação" : "Reunião"}</span>
-            <div className="meeting-title">{isCall ? callLabel : cleanTitle(row)}</div>
-            {isCall && <div className="relato-call-meta"><span>{Number(row.duration_seconds || 0) ? fmtTimestamp(Number(row.duration_seconds || 0) * 1000) : "Duração não informada"}</span><span>{row.has_audio ? "Gravação disponível" : "Sem áudio"}</span></div>}
-            <div className="meeting-summary">{String(row.summary || (isCall ? "Abra a ligação para consultar transcrição e gravação." : "Sem resumo processado. Abra a reunião para consultar o conteúdo disponível."))}</div>
-            <div className="meeting-card-footer">
-              {decisions.length > 0 && <span className="meeting-pill">{decisions.length} decisões</span>}
-              {commitments.length > 0 && <span className="meeting-pill">{commitments.length} compromissos</span>}
-              {people.length > 0 && <span className="meeting-pill">{people.length} participantes</span>}
-              <span className="meeting-pill">{Math.round(Number(row.transcript_chars || 0) / 1000)}k chars</span>
+            <div className="meeting-summary">{String(row.summary || (isCall ? "Abra a ligação para consultar o resumo, transcrição e gravação completa." : "Abra a reunião para consultar resumo, participantes, decisões e transcrição completa."))}</div>
+            <div className="meeting-card-side">
+              <div className="meeting-card-footer">
+                {people.length > 0 && <span className="meeting-pill">{people.length} participantes</span>}
+                {decisions.length > 0 && <span className="meeting-pill">{decisions.length} decisões</span>}
+                {commitments.length > 0 && <span className="meeting-pill">{commitments.length} ações</span>}
+                <span className="meeting-pill">{Math.max(0, Math.round(Number(row.transcript_chars || 0) / 1000))}k chars</span>
+              </div>
+              <span className="meetings-btn">Abrir completo →</span>
             </div>
           </button>;
         })}
@@ -353,44 +373,52 @@ export default function MeetingsBridge() {
               <button className="meetings-btn" onClick={() => setDetail(null)}>Fechar</button>
             </div>
 
-            <div className="meeting-section">
-              <h3>Gravação</h3>
-              <div className="meeting-audio-card">
-                <div className="meeting-audio-head">
-                  <span className="meeting-audio-status">
-                    {detail._audio?.audio_status === "READY" ? "Áudio pronto" : detail._audio?.audio_status ? `Áudio · ${detail._audio.audio_status}` : "Sem gravação"}
-                  </span>
-                  {detail._audio?.audio_source && <span className="meeting-pill">{String(detail._audio.audio_source)}</span>}
-                </div>
-                {detail._audio?.signed_url ? <>
-                  <audio ref={audioRef} controls preload="metadata" src={String(detail._audio.signed_url)} />
-                  <div className="meeting-audio-actions">
-                    <a className="meetings-btn" href={String(detail._audio.download_url || detail._audio.signed_url)} download={String(detail._audio.download_name || "relato-audio")}>Baixar áudio principal</a>
-                    {Number(detail._audio.audio_duration_ms || 0) > 0 && <span className="meeting-audio-note">Duração {fmtTimestamp(detail._audio.audio_duration_ms)}</span>}
-                  </div>
-                  {Array.isArray(detail._audio_files) && detail._audio_files.length > 1 && <div className="meeting-audio-files">{detail._audio_files.map((file: Row) => <div className="meeting-audio-file" key={String(file.role)}>
-                    <div className="meeting-audio-file-head"><b>{file.role === "mixed" ? "Gravação completa" : file.role === "remote" ? "Outro lado" : "Minha voz"}</b><a className="meetings-btn" href={String(file.download_url || file.signed_url)} download={String(file.download_name || "relato-audio")}>Baixar</a></div>
-                    <audio controls preload="metadata" src={String(file.play_url || file.signed_url || "")} />
-                  </div>)}</div>}
-                  <div className="meeting-audio-note">Arquivos privados com URL temporária. Clique em qualquer timestamp da transcrição para ouvir daquele ponto.</div>
-                </> : <div className="meeting-audio-note">
-                  {detail._audio?.audio_status === "PROCESSING" || detail._audio?.audio_status === "STORED" || detail._audio?.audio_status === "UPLOADING"
-                    ? "A gravação foi preservada e ainda está sendo preparada para reprodução."
-                    : detail._audio?.audio_last_error
-                      ? `Gravação preservada, mas o processamento precisa de retry: ${String(detail._audio.audio_last_error)}`
-                      : "Esta reunião ainda não possui um arquivo de áudio reproduzível."}
-                </div>}
-              </div>
+            <div className="meeting-detail-tabs">
+              <button type="button" className={detailTab === "overview" ? "active" : ""} onClick={() => setDetailTab("overview")}>Resumo</button>
+              <button type="button" className={detailTab === "transcript" ? "active" : ""} onClick={() => setDetailTab("transcript")}>Transcrição completa</button>
+              <button type="button" className={detailTab === "participants" ? "active" : ""} onClick={() => setDetailTab("participants")}>Participantes · {participants(detail.participants).length}</button>
+              <button type="button" className={detailTab === "actions" ? "active" : ""} onClick={() => setDetailTab("actions")}>Decisões & ações</button>
             </div>
 
-            <div className="meeting-section"><h3>Resumo</h3><p>{String(detail.summary || "Sem resumo processado.")}</p></div>
+            {detailTab === "overview" && <>
+              <div className="meeting-overview-grid">
+                <div className="meeting-overview-card"><h3>Resumo da conversa</h3><p>{String(detail.summary || "Sem resumo processado.")}</p></div>
+                <div className="meeting-overview-card"><h3>Quem participou</h3><p>{participants(detail.participants).length ? participants(detail.participants).join(" · ") : "Participantes não identificados."}</p></div>
+                <div className="meeting-overview-card"><h3>Decisões</h3><p>{asItems(detail.decisions).length ? asItems(detail.decisions).join("\n• ") : "Nenhuma decisão registrada."}</p></div>
+                <div className="meeting-overview-card"><h3>Próximas ações</h3><p>{asItems(detail.commitments).length ? asItems(detail.commitments).join("\n• ") : "Nenhuma ação registrada."}</p></div>
+              </div>
 
-            {participants(detail.participants).length > 0 && <div className="meeting-section"><h3>Participantes</h3><div className="meeting-participants">{participants(detail.participants).map((name, index) => <span className="meeting-participant" key={`${name}-${index}`}>{name}</span>)}</div></div>}
+              <div className="meeting-section">
+                <h3>Gravação</h3>
+                <div className="meeting-audio-card">
+                  <div className="meeting-audio-head">
+                    <span className="meeting-audio-status">
+                      {detail._audio?.audio_status === "READY" ? "Áudio pronto" : detail._audio?.audio_status ? `Áudio · ${detail._audio.audio_status}` : "Sem gravação"}
+                    </span>
+                    {detail._audio?.audio_source && <span className="meeting-pill">{String(detail._audio.audio_source)}</span>}
+                  </div>
+                  {detail._audio?.signed_url ? <>
+                    <audio ref={audioRef} controls preload="metadata" src={String(detail._audio.signed_url)} />
+                    <div className="meeting-audio-actions">
+                      <a className="meetings-btn" href={String(detail._audio.download_url || detail._audio.signed_url)} download={String(detail._audio.download_name || "relato-audio")}>Baixar áudio</a>
+                      {Number(detail._audio.audio_duration_ms || 0) > 0 && <span className="meeting-audio-note">Duração {fmtTimestamp(detail._audio.audio_duration_ms)}</span>}
+                    </div>
+                    {Array.isArray(detail._audio_files) && detail._audio_files.length > 1 && <div className="meeting-audio-files">{detail._audio_files.map((file: Row) => <div className="meeting-audio-file" key={String(file.role)}>
+                      <div className="meeting-audio-file-head"><b>{file.role === "mixed" ? "Gravação completa" : file.role === "remote" ? "Outro lado" : "Minha voz"}</b><a className="meetings-btn" href={String(file.download_url || file.signed_url)} download={String(file.download_name || "relato-audio")}>Baixar</a></div>
+                      <audio controls preload="metadata" src={String(file.play_url || file.signed_url || "")} />
+                    </div>)}</div>}
+                  </> : <div className="meeting-audio-note">
+                    {detail._audio?.audio_status === "PROCESSING" || detail._audio?.audio_status === "STORED" || detail._audio?.audio_status === "UPLOADING"
+                      ? "A gravação foi preservada e ainda está sendo preparada para reprodução."
+                      : detail._audio?.audio_last_error
+                        ? `Gravação preservada, mas o processamento precisa de retry: ${String(detail._audio.audio_last_error)}`
+                        : "Este registro ainda não possui um arquivo de áudio reproduzível."}
+                  </div>}
+                </div>
+              </div>
+            </>}
 
-            {asItems(detail.decisions).length > 0 && <div className="meeting-section"><h3>Decisões</h3><ul>{asItems(detail.decisions).map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
-            {asItems(detail.commitments).length > 0 && <div className="meeting-section"><h3>Compromissos</h3><ul>{asItems(detail.commitments).map((item, index) => <li key={index}>{item}</li>)}</ul></div>}
-
-            <div className="meeting-section"><h3>Transcrição</h3>
+            {detailTab === "transcript" && <div className="meeting-section"><h3>Conversa por inteiro</h3>
               {Array.isArray(detail._segments) && detail._segments.length > 0
                 ? <div className="meeting-transcript-rows">{detail._segments.map((segment: Row, index: number) => <div className="meeting-transcript-row" key={String(segment.sequence_no ?? index)}>
                     <button className="meeting-transcript-time" type="button" title={detail._audio?.signed_url ? "Ouvir deste ponto" : "Timestamp"} onClick={() => seekAudio(segment.started_ms)}>{fmtTimestamp(segment.started_ms)}</button>
@@ -400,7 +428,19 @@ export default function MeetingsBridge() {
                     </div>
                   </div>)}</div>
                 : <div className="meeting-transcript">{String(detail.transcript_text || "Transcrição completa indisponível para este registro.")}</div>}
-            </div>
+            </div>}
+
+            {detailTab === "participants" && <div className="meeting-section"><h3>Participantes</h3>
+              {participants(detail.participants).length
+                ? <div className="meeting-participant-list">{participants(detail.participants).map((name, index) => <div className="meeting-participant-card" key={`${name}-${index}`}><b>{name}</b><span>Participante da conversa</span></div>)}</div>
+                : <div className="meeting-empty">Nenhum participante identificado neste registro.</div>}
+            </div>}
+
+            {detailTab === "actions" && <>
+              <div className="meeting-section"><h3>Decisões</h3>{asItems(detail.decisions).length ? <ul>{asItems(detail.decisions).map((item, index) => <li key={index}>{item}</li>)}</ul> : <p>Nenhuma decisão registrada.</p>}</div>
+              <div className="meeting-section"><h3>Próximas ações / compromissos</h3>{asItems(detail.commitments).length ? <ul>{asItems(detail.commitments).map((item, index) => <li key={index}>{item}</li>)}</ul> : <p>Nenhuma ação registrada.</p>}</div>
+            </>}
+
             {detail.source_url && <div className="meeting-section"><a className="meetings-btn" href={String(detail.source_url)} target="_blank" rel="noreferrer">Abrir origem ↗</a></div>}
           </>}
         </aside>
