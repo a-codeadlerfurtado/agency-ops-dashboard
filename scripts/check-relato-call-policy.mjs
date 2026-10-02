@@ -42,7 +42,9 @@ const invariants = [
   [heavy.includes("canonicalSegments"), "legacy mixed fallback must never become canonical transcript evidence"],
   [fs.readFileSync("supabase/functions/agency-ops-meeting-capture-api/index.ts","utf8").includes('state: noAnswer ? "READY" : "PROCESSING"'), "known no-answer attempts must skip transcription queue"],
   [ui.includes("Não atendidas") && ui.includes("answeredRows"), "SDR dashboard metrics must separate answered calls from attempts"],
-  [fs.readFileSync("desktop-agent/RelatoAI.DesktopAgent/AgentUpdater.cs","utf8").includes('desktop-0.5.12'), "SDR desktop must include call-state detection release"],
+  [fs.readFileSync("desktop-agent/RelatoAI.DesktopAgent/AgentUpdater.cs","utf8").includes('desktop-0.5.12') || fs.readFileSync("desktop-agent/RelatoAI.DesktopAgent/AgentUpdater.cs","utf8").includes('desktop-0.5.13'), "SDR desktop must include current identity/call-state release"],
+  [!fs.readFileSync("desktop-agent/RelatoAI.DesktopAgent/FeedbackForm.cs","utf8").includes("includeName: !IsGustavoSdr"), "Gustavo SDR post-call must not suppress automatic prospect names"],
+  [fs.readFileSync("supabase/functions/agency-ops-meeting-capture-api/index.ts","utf8").includes("candidatePhoneConsensus"), "feedback context must consolidate safe identity evidence"],
   [fs.readFileSync("desktop-agent/RelatoAI.DesktopAgent/WhatsAppDesktopCapture.cs","utf8").includes("callUiConnectedObserved"), "desktop capture must persist connected/ringing/no-answer evidence"],
   [fs.readFileSync("desktop-agent/RelatoAI.DesktopAgent/WhatsAppDesktopUiIdentityResolver.cs","utf8").includes("ResolveCallState"), "desktop must inspect WhatsApp UI state instead of inferring answer from audio duration"],
 ];
