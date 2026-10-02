@@ -39,12 +39,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = "relato-package-v2026.10.02.3"
+          $tag = "relato-package-v2026.10.02.4"
           gh release delete $tag --yes 2>$null
           git push origin ":refs/tags/$tag" 2>$null
           gh release create $tag `
             publish/RelatoAI-Desktop-SDR.exe `
             publish/RelatoAI-Desktop-SDR.exe.sha256 `
             --target "${{ github.sha }}" `
-            --title "Relato AI Desktop 0.5.12" `
-            --notes "Distingue tentativa sem atendimento de call atendida usando o estado real da interface do WhatsApp Desktop. Chamadas que ficaram apenas chamando não entram mais como ligação atendida nem disparam STT desnecessário. Mantém upload/retry resiliente das versões anteriores."
+            --title "Relato AI Desktop 0.5.13" `
+            --notes "Restaura o preenchimento automático de nome e telefone no pós-call do SDR usando a identidade consolidada da chamada. Mantém detecção de atendimento, upload/retry resiliente, transcrição e vínculo comercial das versões anteriores."
