@@ -26,11 +26,60 @@ const safeContactName=(v:unknown)=>{
   const name=clean(v);
   if(!name||GENERIC_CONTACT_NAMES.has(name.toLowerCase())) return null;
   if(/^(?:contato\s+)?whatsapp\s*\+?\d{8,15}$/i.test(name)) return null;
+  if(/^(?:webcdbopen|phonenumber|order_details)$/i.test(name)) return null;
   if(/[\u0000-\u001f\u007f-\u009f]/.test(name)) return null;
   const letters=name.match(/\p{L}/gu)?.length||0;
   return letters>=2?name:null;
 };
-const nameEvidence=(metadata:Row={},lead:Row|null=null,record:Row|null=null)=>{
+const personKey=(v:unknown)=>clean(v).normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
+const candidateConsensusName=(metadata:Row={},internalNameKeys:Set<string>=new Set())=>{
+  const rejected=safeContactName(metadata?.rejected_remote_candidate?.resolved_name);
+  const direct=safeContactName(metadata?.untrusted_direct_chat_candidate?.name);
+  const rejectedSource=clean(metadata?.rejected_remote_candidate?.source).toUpperCase();
+  const directSource=clean(metadata?.untrusted_direct_chat_candidate?.source).toUpperCase();
+  if(!rejected||!direct||!rejectedSource||!directSource||rejectedSource===directSource) return null;
+  const a=personKey(rejected),b=personKey(direct);
+  if(!a||a!==b) return null;
+  for(const teamKey of internalNameKeys){
+    if(teamKey&&(a===teamKey||a.startsWith(teamKey+" ")||teamKey.startsWith(a+" "))) return null;
+  }
+  return rejected;
+};
+const inferDirectAddressName=(transcriptText:unknown,ownerPerson:unknown,internalNameKeys:Set<string>=new Set())=>{
+  const raw=clean(transcriptText);
+  if(!raw) return null;
+  const owner=personKey(ownerPerson);
+  const stop=new Set(["tudo","bem","quem","gente","pessoal","sim","nao","claro","hoje","agora","voce","senhor","senhora","amigo","amiga","cara","bom","boa","seguinte","pai","doutor","obrigado","obrigada","tchau","alo","oi"]);
+  const scores=new Map<string,{name:string;score:number}>();
+  const add=(candidate:string,score:number)=>{
+    const name=safeContactName(candidate);
+    if(!name) return;
+    const key=personKey(name);
+    if(!key||key===owner||stop.has(key)||key.length<3) return;
+    for(const teamKey of internalNameKeys){
+      if(teamKey&&(key===teamKey||key.startsWith(teamKey+" ")||teamKey.startsWith(key+" "))) return;
+    }
+    const first=Array.from(name.trim())[0]||"";
+    if(!first||first!==first.toLocaleUpperCase("pt-BR")||first===first.toLocaleLowerCase("pt-BR")) return;
+    const prev=scores.get(key);
+    scores.set(key,{name,score:(prev?.score||0)+score});
+  };
+  for(const line of raw.split(/\r?\n/)){
+    const match=line.match(/^\[[^\]]+\]\s+([^:]+):\s*(.+)$/u);
+    if(!match) continue;
+    const speaker=personKey(match[1]);
+    if(!speaker||(!speaker.startsWith(owner)&&!owner.startsWith(speaker))) continue;
+    const text=match[2].trim();
+    for(const m of text.matchAll(/(?:^|\b)(?:al[oô]|oi|ol[aá]|fala|bom dia|boa tarde|boa noite)\s*[,!:\-]?\s+([\p{Lu}][\p{L}'’\-]{1,30})\b/giu)) add(m[1],7);
+    for(const m of text.matchAll(/\b(?:tudo bem|como vai)\s*[,!:\-]?\s+([\p{Lu}][\p{L}'’\-]{1,30})\b/giu)) add(m[1],6);
+    for(const m of text.matchAll(/(?:^|[.!?]\s+)([\p{Lu}][\p{L}'’\-]{1,30})\s*[,!?:\-]\s*(?:cara|eu|se|voc[eê]|a gente|vamos|olha|lembra|me diz|me fala|tudo bem)/giu)) add(m[1],5);
+  }
+  const ranked=[...scores.values()].sort((a,b)=>b.score-a.score);
+  if(!ranked[0]||ranked[0].score<7) return null;
+  if(ranked[1]&&ranked[0].score-ranked[1].score<3) return null;
+  return ranked[0].name;
+};
+const nameEvidence=(metadata:Row={},lead:Row|null=null,record:Row|null=null,transcriptFallback:unknown=null,whatsappConsensus:unknown=null)=>{
   const identity:Row=metadata?.identity_resolution||{};
   const source=clean(identity?.source||metadata?.identity_source).toUpperCase();
   const explicit=metadata?.name_evidence||{};
@@ -67,8 +116,10 @@ const nameEvidence=(metadata:Row={},lead:Row|null=null,record:Row|null=null)=>{
     explicit?.transcript?.name ||
     metadata?.transcript_inferred_name ||
     (commercialSource==="TRANSCRIPT"?commercialName:null) ||
-    (transcriptSource?identity?.name:null)
+    (transcriptSource?identity?.name:null) ||
+    transcriptFallback
   );
+  const consensusName=safeContactName(whatsappConsensus);
   const crmName=safeContactName(
     lead?.company || lead?.name ||
     explicit?.crm?.name ||
@@ -76,8 +127,8 @@ const nameEvidence=(metadata:Row={},lead:Row|null=null,record:Row|null=null)=>{
     (commercialSource==="CRM"?commercialName:null)
   );
   const legacyName=safeContactName(record?.remote_name);
-  const primaryName=postCallName||whatsappName||crmName||autoName||commercialName||legacyName||null;
-  const primarySource=postCallName?"POST_CALL":whatsappName?"WHATSAPP":crmName?"CRM":autoName?"TRANSCRIPT":commercialName?(commercialSource||"COMMERCIAL"):legacyName?"LEGACY":null;
+  const primaryName=postCallName||whatsappName||crmName||consensusName||autoName||commercialName||legacyName||null;
+  const primarySource=postCallName?"POST_CALL":whatsappName?"WHATSAPP":crmName?"CRM":consensusName?"WHATSAPP":autoName?"TRANSCRIPT":commercialName?(commercialSource||"COMMERCIAL"):legacyName?"LEGACY":null;
   return {
     whatsapp_name:whatsappName,
     post_call_name:postCallName,
@@ -551,7 +602,7 @@ Deno.serve(async(req:Request)=>{
       .select("id,local_session_id,title,started_at,ended_at,state,capture_mode,transcript_id,metadata,audio_status,audio_source,audio_local_path,audio_remote_path,audio_mixed_path,audio_duration_ms,audio_size_bytes,audio_mime_type,audio_last_error,created_at")
       .in("owner_person",targetPeople).order("started_at",{ascending:false}).limit(1000),
     ops.from("meeting_transcripts")
-      .select("id,source_url,meeting_started_at,meeting_ended_at,duration_seconds,participants,summary,decisions,commitments,ai_signals,metadata,created_at,owner_person")
+      .select("id,source_url,meeting_started_at,meeting_ended_at,duration_seconds,transcript_text,participants,summary,decisions,commitments,ai_signals,metadata,created_at,owner_person")
       .in("owner_person",targetPeople).order("meeting_started_at",{ascending:false}).limit(1000),
     ops.from("commercial_call_records")
       .select("id,lead_id,capture_session_id,transcript_id,sdr_person,channel,remote_phone,remote_name,outcome,notes,next_step,next_step_at,metadata,created_at")
@@ -572,6 +623,11 @@ Deno.serve(async(req:Request)=>{
     if(leadError) return reply({error:"lead_lookup_failed",detail:leadError.message},500);
     leadMap=new Map((leadRows||[]).map((r:Row)=>[String(r.id),r]));
   }
+
+  const {data:identityRosterRows,error:identityRosterError}=await ops.from("team_roster")
+    .select("person").limit(1000);
+  if(identityRosterError) return reply({error:"identity_roster_failed",detail:identityRosterError.message},500);
+  const internalNameKeys=new Set((identityRosterRows||[]).map((r:Row)=>personKey(r.person)).filter(Boolean));
 
   const transcriptMap=new Map((transcriptRes.data||[]).map((r:Row)=>[String(r.id),r]));
   const callBySession=new Map(calls.filter((r:Row)=>r.capture_session_id).map((r:Row)=>[String(r.capture_session_id),r]));
@@ -600,10 +656,25 @@ Deno.serve(async(req:Request)=>{
     if(reviewRowsError) return reply({error:"manager_reviews_failed",detail:reviewRowsError.message},500);
     for(const row of reviewRows||[]) managerReviewMap.set(String(row.session_id),String(row.reviewed_at||""));
   }
-  const sessionPhones=[...new Set(callSessions.map((r:Row)=>metadataPhone(r.metadata||{})).filter(Boolean))];
+  const sessionPhones=[...new Set(callSessions.flatMap((r:Row)=>[
+    metadataPhone(r.metadata||{}),
+    plausiblePhone(r.metadata?.rejected_remote_candidate?.phone),
+    plausiblePhone(r.metadata?.untrusted_direct_chat_candidate?.phone),
+  ]).filter(Boolean))];
   const phoneLeadMap=new Map<string,Row>();
   if(sessionPhones.length){
-    const variants=[...new Set(sessionPhones.flatMap((p:string)=>[p,"+"+p]))];
+    const phoneVariants=(p:string)=>{
+      const digits=phoneDigits(p);
+      const values=[digits,"+"+digits];
+      const national=digits.startsWith("55")?digits.slice(2):digits;
+      if(national.length===10||national.length===11){
+        const ddd=national.slice(0,2),number=national.slice(2);
+        const local=number.length===9?number.slice(0,5)+"-"+number.slice(5):number.slice(0,4)+"-"+number.slice(4);
+        values.push(national,ddd+" "+local,"("+ddd+") "+local,"+55 "+ddd+" "+local,"+55 ("+ddd+") "+local);
+      }
+      return values;
+    };
+    const variants=[...new Set(sessionPhones.flatMap(phoneVariants))];
     const {data:phoneLeads,error:phoneLeadError}=await crm.from("leads")
       .select("id,name,company,stage,phone,updated_at").in("phone",variants).is("archived_at",null)
       .order("updated_at",{ascending:false}).limit(1000);
@@ -620,9 +691,16 @@ Deno.serve(async(req:Request)=>{
     const metadataLeadId=clean(session.metadata?.commercial_prospect?.lead_id);
     const metadataLead:any=metadataLeadId?leadMap.get(metadataLeadId)||null:null;
     const remotePhone=record?.remote_phone||session.metadata?.remote_phone||metadataPhone(session.metadata||{})||null;
-    const phoneLead:any=phoneLeadMap.get(phoneDigits(remotePhone))||null;
+    const candidatePhones=[
+      remotePhone,
+      session.metadata?.rejected_remote_candidate?.phone,
+      session.metadata?.untrusted_direct_chat_candidate?.phone,
+    ].map(phoneDigits).filter(Boolean);
+    const phoneLead:any=candidatePhones.map((p:string)=>phoneLeadMap.get(p)).find(Boolean)||null;
     const lead:any=recordLead||metadataLead||phoneLead||null;
-    const names=nameEvidence(session.metadata||{},lead,record);
+    const consensusName=candidateConsensusName(session.metadata||{},internalNameKeys);
+    const transcriptFallback=inferDirectAddressName(transcript?.transcript_text,session.owner_person,internalNameKeys);
+    const names=nameEvidence(session.metadata||{},lead,record,transcriptFallback,consensusName);
     const explicitOutcome=clean(session.metadata?.call_outcome,80).toUpperCase();
     const qualityStatus=clean(session.metadata?.transcript_quality?.status,80).toUpperCase();
     const callOutcome=explicitOutcome
@@ -677,8 +755,9 @@ Deno.serve(async(req:Request)=>{
       decisions:transcript?.decisions||[],commitments:transcript?.commitments||[],ai_signals:transcript?.ai_signals||{}
     };
   });
-  const answeredCalls=enrichedCalls.filter((row:Row)=>String(row.call_outcome||"").toUpperCase()!=="NO_ANSWER");
+  const answeredCalls=enrichedCalls.filter((row:Row)=>row.answered===true||String(row.call_outcome||"").toUpperCase().startsWith("ANSWERED"));
   const noAnswerAttempts=enrichedCalls.filter((row:Row)=>String(row.call_outcome||"").toUpperCase()==="NO_ANSWER");
+  const unclassifiedCalls=enrichedCalls.filter((row:Row)=>!row.answered&&String(row.call_outcome||"").toUpperCase()!=="NO_ANSWER");
 
   const meetings=(transcriptRes.data||[]).map((r:Row)=>({
     id:r.id,
@@ -728,7 +807,7 @@ Deno.serve(async(req:Request)=>{
       release_url:"https://github.com/a-codeadlerfurtado/agency-ops-dashboard/releases/download/relato-package-v2026.10.02.3/RelatoAI-Desktop-SDR.exe"
     }:null,
     sdr_options:isLeonardoViewer?targetPeople:[],
-    summary:{meetings:meetings.length,calls:answeredCalls.length,attempts:noAnswerAttempts.length,notifications_unread:ownNotifications.unread},
+    summary:{meetings:meetings.length,calls:answeredCalls.length,attempts:noAnswerAttempts.length,unclassified:unclassifiedCalls.length,notifications_unread:ownNotifications.unread},
     notifications:ownNotifications.items,
     meetings,calls:answeredCalls,sessions,
     generated_at:new Date().toISOString()
