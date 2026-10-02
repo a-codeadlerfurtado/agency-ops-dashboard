@@ -693,7 +693,7 @@ Deno.serve(async (req: Request) => {
     const { data: roster } = await ops.from("team_roster")
       .select("role").eq("person", device.owner_person).eq("is_former", false).maybeSingle();
     const rosterRole = String(roster?.role || "").toUpperCase();
-    const supportedSdrDesktopVersions = new Set([REQUIRED_SDR_DESKTOP_VERSION, "desktop-0.5.10", "desktop-0.5.7", "desktop-0.5.6", "desktop-0.5.5", "desktop-0.5.4", "desktop-0.5.2", "desktop-0.5.1"]);
+    const supportedSdrDesktopVersions = new Set([REQUIRED_SDR_DESKTOP_VERSION, "desktop-0.5.12", "desktop-0.5.10", "desktop-0.5.7", "desktop-0.5.6", "desktop-0.5.5", "desktop-0.5.4", "desktop-0.5.2", "desktop-0.5.1"]);
     if (rosterRole === "SDR" && !supportedSdrDesktopVersions.has(extensionVersion)) {
       return respond({
         error: "desktop_agent_upgrade_required",
@@ -721,6 +721,10 @@ Deno.serve(async (req: Request) => {
     const localPhone = normalizePhone(call.local_phone);
     const remotePhoneCandidate = normalizePhone(call.remote_phone);
     const identitySource = clean(call.identity_source, 80) || null;
+    const requestedOutcome = clean(call.call_outcome, 60).toUpperCase();
+    const callOutcome = ["ANSWERED","NO_ANSWER","UNKNOWN"].includes(requestedOutcome) ? requestedOutcome : "UNKNOWN";
+    const callUiState = clean(call.call_ui_state, 60).toUpperCase() || null;
+    const callUiEvidence = clean(call.call_ui_evidence, 1000) || null;
     const source = clean(call.source, 40).toUpperCase() === "WHATSAPP_DESKTOP" ? "WHATSAPP_DESKTOP" : "WHATSAPP_WEB";
     const directDesktopIdentity = ["WHATSAPP_DESKTOP_UI", "WHATSAPP_DESKTOP_UIA", "WHATSAPP_SCREEN_OCR", "WHATSAPP_SCREEN_OCR+UI", "RELATO_USER_CONFIRMED"].includes(identitySource || "");
     if (!localSessionId || !startedAt || !endedAt) return respond({ error: "missing_call_data" }, 400);
@@ -835,7 +839,15 @@ Deno.serve(async (req: Request) => {
         whatsapp_name: whatsappName,
         name_evidence: nameEvidence,
         remote_name: resolvedIdentity.name, remote_role: resolvedIdentity.role, resolved_client_id: resolvedIdentity.client_id, resolved_client_name: resolvedIdentity.client_name,
-        identity_resolution: resolvedIdentity, audio_paths: audioPaths, finish_reason: clean(call.finish_reason, 80) || null, extension_version: clean(call.extension_version, 40) || null },
+        identity_resolution: resolvedIdentity, audio_paths: audioPaths,
+        call_outcome: callOutcome,
+        answered: callOutcome === "ANSWERED" ? true : (callOutcome === "NO_ANSWER" ? false : null),
+        call_ui_state: callUiState,
+        call_ui_evidence: callUiEvidence,
+        call_ui_connected_observed: Boolean(call.call_ui_connected_observed),
+        call_ui_ringing_observed: Boolean(call.call_ui_ringing_observed),
+        call_ui_no_answer_observed: Boolean(call.call_ui_no_answer_observed),
+        finish_reason: clean(call.finish_reason, 80) || null, extension_version: clean(call.extension_version, 40) || null },
       updated_at: new Date().toISOString(),
     };
     const { data: session, error: sessionError } = await ops.from("meeting_capture_sessions").upsert(sessionPayload, { onConflict: "device_id,local_session_id" }).select("id").single();
@@ -1300,8 +1312,9 @@ Deno.serve(async (req: Request) => {
     const expectedMixedBytes = durationMs > 0 ? Math.round((durationMs / 1000) * 16000) : 0;
     const partialMixedAudio = mixedBytes > 0 && durationMs >= 15000 && expectedMixedBytes > 0 && mixedBytes < expectedMixedBytes * 0.50;
     const now = new Date().toISOString();
+    const noAnswer = String(session.metadata?.call_outcome || "").toUpperCase() === "NO_ANSWER";
     await ops.from("meeting_capture_sessions").update({
-      state: "PROCESSING",
+      state: noAnswer ? "READY" : "PROCESSING",
       audio_status: mixedBytes > 0 ? (partialMixedAudio ? "PARTIAL" : "READY") : "STORED",
       audio_size_bytes: mixedBytes > 0 ? mixedBytes : totalBytes || null,
       audio_duration_ms: durationMs || null,
@@ -1316,11 +1329,19 @@ Deno.serve(async (req: Request) => {
           mixed_bytes: mixedBytes,
           duration_ms: durationMs,
           checked_at: now
-        } : null
+        } : null,
+        ...(noAnswer ? {
+          transcript_quality: {
+            status: "NO_ANSWER",
+            source: "WHATSAPP_DESKTOP_UI",
+            evaluated_at: now
+          }
+        } : {})
       },
       audio_updated_at: now,
       updated_at: now
     }).eq("id", session.id);
+    if (noAnswer) return respond({ ok: true, session_id: session.id, job_id: null, state: "READY", call_outcome: "NO_ANSWER" });
     const { data: jobId, error: jobError } = await ops.rpc("enqueue_heavy_job", {
       p_job_type: "CALL_TRANSCRIBE", p_payload: { session_id: session.id }, p_dedupe_key: `call:${session.id}`, p_max_attempts: 5, p_available_at: new Date().toISOString(),
     });

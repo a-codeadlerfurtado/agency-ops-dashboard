@@ -539,6 +539,8 @@ Deno.serve(async(req:Request)=>{
         audio,
         audio_status:sessionRow.audio_status||null,
         audio_last_error:sessionRow.audio_last_error||null,
+        call_outcome:String(sessionRow.metadata?.call_outcome||"UNKNOWN").toUpperCase(),
+        answered:sessionRow.metadata?.answered===true||String(sessionRow.metadata?.call_outcome||"").toUpperCase().startsWith("ANSWERED"),
       },
       generated_at:new Date().toISOString()
     });
@@ -621,6 +623,11 @@ Deno.serve(async(req:Request)=>{
     const phoneLead:any=phoneLeadMap.get(phoneDigits(remotePhone))||null;
     const lead:any=recordLead||metadataLead||phoneLead||null;
     const names=nameEvidence(session.metadata||{},lead,record);
+    const explicitOutcome=clean(session.metadata?.call_outcome,80).toUpperCase();
+    const qualityStatus=clean(session.metadata?.transcript_quality?.status,80).toUpperCase();
+    const callOutcome=explicitOutcome
+      || (qualityStatus==="NO_ANSWER_OR_NO_REMOTE_SPEECH"?"NO_ANSWER":"UNKNOWN");
+    const answered=session.metadata?.answered===true||callOutcome.startsWith("ANSWERED");
     const startedMs=Date.parse(String(session.started_at||""));
     const endedMs=Date.parse(String(session.ended_at||""));
     const durationSeconds=Number(transcript?.duration_seconds||0)
@@ -661,6 +668,8 @@ Deno.serve(async(req:Request)=>{
       review_classification:session.metadata?.backfill_review?.classification||null,
       review_reason:session.metadata?.backfill_review?.reason||null,
       commercial_sync_status:session.metadata?.commercial_sync?.status||null,
+      call_outcome:callOutcome,
+      answered,
       coaching_count:coachingCountMap.get(String(session.id))||0,
       manager_reviewed:managerReviewMap.has(String(session.id)),
       manager_reviewed_at:managerReviewMap.get(String(session.id))||null,

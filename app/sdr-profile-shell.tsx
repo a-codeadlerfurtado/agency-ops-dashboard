@@ -45,6 +45,12 @@ const dayKey=(v:unknown)=>{
   return map.year+"-"+map.month+"-"+map.day;
 };
 const pct=(n:number,d:number)=>d?Math.round((n/d)*100):0;
+const callOutcomeLabel=(value:unknown)=>{
+  const key=String(value||"UNKNOWN").toUpperCase();
+  if(key.startsWith("ANSWERED"))return "Atendida";
+  if(key==="NO_ANSWER")return "Não atendida";
+  return "Atendimento não confirmado";
+};
 const reviewLabel=(value:unknown)=>{
   const key=String(value||"").toUpperCase();
   const labels:Record<string,string>={
@@ -282,18 +288,21 @@ export function CallsView({data,managerMode=false,focus,onFocusConsumed}:{data:R
   }),[calls,query,period,dateFrom,dateTo,status,identity,transcript,recording,durationBand,channel,managerMode,sdrPerson]);
 
   const metrics=useMemo(()=>{
-    const secs=visible.map(r=>Math.max(0,Number(r.duration_seconds||0))).filter(n=>n>0);
+    const answeredRows=visible.filter(r=>r.answered===true||String(r.call_outcome||"").toUpperCase().startsWith("ANSWERED"));
+    const attempts=visible.filter(r=>String(r.call_outcome||"").toUpperCase()==="NO_ANSWER").length;
+    const secs=answeredRows.map(r=>Math.max(0,Number(r.duration_seconds||0))).filter(n=>n>0);
     const total=secs.reduce((a,b)=>a+b,0);
-    const uniqueProspects=new Set(visible.map(r=>String(r.prospect_lead_id||r.prospect_name||r.remote_phone||"")).filter(Boolean)).size;
-    const activeDays=new Set(visible.map(r=>dayKey(r.created_at)).filter(Boolean)).size;
+    const uniqueProspects=new Set(answeredRows.map(r=>String(r.prospect_lead_id||r.prospect_name||r.remote_phone||"")).filter(Boolean)).size;
+    const activeDays=new Set(answeredRows.map(r=>dayKey(r.created_at)).filter(Boolean)).size;
     return {
-      calls:visible.length,
+      calls:answeredRows.length,
+      attempts,
       avgDuration:secs.length?total/secs.length:0,
       totalDuration:total,
-      avgPerDay:activeDays?visible.length/activeDays:0,
-      transcriptPct:pct(visible.filter(r=>r.has_transcript||r.transcript_id).length,visible.length),
-      recordingPct:pct(visible.filter(r=>r.has_audio||["READY","STORED","PROCESSING"].includes(String(r.audio_status||"").toUpperCase())).length,visible.length),
-      identifiedPct:pct(visible.filter(r=>r.prospect_identified||r.prospect_name).length,visible.length),
+      avgPerDay:activeDays?answeredRows.length/activeDays:0,
+      transcriptPct:pct(answeredRows.filter(r=>r.has_transcript||r.transcript_id).length,answeredRows.length),
+      recordingPct:pct(answeredRows.filter(r=>r.has_audio||["READY","STORED","PROCESSING"].includes(String(r.audio_status||"").toUpperCase())).length,answeredRows.length),
+      identifiedPct:pct(answeredRows.filter(r=>r.prospect_identified||r.prospect_name).length,answeredRows.length),
       uniqueProspects
     };
   },[visible]);
@@ -342,7 +351,8 @@ export function CallsView({data,managerMode=false,focus,onFocusConsumed}:{data:R
       <p>{managerMode?"Acompanhe as ligações dos SDRs, marque melhorias no segundo exato e deixe o coaching visível para o SDR.":"Volume, duração, identificação, transcrição, gravação e feedback do gestor nas suas calls."}</p></div><b>{visible.length} exibidas</b></header>
 
     <div className="sdr-call-kpis">
-      <article><span>Ligações</span><b>{metrics.calls}</b><small>No filtro atual</small></article>
+      <article><span>Ligações atendidas</span><b>{metrics.calls}</b><small>Não inclui tentativas sem atendimento</small></article>
+      <article><span>Não atendidas</span><b>{metrics.attempts}</b><small>Tentativas registradas separadamente</small></article>
       <article><span>Duração média</span><b>{duration(metrics.avgDuration)}</b><small>Por ligação com duração</small></article>
       <article><span>Tempo total</span><b>{duration(metrics.totalDuration)}</b><small>Tempo falado</small></article>
       <article><span>Média / dia ativo</span><b>{metrics.avgPerDay.toFixed(1)}</b><small>Ligações por dia com atividade</small></article>
@@ -386,7 +396,8 @@ export function CallsView({data,managerMode=false,focus,onFocusConsumed}:{data:R
       <div className="sdr-call-facts">
         <span><b>Outro número</b>{phone(row.remote_phone)}</span>
         <span><b>Duração</b>{duration(row.duration_seconds)}</span>
-        <span><b>Status</b>{text(row.state)}</span>
+        <span><b>Atendimento</b>{callOutcomeLabel(row.call_outcome)}</span>
+        <span><b>Processamento</b>{text(row.state)}</span>
         {row.review_classification&&<span><b>Classificação</b>{reviewLabel(row.review_classification)}</span>}
       </div>
       <p>{text(row.transcript_summary||row.notes,"Sem resumo disponível ainda.")}</p>
@@ -407,7 +418,8 @@ export function CallsView({data,managerMode=false,focus,onFocusConsumed}:{data:R
           <article><span>Outro número</span><b>{phone(detail.remote_phone)}</b></article>
           <article><span>Duração</span><b>{duration(detail.duration_seconds)}</b></article>
           <article><span>Início</span><b>{dateTime(detail.started_at)}</b></article>
-          <article><span>Status</span><b>{text(detail.state)}</b></article>
+          <article><span>Atendimento</span><b>{callOutcomeLabel(detail.call_outcome)}</b></article>
+          <article><span>Processamento</span><b>{text(detail.state)}</b></article>
           {detail.prospect_name_source&&<article><span>Nome exibido</span><b>{text(detail.prospect_name)} · {nameSourceLabel(detail.prospect_name_source)}</b></article>}
           {detail.whatsapp_name&&<article><span>Nome do WhatsApp</span><b>{text(detail.whatsapp_name)}</b></article>}
           {detail.post_call_name&&<article><span>Nome informado no pós-call</span><b>{text(detail.post_call_name)}</b></article>}
