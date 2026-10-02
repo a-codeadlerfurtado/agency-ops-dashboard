@@ -302,6 +302,13 @@ export default function NotificationDetailBridge() {
         return;
       }
 
+      const onboardingAlertId = String(item.metadata?.onboarding_required_alert_id || "").trim();
+      if (String(item.type || "") === "ONBOARDING_REQUIRED_ALERT" && onboardingAlertId) {
+        setSelected(null);
+        window.dispatchEvent(new CustomEvent("open-onboarding-required-alert", { detail: { alertId: onboardingAlertId, notificationId: item.id } }));
+        return;
+      }
+
       setSelected({ ...item });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Não foi possível carregar o contexto desta notificação.");
