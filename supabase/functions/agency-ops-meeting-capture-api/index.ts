@@ -1128,7 +1128,7 @@ Deno.serve(async (req: Request) => {
     if (sessionError || !session) return respond({ error: "call_session_not_found" }, 404);
     const now = new Date().toISOString();
     const { error: updateError } = await ops.from("meeting_capture_sessions").update({
-      state: "UPLOAD_FAILED",
+      state: "FAILED",
       audio_status: "UPLOAD_FAILED",
       audio_last_error: message,
       metadata: {
@@ -1139,7 +1139,7 @@ Deno.serve(async (req: Request) => {
       audio_updated_at: now,
     }).eq("id",session.id);
     if (updateError) return respond({ error: "call_upload_failure_save_failed", detail: updateError.message }, 500);
-    return respond({ ok: true, session_id: session.id, state: "UPLOAD_FAILED" });
+    return respond({ ok: true, session_id: session.id, state: "FAILED" });
   }
 
   if (action === "call_mixed_ready") {
