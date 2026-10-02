@@ -361,6 +361,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
             : $"Ligação encerrada ({reason})");
         CallEnded?.Invoke(id, contact);
         var success = false; string? error = null;
+        RelatoApi? api = null;
         try
         {
             var cfg = AgentConfig.Load() ?? configProvider() ?? throw new InvalidOperationException("Desktop Agent não pareado");
@@ -377,7 +378,7 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
                 cfg = cfg with { LocalPhone = identity.LocalPhone };
                 cfg.Save();
             }
-            var api = new RelatoApi(cfg);
+            api = new RelatoApi(cfg);
             var durationMs = Math.Max(0L, (long)Math.Round((ended - started).TotalMilliseconds));
             var roles = new List<string>();
             if (remotePath is not null && File.Exists(remotePath) && new FileInfo(remotePath).Length > 1000) roles.Add("remote");
@@ -398,17 +399,32 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
                     "remote" => remotePath,
                     _ => null
                 };
-                if (file is null || !File.Exists(file)) return (object?)null;
+                if (file is null || !File.Exists(file))
+                    return (uploaded: (object?)null, error: (string?)($"{targetUpload.Role}: arquivo local ausente"));
                 const string mime = "audio/wav";
-                await api.UploadAsync(targetUpload.SignedUrl, file, mime);
-                var fileBytes = new FileInfo(file).Length;
-                return (object)new { role = targetUpload.Role, path = targetUpload.Path, bytes = fileBytes, mime_type = mime };
+                try
+                {
+                    await api.UploadAsync(targetUpload.SignedUrl, file, mime);
+                    var fileBytes = new FileInfo(file).Length;
+                    return (uploaded: (object?)new { role = targetUpload.Role, path = targetUpload.Path, bytes = fileBytes, mime_type = mime }, error: (string?)null);
+                }
+                catch (Exception ex)
+                {
+                    return (uploaded: (object?)null, error: (string?)($"{targetUpload.Role}: {ex.Message}"));
+                }
             }).ToArray();
 
-            var uploaded = (await Task.WhenAll(uploadTasks))
-                .Where(item => item is not null)
-                .Cast<object>()
+            var uploadResults = await Task.WhenAll(uploadTasks);
+            var uploaded = uploadResults.Where(item => item.uploaded is not null)
+                .Select(item => item.uploaded!)
                 .ToList();
+            var uploadErrors = uploadResults.Where(item => !string.IsNullOrWhiteSpace(item.error))
+                .Select(item => item.error!)
+                .ToList();
+            if (uploaded.Count == 0)
+                throw new InvalidOperationException("Nenhum canal de áudio conseguiu ser enviado após as tentativas.");
+            if (uploadErrors.Count > 0)
+                StatusChanged?.Invoke("Ligação enviada com áudio parcial: " + string.Join(" | ", uploadErrors));
             await api.FinalizeCallAsync(id, uploaded, durationMs);
             success = true;
             CallFinished?.Invoke(id, true, null);
@@ -417,6 +433,11 @@ internal sealed class WhatsAppDesktopCapture : IDisposable
         catch (Exception ex)
         {
             error = ex.Message;
+            if (api is not null)
+            {
+                try { await api.MarkCallUploadFailedAsync(id, error); }
+                catch { }
+            }
             CallFinished?.Invoke(id, false, error);
         }
         finally
