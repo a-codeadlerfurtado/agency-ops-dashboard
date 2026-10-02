@@ -55,11 +55,15 @@ Deno.serve(async (req: Request) => {
   const isLeonardo = person === "Leonardo Augusto" && role === "COMMERCIAL";
   const elevated = (approvals || []).some((row: Row) => row.kind === "ELEVATION");
   const url = new URL(req.url);
-  const selfScope = String(url.searchParams.get("scope") || "").toLowerCase() === "self";
-  if (!selfScope && !(isAdler || isLeonardo || ["GT", "CS", "MGMT"].includes(role))) return reply({ error: "forbidden" }, 403, "no-store");
+  const requestedScope = String(url.searchParams.get("scope") || "").toLowerCase();
+  const selfScope = requestedScope === "self";
+  const teamScope = requestedScope === "team";
+  if (teamScope && !isAdler) return reply({ error: "forbidden" }, 403, "no-store");
+  if (!selfScope && !teamScope && !(isAdler || isLeonardo || ["GT", "CS", "MGMT"].includes(role))) return reply({ error: "forbidden" }, 403, "no-store");
 
   const transcriptId = Number(url.searchParams.get("transcript_id") || 0);
   const clientId = String(url.searchParams.get("client_id") || "").trim();
+  const ownerFilter = String(url.searchParams.get("owner") || "").trim();
 
   if (transcriptId > 0) {
     let q = ops.from("meeting_transcripts").select("id,client_id,client_name_raw,owner_person,source_system,transcript_source,source_file_name,source_url,meeting_code,meeting_started_at,meeting_ended_at,duration_seconds,transcript_text,transcript_chars,participants,summary,decisions,commitments,ai_signals,metadata,capture_session_id,created_at").eq("id", transcriptId);
@@ -145,6 +149,8 @@ Deno.serve(async (req: Request) => {
   const search = sanitizeSearch(String(url.searchParams.get("q") || ""));
   const from = String(url.searchParams.get("from") || "").trim();
   const to = String(url.searchParams.get("to") || "").trim();
+  const recordTypeFilter = String(url.searchParams.get("type") || "").toUpperCase();
+  const audioOnly = String(url.searchParams.get("audio") || "") === "1";
 
   let allowedClientIds: string[] | null = null;
   if (!selfScope && role === "GT" && !elevated) {
@@ -160,6 +166,7 @@ Deno.serve(async (req: Request) => {
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
   if (selfScope) q = q.eq("owner_person", person);
+  if (teamScope && ownerFilter) q = q.eq("owner_person", ownerFilter);
   if (allowedClientIds) q = q.in("client_id", allowedClientIds);
   if (clientId) q = q.eq("client_id", clientId);
   if (from) q = q.gte("meeting_started_at", from);
@@ -194,13 +201,23 @@ Deno.serve(async (req: Request) => {
       duration_seconds: Number(row.duration_seconds || 0) || fallbackDuration,
     };
   });
+  let owners: string[] = [];
+  if (isAdler) {
+    const { data: ownerRows } = await ops.from("team_roster")
+      .select("person")
+      .eq("is_former", false)
+      .order("person", { ascending: true });
+    owners = (ownerRows || []).map((row: Row) => String(row.person || "").trim()).filter(Boolean);
+  }
+
   return reply({
     records,
     count: count || 0,
     has_more: offset + records.length < (count || 0),
     limit,
     offset,
+    owners,
     generated_at: new Date().toISOString(),
-    policy: { transcript_on_demand: true, polling: false, cache_seconds: 60, scope: selfScope ? "self" : "role" },
+    policy: { transcript_on_demand: true, polling: false, cache_seconds: 60, scope: selfScope ? "self" : teamScope ? "team" : "role", can_view_team: isAdler },
   });
 });

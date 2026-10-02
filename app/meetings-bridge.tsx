@@ -65,9 +65,15 @@ const STYLE = `
   .meetings-btn{border:1px solid #34414b;background:#151c22;color:#e8f0f5;border-radius:10px;padding:9px 12px;font:700 12px Inter,sans-serif;cursor:pointer;}
   .meetings-btn:hover{border-color:#76c6ff;background:#18232a;}
   .meetings-btn.primary{border-color:#ff934f;background:#ff7a2f;color:white;}
-  .meetings-toolbar{max-width:1440px;margin:0 auto 14px;display:grid;grid-template-columns:minmax(240px,1fr) auto auto;gap:8px;}
+  .meetings-toolbar{max-width:1440px;margin:0 auto 10px;display:grid;grid-template-columns:minmax(240px,1fr) auto auto;gap:8px;}
   .meetings-toolbar input{min-width:0;border:1px solid #33414b;background:#10161b;color:#eef5f8;border-radius:10px;padding:10px 12px;outline:none;}
   .meetings-toolbar input:focus{border-color:#76c6ff;box-shadow:0 0 0 2px rgba(118,198,255,.08);}
+  .relato-filterbar{max-width:1440px;margin:0 auto 12px;display:grid;grid-template-columns:minmax(210px,1fr) repeat(2,minmax(145px,.45fr)) auto auto;gap:8px;align-items:end;}
+  .relato-filterbar label{display:grid;gap:5px;color:#8698a5;font-size:9px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;}
+  .relato-filterbar select,.relato-filterbar input{height:38px;border:1px solid #33414b;background:#10161b;color:#e8f0f5;border-radius:10px;padding:0 10px;outline:none;}
+  .relato-filterbar .audio-toggle{height:38px;display:flex;align-items:center;gap:8px;border:1px solid #33414b;background:#10161b;border-radius:10px;padding:0 11px;color:#aebbc4;font-size:11px;font-weight:800;white-space:nowrap;text-transform:none;letter-spacing:0;}
+  .relato-filterbar .audio-toggle input{width:15px;height:15px;padding:0;}
+  .relato-filterbar .clear-filters{height:38px;}
   .relato-self-tabs{max-width:1440px;margin:0 auto 12px;display:flex;gap:7px;flex-wrap:wrap;}
   .relato-self-tabs button{border:1px solid #33414b;background:#10161b;color:#9eacb7;border-radius:999px;padding:7px 11px;font:800 10px Inter,sans-serif;cursor:pointer;}
   .relato-self-tabs button.active{border-color:#ff934f;background:#2b1a11;color:#ffc19a;}
@@ -126,7 +132,7 @@ const STYLE = `
   .meeting-transcript-time:hover{background:#203441;color:#c7eaff;}
   .meeting-transcript-speaker{font-size:10px;font-weight:900;color:#ff9a61;margin-bottom:3px;}
   .meeting-transcript-text{font-size:11px;line-height:1.5;color:#b8c4cb;white-space:pre-wrap;}
-  @media(max-width:900px){.meeting-card{grid-template-columns:1fr;gap:10px}.meeting-card-side{justify-items:start;min-width:0}.meeting-card-footer{justify-content:flex-start}.meeting-overview-grid{grid-template-columns:1fr}}
+  @media(max-width:900px){.relato-filterbar{grid-template-columns:1fr 1fr}.relato-filterbar label:first-child{grid-column:1/-1}.meeting-card{grid-template-columns:1fr;gap:10px}.meeting-card-side{justify-items:start;min-width:0}.meeting-card-footer{justify-content:flex-start}.meeting-overview-grid{grid-template-columns:1fr}}
   @media(max-width:720px){.meetings-shell{left:58px;padding:18px 14px 34px}.meetings-head{flex-direction:column}.meetings-toolbar{grid-template-columns:1fr 1fr}.meetings-toolbar input{grid-column:1/-1}.meeting-drawer-backdrop{left:58px}.meeting-drawer{width:100%;padding:18px 14px 28px}.meeting-detail-tabs{top:66px;overflow-x:auto;flex-wrap:nowrap}.meeting-detail-tabs button{white-space:nowrap}.meeting-transcript-row{grid-template-columns:48px minmax(0,1fr)}}
 `;
 
@@ -139,6 +145,12 @@ export default function MeetingsBridge() {
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [activeQuery, setActiveQuery] = useState("");
+  const [owners, setOwners] = useState<string[]>([]);
+  const [canViewTeam, setCanViewTeam] = useState(false);
+  const [ownerFilter, setOwnerFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [audioOnly, setAudioOnly] = useState(false);
   const [detail, setDetail] = useState<Row | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailTab, setDetailTab] = useState<"overview" | "transcript" | "participants" | "actions">("overview");
@@ -152,7 +164,10 @@ export default function MeetingsBridge() {
       const url = new URL(API);
       url.searchParams.set("limit", String(PAGE_SIZE));
       url.searchParams.set("offset", String(reset ? 0 : records.length));
-      url.searchParams.set("scope", "self");
+      url.searchParams.set("scope", ownerFilter ? "team" : "self");
+      if (ownerFilter) url.searchParams.set("owner", ownerFilter);
+      if (dateFrom) url.searchParams.set("from", new Date(dateFrom + "T00:00:00").toISOString());
+      if (dateTo) url.searchParams.set("to", new Date(dateTo + "T23:59:59").toISOString());
       if (q.trim()) url.searchParams.set("q", q.trim());
       const response = await authenticatedFetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error(`API ${response.status}`);
@@ -161,12 +176,14 @@ export default function MeetingsBridge() {
       setRecords((current) => reset ? next : [...current, ...next]);
       setCount(Number(body.count || 0));
       setHasMore(Boolean(body.has_more));
+      if (Array.isArray(body.owners)) setOwners(body.owners.map((value: unknown) => String(value)).filter(Boolean));
+      setCanViewTeam(Boolean(body.policy?.can_view_team));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Não foi possível carregar as reuniões.");
     } finally {
       setLoading(false);
     }
-  }, [activeQuery, records.length]);
+  }, [activeQuery, records.length, ownerFilter, dateFrom, dateTo]);
 
   useEffect(() => {
     if (!open || records.length || loading) return;
@@ -263,7 +280,7 @@ export default function MeetingsBridge() {
     try {
       const url = new URL(API);
       url.searchParams.set("transcript_id", String(row.id));
-      url.searchParams.set("scope", "self");
+      url.searchParams.set("scope", ownerFilter ? "team" : "self");
       const response = await authenticatedFetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error(`API ${response.status}`);
       const body = await response.json();
@@ -282,7 +299,10 @@ export default function MeetingsBridge() {
     void audio.play().catch(() => {});
   };
 
-  const visibleRecords = useMemo(() => records.filter((row) => recordType === "ALL" || String(row.record_type || "MEETING").toUpperCase() === recordType), [records, recordType]);
+  const visibleRecords = useMemo(() => records.filter((row) =>
+    (recordType === "ALL" || String(row.record_type || "MEETING").toUpperCase() === recordType)
+    && (!audioOnly || Boolean(row.has_audio))
+  ), [records, recordType, audioOnly]);
   const totalChars = useMemo(() => visibleRecords.reduce((sum, row) => sum + Number(row.transcript_chars || 0), 0), [visibleRecords]);
   const callCount = useMemo(() => records.filter((row) => String(row.record_type || "").toUpperCase() === "CALL").length, [records]);
   const meetingCount = useMemo(() => records.filter((row) => String(row.record_type || "MEETING").toUpperCase() === "MEETING").length, [records]);
@@ -316,6 +336,23 @@ export default function MeetingsBridge() {
         <button className="meetings-btn primary" type="submit">Buscar</button>
         {(activeQuery || query) && <button className="meetings-btn" type="button" onClick={() => { setQuery(""); setActiveQuery(""); setRecords([]); load(true, ""); }}>Limpar</button>}
       </form>
+
+      {canViewTeam && <div className="relato-filterbar">
+        <label>Colaborador
+          <select value={ownerFilter} onChange={(event) => { setOwnerFilter(event.target.value); setRecords([]); }}>
+            <option value="">Meu histórico</option>
+            {owners.filter((name) => name !== "Adler Furtado").map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
+        <label>De
+          <input type="date" value={dateFrom} onChange={(event) => { setDateFrom(event.target.value); setRecords([]); }} />
+        </label>
+        <label>Até
+          <input type="date" value={dateTo} onChange={(event) => { setDateTo(event.target.value); setRecords([]); }} />
+        </label>
+        <label className="audio-toggle"><input type="checkbox" checked={audioOnly} onChange={(event) => setAudioOnly(event.target.checked)} />Só com áudio</label>
+        <button className="meetings-btn clear-filters" type="button" onClick={() => { setOwnerFilter(""); setDateFrom(""); setDateTo(""); setAudioOnly(false); setRecordType("ALL"); setQuery(""); setActiveQuery(""); setRecords([]); }}>Limpar filtros</button>
+      </div>}
 
       <div className="meetings-meta">
         <span>{count} registros pessoais encontrados</span>
