@@ -203,11 +203,22 @@ Deno.serve(async (req: Request) => {
   });
   let owners: string[] = [];
   if (isAdler) {
-    const { data: ownerRows } = await ops.from("team_roster")
-      .select("person")
-      .eq("is_former", false)
-      .order("person", { ascending: true });
-    owners = (ownerRows || []).map((row: Row) => String(row.person || "").trim()).filter(Boolean);
+    const [{ data: ownerRows }, { data: profileRows }] = await Promise.all([
+      ops.from("team_roster")
+        .select("person")
+        .eq("is_former", false)
+        .order("person", { ascending: true }),
+      ops.from("user_preferences")
+        .select("collaborator_person"),
+    ]);
+    const profilePeople = new Set(
+      (profileRows || [])
+        .map((row: Row) => String(row.collaborator_person || "").trim())
+        .filter(Boolean)
+    );
+    owners = (ownerRows || [])
+      .map((row: Row) => String(row.person || "").trim())
+      .filter((name: string) => Boolean(name) && profilePeople.has(name));
   }
 
   return reply({
