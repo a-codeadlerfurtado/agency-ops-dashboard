@@ -5,7 +5,7 @@ import { rodarRondas } from "./jarvis/routines";
 const SUPABASE = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const OLD_IMG_SRC = "img-src 'self' data:";
 const NEW_IMG_SRC = `img-src 'self' data: ${SUPABASE}`;
-const MEDIA_SRC = "media-src 'self' blob:";
+const MEDIA_SRC = `media-src 'self' blob: ${SUPABASE}`;
 const VISION_MODEL = "@cf/meta/llama-3.2-11b-vision-instruct";
 const VISION_BULK_KEY = "cvi_20260829_5b1d73f04c784898";
 
@@ -17,7 +17,10 @@ function widenImageCsp(response: Response): Response {
       ? csp.replace(OLD_IMG_SRC, NEW_IMG_SRC)
       : csp;
     if (!/\bmedia-src\b/i.test(next)) next = `${next}; ${MEDIA_SRC}`;
-    else if (!/\bmedia-src\b[^;]*\bblob:/i.test(next)) next = next.replace(/\bmedia-src\b([^;]*)/i, `media-src$1 blob:`);
+    else {
+      if (!/\bmedia-src\b[^;]*\bblob:/i.test(next)) next = next.replace(/\bmedia-src\b([^;]*)/i, `media-src$1 blob:`);
+      if (!next.includes(SUPABASE)) next = next.replace(/\bmedia-src\b([^;]*)/i, `media-src$1 ${SUPABASE}`);
+    }
     if (next !== csp) headers.set("content-security-policy", next);
   }
   const contentType = (headers.get("content-type") || "").toLowerCase();
