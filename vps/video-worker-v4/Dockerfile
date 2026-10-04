@@ -11,10 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-de
     && mkdir -p /data/work /data/music /data/claude-config /usr/local/lib/node_modules/@anthropic-ai \
     && chown -R worker:worker /data
 COPY --from=claude_cli /usr/local/bin/node /usr/local/bin/node
+COPY --from=claude_cli /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=claude_cli /usr/local/lib/node_modules/@anthropic-ai/claude-code /usr/local/lib/node_modules/@anthropic-ai/claude-code
-RUN ln -sf /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js /usr/local/bin/claude \
-    && chmod +x /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js \
-    && node --version \
+RUN node --version \
     && claude --version
 WORKDIR /app
 COPY worker.py worker_v42.py worker_v421.py worker_v43.py worker_v431.py worker_v44.py worker_v45.py worker_v46.py director_v42.py director_v43.py vision_v43.py audio_v43.py capabilities_v43.py providers_v43.py vfx_local_v44.py qa_v43.py learning_v43.py variants_v43.py dna_v45.py critic_v45.py claude_edit_spec_v46.py claude_brain_v46.py healthcheck.py smoke_raw.py smoke_v45.py smoke_v46.py /app/
