@@ -65,6 +65,9 @@ def _claude_env():
     if os.getenv("ANTHROPIC_AUTH_TOKEN"):
         raise RuntimeError("claude_subscription_guard:ANTHROPIC_AUTH_TOKEN_must_be_unset")
     env = os.environ.copy()
+    for key in list(env):
+        if SECRET_KEY_PATTERN.search(key):
+            env.pop(key, None)
     env.pop("ANTHROPIC_API_KEY", None)
     env.pop("ANTHROPIC_AUTH_TOKEN", None)
     config_dir = Path(os.getenv("CLAUDE_CONFIG_DIR", "/data/claude-config"))
@@ -342,6 +345,34 @@ def plan(job, inputs, analyses, baseline, path_by_drive_id, download_fn):
     prompt_path = claude_dir / "prompt.txt"
     prompt_path.write_text(prompt, encoding="utf-8")
 
+    allowed_reads = ["Read(./context.json)"]
+    for row in (context.get("raw_assets") or []) + (context.get("approved_references") or []):
+        contact = row.get("contact_sheet") or {}
+        file_name = Path(str(contact.get("file") or "")).name
+        if file_name:
+            allowed_reads.append(f"Read(./{file_name})")
+    permission_settings = {
+        "permissions": {
+            "allow": sorted(set(allowed_reads)),
+            "deny": [
+                "Read(./prompt.txt)",
+                "Read(./claude-permissions.json)",
+                "Read(../**)",
+                "Read(/data/claude-config/**)",
+                "Read(/run/secrets/**)",
+                "Read(/proc/**)",
+                "Read(/sys/**)",
+                "Read(/etc/**)",
+                "Read(/root/**)",
+                "Read(/home/**/.ssh/**)",
+                "Read(**/.env)",
+                "Read(**/.env.*)",
+            ],
+        }
+    }
+    settings_path = claude_dir / "claude-permissions.json"
+    settings_path.write_text(json.dumps(permission_settings, ensure_ascii=False, indent=2), encoding="utf-8")
+
     model = os.getenv("VIDEO_CLAUDE_MODEL", "opus").strip() or "opus"
     max_turns = max(4, min(30, int(os.getenv("VIDEO_CLAUDE_MAX_TURNS", "12"))))
     timeout = max(60, min(1800, int(os.getenv("VIDEO_CLAUDE_TIMEOUT_SECONDS", "900"))))
@@ -356,8 +387,8 @@ def plan(job, inputs, analyses, baseline, path_by_drive_id, download_fn):
         edit_spec.schema_json(),
         "--tools",
         "Read",
-        "--allowedTools",
-        "Read",
+        "--settings",
+        str(settings_path),
         "--permission-mode",
         "dontAsk",
         "--max-turns",
