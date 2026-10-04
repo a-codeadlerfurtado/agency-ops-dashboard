@@ -52,8 +52,11 @@ Deno.serve(async(req:Request)=>{
     }
     if(action==="claim"){
       await ops.rpc("requeue_stale_video_v4_render_jobs",{p_stale_minutes:20,p_max_attempts:3});
-      const {data:renderJob,error}=await ops.rpc("claim_video_v4_render_job",{p_worker_id:worker}); if(error) throw error;
-      if(!renderJob?.id) return json({ok:true,render_job:null});
+      const variantFilter=txt(body.variant);
+      const claimRpc=variantFilter?"claim_video_v4_render_job_variant":"claim_video_v4_render_job";
+      const claimArgs=variantFilter?{p_worker_id:worker,p_variant:variantFilter}:{p_worker_id:worker};
+      const {data:renderJob,error}=await ops.rpc(claimRpc,claimArgs); if(error) throw error;
+      if(!renderJob?.id) return json({ok:true,render_job:null,variant_filter:variantFilter||null});
       const [{data:timeline},{data:sourceJob},{data:inputs}]=await Promise.all([
         ops.from("video_timelines").select("*").eq("id",renderJob.timeline_id).maybeSingle(),
         ops.from("video_edit_jobs").select("*").eq("id",renderJob.source_job_id).maybeSingle(),
@@ -73,8 +76,20 @@ Deno.serve(async(req:Request)=>{
         const {data}=await ops.from("video_approved_references").select("id,client_id,product_name,product_type,market_tier,aspect_ratio,drive_file_id,drive_url,duration_seconds,width,height,fps,dna_features,status").in("id",refIds).eq("status","ACTIVE");
         references=data||[];
       }
-      const sourceWithReferences=sourceJob?{...sourceJob,_reference_pack:{profiles,references}}:sourceJob;
-      return json({ok:true,render_job:renderJob,timeline,source_job:sourceWithReferences,inputs:inputs||[]});
+      const analysisIds=[...new Set((inputs||[]).map((x:any)=>Number(x.analysis_id)).filter((x:number)=>Number.isFinite(x)))];
+      let analysisRows:any[]=[];
+      if(analysisIds.length){
+        const {data}=await ops.from("creative_video_analysis").select("id,analysis_json,analysis_text,model,analysis_version").in("id",analysisIds);
+        analysisRows=data||[];
+      }
+      const analysisById=new Map(analysisRows.map((x:any)=>[Number(x.id),x]));
+      const hydratedInputs=(inputs||[]).map((x:any)=>({...x,existing_analysis:x.analysis_id?analysisById.get(Number(x.analysis_id))||null:null}));
+      const sourceWithReferences=sourceJob?{
+        ...sourceJob,
+        _reference_pack:{profiles,references},
+        _render_context:{variant:renderJob.variant,render_job_id:renderJob.id,worker_id:worker}
+      }:sourceJob;
+      return json({ok:true,render_job:renderJob,timeline,source_job:sourceWithReferences,inputs:hydratedInputs});
     }
     const renderId=txt(body.render_job_id); if(!renderId) return json({error:"render_job_id_required"},400);
     const {data:rj,error:rjError}=await ops.from("video_v4_render_jobs").select("*").eq("id",renderId).maybeSingle(); if(rjError) throw rjError; if(!rj) return json({error:"render_job_not_found"},404);
@@ -97,16 +112,19 @@ Deno.serve(async(req:Request)=>{
       const variant=txt(rj.variant)||"v4_shadow";
       const renderer=txt(body.renderer_version)||"leonardo-renderer-v4.0.0";
       const critic=q.approved_reference_critic||{};
-      const isV45=renderer.startsWith("4.5");
-      if(isV45&&txt(critic.status)!=="PASS") return json({error:"approved_reference_critic_pass_required"},409);
-      const reviewStatus=isV45&&variant==="v4_auto"?"AUTO_APPROVED":"REVIEW_REQUIRED";
+      const isV45Plus=renderer.startsWith("4.5")||renderer.startsWith("4.6");
+      const isClaude=variant.startsWith("v4_claude");
+      if(isV45Plus&&txt(critic.status)!=="PASS") return json({error:"approved_reference_critic_pass_required"},409);
+      const reviewStatus=isClaude?"REVIEW_REQUIRED":(isV45Plus&&variant==="v4_auto"?"AUTO_APPROVED":"REVIEW_REQUIRED");
       const {data:out,error:outError}=await ops.from("video_edit_job_outputs").upsert({job_id:rj.source_job_id,variant,aspect_ratio:"9:16",drive_file_id:txt(o.drive_file_id),drive_url:txt(o.drive_url)||null,file_name:txt(o.file_name)||null,duration_seconds:num(o.duration_seconds),render_metadata:{...(o.render_metadata||{}),v4_render_job_id:rj.id,timeline_id:rj.timeline_id},qa_status:"PASS",qa_json:q,idempotency_key:txt(o.idempotency_key)||`${rj.id}:${variant}`,content_hash:txt(o.content_hash),size_bytes:num(o.size_bytes),video_codec:txt(o.video_codec)||null,audio_codec:txt(o.audio_codec)||null,width:num(o.width),height:num(o.height),fps:num(o.fps),renderer_version:renderer,review_status:reviewStatus},{onConflict:"job_id,variant"}).select("id").single(); if(outError) throw outError;
-      if(isV45){
+      if(isV45Plus){
         const refs=Array.isArray(critic.reference_ids)?critic.reference_ids:[];
         await ops.from("video_critic_runs").insert({job_id:rj.source_job_id,render_job_id:rj.id,output_id:out.id,attempt_no:Number(critic.attempts||1),status:"PASS",critic_version:txt(critic.critic_version)||"approved-video-critic-v4.5.0",score:Number(critic.score||0),checks:critic.checks||[],reference_ids:refs,comparison:{feature_vector:critic.feature_vector||{},dna_profile_id:critic.dna_profile_id||null}});
       }
-      const {error}=await ops.from("video_v4_render_jobs").update({status:"COMPLETED",progress_pct:100,current_stage:isV45&&variant==="v4_auto"?"FINAL_READY":"COMPLETED",heartbeat_at:new Date().toISOString(),finished_at:new Date().toISOString(),output_id:out.id,renderer_version:renderer,render_metadata:{...(rj.render_metadata||{}),...(body.render_metadata||{}),approved_reference_critic:isV45?critic:null,completed_at:new Date().toISOString()},last_error:null,updated_at:new Date().toISOString()}).eq("id",renderId).eq("worker_id",worker); if(error) throw error;
-      await ops.from("video_edit_job_events").insert({job_id:rj.source_job_id,event_type:isV45&&variant==="v4_auto"?"V45_FINAL_READY":"V4_COMPLETED",stage:isV45&&variant==="v4_auto"?"FINAL_READY":"COMPLETED",worker_id:worker,attempt_count:rj.attempt_count,progress_pct:100,metrics:{v4_render_job_id:rj.id,timeline_id:rj.timeline_id,output_id:out.id,critic_score:critic.score||null}});
+      const finalStage=isClaude?"REVIEW_REQUIRED":(isV45Plus&&variant==="v4_auto"?"FINAL_READY":"COMPLETED");
+      const finalEvent=isClaude?"V46_CLAUDE_REVIEW_REQUIRED":(isV45Plus&&variant==="v4_auto"?"V45_FINAL_READY":"V4_COMPLETED");
+      const {error}=await ops.from("video_v4_render_jobs").update({status:"COMPLETED",progress_pct:100,current_stage:finalStage,heartbeat_at:new Date().toISOString(),finished_at:new Date().toISOString(),output_id:out.id,renderer_version:renderer,render_metadata:{...(rj.render_metadata||{}),...(body.render_metadata||{}),approved_reference_critic:isV45Plus?critic:null,human_review_required:isClaude||reviewStatus==="REVIEW_REQUIRED",completed_at:new Date().toISOString()},last_error:null,updated_at:new Date().toISOString()}).eq("id",renderId).eq("worker_id",worker); if(error) throw error;
+      await ops.from("video_edit_job_events").insert({job_id:rj.source_job_id,event_type:finalEvent,stage:finalStage,worker_id:worker,attempt_count:rj.attempt_count,progress_pct:100,metrics:{v4_render_job_id:rj.id,timeline_id:rj.timeline_id,output_id:out.id,critic_score:critic.score||null,human_review_required:isClaude||reviewStatus==="REVIEW_REQUIRED"}});
       return json({ok:true,status:"COMPLETED",output_id:out.id,review_status:reviewStatus});
     }
     if(action==="fail"){
