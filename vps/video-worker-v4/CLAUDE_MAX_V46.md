@@ -28,7 +28,8 @@ Automatic publication is not part of this integration.
 
 ## Authentication
 
-The image pins `@anthropic-ai/claude-code@2.1.288`.
+The image pins `@anthropic-ai/claude-code@2.1.288` and runs it on Node 22, matching
+the package's current `node >=22` engine requirement.
 
 Use a persistent Docker volume mounted at:
 
@@ -88,7 +89,10 @@ Migration `20261004011500_video_claude_max_v46.sql` adds
 `claim_video_v4_render_job_variant(worker, variant)`.
 
 The Claude worker sends `variant=v4_claude_test` on claim. The RPC uses
-`FOR UPDATE SKIP LOCKED`, preserving atomic claim behavior.
+`FOR UPDATE SKIP LOCKED`, preserving atomic claim behavior. The migration also
+redefines the generic V4 claim so legacy V4.5 workers explicitly exclude
+`v4_claude%` variants; a live V4.5 worker therefore cannot steal the controlled
+Claude job.
 
 The existing V4 queue retains:
 
