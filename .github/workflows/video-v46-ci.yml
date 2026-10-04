@@ -1,0 +1,55 @@
+name: Video V4.6 Claude Max CI
+
+on:
+  push:
+    branches: [feat/video-claude-max-brain-v46]
+    paths:
+      - 'vps/video-worker-v4/**'
+      - 'supabase/functions/agency-ops-video-v4-worker-api/**'
+      - 'supabase/migrations/*video*claude*.sql'
+      - '.github/workflows/video-v46-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  validate-v46:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      VIDEO_WORK_DIR: /tmp/video-v46-work
+      VIDEO_MUSIC_LIBRARY_DIR: /tmp/video-v46-music
+      VIDEO_CLAUDE_ENABLED: 'false'
+      VIDEO_CLAUDE_VARIANT_FILTER: v4_claude_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python runtime dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core
+          python -m pip install --upgrade pip
+          python -m pip install 'numpy>=1.26,<3' 'opencv-contrib-python-headless>=4.10,<5'
+
+      - name: Compile worker modules
+        run: python -m py_compile vps/video-worker-v4/*.py
+
+      - name: Run V4.5 regression smoke
+        working-directory: vps/video-worker-v4
+        run: python smoke_v45.py
+
+      - name: Run V4.6 Claude contract smoke
+        working-directory: vps/video-worker-v4
+        run: python smoke_v46.py
+
+      - name: Assert safe defaults
+        run: |
+          grep -q '@anthropic-ai/claude-code@2.1.288' vps/video-worker-v4/Dockerfile
+          grep -q 'VIDEO_CLAUDE_ENABLED=false' vps/video-worker-v4/Dockerfile
+          grep -q 'VIDEO_CLAUDE_VARIANT_FILTER=v4_claude_test' vps/video-worker-v4/Dockerfile
+          grep -q 'worker_v46.py' vps/video-worker-v4/Dockerfile
+          grep -q 'claim_video_v4_render_job_variant' supabase/migrations/20261004011500_video_claude_max_v46.sql
+
+      - name: Build production-equivalent worker image
+        run: docker build -t leonardo-video-worker-v4:4.6.0 vps/video-worker-v4
