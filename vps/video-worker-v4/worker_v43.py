@@ -342,7 +342,8 @@ def decorate(base, timeline, out):
     audio_labels.append("abase")
     target = float(timeline.get("duration") or 18.0)
     if music_idx is not None:
-        filters.append(f"[{music_idx}:a]atrim=duration={target:.3f},asetpts=PTS-STARTPTS,volume=0.23,afade=t=in:st=0:d=0.45,afade=t=out:st={max(0,target-1.8):.3f}:d=1.8[music]")
+        music_volume = _clamp(music.get("volume") if music.get("volume") is not None else 0.23, 0.0, 0.55)
+        filters.append(f"[{music_idx}:a]atrim=duration={target:.3f},asetpts=PTS-STARTPTS,volume={music_volume:.3f},afade=t=in:st=0:d=0.45,afade=t=out:st={max(0,target-1.8):.3f}:d=1.8[music]")
         audio_labels.append("music")
     for idx, e in enumerate(events):
         typ = str(e.get("type") or "whoosh")
