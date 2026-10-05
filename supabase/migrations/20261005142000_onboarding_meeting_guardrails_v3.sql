@@ -1,7 +1,7 @@
 -- Onboarding meeting guardrails v3
 -- Keeps the three onboarding meetings synchronized with required alerts,
 -- acknowledgements, reminders, completion confirmation, and the meeting radar.
--- Generated from the production definitions after validation on 2026-10-05.
+-- Source synchronized with the production definitions after validation on 2026-10-05.
 
 CREATE OR REPLACE FUNCTION agency_ops.resolve_onboarding_required_alert(p_alert_id uuid, p_person text, p_user_key text, p_action text DEFAULT 'ACK'::text, p_scheduled_date text DEFAULT NULL::text, p_scheduled_time text DEFAULT NULL::text, p_meet_url text DEFAULT NULL::text)
  RETURNS jsonb
@@ -578,6 +578,41 @@ begin
       if v_alert_id is not null then v_created:=v_created+1; end if;
     end if;
   end loop;
+
+  -- Expired informational/reminder alerts must not block the completion check.
+  update agency_ops.onboarding_required_alerts
+  set acknowledged_at=coalesce(acknowledged_at,now()),
+      acknowledged_by_user_key=coalesce(acknowledged_by_user_key,'AUTO:MEETING_TIME_PASSED'),
+      metadata=coalesce(metadata,'{}'::jsonb)||jsonb_build_object(
+        'auto_resolved',true,
+        'resolution_source','MEETING_TIME_PASSED',
+        'resolution_at',now(),
+        'next_present_at',null
+      )
+  where acknowledged_at is null
+    and alert_type in ('ONBOARDING_MEETING_SCHEDULED_INFO','ONBOARDING_MEETING_DAY_REMINDER','ONBOARDING_MEETING_60M_REMINDER')
+    and nullif(metadata->>'scheduled_for','') is not null
+    and (metadata->>'scheduled_for')::timestamptz <= now();
+
+  -- If a meeting was detected/scheduled automatically, remove the older scheduling prompt.
+  update agency_ops.onboarding_required_alerts a
+  set acknowledged_at=coalesce(a.acknowledged_at,now()),
+      acknowledged_by_user_key=coalesce(a.acknowledged_by_user_key,'AUTO:MEETING_ALREADY_SCHEDULED'),
+      metadata=coalesce(a.metadata,'{}'::jsonb)||jsonb_build_object(
+        'auto_resolved',true,
+        'resolution_source','MEETING_ALREADY_SCHEDULED',
+        'resolution_at',now(),
+        'next_present_at',null
+      )
+  where a.acknowledged_at is null
+    and a.alert_type='ONBOARDING_MEETING_HANDOFF'
+    and exists(
+      select 1
+      from agency_ops.onboarding_stages s
+      where s.case_id=a.onboarding_case_id
+        and s.stage_code=a.metadata->>'target_stage'
+        and (s.status in ('SCHEDULED','IN_PROGRESS','DONE','SKIPPED') or s.due_at is not null)
+    );
 
   perform agency_ops.run_onboarding_notification_engine();
   perform set_config('agency_ops.onboarding_internal_update',v_previous_internal,true);
