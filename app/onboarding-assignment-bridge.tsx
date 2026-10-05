@@ -6,7 +6,7 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from "./shared";
 import type { Row } from "./shared";
 
 const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-onboarding-api`;
-const RECOMMENDATION_API = `${SUPABASE_URL}/functions/v1/agency-ops-gt-recommendation-api`;
+const RECOMMENDATION_API = `${SUPABASE_URL}/functions/v1/agency-ops-gt-recommendation-api`;\nconst ADLER_USER_ID = "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
 
 function shortName(name: unknown) {
   const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
@@ -51,7 +51,7 @@ export default function OnboardingAssignmentBridge() {
   }, []);
 
   const load = useCallback(async () => {
-    if (!token) { setItems([]); return; }
+    if (!token) { setItems([]); setProfilePerson(""); return; }
     try {
       const response = await fetch(API_URL, {
         headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY },
@@ -104,6 +104,22 @@ export default function OnboardingAssignmentBridge() {
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, []);
+
+  const isAdler = sessionUserId === ADLER_USER_ID || profilePerson === "Adler Furtado";
+
+  useEffect(() => {
+    if (!isAdler) { setExplicitRequestId(""); return; }
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ requestId?: string }>).detail;
+      const requestId = String(detail?.requestId || "").trim();
+      if (!requestId) return;
+      setHiddenToastId("");
+      setExplicitRequestId(requestId);
+      void load();
+    };
+    window.addEventListener("open-onboarding-gt-assignment", handler as EventListener);
+    return () => window.removeEventListener("open-onboarding-gt-assignment", handler as EventListener);
+  }, [isAdler, load]);
 
   async function assign(item: Row, gtOwner: string) {
     const requestId = String(item.metadata?.request_id || "");
@@ -163,18 +179,18 @@ export default function OnboardingAssignmentBridge() {
   if (!token || !items.length) return null;
 
   return <>
-    {panelTarget && createPortal(<div style={{ display: "grid", gap: 9, marginBottom: 10 }}><div style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".12em", color: "#6ea9df" }}>ONBOARDING · AÇÃO NECESSÁRIA</div>{cards}{error && <div style={{ color: "#fca5a5", fontSize: 11 }}>{error}</div>}</div>, panelTarget)}
-    {toastVisible && !onOnboardingPage && <aside style={{ position: "fixed", zIndex: 10050, right: 22, top: 92, width: "min(560px, calc(100vw - 44px))", maxHeight: "calc(100vh - 116px)", overflow: "auto", border: "1px solid #244767", background: "rgba(4,17,29,.98)", color: "#eff7ff", borderRadius: 14, padding: 14, boxShadow: "0 22px 70px rgba(0,0,0,.48)" }}>
-      <button aria-label="Fechar por agora" onClick={() => setHiddenToastId(String(first.id))} style={{ position: "absolute", right: 10, top: 8, border: 0, background: "transparent", color: "#8ba8c3", fontSize: 18, cursor: "pointer" }}>×</button>
+    {panelTarget && !isAdler && createPortal(<div style={{ display: "grid", gap: 9, marginBottom: 10 }}><div style={{ fontSize: 10, fontWeight: 800, letterSpacing: ".12em", color: "#6ea9df" }}>ONBOARDING · AÇÃO NECESSÁRIA</div>{cards}{error && <div style={{ color: "#fca5a5", fontSize: 11 }}>{error}</div>}</div>, panelTarget)}
+    {toastVisible && (!onOnboardingPage || isAdler) && displayItem && <aside style={{ position: "fixed", zIndex: 10050, right: 22, top: 92, width: "min(560px, calc(100vw - 44px))", maxHeight: "calc(100vh - 116px)", overflow: "auto", border: "1px solid #244767", background: "rgba(4,17,29,.98)", color: "#eff7ff", borderRadius: 14, padding: 14, boxShadow: "0 22px 70px rgba(0,0,0,.48)" }}>
+      <button aria-label="Fechar por agora" onClick={() => { if (isAdler) setExplicitRequestId(""); else setHiddenToastId(String(displayItem.id)); }} style={{ position: "absolute", right: 10, top: 8, border: 0, background: "transparent", color: "#8ba8c3", fontSize: 18, cursor: "pointer" }}>×</button>
       <div style={{ color: "#65aef2", fontSize: 10, fontWeight: 800, letterSpacing: ".12em", marginBottom: 6 }}>ONBOARDING · SELECIONE O GT</div>
-      <b style={{ display: "block", fontSize: 14, paddingRight: 24 }}>{String(first.client_display_name || first.title)}</b>
-      <p style={{ margin: "5px 0 11px", color: "#a9bed5", fontSize: 12, lineHeight: 1.45 }}>{String(first.description || "Selecione o gestor de tráfego responsável.")}</p>
-      <RecommendationBox recommendation={recommendations[firstRequestId]} />
+      <b style={{ display: "block", fontSize: 14, paddingRight: 24 }}>{String(displayItem.client_display_name || displayItem.title)}</b>
+      <p style={{ margin: "5px 0 11px", color: "#a9bed5", fontSize: 12, lineHeight: 1.45 }}>{String(displayItem.description || "Selecione o gestor de tráfego responsável.")}</p>
+      <RecommendationBox recommendation={recommendations[displayRequestId]} />
       <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginTop: 10 }}>
-        {(Array.isArray(first.metadata?.gt_options) ? first.metadata.gt_options : []).map((option: Row) => {
-          const key = `${firstRequestId}:${String(option.person)}`;
-          const recommended = recommendations[firstRequestId]?.recommended_gt === option.person;
-          return <button key={String(option.person)} disabled={Boolean(busy)} onClick={() => assign(first, String(option.person))} style={{ border: `1px solid ${recommended ? "#4bc486" : "#2f5d86"}`, background: recommended ? "#123a2c" : "#0d2941", color: "#e7f3ff", borderRadius: 8, padding: "8px 10px", cursor: busy ? "wait" : "pointer", fontSize: 11.5, fontWeight: 700 }}>
+        {(Array.isArray(displayItem.metadata?.gt_options) ? displayItem.metadata.gt_options : []).map((option: Row) => {
+          const key = `${displayRequestId}:${String(option.person)}`;
+          const recommended = recommendations[displayRequestId]?.recommended_gt === option.person;
+          return <button key={String(option.person)} disabled={Boolean(busy)} onClick={() => assign(displayItem, String(option.person))} style={{ border: `1px solid ${recommended ? "#4bc486" : "#2f5d86"}`, background: recommended ? "#123a2c" : "#0d2941", color: "#e7f3ff", borderRadius: 8, padding: "8px 10px", cursor: busy ? "wait" : "pointer", fontSize: 11.5, fontWeight: 700 }}>
             {busy === key ? "Atribuindo…" : `${recommended ? "★ " : ""}${shortName(option.person)}`}{option.carteira ? ` · ${option.carteira}` : ""}
           </button>;
         })}

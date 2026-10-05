@@ -5,13 +5,14 @@
   "type": "module",
   "scripts": {
     "dev": "vinext dev",
-    "build": "node scripts/check-home-overview-policy.mjs && node scripts/check-relato-call-policy.mjs && vinext build && node -e \"const f=require('fs');f.mkdirSync('dist/.openai',{recursive:true});f.copyFileSync('.openai/hosting.json','dist/.openai/hosting.json')\"",
+    "build": "node scripts/check-home-overview-policy.mjs && node scripts/check-adler-warning-policy.mjs && node scripts/check-relato-call-policy.mjs && vinext build && node -e \"const f=require('fs');f.mkdirSync('dist/.openai',{recursive:true});f.copyFileSync('.openai/hosting.json','dist/.openai/hosting.json')\"",
     "start": "vinext start",
     "typecheck": "tsc --noEmit",
     "test:capacity": "node --test shared/capacity/capacity.test.ts",
     "test:jarvis": "node --test worker/jarvis/guards.test.ts",
     "test:home-policy": "node scripts/check-home-overview-policy.mjs",
-    "test:relato-policy": "node scripts/check-relato-call-policy.mjs"
+    "test:relato-policy": "node scripts/check-relato-call-policy.mjs",
+    "test:adler-warning-policy": "node scripts/check-adler-warning-policy.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",

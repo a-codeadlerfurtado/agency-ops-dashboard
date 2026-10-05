@@ -309,6 +309,13 @@ export default function NotificationDetailBridge() {
         return;
       }
 
+      const onboardingGtRequestId = String(item.metadata?.onboarding_gt_assignment_request_id || "").trim();
+      if (String(item.type || "") === "ONBOARDING_GT_ASSIGNMENT_REQUIRED" && onboardingGtRequestId) {
+        setSelected(null);
+        window.dispatchEvent(new CustomEvent("open-onboarding-gt-assignment", { detail: { requestId: onboardingGtRequestId, notificationId: item.id } }));
+        return;
+      }
+
       setSelected({ ...item });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Não foi possível carregar o contexto desta notificação.");
