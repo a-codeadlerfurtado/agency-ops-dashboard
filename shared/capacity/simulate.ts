@@ -31,7 +31,11 @@ export type ImpactoResponsavel = {
 
 export type ResultadoCrescimento = {
   clientesLiquidos: number;
+  cargaAntesPontos: number;
   cargaAdicionalPontos: number;
+  cargaDepoisPontos: number;
+  /** Carga positiva que ainda nao pode ser roteada por GT porque falta capacidade calibrada. */
+  cargaNaoDistribuidaPontos: number;
   utilizacaoAntesPct: number | null;
   utilizacaoDepoisPct: number | null;
   faixaDepois: Faixa | "NAO_CALIBRADO";
@@ -83,9 +87,11 @@ export function simularCrescimento(
   const cargaMedia = numero(cenario?.cargaMediaNovoCliente) || 1;
   const cargaAdicional = arredondar(liquidos * cargaMedia);
 
-  const cargaAtual = ativos.reduce((total, c) => total + c.cargaPontos, 0);
-  const capacidade = ativos.reduce((total, c) => total + c.capacidadePontos, 0);
+  const cargaAtual = arredondar(ativos.reduce((total, c) => total + c.cargaPontos, 0));
+  const capacidade = arredondar(ativos.reduce((total, c) => total + c.capacidadePontos, 0));
   const distribuicao = distribuirPorFolga(ativos, Math.max(0, cargaAdicional));
+  const cargaDistribuida = arredondar([...distribuicao.values()].reduce((total, valor) => total + valor, 0));
+  const cargaNaoDistribuida = cargaAdicional > 0 ? arredondar(Math.max(0, cargaAdicional - cargaDistribuida)) : 0;
 
   // Churn liquido negativo alivia a operacao inteira proporcionalmente: nao da'
   // para saber de quem sera' o cliente que sai.
@@ -110,8 +116,11 @@ export function simularCrescimento(
 
   return {
     clientesLiquidos: liquidos,
+    cargaAntesPontos: cargaAtual,
     cargaAdicionalPontos: cargaAdicional,
-    utilizacaoAntesPct: utilizacao(arredondar(cargaAtual), capacidade),
+    cargaDepoisPontos: cargaDepois,
+    cargaNaoDistribuidaPontos: cargaNaoDistribuida,
+    utilizacaoAntesPct: utilizacao(cargaAtual, capacidade),
     utilizacaoDepoisPct: utilDepois,
     faixaDepois: faixaDe(utilDepois, config),
     responsaveisAcimaDoLimite: impactos.filter(
@@ -121,7 +130,9 @@ export function simularCrescimento(
     premissas: [
       `${cenario?.novosClientes ?? 0} entradas e ${cenario?.churnPrevisto ?? 0} saidas em ${cenario?.periodoDias ?? 30} dias`,
       `carga media de ${cargaMedia.toFixed(2)} ponto por cliente novo`,
-      "novos clientes distribuidos para quem tem maior folga a cada passo",
+      cargaNaoDistribuida > 0
+        ? "carga total projetada calculada; distribuicao por GT aguarda calibracao da capacidade"
+        : "novos clientes distribuidos para quem tem maior folga a cada passo",
     ],
   };
 }
