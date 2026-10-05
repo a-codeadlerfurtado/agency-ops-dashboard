@@ -6,7 +6,8 @@ import { SUPABASE_ANON_KEY, SUPABASE_URL, supabase } from "./shared";
 import type { Row } from "./shared";
 
 const API_URL = `${SUPABASE_URL}/functions/v1/agency-ops-onboarding-api`;
-const RECOMMENDATION_API = `${SUPABASE_URL}/functions/v1/agency-ops-gt-recommendation-api`;\nconst ADLER_USER_ID = "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
+const RECOMMENDATION_API = `${SUPABASE_URL}/functions/v1/agency-ops-gt-recommendation-api`;
+const ADLER_USER_ID = "794f4cd0-0279-4ad8-9cf9-a1e2c1bc4476";
 
 function shortName(name: unknown) {
   const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
@@ -37,6 +38,9 @@ function RecommendationBox({ recommendation }: { recommendation?: Row | null }) 
 
 export default function OnboardingAssignmentBridge() {
   const [token, setToken] = useState("");
+  const [sessionUserId, setSessionUserId] = useState("");
+  const [profilePerson, setProfilePerson] = useState("");
+  const [explicitRequestId, setExplicitRequestId] = useState("");
   const [items, setItems] = useState<Row[]>([]);
   const [recommendations, setRecommendations] = useState<Record<string, Row>>({});
   const [panelTarget, setPanelTarget] = useState<Element | null>(null);
@@ -45,8 +49,19 @@ export default function OnboardingAssignmentBridge() {
   const [hiddenToastId, setHiddenToastId] = useState("");
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setToken(data.session?.access_token || ""));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => setToken(session?.access_token || ""));
+    supabase.auth.getSession().then(({ data }) => {
+      setToken(data.session?.access_token || "");
+      setSessionUserId(data.session?.user?.id || "");
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setToken(session?.access_token || "");
+      setSessionUserId(session?.user?.id || "");
+      if (!session) {
+        setProfilePerson("");
+        setExplicitRequestId("");
+        setItems([]);
+      }
+    });
     return () => subscription.unsubscribe();
   }, []);
 
@@ -60,6 +75,7 @@ export default function OnboardingAssignmentBridge() {
       if (!response.ok) { setItems([]); return; }
       const body = await response.json();
       setItems(Array.isArray(body.assignment_notifications) ? body.assignment_notifications : []);
+      setProfilePerson(String(body?.profile?.person || ""));
       setError("");
     } catch {
       // A ponte de notificação nunca derruba o dashboard principal.
@@ -139,6 +155,7 @@ export default function OnboardingAssignmentBridge() {
       const body = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(body.detail || body.error || "Não foi possível atribuir o GT.");
       setHiddenToastId("");
+      setExplicitRequestId("");
       await load();
       const updateButton = Array.from(document.querySelectorAll("button")).find((button) => (button.textContent || "").trim() === "Atualizar") as HTMLButtonElement | undefined;
       updateButton?.click();
@@ -149,9 +166,11 @@ export default function OnboardingAssignmentBridge() {
     } finally { setBusy(""); }
   }
 
-  const first = items[0];
-  const firstRequestId = String(first?.metadata?.request_id || "");
-  const toastVisible = Boolean(first && hiddenToastId !== String(first.id));
+  const displayItem = isAdler
+    ? (explicitRequestId ? items.find((item) => String(item.metadata?.request_id || "") === explicitRequestId) || null : null)
+    : (items[0] || null);
+  const displayRequestId = String(displayItem?.metadata?.request_id || "");
+  const toastVisible = Boolean(displayItem && hiddenToastId !== String(displayItem.id));
   const onOnboardingPage = typeof window !== "undefined" && window.location.pathname === "/onboarding";
 
   const cards = useMemo(() => items.map((item) => {
