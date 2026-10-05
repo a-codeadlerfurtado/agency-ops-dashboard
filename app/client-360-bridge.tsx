@@ -32,6 +32,65 @@ async function authedFetch(url: string, init?: RequestInit) {
 function Badge({ children, tone = "" }: { children: React.ReactNode; tone?: string }) { return <span className={`c360-badge ${tone}`}>{children}</span>; }
 function Metric({ label, value, note }: { label: string; value: React.ReactNode; note?: React.ReactNode }) { return <div className="c360-metric"><span>{label}</span><strong>{value}</strong>{note ? <small>{note}</small> : null}</div>; }
 function List({ rows, render }: { rows: Row[]; render: (r: Row, i: number) => React.ReactNode }) { return rows.length ? <div className="c360-list">{rows.map(render)}</div> : <div className="c360-empty">Nenhum registro nesta fonte.</div>; }
+const percent = (v: unknown) => v == null || !Number.isFinite(Number(v)) ? "—" : `${Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
+
+function FunnelPanel({ funnel, days, onDaysChange }: { funnel: Row; days: number; onDaysChange: (n: number) => void }) {
+  const totals = funnel?.totals || {};
+  const conv = funnel?.conversions || {};
+  const coverage = funnel?.coverage || {};
+  const audit = funnel?.whatsapp_audit?.summary || {};
+  const brokers: Row[] = funnel?.brokers || [];
+  const connections: Row[] = funnel?.connections || [];
+  const hasData = Number(totals.leads_with_events || 0) > 0;
+  const stageMetrics = [
+    ["Leads no CRM", totals.new_leads, "entradas identificadas"],
+    ["Contatados", totals.contacted, "lead atendido"],
+    ["Visitas marcadas", totals.visits_scheduled, "agendamentos"],
+    ["Visitas realizadas", totals.visits_completed, "comparecimentos"],
+    ["Propostas", totals.proposals, "propostas registradas"],
+    ["Vendas", totals.won, "ganhos no CRM"],
+  ];
+  return <section className="c360-funnel">
+    <div className="c360-funnel-head">
+      <div><span className="c360-kicker">FUNIL COMERCIAL</span><h3>Performance do cliente</h3><p>CRM como fonte principal, com o grupo comercial usado para auditoria e confirmação.</p></div>
+      <div className="c360-periods">{[7, 30, 60, 90].map((n) => <button key={n} className={days === n ? "active" : ""} onClick={() => onDaysChange(n)}>{n}d</button>)}</div>
+    </div>
+    <div className={`c360-coverage ${String(coverage.state || "NONE").toLowerCase()}`}>
+      <Badge tone={coverage.state === "FULL" ? "ok" : coverage.state === "PARTIAL" ? "warn" : "bad"}>{coverage.state === "FULL" ? "COBERTURA COMPLETA" : coverage.state === "PARTIAL" ? "COBERTURA PARCIAL" : "SEM COBERTURA CRM"}</Badge>
+      <span>{coverage.note || "Sem informação de cobertura."}</span>
+    </div>
+    <div className="c360-funnel-metrics">{stageMetrics.map(([label, value, note]) => <Metric key={String(label)} label={String(label)} value={hasData ? fmt(value) : "—"} note={String(note)} />)}</div>
+    <div className="c360-conversions">
+      <div><span>Lead → contato</span><b>{percent(conv.lead_to_contact)}</b></div>
+      <div><span>Lead → visita marcada</span><b>{percent(conv.lead_to_visit_scheduled)}</b></div>
+      <div><span>Visita marcada → realizada</span><b>{percent(conv.visit_show_rate)}</b></div>
+      <div><span>Visita → proposta</span><b>{percent(conv.visit_to_proposal)}</b></div>
+      <div><span>Proposta → venda</span><b>{percent(conv.proposal_to_sale)}</b></div>
+      <div><span>Lead → venda</span><b>{percent(conv.lead_to_sale)}</b></div>
+    </div>
+    <div className="c360-funnel-grid">
+      <div className="c360-funnel-card">
+        <div className="c360-funnel-card-head"><b>Por corretor</b><small>{brokers.length} identificados</small></div>
+        {brokers.length ? <div className="c360-broker-table">
+          <div className="head"><span>Corretor</span><span>Leads</span><span>V. marc.</span><span>V. real.</span><span>Prop.</span><span>Vendas</span></div>
+          {brokers.slice(0, 15).map((r) => <div key={String(r.broker_name)}><span title={String(r.broker_name)}>{fmt(r.broker_name)}</span><span>{fmt(r.new_leads)}</span><span>{fmt(r.visits_scheduled)}</span><span>{fmt(r.visits_completed)}</span><span>{fmt(r.proposals)}</span><span>{fmt(r.won)}</span></div>)}
+        </div> : <div className="c360-empty">Nenhum corretor identificado nesta fonte/período.</div>}
+      </div>
+      <div className="c360-funnel-card">
+        <div className="c360-funnel-card-head"><b>CRM × grupo comercial</b><small>auditoria do período</small></div>
+        <div className="c360-audit-grid">
+          <div><span>Dias CRM atrás do reportado</span><b>{Number(audit.crm_behind_days || 0)}</b></div>
+          <div><span>Dias sem fonte CRM</span><b>{Number(audit.crm_source_missing_days || 0)}</b></div>
+          <div><span>Dias sem reporte no grupo</span><b>{Number(audit.whatsapp_report_missing_days || 0)}</b></div>
+          <div><span>Gap de visitas realizadas</span><b>{Number(audit.visits_completed_gap || 0)}</b></div>
+          <div><span>Gap de propostas</span><b>{Number(audit.proposals_gap || 0)}</b></div>
+          <div><span>Gap de vendas</span><b>{Number(audit.sales_gap || 0)}</b></div>
+        </div>
+        <div className="c360-connection-list">{connections.map((r) => <div key={String(r.provider)}><span><b>{fmt(r.provider)}</b><small>{fmt(r.scope || "funil")}</small></span><Badge tone={r.status === "ACTIVE" ? "ok" : r.status === "READY" ? "warn" : "bad"}>{fmt(r.status)}</Badge></div>)}</div>
+      </div>
+    </div>
+  </section>;
+}
 
 function SafeMetaActions({ clientId, campaigns, onDone }: { clientId: string; campaigns: Row[]; onDone: () => void }) {
   const [cap, setCap] = useState<Row | null>(null);
@@ -96,11 +155,12 @@ function Panel({ clientName }: { clientName: string }) {
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState("");
   const [reload, setReload] = useState(0);
+  const [days, setDays] = useState(30);
   useEffect(() => {
     let active = true; setError("");
-    authedFetch(`${API_360}?name=${encodeURIComponent(clientName)}`).then((p) => { if (active) setData(p); }).catch((e) => { if (active) setError(e.message); });
+    authedFetch(`${API_360}?name=${encodeURIComponent(clientName)}&days=${days}`).then((p) => { if (active) setData(p); }).catch((e) => { if (active) setError(e.message); });
     return () => { active = false; };
-  }, [clientName, reload]);
+  }, [clientName, reload, days]);
   if (error) return <section className="c360-shell"><div className="c360-error">Cliente 360 indisponível: {error}</div></section>;
   if (!data) return <section className="c360-shell"><div className="c360-empty">Montando Cliente 360…</div></section>;
 
@@ -119,6 +179,8 @@ function Panel({ clientName }: { clientName: string }) {
       <Metric label="Pendências visíveis" value={pending} note={`${data.commitments?.length || 0} compromissos · ${data.clickup_tasks?.length || 0} ClickUp`} />
     </div>
     <div className="c360-now"><div><span>AGORA</span><b>{op.current_subject || op.summary_today || health.external_summary || "Sem assunto operacional consolidado."}</b></div><div><span>PRÓXIMO PASSO</span><b>{op.next_step || health.external_recommended_action || "Sem próximo passo consolidado."}</b><small>{op.action_owner ? `Responsável: ${op.action_owner}` : ""}{op.next_step_due ? ` · até ${shortDate(op.next_step_due)}` : ""}</small></div></div>
+
+    <FunnelPanel funnel={data.crm_funnel || {}} days={days} onDaysChange={setDays} />
 
     <div className="c360-details-grid">
       <details open><summary>Pendências e execução <Badge>{pending}</Badge></summary><div className="c360-detail-body">

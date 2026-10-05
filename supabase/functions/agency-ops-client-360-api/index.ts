@@ -13,6 +13,13 @@ const CORS_BASE = {
 };
 type Row = Record<string, any>;
 const clamp = (n: number) => Math.max(0, Math.min(100, Math.round(n)));
+const pct = (num: unknown, den: unknown) => {
+  const n = Number(num || 0), d = Number(den || 0);
+  return d > 0 ? Math.round((n / d) * 1000) / 10 : null;
+};
+const saoPauloDate = () => new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/Sao_Paulo", year: "numeric", month: "2-digit", day: "2-digit",
+}).format(new Date());
 function recencyScore(value: unknown, goodHours: number, staleHours: number) {
   if (!value) return { score: 0, state: "MISSING", last_at: null };
   const d = new Date(String(value));
@@ -66,6 +73,12 @@ Deno.serve(async (req: Request) => {
   const url = new URL(req.url);
   const clientId = String(url.searchParams.get("client_id") || "").trim();
   const name = String(url.searchParams.get("name") || "").trim();
+  const requestedDays = Number(url.searchParams.get("days") || 30);
+  const periodDays = Number.isFinite(requestedDays) ? Math.max(7, Math.min(90, Math.round(requestedDays))) : 30;
+  const dateTo = saoPauloDate();
+  const dateFromDate = new Date(dateTo + "T12:00:00Z");
+  dateFromDate.setUTCDate(dateFromDate.getUTCDate() - (periodDays - 1));
+  const dateFrom = dateFromDate.toISOString().slice(0, 10);
   if (!clientId && !name) return reply({ error: "missing_client" }, 400);
 
   let client: Row | null = null;
@@ -83,7 +96,7 @@ Deno.serve(async (req: Request) => {
   if (role === "GT" && !elevated && String(client.gt_owner || "") !== person) return reply({ error: "forbidden" }, 403);
 
   const cid = client.id;
-  const [healthQ, snapshotQ, metaQ, integrationsQ, workQ, clickupQ, clickupRecentQ, commitmentsQ, adjustmentsQ, meetingsQ, reportsQ, notesQ, campaignsQ, whatsappQ] = await Promise.all([
+  const [healthQ, snapshotQ, metaQ, integrationsQ, workQ, clickupQ, clickupRecentQ, commitmentsQ, adjustmentsQ, meetingsQ, reportsQ, notesQ, campaignsQ, whatsappQ, crmConnectionsQ, crmSummaryQ, crmDailyQ, crmGapQ] = await Promise.all([
     ops.from("client_health_board").select("priority,internal_score,internal_band,internal_date,external_health_status,external_health_score,external_risk_level,external_satisfaction_avg,external_risk_avg,external_summary,external_recommended_action,external_source_updated_at,sentimento,sinais_alerta,sinais_positivos,reclamacoes,crosscheck_status").eq("client_id", cid).maybeSingle(),
     ops.from("client_operational_snapshot").select("priority,waiting_direction,summary_today,current_subject,action_owner,next_step,next_step_due,open_commitments,overdue_commitments,open_complaints,pending_approvals,blockers,data_coverage,confidence,last_activity_at,snapshot_at,updated_at").eq("client_id", cid).maybeSingle(),
     ops.from("campaign_client_latest").select("configured_accounts,configured_account_names,latest_date,checked_at,insight_accounts,campaign_count,active_campaigns,paused_campaigns,spend,impressions,clicks,results,leads,result_types,ctr,cpc,cpm,cost_per_result,age_days,delivery_status").eq("client_id", cid).maybeSingle(),
@@ -98,9 +111,13 @@ Deno.serve(async (req: Request) => {
     ops.from("client_notes").select("id,title,body,note_type,importance,is_pinned,created_by_person,created_at,updated_at").eq("client_id", cid).is("archived_at", null).or("sensitivity.is.null,sensitivity.eq.NORMAL").order("is_pinned", { ascending: false }).order("created_at", { ascending: false }).limit(8),
     ops.from("meta_campaign_inventory").select("meta_ad_account_id,campaign_id,campaign_name,campaign_status,objective,checked_at").eq("client_id", cid).order("checked_at", { ascending: false }).limit(80),
     ops.from("whatsapp_chat_registry").select("chat_id,chat_name,scope,confidence,last_seen_at,message_count,updated_at").eq("client_id", cid).order("last_seen_at", { ascending: false }).limit(5),
+    ops.from("external_crm_connections").select("provider,display_name,status,created_at,last_event_at,last_sync_at,last_error,config").eq("client_id", cid).order("updated_at", { ascending: false }).limit(20),
+    ops.rpc("get_client_crm_funnel_summary", { p_client_id: cid, p_date_from: dateFrom, p_date_to: dateTo }),
+    ops.from("external_crm_funnel_daily").select("report_date,new_leads,contacted,qualified,visits_scheduled,visits_completed,proposals,won,lost,leads_with_events,last_event_received_at").eq("client_id", cid).gte("report_date", dateFrom).lte("report_date", dateTo).order("report_date", { ascending: true }),
+    ops.from("crm_whatsapp_daily_gap_audit").select("report_date,audit_status,crm_leads_with_events,crm_visits_scheduled,crm_visits_completed,crm_proposals,crm_won,whatsapp_brokers_reporting,whatsapp_visits_scheduled,whatsapp_visits_completed,whatsapp_proposals,whatsapp_sales,visits_scheduled_gap,visits_completed_gap,proposals_gap,sales_gap,last_source_activity_at").eq("client_id", cid).gte("report_date", dateFrom).lte("report_date", dateTo).order("report_date", { ascending: false }).limit(120),
   ]);
 
-  const failed = [healthQ, snapshotQ, metaQ, integrationsQ, workQ, clickupQ, clickupRecentQ, commitmentsQ, adjustmentsQ, meetingsQ, reportsQ, notesQ, campaignsQ, whatsappQ].find((q: any) => q.error);
+  const failed = [healthQ, snapshotQ, metaQ, integrationsQ, workQ, clickupQ, clickupRecentQ, commitmentsQ, adjustmentsQ, meetingsQ, reportsQ, notesQ, campaignsQ, whatsappQ, crmConnectionsQ, crmSummaryQ, crmDailyQ, crmGapQ].find((q: any) => q.error);
   if (failed?.error) return reply({ error: "query_failed", detail: failed.error.message }, 500);
 
   const health = healthQ.data || null;
@@ -121,6 +138,83 @@ Deno.serve(async (req: Request) => {
   else sourceScores.push({ source: "Meta", score: null, state: "NA", last_at: meta?.checked_at || null });
   sourceScores.push({ source: "ClickUp", ...recencyScore(clickupLast, 24, 72) });
   sourceScores.push({ source: "WhatsApp", ...recencyScore(waLast, 24, 72) });
+
+  const crmConnections = (crmConnectionsQ.data || []) as Row[];
+  const crmSummary = (crmSummaryQ.data || {}) as Row;
+  const crmTotals = (crmSummary.totals || {}) as Row;
+  const connectionViews = crmConnections.map((r: Row) => {
+    const cfg = (r.config || {}) as Row;
+    return {
+      provider: r.provider,
+      display_name: r.display_name,
+      status: r.status,
+      created_at: r.created_at,
+      last_event_at: r.last_event_at,
+      last_sync_at: r.last_sync_at,
+      last_error: r.last_error,
+      scope: cfg.canonical_scope || (cfg.lead_ingestion_active ? "LEADS_ONLY" : null),
+      blocker: cfg.remaining_blocker || cfg.blocker || null,
+      historical_backfill_complete: cfg.historical_backfill_complete === true,
+    };
+  });
+  const connectionDates = connectionViews
+    .map((r: Row) => r.created_at ? String(r.created_at).slice(0, 10) : "")
+    .filter(Boolean)
+    .sort();
+  const firstConnectionDate = connectionDates[0] || null;
+  const fullHistory = connectionViews.length > 0 && connectionViews.every((r: Row) =>
+    r.historical_backfill_complete === true || !r.created_at || dateFrom >= String(r.created_at).slice(0, 10)
+  );
+  const hasFullFunnelScope = connectionViews.some((r: Row) =>
+    !r.scope || !["NEW_ONLY", "NEW_PLUS_BROKER", "LEADS_ONLY"].includes(String(r.scope).toUpperCase())
+  );
+  const coverageState = !connectionViews.length && Number(crmTotals.leads_with_events || 0) === 0
+    ? "NONE"
+    : fullHistory && hasFullFunnelScope ? "FULL" : "PARTIAL";
+  const coverageNote = coverageState === "FULL"
+    ? "Cobertura integral do período solicitado pelas fontes conectadas."
+    : coverageState === "NONE"
+      ? "Nenhuma fonte CRM com eventos comerciais disponível neste período."
+      : firstConnectionDate && dateFrom < firstConnectionDate
+        ? "Integração disponível desde " + firstConnectionDate + "; o período anterior não foi backfillado. Zeros anteriores não significam ausência de atividade."
+        : "A fonte atual não entrega todas as etapas do funil. Zeros em etapas sem cobertura não devem ser lidos como ausência de atividade.";
+
+  const crmLast = latestDate(...connectionViews.map((r: Row) => r.last_event_at || r.last_sync_at), crmTotals.last_event_received_at);
+  if (connectionViews.length || Number(crmTotals.leads_with_events || 0) > 0) {
+    sourceScores.push({ source: "CRM/Funil", ...recencyScore(crmLast, 24, 72) });
+  } else sourceScores.push({ source: "CRM/Funil", score: null, state: "NA", last_at: null });
+
+  const gapRows = (crmGapQ.data || []) as Row[];
+  const gapSummary = {
+    crm_behind_days: gapRows.filter((r: Row) => r.audit_status === "CRM_BEHIND_REPORTED").length,
+    crm_source_missing_days: gapRows.filter((r: Row) => r.audit_status === "CRM_SOURCE_MISSING").length,
+    whatsapp_report_missing_days: gapRows.filter((r: Row) => r.audit_status === "WHATSAPP_REPORT_MISSING").length,
+    visits_scheduled_gap: gapRows.reduce((a: number, r: Row) => a + Number(r.visits_scheduled_gap || 0), 0),
+    visits_completed_gap: gapRows.reduce((a: number, r: Row) => a + Number(r.visits_completed_gap || 0), 0),
+    proposals_gap: gapRows.reduce((a: number, r: Row) => a + Number(r.proposals_gap || 0), 0),
+    sales_gap: gapRows.reduce((a: number, r: Row) => a + Number(r.sales_gap || 0), 0),
+  };
+  const funnel = {
+    period_days: periodDays,
+    date_from: dateFrom,
+    date_to: dateTo,
+    totals: crmTotals,
+    conversions: {
+      lead_to_contact: pct(crmTotals.contacted, crmTotals.new_leads),
+      lead_to_visit_scheduled: pct(crmTotals.visits_scheduled, crmTotals.new_leads),
+      visit_show_rate: pct(crmTotals.visits_completed, crmTotals.visits_scheduled),
+      visit_to_proposal: pct(crmTotals.proposals, crmTotals.visits_completed),
+      proposal_to_sale: pct(crmTotals.won, crmTotals.proposals),
+      lead_to_sale: pct(crmTotals.won, crmTotals.new_leads),
+    },
+    brokers: crmSummary.brokers || [],
+    providers: crmSummary.providers || [],
+    connections: connectionViews,
+    daily: crmDailyQ.data || [],
+    whatsapp_audit: { summary: gapSummary, rows: gapRows.slice(0, 30) },
+    coverage: { state: coverageState, note: coverageNote, first_connection_date: firstConnectionDate },
+  };
+
   const applicable = sourceScores.filter((s) => typeof s.score === "number");
   const overall = applicable.length ? clamp(applicable.reduce((a, s) => a + Number(s.score), 0) / applicable.length) : 0;
 
@@ -141,6 +235,7 @@ Deno.serve(async (req: Request) => {
     notes: notesQ.data || [],
     campaigns: campaignsQ.data || [],
     whatsapp: whatsappQ.data || [],
+    crm_funnel: funnel,
     data_confidence: { overall, sources: sourceScores },
     permissions: { safe_meta_actions: ["GT", "MGMT"].includes(role), all_clients: role === "MGMT" || elevated },
     generated_at: new Date().toISOString(),
