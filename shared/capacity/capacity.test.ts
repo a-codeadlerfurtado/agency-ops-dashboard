@@ -299,6 +299,23 @@ test("simular +20 clientes eleva a utilizacao e conta quem estoura", () => {
   assert.ok(resultado.premissas.length > 0);
 });
 
+test("crescimento sem capacidade calibrada ainda calcula carga total", () => {
+  const { cargas } = agregarPorResponsavel(
+    [
+      { clientId: "a", nome: "x", gtOwner: "A", lifecycle: "ACTIVE", score: 10, origem: "AUTOMATICO", intensidade: 0, componentes: [] },
+      { clientId: "b", nome: "x", gtOwner: "B", lifecycle: "ACTIVE", score: 12, origem: "AUTOMATICO", intensidade: 0, componentes: [] },
+    ],
+    [{ pessoa: "A", papel: "GT", capacidadePontos: 0, ativo: true }, { pessoa: "B", papel: "GT", capacidadePontos: 0, ativo: true }],
+  );
+  const resultado = simularCrescimento(cargas, { novosClientes: 10, periodoDias: 60, churnPrevisto: 2, cargaMediaNovoCliente: 1.25 });
+  assert.equal(resultado.cargaAntesPontos, 22);
+  assert.equal(resultado.cargaAdicionalPontos, 10);
+  assert.equal(resultado.cargaDepoisPontos, 32);
+  assert.equal(resultado.cargaNaoDistribuidaPontos, 10);
+  assert.equal(resultado.utilizacaoAntesPct, null);
+  assert.equal(resultado.utilizacaoDepoisPct, null);
+});
+
 test("churn maior que vendas alivia em vez de estourar", () => {
   const { cargas } = agregarPorResponsavel(
     Array.from({ length: 10 }, (_, i) => ({ clientId: `c${i}`, nome: "x", gtOwner: "A", lifecycle: "ACTIVE" as const, score: 1, origem: "AUTOMATICO" as const, intensidade: 0, componentes: [] })),
