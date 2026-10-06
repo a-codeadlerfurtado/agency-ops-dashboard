@@ -26,6 +26,7 @@ const VideoScriptsCenter = lazy(() => import("./views/video-scripts").then((m) =
 const VideoAutomationCenter = lazy(() => import("./views/video-automation").then((m) => ({ default: m.VideoAutomationCenter })));
 const CommercialFollowupCenter = lazy(() => import("./views/commercial-followup").then((m) => ({ default: m.CommercialFollowupCenter })));
 const MATERIAL_TRIAGE_API = SUPABASE_URL + "/functions/v1/agency-ops-material-triage-api";
+const NOTIFICATIONS_HOME_API = SUPABASE_URL + "/functions/v1/agency-ops-notifications-home";
 
 function materialTriageAge(item: Row, now = Date.now()) {
   const raw = item.metadata?.received_at || item.created_at;
@@ -129,6 +130,7 @@ export default function Dashboard() {
   const [walletTransferClient, setWalletTransferClient] = useState<Row | null>(null);
   const [walletManagementAllowed, setWalletManagementAllowed] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notificationItems, setNotificationItems] = useState<Row[] | null>(null);
   const [workItemId, setWorkItemId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [toast, setToast] = useState<Row | null>(null);
@@ -136,6 +138,7 @@ export default function Dashboard() {
   const [win, setWin] = useState<Row | null>(null);
   const loadedRef = useRef(false);
   const loadInFlightRef = useRef(false);
+  const notificationLoadInFlightRef = useRef(false);
   const lastNotificationRef = useRef<string | null>(null);
   const preferencesRef = useRef<Row>({});
   const [materialTriage, setMaterialTriage] = useState<Row[]>([]);
@@ -281,12 +284,43 @@ export default function Dashboard() {
     }
   }, [playTone, session?.access_token]);
 
+  const loadNotificationCenter = useCallback(async () => {
+    if (!session?.access_token || notificationLoadInFlightRef.current) return;
+    notificationLoadInFlightRef.current = true;
+    try {
+      const response = await fetch(NOTIFICATIONS_HOME_API, {
+        headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },
+        cache: "no-store",
+        signal: AbortSignal.timeout(15_000),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok || !body?.ok) throw new Error(body?.error || `HTTP ${response.status}`);
+      setNotificationItems(Array.isArray(body.items) ? body.items : []);
+    } catch {
+      // O sino nunca derruba a Home: em falha transitória, preserva o último snapshot canônico.
+    } finally {
+      notificationLoadInFlightRef.current = false;
+    }
+  }, [session?.access_token]);
+
+  const closeNotifications = useCallback(() => setNotificationsOpen(false), []);
+
   useEffect(() => {
     if (!session?.access_token) return;
     load();
     const timer = window.setInterval(load, 120_000);
     return () => window.clearInterval(timer);
   }, [load, session?.access_token]);
+
+  useEffect(() => {
+    if (!session?.access_token) {
+      setNotificationItems(null);
+      return;
+    }
+    void loadNotificationCenter();
+    const timer = window.setInterval(() => { void loadNotificationCenter(); }, 60_000);
+    return () => window.clearInterval(timer);
+  }, [loadNotificationCenter, session?.access_token]);
 
   useEffect(() => {
     if (!toast) { setToastLeaving(false); return; }
@@ -516,7 +550,17 @@ export default function Dashboard() {
     });
     return [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
   }, [activeClients]);
-  const unread = (data?.notifications || []).filter((item) => !item.read_at).length;
+  // O sino usa a mesma fonte canônica da Central de Notificações.
+  // Enquanto a primeira leitura ainda não chegou, mantém o snapshot legado da Home
+  // para não deixar o usuário sem feedback em caso de rede lenta.
+  const notificationFeed = notificationItems ?? (data?.notifications || []);
+  const bellNotifications = useMemo(() => notificationFeed.filter((item) => {
+    const resolved = String(item.status || "").toUpperCase() === "RESOLVED";
+    if (resolved) return false;
+    if (item.kind === "ALERT") return true;
+    return !item.read_at;
+  }), [notificationFeed]);
+  const unread = bellNotifications.length;
   const filteredCampaigns = (data?.campaigns || []).filter((row) => campaignFilter === "ALL" || (campaignFilter === "ACTIVE" ? ["ACTIVE","ONBOARDING"].includes(row.lifecycle) : row.lifecycle === campaignFilter));
 
   if (!authReady) return <div className="auth-loading"><span className="dot loading"/> Validando sessão…</div>;
@@ -539,7 +583,7 @@ export default function Dashboard() {
           <span className={`dot ${loading ? "loading" : error ? "error" : ""}`} />
           <span role="status" aria-live="polite">{loading ? "Atualizando…" : error ? "Problema de sincronização" : "Sistemas sincronizados"}</span>
           <button className="command-trigger" onClick={() => setCommandOpen(true)}>⌕ Pesquisar <kbd>Ctrl K</kbd></button>
-          <button className="icon-btn" onClick={() => setNotificationsOpen(!notificationsOpen)} aria-label="Notificações">♢{unread > 0 && <b>{unread}</b>}</button>
+          <button className="icon-btn" onClick={() => { const next = !notificationsOpen; setNotificationsOpen(next); if (next) void loadNotificationCenter(); }} aria-label="Notificações">♢{unread > 0 && <b>{unread}</b>}</button>
           <button className="btn" onClick={load}>Atualizar</button>
           <button className="theme-btn" onClick={() => setTheme(theme === "dark" ? "light" : "dark")} aria-label="Alternar tema">{theme === "dark" ? "☀" : "☾"}</button>
           <button className="profile-trigger" onClick={() => setProfileOpen(!profileOpen)}><span className="avatar small-avatar">{initials(data?.preferences?.name)}</span><span><b>{text(data?.preferences?.name || session.user.user_metadata?.name || session.user.email)}</b><small>{text(data?.profile?.carteira ? `Carteira ${data.profile.carteira}` : (data?.preferences?.role || "Colaborador"))}</small></span></button>
@@ -727,7 +771,7 @@ export default function Dashboard() {
         });
         void load();
       }} />}
-      {notificationsOpen && <NotificationCenter items={data?.notifications || []} close={() => setNotificationsOpen(false)} refresh={load} openClient={openClient} openWork={(id) => { setNotificationsOpen(false); setWorkItemId(id); setView("work"); }} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
+      {notificationsOpen && <NotificationCenter items={bellNotifications} close={closeNotifications} refresh={loadNotificationCenter} openClient={openClient} openWork={(id) => { setNotificationsOpen(false); setWorkItemId(id); setView("work"); }} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
       {settingsOpen && <SettingsModal preferences={data?.preferences || {}} close={() => setSettingsOpen(false)} refresh={load} token={session.access_token} pendingRequests={data?.access_requests_pending || []} canDecide={Boolean(data?.profile?.can_decide_access_requests)} decide={decideAccessRequest} />}
       {toast && <button className={`toast${toastLeaving ? " leaving" : ""}`} onClick={() => { const workId = toast.metadata?.work_item_id; if (workId) { setWorkItemId(String(workId)); setView("work"); } else if (toast.client_id) openClient(toast.client_id); setToast(null); }}><Chip value={toast.level}/><span><b>{text(toast.title)}</b><small>{text(toast.actor ? `${toast.actor}: ${toast.description}` : toast.description)}</small>{(toast.gestor || toast.carteira) && <small className="toast-meta">{text(toast.carteira ? `Carteira ${toast.carteira}` : (toast.gestor ? `Gestor: ${toast.gestor}` : ""))}</small>}</span><i onClick={(event) => { event.stopPropagation(); setToast(null); }}>×</i></button>}
       {win && data?.preferences?.win_celebration_enabled !== false && <button className="win-pulse" onClick={() => { if (win.client_id) openClient(win.client_id); setWin(null); }}><small>NOVO CLIENTE</small><strong>{text(win.description)}</strong><span>Acabou de entrar para a operação</span></button>}
@@ -1998,14 +2042,18 @@ function ProfileMenu({preferences,profile,email,settings,openWalletManagement,ca
 function NotificationCenter({items,close,refresh,openClient,openWork,token,pendingRequests,canDecide,decide}:{items:Row[];close:()=>void;refresh:()=>Promise<void>;openClient:(id:string)=>void;openWork:(id:string)=>void;token:string;pendingRequests:Row[];canDecide:boolean;decide:(id:string,decision:"APPROVED"|"DENIED")=>Promise<void>}) {
   const dialogRef = useDialogFocus(close);
   const [deciding,setDeciding]=useState<string|null>(null);
-  async function read(id?:string){await apiPost("notifications-read",token,id?{id}:{});await refresh();}
+  async function read(item?:Row){
+    if (item?.kind === "ALERT") return;
+    await apiPost("notifications-read",token,item?.id?{id:item.id}:{});
+    await refresh();
+  }
   // Solicitacoes de acesso ainda pendentes viram acao inline: aprovar aqui ja libera o colaborador.
   const pendingIds=new Set(pendingRequests.map((request)=>String(request.id)));
   async function act(requestId:string,decision:"APPROVED"|"DENIED"){
     setDeciding(requestId);
     try{await decide(requestId,decision);}finally{setDeciding(null);}
   }
-  return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Central de notificações" className="notification-panel"><div className="panel-heading"><div><span className="eyebrow">Central de Notificações</span><h3>Atualizações da operação</h3></div><button onClick={close}>×</button></div><button className="mark-read" onClick={()=>read()}>Marcar todas como lidas</button><div className="notification-list">{items.map(item=>{
+  return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Central de notificações" className="notification-panel"><div className="panel-heading"><div><span className="eyebrow">Central de Notificações</span><h3>Atualizações da operação</h3></div><button onClick={close}>×</button></div><button className="mark-read" onClick={()=>{void read();}}>Marcar notificações como lidas</button><div className="notification-list">{items.map(item=>{
     const requestId=item.metadata?.access_request_id?String(item.metadata.access_request_id):null;
     if(canDecide&&requestId&&pendingIds.has(requestId)) return <div className={`notification-action${item.read_at?"":" unread"}`} key={item.id}><Chip value={item.level}/><span><b>{text(item.title)}</b><small>{text(item.description)} · {formatDate(item.occurred_at)}</small></span><span className="access-request-actions"><button disabled={deciding===requestId} onClick={()=>act(requestId,"APPROVED")}>Aprovar</button><button className="muted" disabled={deciding===requestId} onClick={()=>act(requestId,"DENIED")}>Recusar</button></span></div>;
     const conclusao=taskCompletion(item);
@@ -2014,7 +2062,7 @@ function NotificationCenter({items,close,refresh,openClient,openWork,token,pendi
       item.metadata?.alert_type==="CLIENT_WAITING_SLA"||
       item.type==="COLLABORATOR_MEETING_STARTED"
     );
-    return <button className={item.read_at?"":"unread"} data-notification-id={String(item.id)} key={item.id} onClick={()=>{read(item.id);const workId=item.metadata?.work_item_id;if(hasOperationalContext&&item.client_id)openClient(String(item.client_id));else if(workId)openWork(String(workId));else if(item.client_id)openClient(String(item.client_id));}}><Chip value={item.level}/><span><b>{item.title}</b>{conclusao
+    return <button className={item.read_at?"":"unread"} data-notification-id={String(item.id)} key={item.id} onClick={()=>{void read(item);const workId=item.metadata?.work_item_id;if(hasOperationalContext&&item.client_id)openClient(String(item.client_id));else if(workId)openWork(String(workId));else if(item.client_id)openClient(String(item.client_id));}}><Chip value={item.level}/><span><b>{item.title}</b>{conclusao
       ? <><small>{text(conclusao.tarefa)}</small><small className="notification-owner">Concluída por: {conclusao.concluidaPor || "não identificado"}</small><small className="notification-owner">Responsável: {text(conclusao.responsavel)}</small><small>{formatDate(item.occurred_at)}</small></>
       : <small>{text(item.actor ? `${item.actor}: ${item.description}` : item.description)} · {formatDate(item.occurred_at)}</small>}{(item.gestor || item.carteira) && <small className="notification-owner">{text(item.carteira ? `Carteira ${item.carteira}` : (item.gestor ? `Gestor: ${item.gestor}` : ""))}</small>}</span></button>;
   })}{!items.length&&<div className="empty">Nenhuma notificação.</div>}</div></div>;
