@@ -52,12 +52,18 @@ async function sha256(value: string) {
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-function serviceAuthorized(req: Request) {
-  const auth = req.headers.get("authorization") || "";
-  const supplied = auth.replace(/^Bearer\s+/i, "");
-  if (!SERVICE_ROLE || supplied.length !== SERVICE_ROLE.length) return false;
+async function runtimeAuthorized(req: Request) {
+  const supplied = req.headers.get("x-google-calendar-watch-key") || "";
+  if (supplied.length < 32) return false;
+  const { data, error } = await ops.from("google_calendar_watch_runtime")
+    .select("request_token")
+    .eq("singleton", true)
+    .maybeSingle();
+  if (error) throw error;
+  const expected = String(data?.request_token || "");
+  if (!expected || expected.length !== supplied.length) return false;
   let diff = 0;
-  for (let i = 0; i < supplied.length; i++) diff |= supplied.charCodeAt(i) ^ SERVICE_ROLE.charCodeAt(i);
+  for (let i = 0; i < supplied.length; i++) diff |= supplied.charCodeAt(i) ^ expected.charCodeAt(i);
   return diff === 0;
 }
 async function secret(id: string | null | undefined) {
@@ -737,7 +743,7 @@ Deno.serve(async (req: Request) => {
     return new Response(null, { status: 204 });
   }
 
-  if (!serviceAuthorized(req)) return json({ error: "unauthorized" }, 401);
+  if (!(await runtimeAuthorized(req))) return json({ error: "unauthorized" }, 401);
   const body = await req.json().catch(() => ({}));
   const action = lower(body?.action);
 
