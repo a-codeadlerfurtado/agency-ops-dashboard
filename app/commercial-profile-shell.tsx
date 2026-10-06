@@ -10,7 +10,7 @@ import { DailyReflection } from "./daily-reflection";
 type Row = Record<string, any>;
 type View = "home" | "funnel" | "clients" | "closed-clients" | "campaigns" | "meetings" | "direction";
 
-const API = `${SUPABASE_URL}/functions/v1/agency-ops-commercial-direction-api`;
+const API = `${SUPABASE_URL}/functions/v1/agency-ops-commercial-direction-api`;\nconst MEETINGS_API = `${SUPABASE_URL}/functions/v1/agency-ops-meetings-api`;
 const views: Array<[View, string]> = [
   ["home", "Home Comercial"],
   ["funnel", "Funil Comercial"],
