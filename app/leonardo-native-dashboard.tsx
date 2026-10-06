@@ -23,6 +23,7 @@ type Tab = "home" | "funnel" | "clients" | "closed-clients" | "campaigns" | "mee
 type NavItem = { key: string; label: string; tab?: Tab; href?: string };
 
 const API = `${SUPABASE_URL}/functions/v1/agency-ops-commercial-direction-api`;
+const MEETINGS_API = `${SUPABASE_URL}/functions/v1/agency-ops-meetings-api`;
 const SDR_CALLS_API = `${SUPABASE_URL}/functions/v1/agency-ops-sdr-api`;
 const CLICKUP_API = `${SUPABASE_URL}/functions/v1/agency-ops-leonardo-clickup-api`;
 const NAV: NavItem[] = [
@@ -131,12 +132,74 @@ function CampaignsView({ data }: { data: Row }) {
   </section>;
 }
 
-function MeetingsView({ data }: { data: Row }) {
+function MeetingsView({ data, token }: { data: Row; token: string }) {
+  const [query, setQuery] = useState("");
+  const [owner, setOwner] = useState("ALL");
+  const [selected, setSelected] = useState<Row | null>(null);
+  const [detail, setDetail] = useState<Row | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
   const meetings: Row[] = data.meetings || [];
-  return <section className="workspace">
-    <div className="workspace-head"><div><span className="eyebrow">Agenda comercial</span><h2>Reuniões</h2><p>Histórico e contexto das reuniões do comercial.</p></div><span className="counter">{meetings.length} reuniões</span></div>
-    <div className="leo-native-grid2">{meetings.length ? meetings.slice(0, 60).map((row) => <article className="card section" key={row.id}><div className="panel-heading"><div><span className="eyebrow">{text(row.owner)}</span><h3>{text(row.title)}</h3></div><small>{dateTime(row.meeting_started_at)}</small></div><p className="small leo-native-summary">{text(row.summary)}</p>{row.client_name && <div className="small"><b>Cliente:</b> {text(row.client_name)}</div>}</article>) : <article className="card section empty">Nenhuma reunião encontrada.</article>}</div>
-  </section>;
+  const owners = [...new Set(meetings.map((row) => text(row.owner)).filter((name) => name !== "—"))].sort();
+  const visible = useMemo(() => meetings.filter((row) => {
+    const ownerOk = owner === "ALL" || text(row.owner) === owner;
+    const q = norm(query);
+    const searchOk = !q || norm(`${row.title || ""} ${row.client_name || ""} ${row.prospect_name || ""} ${row.owner || ""} ${(row.participants || []).join(" ")}`).includes(q);
+    return ownerOk && searchOk;
+  }), [meetings, owner, query]);
+
+  const openTranscript = async (row: Row) => {
+    setSelected(row); setDetail(null); setDetailError(""); setDetailLoading(true);
+    try {
+      const url = new URL(MEETINGS_API);
+      url.searchParams.set("transcript_id", String(row.id));
+      const response = await fetch(url, { headers: { Authorization: `Bearer ${token}`, apikey: SUPABASE_ANON_KEY }, cache: "no-store" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body?.detail || body?.error || `API ${response.status}`);
+      setDetail(body?.transcript || row);
+    } catch (caught) {
+      setDetailError(caught instanceof Error ? caught.message : "Não foi possível carregar a transcrição.");
+    } finally { setDetailLoading(false); }
+  };
+  const closeTranscript = () => { setSelected(null); setDetail(null); setDetailError(""); };
+  const transcriptText = String(detail?.transcript_text || "").trim();
+  const downloadTranscript = () => {
+    if (!transcriptText || !selected) return;
+    const blob = new Blob([transcriptText], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const safe = String(selected.client_name || selected.prospect_name || selected.title || "reuniao")
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "").toLowerCase();
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${safe || "reuniao"}-${String(selected.meeting_started_at || "").slice(0, 10) || "sem-data"}.txt`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return <>
+    <section className="workspace">
+      <div className="workspace-head"><div><span className="eyebrow">Agenda comercial</span><h2>Reuniões</h2><p>Histórico, contexto e transcrição completa das reuniões do comercial.</p></div><span className="counter">{visible.length} reuniões</span></div>
+      <div className="toolbar leo-native-toolbar"><input className="control" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar cliente, prospect, título ou participante"/><select className="control" value={owner} onChange={(e) => setOwner(e.target.value)}><option value="ALL">Leonardo + Vitor</option>{owners.map((name) => <option key={name} value={name}>{name}</option>)}</select></div>
+      <div className="leo-native-grid2">{visible.length ? visible.map((row) => <article className="card section leo-native-meeting-card" key={row.id}>
+        <div className="panel-heading"><div><span className="eyebrow">{text(row.owner)}</span><h3>{text(row.title)}</h3></div><small>{dateTime(row.meeting_started_at)}</small></div>
+        <p className="small leo-native-summary">{text(row.summary)}</p>
+        {row.client_name && <div className="small"><b>Cliente:</b> {text(row.client_name)}</div>}
+        <div className="leo-native-meeting-actions"><button className="btn" type="button" onClick={() => void openTranscript(row)}>Abrir transcrição</button></div>
+      </article>) : <article className="card section empty">Nenhuma reunião encontrada.</article>}</div>
+    </section>
+    {selected && <div className="leo-native-modal-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) closeTranscript(); }}>
+      <section className="card leo-native-transcript-modal" role="dialog" aria-modal="true" aria-label="Transcrição da reunião">
+        <div className="workspace-head"><div><span className="eyebrow">Transcrição completa</span><h2>{text(selected.title)}</h2><p>{dateTime(selected.meeting_started_at)} · {text(selected.owner)}{selected.client_name ? ` · ${selected.client_name}` : ""}</p></div><button className="theme-btn" type="button" onClick={closeTranscript}>×</button></div>
+        {detailLoading && <div className="auth-loading"><span className="dot loading"/> Carregando transcrição…</div>}
+        {detailError && <div className="error-box">{detailError}</div>}
+        {!detailLoading && !detailError && <>
+          <div className="leo-native-transcript-actions"><button className="btn" type="button" onClick={() => void navigator.clipboard?.writeText(transcriptText)} disabled={!transcriptText}>Copiar</button><button className="btn" type="button" onClick={downloadTranscript} disabled={!transcriptText}>Baixar TXT</button></div>
+          <article className="card section"><div className="panel-heading"><div><span className="eyebrow">Resumo</span><h3>Contexto da reunião</h3></div></div><p className="small leo-native-summary">{text(detail?.summary || selected.summary)}</p></article>
+          <article className="card section leo-native-transcript-box"><pre>{transcriptText || "Transcrição ainda não disponível."}</pre></article>
+        </>}
+      </section>
+    </div>
+  </>;
 }
 
 function DirectionView({ data }: { data: Row }) {
@@ -179,7 +242,7 @@ function CommercialContent({ tab, data, sdrCalls, clickup, token }: { tab: Tab; 
   if (tab === "clients") return <ClientsView data={data} />;
   if (tab === "closed-clients") return <CloserClientsView rows={data.portfolio_clients || []} closerName="Leonardo Augusto" />;
   if (tab === "campaigns") return <CampaignsView data={data} />;
-  if (tab === "meetings") return <MeetingsView data={data} />;
+  if (tab === "meetings") return <MeetingsView data={data} token={token} />;
   if (tab === "direction") return <DirectionView data={data} />;
   return <HomeView data={data} />;
 }
@@ -262,7 +325,7 @@ export default function LeonardoNativeDashboard({ session }: { session: Session 
     <style>{`
       .leo-native-stack{display:grid;gap:14px}.leo-native-kpis{grid-template-columns:repeat(6,minmax(130px,1fr))}.leo-native-direction-kpis{grid-template-columns:repeat(4,minmax(150px,1fr))}.leo-clickup-kpis{grid-template-columns:repeat(6,minmax(130px,1fr))}
       .leo-native-sources{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.leo-native-source>div{display:flex;align-items:center;gap:8px}.leo-native-source strong,.leo-native-source small{display:block;margin-top:7px}.leo-native-source small{color:var(--muted)}
-      .leo-native-grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.leo-native-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:12px 2px;border-bottom:1px solid var(--line)}.leo-native-row:last-child{border-bottom:0}.leo-native-row>span{display:flex;flex-direction:column;min-width:0}.leo-native-row small{color:var(--muted);font-size:11px;margin-top:3px}.leo-native-right{text-align:right}.leo-native-toolbar{margin-bottom:14px}.leo-native-summary{white-space:normal;line-height:1.55;max-width:none}
+      .leo-native-grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.leo-native-meeting-card{display:flex;flex-direction:column}.leo-native-meeting-actions{display:flex;justify-content:flex-end;margin-top:auto;padding-top:14px}.leo-native-transcript-modal{width:min(1120px,96vw);max-height:90vh;overflow:auto;padding:20px}.leo-native-transcript-actions{display:flex;justify-content:flex-end;gap:8px;margin:0 0 12px}.leo-native-transcript-box{margin-top:12px;padding:0;overflow:hidden}.leo-native-transcript-box pre{margin:0;max-height:58vh;overflow:auto;padding:16px;white-space:pre-wrap;word-break:break-word;font:500 12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--text);background:var(--panel2)}.leo-native-row{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:12px 2px;border-bottom:1px solid var(--line)}.leo-native-row:last-child{border-bottom:0}.leo-native-row>span{display:flex;flex-direction:column;min-width:0}.leo-native-row small{color:var(--muted);font-size:11px;margin-top:3px}.leo-native-right{text-align:right}.leo-native-toolbar{margin-bottom:14px}.leo-native-summary{white-space:normal;line-height:1.55;max-width:none}
       .leo-clickup-months{display:grid;gap:10px;margin-top:18px}.leo-clickup-month{display:grid;grid-template-columns:58px 1fr 54px;align-items:center;gap:10px}.leo-clickup-month>span,.leo-clickup-month>b{font-size:11px}.leo-clickup-month>b{text-align:right}.leo-clickup-month>div{height:8px;background:var(--panel2);border-radius:999px;overflow:hidden}.leo-clickup-month i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,var(--blue),var(--green))}.leo-clickup-sync{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:17px}.leo-clickup-sync>div{padding:12px;border:1px solid var(--line);background:var(--panel2);border-radius:11px}.leo-clickup-sync span,.leo-clickup-sync b{display:block}.leo-clickup-sync span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}.leo-clickup-sync b{margin-top:5px;font-size:13px}.leo-clickup-note{margin:14px 0 0}
       .leo-native-popover-wrap{position:relative}.leo-native-popover,.leo-native-profile-menu{position:absolute;right:0;top:calc(100% + 9px);z-index:90;min-width:260px;padding:10px}.leo-native-popover>b{display:block;padding:5px 7px 9px}.leo-native-popover button,.leo-native-profile-menu button{display:flex;width:100%;flex-direction:column;gap:3px;text-align:left;border:0;border-radius:8px;background:transparent;color:var(--text);padding:9px;cursor:pointer}.leo-native-profile-menu button{display:block}.leo-native-popover button:hover,.leo-native-profile-menu button:hover{background:var(--wash)}.leo-native-popover small{color:var(--muted)}
       .leo-native-modal-backdrop{position:fixed;inset:0;z-index:120;background:rgba(0,0,0,.62);display:grid;place-items:center;padding:20px}.leo-native-command,.leo-native-settings{width:min(620px,96vw);padding:20px;max-height:84vh;overflow:auto}.leo-native-command-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.leo-native-command-grid button{border:1px solid var(--line);border-radius:10px;background:var(--panel2);color:var(--text);padding:12px;text-align:left;cursor:pointer}.leo-native-command-grid button:hover{border-color:var(--blue)}.leo-native-settings label{display:grid;gap:6px;margin:12px 0;color:var(--muted);font-size:12px}.leo-native-settings .control{width:100%}.leo-native-settings-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
