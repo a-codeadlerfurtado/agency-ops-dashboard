@@ -380,11 +380,17 @@ async function emitAlert(account: Row, kind: "CREATED" | "RESCHEDULED" | "CANCEL
       whatsapp_status: "PENDING",
     }).select("*").single();
     if (error) {
-      if (String((error as Row)?.code || "") === "23505") return;
-      throw error;
+      if (String((error as Row)?.code || "") === "23505") {
+        const { data: raced } = await ops.from("google_calendar_alerts").select("*").eq("dedupe_key", dedupeKey).maybeSingle();
+        alertRow = raced as Row | null;
+      } else {
+        throw error;
+      }
+    } else {
+      alertRow = data as Row;
     }
-    alertRow = data as Row;
   }
+  if (!alertRow) return;
 
   const scheduledLabel = formatMeetingWindow(snapshot.startTime, snapshot.endTime);
   const description = [
@@ -445,32 +451,53 @@ async function emitAlert(account: Row, kind: "CREATED" | "RESCHEDULED" | "CANCEL
     updated_at: new Date().toISOString(),
   }).eq("dedupe_key", dedupeKey);
 
-  if (String(alertRow?.whatsapp_status || "") === "SENT") return;
+  if (String(alertRow.whatsapp_status || "") === "SENT") return;
 
-  let lastError = "";
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    try {
-      const sent = await sendRawWhatsApp(phone, message);
-      await ops.from("google_calendar_alerts").update({
-        whatsapp_status: "SENT",
-        whatsapp_message_id: sent.messageId,
-        whatsapp_error: null,
-        attempts: Number(alertRow?.attempts || 0) + attempt,
-        sent_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }).eq("dedupe_key", dedupeKey);
-      return;
-    } catch (error) {
-      lastError = clean(error instanceof Error ? error.message : error, 1500);
-      if (attempt < 3) await sleep(attempt * 800);
-    }
+  // A mesma mudança pode gerar mais de um webhook do Google. O claim atômico
+  // garante que apenas uma execução tenha permissão de chamar a Z-API.
+  if (String(alertRow.whatsapp_status || "") === "SENDING") {
+    const sendingSince = Date.parse(String(alertRow.updated_at || alertRow.created_at || ""));
+    if (Number.isFinite(sendingSince) && sendingSince > Date.now() - 5 * 60_000) return;
+    await ops.from("google_calendar_alerts").update({
+      whatsapp_status: "FAILED",
+      whatsapp_error: "stale_send_claim_recovered",
+      updated_at: new Date().toISOString(),
+    }).eq("dedupe_key", dedupeKey).eq("whatsapp_status", "SENDING");
   }
-  await ops.from("google_calendar_alerts").update({
-    whatsapp_status: "FAILED",
-    whatsapp_error: lastError,
-    attempts: Number(alertRow?.attempts || 0) + 3,
-    updated_at: new Date().toISOString(),
-  }).eq("dedupe_key", dedupeKey);
+
+  const { data: claimed, error: claimError } = await ops.from("google_calendar_alerts")
+    .update({
+      whatsapp_status: "SENDING",
+      whatsapp_error: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("dedupe_key", dedupeKey)
+    .in("whatsapp_status", ["PENDING", "FAILED"])
+    .select("dedupe_key,attempts")
+    .maybeSingle();
+  if (claimError) throw claimError;
+  if (!claimed) return;
+
+  try {
+    // Uma única tentativa deliberada: em timeout de rede não reenviamos às cegas,
+    // evitando duas mensagens caso a Z-API tenha aceitado a primeira.
+    const sent = await sendRawWhatsApp(phone, message);
+    await ops.from("google_calendar_alerts").update({
+      whatsapp_status: "SENT",
+      whatsapp_message_id: sent.messageId,
+      whatsapp_error: null,
+      attempts: Number(claimed.attempts || 0) + 1,
+      sent_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq("dedupe_key", dedupeKey).eq("whatsapp_status", "SENDING");
+  } catch (error) {
+    await ops.from("google_calendar_alerts").update({
+      whatsapp_status: "FAILED",
+      whatsapp_error: clean(error instanceof Error ? error.message : error, 1500),
+      attempts: Number(claimed.attempts || 0) + 1,
+      updated_at: new Date().toISOString(),
+    }).eq("dedupe_key", dedupeKey).eq("whatsapp_status", "SENDING");
+  }
 }
 
 async function processEvent(account: Row, watch: Row, event: Row, since: Date) {
