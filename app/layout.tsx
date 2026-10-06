@@ -67,6 +67,7 @@ import CreativeManualEditBridge from "./creative-manual-edit-bridge";
 import CreativeIntelligenceBridge from "./creative-intelligence-bridge";
 import LeonardoMeetingNotificationBridge from "./leonardo-meeting-notification-bridge";
 import LeonardoActionWarning from "./leonardo-action-warning";
+import AdlerCalendarMeetingWarning from "./adler-calendar-meeting-warning";
 import NotificationsHomeLink from "./notifications-home-link";
 import NotificationDetailBridge from "./notification-detail-bridge";
 import NotificationReadOnClick from "./notification-read-on-click";
@@ -210,6 +211,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <ClientNotificationsBridge />
         <LeonardoMeetingNotificationBridge />
         <LeonardoActionWarning />
+        <AdlerCalendarMeetingWarning />
         <NotificationsHomeLink />
         <OnboardingHistoryNotificationBridge />
         <OnboardingHistoryPrecisionBridge />
