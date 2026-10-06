@@ -16,6 +16,16 @@ type Row = Record<string, any>;
 function sanitizeSearch(value: string) {
   return value.replace(/[,%()]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
 }
+function normalizePerson(value: unknown) {
+  return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+}
+function transcriptOwner(row: Row) {
+  return normalizePerson(row?.metadata?.mcp_owner_person || row?.metadata?.closer_person || row?.owner_person);
+}
+function leonardoCanReadCommercialTranscript(row: Row) {
+  const owner = transcriptOwner(row);
+  return owner === "leonardo augusto" || owner === "vitor feitoza" || owner === "luiz vitor feitoza";
+}
 
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get("origin");
@@ -69,7 +79,10 @@ Deno.serve(async (req: Request) => {
     const { data, error } = await q.maybeSingle();
     if (error) return reply({ error: "query_failed" }, 500, "no-store");
     if (!data) return reply({ error: "not_found" }, 404, "no-store");
-    if (!isAdler && String(data.owner_person || "") !== person) return reply({ error: "forbidden" }, 403, "no-store");
+    const canonicalOwner = transcriptOwner(data);
+    const viewerOwner = normalizePerson(person);
+    const leonardoCommercialAccess = isLeonardo && leonardoCanReadCommercialTranscript(data);
+    if (!isAdler && !leonardoCommercialAccess && canonicalOwner !== viewerOwner) return reply({ error: "forbidden" }, 403, "no-store");
     if (role === "GT" && !elevated) {
       const { data: client } = await ops.from("clients").select("gt_owner").eq("id", data.client_id).maybeSingle();
       if (!client || String(client.gt_owner || "") !== person) return reply({ error: "forbidden" }, 403, "no-store");
