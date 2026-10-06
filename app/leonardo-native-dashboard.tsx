@@ -198,7 +198,7 @@ function MeetingsView({ data, token }: { data: Row; token: string }) {
           <article className="card section leo-native-transcript-box"><pre>{transcriptText || "Transcrição ainda não disponível."}</pre></article>
         </>}
       </section>
-    </div>
+    </div>}
   </>;
 }
 
