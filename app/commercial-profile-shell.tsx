@@ -132,10 +132,63 @@ function CampaignsView({ data }: { data: Row }) {
 
 function MeetingsView({ data }: { data: Row }) {
   const [owner, setOwner] = useState("ALL");
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<Row | null>(null);
+  const [detail, setDetail] = useState<Row | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
   const meetings: Row[] = data.meetings || [];
   const owners = [...new Set(meetings.map((row) => text(row.owner)).filter((name) => name !== "—"))].sort();
-  const visible = owner === "ALL" ? meetings : meetings.filter((row) => row.owner === owner);
-  return <section className="lc-card lc-wide"><div className="lc-view-head"><div><span>REUNIÕES COMERCIAIS</span><h2>Reuniões</h2><p>Resumos vindos do Relato AI. A fonte mostra a data real de ingestão.</p></div><b>{visible.length} registros</b></div><div className="lc-filters"><select value={owner} onChange={(e) => setOwner(e.target.value)}><option value="ALL">Leonardo + Vitor</option>{owners.map((name) => <option key={name}>{name}</option>)}</select></div><div className="lc-meetings">{visible.slice(0, 80).map((row) => <article className="lc-meeting" key={row.id}><div className="lc-meeting-top"><div><span>{text(row.type, "reunião")}</span><h3>{text(row.title)}</h3></div><time>{dateTime(row.meeting_started_at)}</time></div><p>{text(row.summary)}</p><footer><b>{text(row.owner)}</b><span>{row.client_name ? `Cliente: ${row.client_name}` : row.match_status === "MATCHED" ? "Cliente vinculado" : "Sem cliente confirmado"}</span><span>{(row.participants || []).join(" · ") || "Participantes não informados"}</span></footer></article>)}</div>{!visible.length && <Empty>Nenhuma reunião encontrada.</Empty>}</section>;
+  const visible = meetings.filter((row) => {
+    const ownerOk = owner === "ALL" || row.owner === owner;
+    const q = norm(query);
+    const searchOk = !q || norm(`${row.title || ""} ${row.client_name || ""} ${row.prospect_name || ""} ${row.owner || ""} ${(row.participants || []).join(" ")}`).includes(q);
+    return ownerOk && searchOk;
+  });
+
+  const openTranscript = async (row: Row) => {
+    setSelected(row);
+    setDetail(null);
+    setDetailError("");
+    setDetailLoading(true);
+    try {
+      const url = new URL(MEETINGS_API);
+      url.searchParams.set("transcript_id", String(row.id));
+      const response = await authenticatedFetch(url, { cache: "no-store" });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body?.detail || body?.error || `API ${response.status}`);
+      setDetail(body?.transcript || row);
+    } catch (caught) {
+      setDetailError(caught instanceof Error ? caught.message : "Não foi possível carregar a transcrição.");
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+  const closeTranscript = () => { setSelected(null); setDetail(null); setDetailError(""); };
+  const transcriptText = String(detail?.transcript_text || "").trim();
+
+  return <>
+    <section className="lc-card lc-wide">
+      <div className="lc-view-head"><div><span>REUNIÕES COMERCIAIS</span><h2>Reuniões</h2><p>Leonardo pode abrir a transcrição completa das reuniões comerciais do Vitor para montar contratos, além das próprias reuniões.</p></div><b>{visible.length} registros</b></div>
+      <div className="lc-filters"><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar cliente, prospect, título ou participante"/><select value={owner} onChange={(e) => setOwner(e.target.value)}><option value="ALL">Leonardo + Vitor</option>{owners.map((name) => <option key={name}>{name}</option>)}</select></div>
+      <div className="lc-meetings">{visible.map((row) => <article className="lc-meeting" key={row.id} onClick={() => openTranscript(row)}>
+        <div className="lc-meeting-top"><div><span>{text(row.type, "reunião")}</span><h3>{text(row.title)}</h3></div><time>{dateTime(row.meeting_started_at)}</time></div>
+        <p>{text(row.summary)}</p>
+        <footer><b>{text(row.owner)}</b><span>{row.client_name ? `Cliente: ${row.client_name}` : row.prospect_name ? `Prospect: ${row.prospect_name}` : row.match_status === "MATCHED" ? "Cliente vinculado" : "Sem cliente confirmado"}</span><span>{(row.participants || []).join(" · ") || "Participantes não informados"}</span><button type="button" onClick={(e) => { e.stopPropagation(); openTranscript(row); }}>Abrir transcrição</button></footer>
+      </article>)}</div>
+      {!visible.length && <Empty>Nenhuma reunião encontrada.</Empty>}
+    </section>
+    {selected && <div className="lc-modal-backdrop" onMouseDown={(e) => { if (e.currentTarget === e.target) closeTranscript(); }}>
+      <section className="lc-modal lc-transcript-modal" role="dialog" aria-modal="true">
+        <header><div><span>TRANSCRIÇÃO · RELATO AI</span><h2>{text(selected.title)}</h2><p>{dateTime(selected.meeting_started_at)} · {text(selected.owner)}</p></div><button onClick={closeTranscript}>×</button></header>
+        <div className="lc-modal-body">
+          {detailLoading && <div className="lc-empty">Carregando transcrição completa…</div>}
+          {detailError && <div className="lc-error lc-inline-error">{detailError}</div>}
+          {!detailLoading && !detailError && <><section className="lc-modal-section"><h3>Resumo</h3><p className="lc-transcript-summary">{text(detail?.summary || selected.summary, "Sem resumo disponível.")}</p></section><section className="lc-modal-section"><h3>Transcrição completa</h3>{transcriptText ? <pre className="lc-transcript-text">{transcriptText}</pre> : <Empty>Transcrição ainda não disponível.</Empty>}</section></>}
+        </div>
+      </section>
+    </div>}
+  </>;
 }
 
 function DirectionView({ data }: { data: Row }) {
