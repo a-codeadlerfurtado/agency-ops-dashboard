@@ -30,9 +30,10 @@ export function WalletInlineStyles() {
 
 export function WalletInlineButton({ client, allowed, onClick }: { client: Row; allowed: boolean; onClick: () => void }) {
   const owner = String(client.gt_owner || "").trim();
-  const label = owner || "Sem carteira";
-  if (!allowed || !["ACTIVE", "ONBOARDING"].includes(String(client.lifecycle || ""))) {
-    return <span>{label}</span>;
+  const blocked = client.gt_assignment_blocked === true;
+  const label = blocked ? "IA · sem GT" : owner || "Sem carteira";
+  if (!allowed || blocked || !["ACTIVE", "ONBOARDING"].includes(String(client.lifecycle || ""))) {
+    return <span title={blocked ? "Cliente exclusivo de IA: não exige gestor de tráfego." : undefined}>{label}</span>;
   }
   return <button
     type="button"
