@@ -45,6 +45,7 @@ export default function AdlerWalletManagement({ token, close, refresh }: { token
 
   useEffect(() => { void load(); }, [load]);
   const move = useCallback(async (client: Row, gtOwner: string | null) => {
+    if (client.gt_assignment_blocked === true) return;
     const current = String(client.gt_owner || "") || null;
     if (current === gtOwner) return;
     const destination = gtOwner || "Sem carteira";
@@ -77,12 +78,12 @@ export default function AdlerWalletManagement({ token, close, refresh }: { token
     const wallet = manager?.carteira ? `Carteira ${manager.carteira}` : manager ? "Carteira sem codinome" : "Aguardando atribuição";
     return <section key={key} className={`awm-lane ${!manager ? "awm-unassigned" : ""} ${dropTarget === key ? "drop" : ""}`}
       onDragOver={(event) => { event.preventDefault(); setDropTarget(key); }} onDragLeave={() => setDropTarget((value) => value === key ? null : value)}
-      onDrop={(event) => { event.preventDefault(); const id = dragged || event.dataTransfer.getData("text/plain"); const client = clients.find((row) => String(row.client_id) === id); if (client) void move(client, target); }}>
+      onDrop={(event) => { event.preventDefault(); const id = dragged || event.dataTransfer.getData("text/plain"); const client = clients.find((row) => String(row.client_id) === id); if (client && client.gt_assignment_blocked !== true) void move(client, target); }}>
       <div className="awm-lane-head"><div><b>{label}</b><small>{wallet}</small></div><span className="awm-count">{rows.length}</span></div>
-      <div className="awm-cards">{rows.map((client) => <article key={client.client_id} draggable={!busy} className="awm-card"
-        onDragStart={(event) => { setDragged(String(client.client_id)); event.dataTransfer.setData("text/plain", String(client.client_id)); event.dataTransfer.effectAllowed = "move"; }}>
-        <b>{text(client.display_name)}</b><small>{text(client.lifecycle)} · CS {text(client.cs_owner)}</small>
-        <select disabled={busy === String(client.client_id)} value={String(client.gt_owner || "")} onChange={(event) => void move(client, event.target.value || null)}>
+      <div className="awm-cards">{rows.map((client) => <article key={client.client_id} draggable={!busy && client.gt_assignment_blocked !== true} className="awm-card"
+        onDragStart={(event) => { if (client.gt_assignment_blocked === true) { event.preventDefault(); return; } setDragged(String(client.client_id)); event.dataTransfer.setData("text/plain", String(client.client_id)); event.dataTransfer.effectAllowed = "move"; }}>
+        <b>{text(client.display_name)}</b><small>{text(client.lifecycle)} · {client.gt_assignment_blocked === true ? "IA · GT dispensado" : `CS ${text(client.cs_owner)}`}</small>
+        <select disabled={busy === String(client.client_id) || client.gt_assignment_blocked === true} value={String(client.gt_owner || "")} onChange={(event) => void move(client, event.target.value || null)}>
           <option value="">Sem carteira</option>{managers.map((gt) => <option key={gt.person} value={gt.person}>{gt.person}{gt.carteira ? ` · ${gt.carteira}` : ""}</option>)}
         </select>
       </article>)}{!rows.length && <div className="awm-empty">Nenhum cliente aqui.</div>}</div>
