@@ -39,7 +39,7 @@ async function identifyAdler(req: Request) {
 
 async function loadBoard(ctx: any) {
   const [{ data: clients, error: cErr }, { data: roster, error: rErr }, { data: wallets, error: wErr }, { data: history, error: hErr }] = await Promise.all([
-    ctx.ops.from("dashboard_client_overview").select("client_id,display_name,lifecycle,gt_owner,cs_owner,priority,entrada").in("lifecycle", ["ACTIVE", "ONBOARDING"]).order("display_name"),
+    ctx.ops.from("dashboard_client_overview").select("client_id,display_name,lifecycle,gt_owner,cs_owner,priority,entrada,gt_assignment_blocked").in("lifecycle", ["ACTIVE", "ONBOARDING"]).order("display_name"),
     ctx.ops.from("team_roster").select("person,role,is_former,email").eq("role", "GT").eq("is_former", false).not("email", "is", null).neq("email", "").order("person"),
     ctx.ops.from("wallet_registry").select("gt_owner,carteira,ordem,criada_em").order("ordem"),
     ctx.ops.from("client_lifecycle_events").select("id,client_id,event_type,occurred_at,actor,before_value,after_value,detail").eq("source", "dashboard_wallet_management").order("occurred_at", { ascending: false }).limit(60),
@@ -54,9 +54,12 @@ async function moveClient(ctx: any, body: Row) {
   const clientId = clean(body.client_id);
   const targetGt = clean(body.gt_owner) || null;
   if (!clientId) return reply({ error: "client_required" }, 400);
-  const { data: client, error: cErr } = await ctx.ops.from("clients").select("id,display_name,lifecycle,gt_owner").eq("id", clientId).maybeSingle();
+  const { data: client, error: cErr } = await ctx.ops.from("clients").select("id,display_name,lifecycle,gt_owner,metadata").eq("id", clientId).maybeSingle();
   if (cErr) throw cErr;
   if (!client || !["ACTIVE", "ONBOARDING"].includes(clean(client.lifecycle))) return reply({ error: "client_not_available" }, 404);
+  if (client.metadata?.gt_assignment_blocked === true) {
+    return reply({ error: "gt_assignment_not_applicable", detail: "Cliente exclusivo de IA: não exige GT." }, 409);
+  }
   if (targetGt) {
     const { data: gt, error: gtErr } = await ctx.ops.from("team_roster").select("person,email").eq("person", targetGt).eq("role", "GT").eq("is_former", false).not("email", "is", null).neq("email", "").maybeSingle();
     if (gtErr) throw gtErr;
