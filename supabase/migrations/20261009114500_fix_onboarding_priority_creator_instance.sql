@@ -29,12 +29,10 @@ $migration$;
 
 DO $verify$
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_get_functiondef(
-      'agency_ops.prepare_priority_onboarding_job(bigint)'::regprocedure
-    ) AS definition
-    WHERE definition LIKE '%and i.connected_phone=''5513988051839''%'
-  ) THEN
+  IF position(
+    'and i.connected_phone=''5513988051839'''
+    in pg_get_functiondef('agency_ops.prepare_priority_onboarding_job(bigint)'::regprocedure)
+  ) > 0 THEN
     RAISE EXCEPTION 'Old group creator phone guard is still present';
   END IF;
 END
