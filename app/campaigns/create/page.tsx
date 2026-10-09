@@ -129,6 +129,10 @@ export default function CampaignCreatePage() {
   const [drafting, setDrafting] = useState(false);
   const [draft, setDraft] = useState<Row | null>(null);
   const [draftError, setDraftError] = useState("");
+  const [historyDiscardId, setHistoryDiscardId] = useState<string | null>(null);
+  const [historyDiscardBusy, setHistoryDiscardBusy] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [historyNotice, setHistoryNotice] = useState("");
   const [overrides, setOverrides] = useState<Row>({});
   const [confirmWord, setConfirmWord] = useState("");
   const [executing, setExecuting] = useState(false);
@@ -276,9 +280,31 @@ export default function CampaignCreatePage() {
 
   const discard = async () => {
     if (!draft?.request_id) return;
-    await api({ action: "DISCARD", request_id: draft.request_id });
-    resetFlow();
-    await loadBoot();
+    try {
+      const { ok, body } = await api({ action: "DISCARD", request_id: draft.request_id });
+      if (!ok) { setDraftError(friendlyError(body, "Não foi possível descartar o rascunho.")); return; }
+      resetFlow();
+      await loadBoot();
+    } catch (error) {
+      setDraftError(`Falha de conexão ao descartar: ${String((error as Error)?.message || error).slice(0, 160)}`);
+    }
+  };
+
+  const discardFromHistory = async (requestId: string) => {
+    if (historyDiscardBusy || historyDiscardId !== requestId) return;
+    setHistoryDiscardBusy(true); setHistoryError(""); setHistoryNotice("");
+    try {
+      const { ok, body } = await api({ action: "DISCARD", request_id: requestId });
+      if (!ok) { setHistoryError(friendlyError(body, "Não foi possível descartar este rascunho.")); return; }
+      if (draft?.request_id === requestId) resetFlow();
+      setHistoryDiscardId(null);
+      setHistoryNotice("Rascunho descartado. Nenhuma campanha foi criada ou alterada na Meta.");
+      await loadBoot();
+    } catch (error) {
+      setHistoryError(`Falha de conexão: ${String((error as Error)?.message || error).slice(0, 160)}`);
+    } finally {
+      setHistoryDiscardBusy(false);
+    }
   };
 
   const plan = draft?.plan as Row | undefined;
@@ -332,6 +358,11 @@ export default function CampaignCreatePage() {
         .cb-history-top b{font-size:13px;color:#fff}
         .cb-history-item small{font-size:12px;color:#7e97ab;line-height:1.45}
         .cb-history-item .prompt{font-style:italic;color:#9fb3c4}
+        .cb-history-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px}
+        .cb-history-actions button{border:1px solid #37536d;border-radius:8px;background:transparent;color:#bcd1df;padding:7px 10px;font-family:inherit;font-weight:700;font-size:12px;cursor:pointer}
+        .cb-history-actions button:hover{border-color:#fa975e;color:#fff}
+        .cb-history-actions button.danger{border-color:#a04545;color:#ffb4b4}
+        .cb-history-actions button:disabled{opacity:.5;cursor:not-allowed}
         .cb-confirm{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
         .cb-confirm input{background:#08131f;border:1px solid #1d3a55;border-radius:10px;color:#e9f3fb;padding:10px 12px;font-size:14px;width:130px;text-transform:uppercase;font-family:inherit}
         .cb-mode{display:flex;gap:8px;margin-bottom:14px}
@@ -604,23 +635,53 @@ export default function CampaignCreatePage() {
 
         <section className="cb-card">
           <h3 style={{ margin: "0 0 12px", fontSize: 12, fontWeight: 900, letterSpacing: ".08em", textTransform: "uppercase", color: "#f26b21" }}>Últimos pedidos</h3>
+          {historyError && <div className="cb-error" role="alert" style={{ marginBottom: 12 }}>{historyError}</div>}
+          {historyNotice && <div className="cb-success" role="status" style={{ marginBottom: 12 }}>{historyNotice}</div>}
           <div className="cb-history">
             {(boot?.history || []).length === 0 && <span className="cb-hint">Nenhum pedido ainda.</span>}
-            {(boot?.history || []).map((h: Row) => (
-              <article key={h.id} className="cb-history-item">
-                <div className="cb-history-top">
-                  <b>{h.client_name || "Cliente"} · {h.plan?.campaign?.name || "Sem plano"}</b>
-                  <span className={`cb-pill ${statusTone[h.status] || "muted"}`}>{statusLabel[h.status] || h.status}</span>
-                </div>
-                <small className="prompt">“{String(h.prompt || "").slice(0, 180)}{String(h.prompt || "").length > 180 ? "…" : ""}”</small>
-                <small>
-                  {h.actor_person} · {dateTime(h.created_at)}
-                  {h.plan?.adset?.daily_budget_brl ? <> · {money(h.plan.adset.daily_budget_brl)}/dia</> : null}
-                  {h.created_campaign_id ? <> · campanha {h.created_campaign_id}</> : null}
-                  {h.status === "FAILED" && h.error ? <> · {String(h.error).slice(0, 140)}</> : null}
-                </small>
-              </article>
-            ))}
+            {(boot?.history || []).map((h: Row) => {
+              const mayDiscard = h.status === "DRAFTED" &&
+                (boot?.profile?.is_adler || boot?.profile?.role === "MGMT" ||
+                  (Boolean(session?.user?.id) && h.actor_user_id === session?.user?.id));
+              const confirming = historyDiscardId === h.id;
+              return (
+                <article key={h.id} className="cb-history-item">
+                  <div className="cb-history-top">
+                    <b>{h.client_name || "Cliente"} · {h.plan?.campaign?.name || "Sem plano"}</b>
+                    <span className={`cb-pill ${statusTone[h.status] || "muted"}`}>{statusLabel[h.status] || h.status}</span>
+                  </div>
+                  <small className="prompt">“{String(h.prompt || "").slice(0, 180)}{String(h.prompt || "").length > 180 ? "…" : ""}”</small>
+                  <small>
+                    {h.actor_person} · {dateTime(h.created_at)}
+                    {h.plan?.adset?.daily_budget_brl ? <> · {money(h.plan.adset.daily_budget_brl)}/dia</> : null}
+                    {h.created_campaign_id ? <> · campanha {h.created_campaign_id}</> : null}
+                    {h.status === "FAILED" && h.error ? <> · {String(h.error).slice(0, 140)}</> : null}
+                    {h.status === "DRAFTED" && h.expires_at && Date.parse(h.expires_at) < Date.now() ? <> · prazo expirado</> : null}
+                  </small>
+                  {mayDiscard && (
+                    <div className="cb-history-actions">
+                      {!confirming ? (
+                        <button type="button" disabled={historyDiscardBusy}
+                          onClick={() => { setHistoryDiscardId(h.id); setHistoryError(""); setHistoryNotice(""); }}>
+                          Descartar rascunho
+                        </button>
+                      ) : (
+                        <>
+                          <span className="cb-hint">Descartar somente este rascunho? O histórico será preservado.</span>
+                          <button type="button" className="danger" disabled={historyDiscardBusy}
+                            onClick={() => void discardFromHistory(h.id)}>
+                            {historyDiscardBusy ? "Descartando…" : "Confirmar descarte"}
+                          </button>
+                          <button type="button" disabled={historyDiscardBusy} onClick={() => setHistoryDiscardId(null)}>
+                            Cancelar
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
           </div>
         </section>
       </div>

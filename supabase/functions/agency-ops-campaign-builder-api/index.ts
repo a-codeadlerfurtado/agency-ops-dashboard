@@ -687,7 +687,7 @@ Deno.serve(async (req: Request) => {
       ids.length ? ops.from("client_meta_assets").select("client_id,meta_ad_account_id,meta_page_id").in("client_id", ids) : Promise.resolve({ data: [] }),
       ids.length ? ops.from("client_integrations").select("client_id,external_id,is_primary,meta_ad_account_id").eq("system", "META_BM").in("client_id", ids) : Promise.resolve({ data: [] }),
       ops.from("campaign_build_requests")
-        .select("id,client_id,actor_person,prompt,status,plan,plan_warnings,created_campaign_id,created_adset_id,created_ad_id,error,executed_at,created_at,creative_type,creative_file_name")
+        .select("id,client_id,actor_person,actor_user_id,prompt,status,plan,plan_warnings,created_campaign_id,created_adset_id,created_ad_id,error,executed_at,created_at,expires_at,creative_type,creative_file_name")
         .in("client_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"])
         .order("created_at", { ascending: false }).limit(25),
     ]);
@@ -897,8 +897,12 @@ Deno.serve(async (req: Request) => {
     if (!row) return reply({ error: "request_not_found" }, 404);
     if (row.actor_user_id !== user.id && !isAdler && role !== "MGMT") return reply({ error: "forbidden" }, 403);
     if (row.status !== "DRAFTED") return reply({ error: "request_not_draft" }, 409);
-    await ops.from("campaign_build_requests").update({ status: "DISCARDED" }).eq("id", requestId);
-    return reply({ ok: true });
+    const { data: changed, error: updateError } = await ops.from("campaign_build_requests")
+      .update({ status: "DISCARDED" }).eq("id", requestId).eq("status", "DRAFTED")
+      .select("id").maybeSingle();
+    if (updateError) return reply({ error: "query_failed" }, 500);
+    if (!changed?.id) return reply({ error: "request_not_draft" }, 409);
+    return reply({ ok: true, request_id: requestId, status: "DISCARDED" });
   }
 
   // --- EXECUTE ---
