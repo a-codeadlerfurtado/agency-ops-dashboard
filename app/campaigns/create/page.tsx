@@ -86,6 +86,7 @@ const errorMessages: Record<string, string> = {
   client_churned: "Cliente churned não recebe campanha nova.",
   forbidden: "Esse cliente não está na sua carteira.",
   guided_invalid: "As opções da Configuração guiada estão incompletas ou inválidas.",
+  planner_incomplete: "A IA devolveu um plano incompleto. Nenhum rascunho inválido foi salvo. Tente novamente.",
   planner_failed: "Falha ao consultar a IA. Confira o serviço e tente novamente.",
   planner_not_configured: "A chave de IA do Campaign Builder ainda não está configurada no servidor. A gestão precisa cadastrar OPENAI_API_KEY.",
   too_many_creatives: "Selecione até 10 imagens ou vídeos por campanha.",

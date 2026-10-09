@@ -218,24 +218,54 @@ async function callPlanner(ops: any, prompt: string, context: Row) {
   if (!key) throw new Error("planner_not_configured");
   const { data: modelSetting } = await ops.from("automation_settings").select("value").eq("key", "CAMPAIGN_BUILDER_MODEL").maybeSingle();
   const model = clean(modelSetting?.value, 60) || clean(Deno.env.get("CAMPAIGN_BUILDER_MODEL"), 60) || "gpt-5-mini";
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" },
-    body: JSON.stringify({
+  // Nunca converter uma resposta vazia ou incompleta da IA em uma campanha "padrão".
+  // Isso gerava rascunhos com orçamento 0, nome genérico e destino WhatsApp.
+  const validate = (rawPlan: any): boolean => {
+    if (!rawPlan || typeof rawPlan !== "object" || Array.isArray(rawPlan)) return false;
+    const campaign = rawPlan.campaign;
+    const adset = rawPlan.adset;
+    const ad = rawPlan.ad;
+    if (!campaign || !adset || !ad || typeof campaign !== "object" || typeof adset !== "object" || typeof ad !== "object") return false;
+    if (clean(campaign.name, 120).length < 3 || !OBJECTIVES.includes(campaign.objective)) return false;
+    if (clean(adset.name, 120).length < 3 || !DESTINATIONS.includes(adset.destination?.type)) return false;
+    if (!Array.isArray(adset.geo?.cities) || !Number.isFinite(Number(adset.daily_budget_brl))) return false;
+    if (clean(ad.name, 120).length < 3) return false;
+    if (context?.modo !== "TURBINAR" && (!clean(ad.primary_text, 900) || !clean(ad.headline, 60))) return false;
+    // Respeita os requisitos explícitos do pedido, em vez de mascarar a omissão.
+    if (/formul[aá]rio\s+(?:instant[aâ]neo|nativo|de leads)|lead\s*form/i.test(prompt) &&
+      adset.destination.type !== "LEAD_FORM" && context?.modo !== "TURBINAR") return false;
+    if (/(?:or[çc]amento[^.\n]{0,70}R\$\s*\d+|R\$\s*\d+[^.\n]{0,70}(?:por dia|di[aá]ri[oa]|\/dia))/i.test(prompt)
+      && Number(adset.daily_budget_brl) <= 0) return false;
+    return true;
+  };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const payload: Row = {
       model,
       response_format: { type: "json_object" },
-      max_completion_tokens: 2500,
+      max_completion_tokens: attempt === 0 ? 6500 : 8500,
       messages: [
         { role: "system", content: PLAN_PROMPT },
         { role: "user", content: `CONTEXTO DO CLIENTE:\n${JSON.stringify(context)}\n\nPEDIDO DO GT:\n${prompt}` },
       ],
-    }),
-  });
-  const raw = await response.text();
-  if (!response.ok) throw new Error(`openai ${response.status}: ${raw.slice(0, 300)}`);
-  let body: any = null;
-  try { body = JSON.parse(raw); } catch { body = null; }
-  return { plan: normalizePlan(parseJsonText(body?.choices?.[0]?.message?.content || "{}")), model };
+    };
+    if (/^gpt-5/i.test(model)) payload.reasoning_effort = "low";
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(80000),
+    });
+    const raw = await response.text();
+    if (!response.ok) throw new Error(`openai ${response.status}: ${raw.slice(0, 220)}`);
+    let parsedResponse: any;
+    try { parsedResponse = JSON.parse(raw); } catch { parsedResponse = null; }
+    const content = parsedResponse?.choices?.[0]?.message?.content;
+    if (typeof content !== "string" || !content.trim()) continue;
+    let rawPlan: any;
+    try { rawPlan = parseJsonText(content); } catch { continue; }
+    if (validate(rawPlan)) return { plan: normalizePlan(rawPlan), model };
+  }
+  throw new Error("planner_incomplete");
 }
 
 async function resolveGeo(token: string, cities: string[]) {
@@ -768,6 +798,7 @@ Deno.serve(async (req: Request) => {
     } catch (error) {
       const reason = clean((error as Error)?.message, 300);
       if (reason === "planner_not_configured") return reply({ error: "planner_not_configured" }, 503);
+      if (reason === "planner_incomplete") return reply({ error: "planner_incomplete" }, 502);
       return reply({ error: "planner_failed", detail: reason }, 502);
     }
     const plan = planned.plan;
