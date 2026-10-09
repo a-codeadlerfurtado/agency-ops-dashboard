@@ -375,7 +375,7 @@ Deno.serve(async (req: Request) => {
 
   const url = new URL(req.url);
   if (req.method === "GET" && url.searchParams.get("health") === "1") {
-    return reply({ ok: true, service: SERVICE, version: SERVICE_VERSION });
+    return reply({ ok: true, service: SERVICE, version: SERVICE_VERSION, planner_env_configured: Boolean(Deno.env.get("OPENAI_API_KEY")) });
   }
   if (req.method !== "POST") return reply({ error: "method_not_allowed" }, 405);
 
