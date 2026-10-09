@@ -138,6 +138,8 @@ export default function AdlerCalendarMeetingWarning() {
   if (!item || session?.user?.id !== ADLER_USER_ID) return null;
 
   const meetingUrl = String(item?.metadata?.meet_url || item?.metadata?.html_link || "");
+  const meetingTitle = String(item?.metadata?.google_calendar_event_title || item?.metadata?.meeting_title || "").trim() || "Sem título";
+  const description = String(item?.description || "").replace(/^Título da reunião:[^\n]*(?:\n|$)/, "");
   const changeType = String(item?.metadata?.google_calendar_change_type || "");
   const eyebrow = changeType === "CREATED"
     ? "NOVA REUNIÃO"
@@ -159,7 +161,11 @@ export default function AdlerCalendarMeetingWarning() {
       <div className="adler-gcal-body">
         <div className="adler-gcal-badge">ONBOARDING ADLER</div>
         <h3>{String(item?.metadata?.google_calendar_creator_name || item?.actor || "Outro usuário")} fez uma alteração na sua agenda</h3>
-        <p>{String(item?.description || "")}</p>
+        <div className="adler-gcal-meeting-title">
+          <span>Título da reunião</span>
+          <strong>{meetingTitle}</strong>
+        </div>
+        <p>{description}</p>
         <small>O aviso também fica salvo na Central de Notificações. Clicar em “Ciente” remove apenas o alerta pendente, sem apagar o histórico.</small>
       </div>
 
@@ -186,7 +192,10 @@ const styles = [
   ".adler-gcal-card header>button{width:38px;height:38px;border-radius:10px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.04);color:#d9e6ef;font-size:22px;cursor:pointer}",
   ".adler-gcal-body{padding:22px 24px}",
   ".adler-gcal-badge{display:inline-flex;padding:6px 9px;border-radius:999px;background:rgba(69,174,232,.12);border:1px solid rgba(69,174,232,.28);color:#8ed4ff;font-size:10px;font-weight:800;letter-spacing:.08em}",
-  ".adler-gcal-body h3{margin:14px 0 8px;font-size:18px}",
+  ".adler-gcal-body h3{margin:14px 0 12px;font-size:18px}",
+  ".adler-gcal-meeting-title{margin:0 0 14px;padding:13px 16px;border:1px solid rgba(69,174,232,.24);background:rgba(69,174,232,.07);border-radius:11px}",
+  ".adler-gcal-meeting-title span{display:block;font-size:11px;font-weight:700;color:#8ed4ff;letter-spacing:.06em;text-transform:uppercase;margin-bottom:5px}",
+  ".adler-gcal-meeting-title strong{display:block;font-size:18px;line-height:1.35;font-weight:800;color:#f1f8fc;overflow-wrap:anywhere}",
   ".adler-gcal-body p{margin:0;color:#bdcbd7;font-size:14px;line-height:1.7;white-space:pre-wrap}",
   ".adler-gcal-body small{display:block;margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.07);color:#71899d;font-size:11px;line-height:1.5}",
   ".adler-gcal-card footer{display:flex;justify-content:flex-end;gap:9px;padding:16px 24px 22px}",

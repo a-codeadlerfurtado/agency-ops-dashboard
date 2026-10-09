@@ -393,7 +393,9 @@ async function emitAlert(account: Row, kind: "CREATED" | "RESCHEDULED" | "CANCEL
   if (!alertRow) return;
 
   const scheduledLabel = formatMeetingWindow(snapshot.startTime, snapshot.endTime);
+  const meetingTitle = clean(snapshot.title, 300) || "Reunião sem título";
   const description = [
+    "Título da reunião: " + meetingTitle,
     "Marcada por: " + creator,
     "Agendada em: " + formatDateTime(snapshot.createdAt || snapshot.updatedAt),
     "Reunião: " + scheduledLabel,
@@ -406,6 +408,7 @@ async function emitAlert(account: Row, kind: "CREATED" | "RESCHEDULED" | "CANCEL
     target_role: "MGMT",
     google_calendar_alert: true,
     google_calendar_event_id: snapshot.eventId,
+    google_calendar_event_title: meetingTitle,
     google_calendar_change_type: kind,
     google_calendar_creator_email: snapshot.creatorEmail || null,
     google_calendar_creator_name: creator,
