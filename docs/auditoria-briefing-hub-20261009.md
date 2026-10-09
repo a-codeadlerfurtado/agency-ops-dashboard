@@ -23,7 +23,7 @@ A migration `supabase/migrations/20261009131000_briefing_hub_sync_drive_binding_
 
 O trigger sincroniza `DRIVE` com `agency_ops.client_drive_bindings` quando uma integração é inserida ou seu `external_id` é alterado, usando a pasta raiz `1-FIIyg51Wbe5GbMXagDcB6XxWhKmdY9A`. Se o vínculo existir e apontar para pasta diferente, o UPSERT atualiza o folder ID e os metadados.
 
-Aplicada no banco em 09/10/2026 e validada pela presença do trigger habilitado. Pela via de aplicação direta no Supabase, a migration remota recebeu a versão `20261009105044`; o nome de arquivo no Git segue o nome solicitado neste registro. Como o SQL é idempotente, uma reaplicação posterior pelo CLI não deve recriar um segundo trigger.
+Aplicada no banco em 09/10/2026 e validada pela presença do trigger habilitado. A aplicação direta no Supabase recebeu inicialmente a versão `20261009105044`. O histórico foi alinhado ao arquivo por `supabase migration repair --project-ref bfzdetibfcwihfkltbkp --status applied 20261009131000 --yes` e `supabase migration repair --project-ref bfzdetibfcwihfkltbkp --status reverted 20261009105044 --yes`, sem executar novamente o SQL. O trigger continuou habilitado.
 
 ## Limitação de observabilidade
 O bloco `exception when others then null` da função foi mantido exatamente como solicitado. Ele impede que falhas de sincronização derrubem a operação original, mas **também silencia erros**. Recomenda-se posteriormente monitorar divergências entre as duas tabelas e exercitar o fluxo de upload ponta a ponta.
