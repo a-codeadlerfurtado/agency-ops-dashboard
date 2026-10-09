@@ -44,7 +44,9 @@ const errorMessages: Record<string, string> = {
   rate_limited: "Limite de pedidos por hora atingido. Aguarde um pouco.",
   client_churned: "Cliente churned não recebe campanha nova.",
   forbidden: "Esse cliente não está na sua carteira.",
-  planner_failed: "A IA não conseguiu montar o plano. Tente reformular o pedido.",
+  planner_failed: "Falha ao consultar a IA. Confira o serviço e tente novamente.",
+  planner_not_configured: "A chave de IA do Campaign Builder ainda não está configurada no servidor. A gestão precisa cadastrar OPENAI_API_KEY.",
+  too_many_creatives: "Selecione até 10 imagens ou vídeos por campanha.",
   draft_expired: "O rascunho expirou. Gere o plano de novo.",
   assets_missing: "Conta de anúncio ou Página não cadastradas em Ativos Meta.",
   creative_missing: "Anexe o criativo antes de criar.",
@@ -76,8 +78,9 @@ export default function CampaignCreatePage() {
   const [postsLoading, setPostsLoading] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Row | null>(null);
   const [prompt, setPrompt] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [creative, setCreative] = useState<Row | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [creatives, setCreatives] = useState<Row[]>([]);
+  const [uploadProgress, setUploadProgress] = useState("");
   const [drafting, setDrafting] = useState(false);
   const [draft, setDraft] = useState<Row | null>(null);
   const [draftError, setDraftError] = useState("");
@@ -144,27 +147,44 @@ export default function CampaignCreatePage() {
     if (mode === "TURBINAR" && !selectedPost) { setDraftError("Escolha a publicação que vai turbinar."); return; }
     setDrafting(true); setDraftError(""); setDraft(null); setResult(null); setOverrides({}); setConfirmWord("");
     try {
-      let creativePayload = creative;
-      if (mode === "NOVA" && file && (!creative || creative.file_name !== file.name)) {
-        const form = new FormData();
-        form.set("action", "UPLOAD_CREATIVE");
-        form.set("client_name", clientName);
-        form.set("file", file);
-        const response = await fetch(API_URL, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${session.access_token}` },
-          body: form,
-        });
-        const body = await response.json().catch(() => null);
-        if (!response.ok || !body?.ok) { setDraftError(friendlyError(body, "Falha no upload do criativo.")); return; }
-        creativePayload = body.creative;
-        setCreative(body.creative);
+      let creativePayloads = creatives;
+      if (mode === "NOVA" && files.length > 10) {
+        setDraftError("Selecione até 10 arquivos.");
+        return;
+      }
+      if (mode === "NOVA" && files.length && creatives.length !== files.length) {
+        const uploaded: Row[] = [];
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (file.size > 25 * 1024 * 1024 || (!file.type.startsWith("image/") && !file.type.startsWith("video/"))) {
+            setDraftError(`Arquivo inválido ou acima de 25 MB: ${file.name}`);
+            return;
+          }
+          setUploadProgress(`Enviando ${i + 1} de ${files.length}: ${file.name}`);
+          const form = new FormData();
+          form.set("action", "UPLOAD_CREATIVE");
+          form.set("client_name", clientName);
+          form.set("file", file);
+          const response = await fetch(API_URL, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${session.access_token}` },
+            body: form,
+          });
+          const body = await response.json().catch(() => null);
+          if (!response.ok || !body?.ok) {
+            setDraftError(`${file.name}: ${friendlyError(body, "Falha no upload do criativo.")}`);
+            return;
+          }
+          uploaded.push(body.creative);
+        }
+        setCreatives(uploaded);
+        creativePayloads = uploaded;
       }
       const { ok, body } = await api({
         action: "DRAFT",
         client_name: clientName,
         prompt: prompt.trim(),
-        creative: mode === "NOVA" ? creativePayload : null,
+        creatives: mode === "NOVA" ? creativePayloads : [],
         boost: mode === "TURBINAR" && selectedPost ? {
           source: selectedPost.source,
           post_id: selectedPost.post_id,
@@ -174,8 +194,11 @@ export default function CampaignCreatePage() {
       });
       if (!ok) { setDraftError(friendlyError(body, "Não foi possível gerar o plano.")); return; }
       setDraft(body);
+    } catch (error) {
+      setDraftError(`Erro de rede ao gerar o plano: ${String((error as Error)?.message || error).slice(0,160)}`);
     } finally {
       setDrafting(false);
+      setUploadProgress("");
     }
   };
 
@@ -185,9 +208,9 @@ export default function CampaignCreatePage() {
     setExecuting(true); setDraftError("");
     try {
       const { ok, body } = await api({ action: "EXECUTE", request_id: draft.request_id, confirmation: "CRIAR", overrides });
-      if (!ok) { setDraftError(friendlyError(body, "A criação falhou. Nada ficou ativo; o que subiu foi revertido.")); await loadBoot(); return; }
+      if (!ok) { setDraftError(friendlyError(body, "A criação falhou. Nenhuma campanha foi ativada; revise o histórico e os itens pausados na Meta.")); await loadBoot(); return; }
       setResult(body);
-      setDraft(null); setPrompt(""); setFile(null); setCreative(null); setConfirmWord("");
+      setDraft(null); setPrompt(""); setFiles([]); setCreatives([]); setConfirmWord("");
       if (fileRef.current) fileRef.current.value = "";
       await loadBoot();
     } finally {
@@ -278,7 +301,7 @@ export default function CampaignCreatePage() {
         {result && (
           <div className="cb-success">
             <b>Campanha criada pausada: {result.campaign_name}</b><br />
-            IDs — campanha {result.campaign_id} · conjunto {result.adset_id} · anúncio {result.ad_id}.<br />
+            IDs — campanha {result.campaign_id} · conjunto {result.adset_id} · anúncios {(result.ad_ids || [result.ad_id]).join(", ")}.<br />
             Revise no Gerenciador de Anúncios e ative quando estiver tudo certo.
           </div>
         )}
@@ -291,7 +314,7 @@ export default function CampaignCreatePage() {
           <div className="cb-grid">
             <div className="cb-field">
               <label>Cliente</label>
-              <select value={clientName} onChange={(e) => { setClientName(e.target.value); resetFlow(); setCreative(null); setFile(null); if (fileRef.current) fileRef.current.value = ""; }}>
+              <select value={clientName} onChange={(e) => { setClientName(e.target.value); resetFlow(); setCreatives([]); setFiles([]); if (fileRef.current) fileRef.current.value = ""; }}>
                 <option value="">Selecione…</option>
                 {(boot?.clients || []).map((c: Row) => (
                   <option key={c.id} value={c.display_name}>{c.display_name}</option>
@@ -309,9 +332,18 @@ export default function CampaignCreatePage() {
             </div>
             {mode === "NOVA" ? (
               <div className="cb-field">
-                <label>Criativo (imagem ou vídeo, até 25 MB)</label>
-                <input ref={fileRef} type="file" accept="image/*,video/*" onChange={(e) => { setFile(e.target.files?.[0] || null); setCreative(null); }} />
-                {file && <span className="cb-hint">{file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB</span>}
+                <label>Criativos (até 10 arquivos, 25 MB cada)</label>
+                <input ref={fileRef} type="file" accept="image/*,video/*" multiple onChange={(e) => {
+                  setFiles(Array.from(e.target.files || []));
+                  setCreatives([]);
+                  resetFlow();
+                }} />
+                {files.length > 0 && (
+                  <div className="cb-hint" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    <b>{files.length} arquivo(s) selecionado(s) — cada um será um anúncio pausado</b>
+                    {files.map((item, i) => <span key={`${item.name}-${i}`}>{i + 1}. {item.name} · {(item.size / 1024 / 1024).toFixed(1)} MB</span>)}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="cb-field">
@@ -352,7 +384,7 @@ export default function CampaignCreatePage() {
           )}
           <div className="cb-actions" style={{ marginTop: 12 }}>
             <button className="cb-btn primary" disabled={!clientName || prompt.trim().length < 15 || drafting || (mode === "TURBINAR" && !selectedPost)} onClick={generate}>
-              {drafting ? "Gerando plano…" : draft ? "Gerar de novo" : "Gerar plano"}
+              {drafting ? (uploadProgress || "Gerando plano…") : draft ? "Gerar de novo" : "Gerar plano"}
             </button>
             {draft && <button className="cb-btn ghost" onClick={discard}>Descartar rascunho</button>}
           </div>
@@ -403,7 +435,7 @@ export default function CampaignCreatePage() {
                     </div>
                     <div className="cb-kv" style={{ marginTop: 10 }}>
                       <span>CTA</span><b>{plan.ad?.cta}</b>
-                      <span>Criativo</span><b>{creative?.file_name || (file ? file.name : "—")}</b>
+                      <span>Criativos</span><b>{(creatives.length ? creatives.map((c) => c.file_name) : files.map((f) => f.name)).join(", ") || "—"}</b>
                     </div>
                   </>
                 )}

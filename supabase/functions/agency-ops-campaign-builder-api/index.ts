@@ -16,11 +16,12 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const SERVICE = "agency-ops-campaign-builder-api";
-const SERVICE_VERSION = "v1.0.0";
+const SERVICE_VERSION = "v1.1.0";
 const GRAPH = "v21.0";
 const BUCKET = "agency-ai-private";
 const DRAFT_TTL_MS = 45 * 60_000;
 const MAX_FILE_MB = 25;
+const MAX_CREATIVES = 10;
 const DRAFT_RATE_PER_HOUR = 30;
 const EXECUTE_RATE_PER_HOUR = 10;
 
@@ -210,13 +211,16 @@ function normalizePlan(raw: any) {
 }
 
 async function callPlanner(ops: any, prompt: string, context: Row) {
-  const { data: key } = await ops.rpc("get_secret", { p_name: "OPENAI_API_KEY" });
-  if (!key || typeof key !== "string") throw new Error("openai_key_missing");
+  const { data: vaultKey } = await ops.rpc("get_secret", { p_name: "OPENAI_API_KEY" });
+  // O projeto também pode configurar a chave como Secret da Edge Function.
+  const key = typeof vaultKey === "string" && vaultKey.trim()
+    ? vaultKey.trim() : clean(Deno.env.get("OPENAI_API_KEY"), 2000);
+  if (!key) throw new Error("planner_not_configured");
   const { data: modelSetting } = await ops.from("automation_settings").select("value").eq("key", "CAMPAIGN_BUILDER_MODEL").maybeSingle();
   const model = clean(modelSetting?.value, 60) || clean(Deno.env.get("CAMPAIGN_BUILDER_MODEL"), 60) || "gpt-5-mini";
   const response = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
-    headers: { Authorization: `Bearer ${key.trim()}`, "content-type": "application/json" },
+    headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" },
     body: JSON.stringify({
       model,
       response_format: { type: "json_object" },
@@ -588,13 +592,22 @@ Deno.serve(async (req: Request) => {
     if ("error" in scoped) return scoped.error;
     const assets = await loadAssets(scoped.client.id);
 
-    const creative = body?.creative && typeof body.creative === "object" ? {
-      bucket: clean(body.creative.bucket, 80) === BUCKET ? BUCKET : null,
-      path: clean(body.creative.path, 300) || null,
-      type: ["IMAGE", "VIDEO"].includes(clean(body.creative.type, 10)) ? clean(body.creative.type, 10) : null,
-      file_name: clean(body.creative.file_name, 200) || null,
-    } : null;
-    const creativeValid = Boolean(creative?.bucket && creative?.path?.startsWith(`campaign-builder/${scoped.client.id}/`) && creative?.type);
+    const inputs = Array.isArray(body?.creatives)
+      ? body.creatives : (body?.creative ? [body.creative] : []);
+    if (inputs.length > MAX_CREATIVES) return reply({ error: "too_many_creatives", max: MAX_CREATIVES }, 400);
+    const creatives: Row[] = inputs.map((item: Row) => ({
+      bucket: clean(item?.bucket, 80) === BUCKET ? BUCKET : null,
+      path: clean(item?.path, 300) || null,
+      type: ["IMAGE", "VIDEO"].includes(clean(item?.type, 10)) ? clean(item.type, 10) : null,
+      file_name: clean(item?.file_name, 200) || null,
+    }));
+    const paths = creatives.map((item) => item.path);
+    const creativeValid = creatives.length > 0 && creatives.every((item) =>
+      item.bucket === BUCKET && item.path?.startsWith(`campaign-builder/${scoped.client.id}/`) &&
+      item.type && item.file_name
+    ) && new Set(paths).size === paths.length;
+    if (creatives.length && !creativeValid) return reply({ error: "creative_missing" }, 400);
+    const creative = creatives[0] || null;
 
     // Turbinar: publicação existente no lugar do criativo
     const boost = body?.boost && typeof body.boost === "object" ? {
@@ -614,10 +627,12 @@ Deno.serve(async (req: Request) => {
         publicacao_turbinada: boostValid ? { rede: boost?.source, legenda: boost?.caption || "(sem legenda)" } : null,
         tem_pagina_cadastrada: Boolean(assets.page_id),
         tem_pixel: Boolean(assets.pixel_id),
-        criativo_anexado: creativeValid ? creative?.type : "nenhum",
+        criativos_anexados: creativeValid ? creatives.map((item) => ({ tipo: item.type, nome: item.file_name })) : [],
       });
     } catch (error) {
-      return reply({ error: "planner_failed", detail: clean((error as Error)?.message, 300) }, 502);
+      const reason = clean((error as Error)?.message, 300);
+      if (reason === "planner_not_configured") return reply({ error: "planner_not_configured" }, 503);
+      return reply({ error: "planner_failed", detail: reason }, 502);
     }
     const plan = planned.plan;
     if (boostValid) {
@@ -651,7 +666,7 @@ Deno.serve(async (req: Request) => {
       if (monthly < Number(assets.minimum_ad_budget)) warnings.push(`Orçamento mensal estimado (R$ ${Math.round(monthly)}) abaixo do mínimo contratado (R$ ${assets.minimum_ad_budget}).`);
     }
 
-    const planHash = await sha256(JSON.stringify({ actor: user.id, client: scoped.client.id, plan, geo: geo.resolved }));
+    const planHash = await sha256(JSON.stringify({ actor: user.id, client: scoped.client.id, plan, geo: geo.resolved, creatives: creativeValid ? creatives.map((c) => c.path) : [] }));
     const expiresAt = new Date(Date.now() + DRAFT_TTL_MS).toISOString();
     const { data: inserted, error: insertError } = await ops.from("campaign_build_requests").insert({
       client_id: scoped.client.id,
@@ -670,7 +685,7 @@ Deno.serve(async (req: Request) => {
       creative_type: !boostValid && creativeValid ? creative?.type : null,
       creative_file_name: !boostValid && creativeValid ? creative?.file_name : null,
       expires_at: expiresAt,
-      request_metadata: { source: "CAMPAIGN_BUILDER_V1", mode: boostValid ? "BOOST" : "NEW", model: planned.model, instagram_id: assets.instagram_id, pixel_id: assets.pixel_id, geo_unresolved: geo.unresolved },
+      request_metadata: { source: "CAMPAIGN_BUILDER_V2", mode: boostValid ? "BOOST" : "NEW", model: planned.model, instagram_id: assets.instagram_id, pixel_id: assets.pixel_id, geo_unresolved: geo.unresolved, creatives: !boostValid && creativeValid ? creatives : [] },
     }).select("id").single();
     if (insertError || !inserted?.id) return reply({ error: "audit_store_failed" }, 500);
 
@@ -723,6 +738,16 @@ Deno.serve(async (req: Request) => {
 
     const plan = row.plan as Row;
     const boostMode = clean(row.request_metadata?.mode, 10) === "BOOST" && Boolean(plan?.boost?.post_id);
+    const creativeRows: Row[] = Array.isArray(row.request_metadata?.creatives) && row.request_metadata.creatives.length
+      ? row.request_metadata.creatives
+      : row.creative_path ? [{ bucket: row.creative_bucket, path: row.creative_path, type: row.creative_type, file_name: row.creative_file_name }] : [];
+    const validCreativeRows = creativeRows.length > 0 && creativeRows.length <= MAX_CREATIVES &&
+      new Set(creativeRows.map((c) => c.path)).size === creativeRows.length &&
+      creativeRows.every((c) =>
+        c.bucket === BUCKET && typeof c.path === "string" &&
+        c.path.startsWith(`campaign-builder/${row.client_id}/`) &&
+        ["IMAGE", "VIDEO"].includes(c.type)
+      );
     const accountId = numericId(row.meta_ad_account_id);
     const pageId = numericId(row.meta_page_id);
     const instagramId = numericId(row.request_metadata?.instagram_id) || null;
@@ -732,7 +757,7 @@ Deno.serve(async (req: Request) => {
       if (plan.boost.source === "FACEBOOK" && !pageId) return reply({ error: "assets_missing" }, 409);
     } else {
       if (!pageId) return reply({ error: "assets_missing" }, 409);
-      if (!row.creative_bucket || !row.creative_path || !row.creative_type) return reply({ error: "creative_missing" }, 409);
+      if (!validCreativeRows) return reply({ error: "creative_missing" }, 409);
     }
     if (!plan?.adset?.daily_budget_brl || plan.adset.daily_budget_brl <= 0) return reply({ error: "budget_missing" }, 409);
 
@@ -756,8 +781,19 @@ Deno.serve(async (req: Request) => {
       const message = clean((error as Error)?.message || error, 500);
       // rollback: apaga o que já foi criado, na ordem inversa
       const rollback: Row = {};
-      try { if (created.ad_id) { await metaDelete(created.ad_id, created.token); rollback.ad = true; } } catch { rollback.ad = false; }
-      try { if (created.creative_id) { await metaDelete(created.creative_id, created.token); rollback.creative = true; } } catch { rollback.creative = false; }
+      rollback.ads = [];
+      for (const id of [...(created.ad_ids || [])].reverse()) {
+        try { await metaDelete(id, created.token); rollback.ads.push({ id, deleted: true }); }
+        catch { rollback.ads.push({ id, deleted: false }); }
+      }
+      rollback.creatives = [];
+      for (const id of [...(created.creative_ids || [])].reverse()) {
+        try { await metaDelete(id, created.token); rollback.creatives.push({ id, deleted: true }); }
+        catch { rollback.creatives.push({ id, deleted: false }); }
+      }
+      for (const id of [...(created.video_ids || [])].reverse()) {
+        try { await metaDelete(id, created.token); } catch { /* a video upload may remain for inspection */ }
+      }
       try { if (created.adset_id) { await metaDelete(created.adset_id, created.token); rollback.adset = true; } } catch { rollback.adset = false; }
       try { if (created.campaign_id) { await metaDelete(created.campaign_id, created.token); rollback.campaign = true; } } catch { rollback.campaign = false; }
       await ops.from("campaign_build_requests").update({
@@ -776,47 +812,6 @@ Deno.serve(async (req: Request) => {
       const token = (resolved as any).candidate.token as string;
       created.token = token;
 
-      // criativo: baixa do Storage e sobe para a Meta (pulado no modo turbinar)
-      let imageHash: string | null = null;
-      let video: { id: string; thumb: string } | null = null;
-      if (boostMode) {
-        // nada a subir: a publicação existente é o criativo
-      } else {
-      const { data: fileData, error: downloadError } = await db.storage.from(row.creative_bucket).download(row.creative_path);
-      if (downloadError || !fileData) return await fail("creative_download", downloadError || new Error("empty_file"), created);
-      if (row.creative_type === "IMAGE") {
-        const form = new FormData();
-        form.set("access_token", token);
-        form.set("source", new File([fileData], row.creative_file_name || "creative.jpg", { type: fileData.type || "image/jpeg" }));
-        const uploaded = await metaJson(`https://graph.facebook.com/${GRAPH}/act_${accountId}/adimages`, { method: "POST", body: form });
-        const images = uploaded?.images || {};
-        imageHash = images[Object.keys(images)[0]]?.hash || null;
-        if (!imageHash) return await fail("image_upload", new Error("Meta não devolveu image_hash."), created);
-      } else {
-        const form = new FormData();
-        form.set("access_token", token);
-        form.set("source", new File([fileData], row.creative_file_name || "creative.mp4", { type: fileData.type || "video/mp4" }));
-        const uploaded = await metaJson(`https://graph.facebook.com/${GRAPH}/act_${accountId}/advideos`, { method: "POST", body: form });
-        const videoId = clean(uploaded?.id, 40);
-        if (!videoId) return await fail("video_upload", new Error("Meta não devolveu o ID do vídeo."), created);
-        // aguarda processamento e busca thumbnail
-        let thumb = "";
-        for (let attempt = 0; attempt < 12; attempt++) {
-          await new Promise((resolve) => setTimeout(resolve, 5000));
-          try {
-            const status = await metaJson(graphUrl(videoId, { fields: "status", access_token: token }));
-            if (clean(status?.status?.video_status, 40).toLowerCase() === "ready") {
-              const thumbs = await metaJson(graphUrl(`${videoId}/thumbnails`, { access_token: token }));
-              thumb = clean((thumbs?.data || []).find((t: Row) => t.is_preferred)?.uri || thumbs?.data?.[0]?.uri, 1000);
-              break;
-            }
-          } catch { /* tenta de novo */ }
-        }
-        if (!thumb) return await fail("video_processing", new Error("Vídeo ainda em processamento na Meta. Tente de novo em alguns minutos."), created);
-        video = { id: videoId, thumb };
-      }
-      }
-
       // campanha
       const campaign = await metaPost(`act_${accountId}/campaigns`, token, {
         name: plan.campaign.name,
@@ -834,38 +829,91 @@ Deno.serve(async (req: Request) => {
       created.adset_id = clean(adset?.id, 40);
       if (!created.adset_id) return await fail("adset_create", new Error("Meta não devolveu o ID do conjunto."), created);
 
-      // criativo
-      let creativeFields: Record<string, string>;
-      if (boostMode && plan.boost.source === "FACEBOOK") {
-        creativeFields = { name: `${plan.ad.name} — turbinar`, object_story_id: plan.boost.post_id };
-      } else if (boostMode) {
-        const igFields: Row = { name: `${plan.ad.name} — turbinar`, instagram_user_id: instagramId, source_instagram_media_id: plan.boost.post_id };
-        if (pageId) igFields.object_id = pageId;
-        creativeFields = igFields as Record<string, string>;
-      } else {
-        creativeFields = {
-          name: `${plan.ad.name} — criativo`,
-          object_story_spec: JSON.stringify(creativeSpec(plan, pageId, instagramId, imageHash, video)),
-        };
-      }
-      const creative = await metaPost(`act_${accountId}/adcreatives`, token, creativeFields);
-      created.creative_id = clean(creative?.id, 40);
-      if (!created.creative_id) return await fail("creative_create", new Error("Meta não devolveu o ID do criativo."), created);
+      // Um anúncio pausado por criativo, todos no mesmo conjunto e mesma campanha.
+      created.ad_ids = [];
+      created.creative_ids = [];
+      created.video_ids = [];
+      for (let index = 0; index < (boostMode ? 1 : creativeRows.length); index++) {
+        const item = boostMode ? null : creativeRows[index];
+        let imageHash: string | null = null;
+        let video: { id: string; thumb: string } | null = null;
+        if (item) {
+          const { data: fileData, error: downloadError } = await db.storage.from(item.bucket).download(item.path);
+          if (downloadError || !fileData) return await fail(`creative_download_${index + 1}`, downloadError || new Error("empty_file"), created);
+          if (item.type === "IMAGE") {
+            const form = new FormData();
+            form.set("access_token", token);
+            form.set("source", new File([fileData], item.file_name || "creative.jpg", { type: fileData.type || "image/jpeg" }));
+            const uploaded = await metaJson(`https://graph.facebook.com/${GRAPH}/act_${accountId}/adimages`, { method: "POST", body: form });
+            const images = uploaded?.images || {};
+            imageHash = images[Object.keys(images)[0]]?.hash || null;
+            if (!imageHash) return await fail(`image_upload_${index + 1}`, new Error("Meta não devolveu image_hash."), created);
+          } else {
+            const form = new FormData();
+            form.set("access_token", token);
+            form.set("source", new File([fileData], item.file_name || "creative.mp4", { type: fileData.type || "video/mp4" }));
+            const uploaded = await metaJson(`https://graph.facebook.com/${GRAPH}/act_${accountId}/advideos`, { method: "POST", body: form });
+            const videoId = clean(uploaded?.id, 40);
+            if (!videoId) return await fail(`video_upload_${index + 1}`, new Error("Meta não devolveu o ID do vídeo."), created);
+            created.video_ids.push(videoId);
+            let thumb = "";
+            for (let attempt = 0; attempt < 12; attempt++) {
+              await new Promise((resolve) => setTimeout(resolve, 5000));
+              try {
+                const status = await metaJson(graphUrl(videoId, { fields: "status", access_token: token }));
+                if (clean(status?.status?.video_status, 40).toLowerCase() === "ready") {
+                  const thumbs = await metaJson(graphUrl(`${videoId}/thumbnails`, { access_token: token }));
+                  thumb = clean((thumbs?.data || []).find((t: Row) => t.is_preferred)?.uri || thumbs?.data?.[0]?.uri, 1000);
+                  break;
+                }
+              } catch { /* tenta de novo */ }
+            }
+            if (!thumb) return await fail(`video_processing_${index + 1}`, new Error("Vídeo ainda em processamento na Meta. Tente de novo em alguns minutos."), created);
+            video = { id: videoId, thumb };
+          }
+        }
+        const itemName = (boostMode ? plan.ad.name : `${plan.ad.name} — ${index + 1}/${creativeRows.length}`).slice(0, 120);
+        let creativeFields: Record<string, string>;
+        if (boostMode && plan.boost.source === "FACEBOOK") {
+          creativeFields = { name: `${itemName} — turbinar`, object_story_id: plan.boost.post_id };
+        } else if (boostMode) {
+          const igFields: Row = { name: `${itemName} — turbinar`, instagram_user_id: instagramId, source_instagram_media_id: plan.boost.post_id };
+          if (pageId) igFields.object_id = pageId;
+          creativeFields = igFields as Record<string, string>;
+        } else {
+          creativeFields = {
+            name: `${itemName} — criativo`,
+            object_story_spec: JSON.stringify(creativeSpec(plan, pageId, instagramId, imageHash, video)),
+          };
+        }
+        const creative = await metaPost(`act_${accountId}/adcreatives`, token, creativeFields);
+        const creativeId = clean(creative?.id, 40);
+        if (!creativeId) return await fail(`creative_create_${index + 1}`, new Error("Meta não devolveu o ID do criativo."), created);
+        created.creative_ids.push(creativeId);
 
-      // anúncio
-      const ad = await metaPost(`act_${accountId}/ads`, token, {
-        name: plan.ad.name,
-        adset_id: created.adset_id,
-        creative: JSON.stringify({ creative_id: created.creative_id }),
-        status: "PAUSED",
-      });
-      created.ad_id = clean(ad?.id, 40);
-      if (!created.ad_id) return await fail("ad_create", new Error("Meta não devolveu o ID do anúncio."), created);
+        const ad = await metaPost(`act_${accountId}/ads`, token, {
+          name: itemName,
+          adset_id: created.adset_id,
+          creative: JSON.stringify({ creative_id: creativeId }),
+          status: "PAUSED",
+        });
+        const adId = clean(ad?.id, 40);
+        if (!adId) return await fail(`ad_create_${index + 1}`, new Error("Meta não devolveu o ID do anúncio."), created);
+        created.ad_ids.push(adId);
+      }
+      created.ad_id = created.ad_ids[0] || null;
+      created.creative_id = created.creative_ids[0] || null;
 
       // verificação: campanha existe e está pausada
       const live = await metaJson(graphUrl(created.campaign_id, { fields: "id,name,status,effective_status", access_token: token }));
       if (clean(live?.status, 20).toUpperCase() !== "PAUSED") {
         return await fail("verification", new Error(`Campanha criada mas com status inesperado: ${live?.status}.`), created);
+      }
+      for (const adId of created.ad_ids) {
+        const adCheck = await metaJson(graphUrl(adId, { fields: "id,status", access_token: token }));
+        if (clean(adCheck?.status, 20).toUpperCase() !== "PAUSED") {
+          return await fail("verification_ads", new Error(`Anúncio ${adId} não está pausado.`), created);
+        }
       }
 
       await ops.from("campaign_build_requests").update({
@@ -876,7 +924,7 @@ Deno.serve(async (req: Request) => {
         created_ad_id: created.ad_id,
         error: null,
         plan,
-        request_metadata: { ...(row.request_metadata || {}), token_source: (resolved as any).candidate.source, account_name: (resolved as any).account?.name || null },
+        request_metadata: { ...(row.request_metadata || {}), token_source: (resolved as any).candidate.source, account_name: (resolved as any).account?.name || null, created_ad_ids: created.ad_ids, created_creative_ids: created.creative_ids },
       }).eq("id", requestId);
 
       // inventário canônico fica coerente sem esperar o próximo sync
@@ -898,6 +946,8 @@ Deno.serve(async (req: Request) => {
         campaign_id: created.campaign_id,
         adset_id: created.adset_id,
         ad_id: created.ad_id,
+        ad_ids: created.ad_ids,
+        creative_ids: created.creative_ids,
         campaign_name: plan.campaign.name,
         note: "Tudo criado PAUSADO. Revise no Gerenciador de Anúncios e ative por lá ou pela Central de Tráfego.",
       });
