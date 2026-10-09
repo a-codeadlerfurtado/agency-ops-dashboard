@@ -654,22 +654,16 @@ Deno.serve(async (req: Request) => {
     const name = clean(form.name, 120);
     const privacy = clean(form.privacy_policy_url, 500);
     const followUp = clean(form.follow_up_action_url, 500);
-    if (name.length < 5 || !/^https:\/\//i.test(privacy) || !/^https:\/\//i.test(followUp)) {
-      return reply({ error: "lead_form_links_required" }, 400);
-    }
+    if (name.length < 5) return reply({ error: "lead_form_invalid" }, 400);
     try {
-      const policyUrl = new URL(privacy), actionUrl = new URL(followUp);
-      const policyHost = policyUrl.hostname.toLowerCase().replace(/^www\./, "");
-      if (["facebook.com", "instagram.com", "fb.com", "fb.me"].includes(policyHost) ||
-          policyHost.endsWith(".facebook.com") || policyHost.endsWith(".instagram.com") ||
-          policyUrl.href === actionUrl.href) {
-        return reply({ error: "lead_form_policy_invalid" }, 400);
-      }
-      if (policyUrl.username || policyUrl.password || actionUrl.username || actionUrl.password ||
-        ["localhost", "127.0.0.1"].includes(policyUrl.hostname) ||
-        ["localhost", "127.0.0.1"].includes(actionUrl.hostname)) {
-        return reply({ error: "lead_form_links_required" }, 400);
-      }
+      // Accept any public web URL, including Facebook/Instagram and matching URLs.
+      // Meta makes the final decision about whether the privacy policy is suitable.
+      const links = [new URL(privacy), new URL(followUp)];
+      if (links.some(url =>
+        !["http:", "https:"].includes(url.protocol) ||
+        !url.hostname || url.username || url.password ||
+        ["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(url.hostname.toLowerCase())
+      )) return reply({ error: "lead_form_links_required" }, 400);
     } catch { return reply({ error: "lead_form_links_required" }, 400); }
     const rawQuestions = Array.isArray(form.questions) ? form.questions : [];
     if (rawQuestions.length > 8) return reply({ error: "lead_form_invalid" }, 400);

@@ -47,9 +47,8 @@ export default function LeadFormComposer({ requestId, clientName, pageId, onSele
       lead_form_page_missing: "A Página do cliente não foi encontrada ou mudou no cadastro da Meta.",
       meta_lead_form_permission: "A integração não tem acesso aos formulários dessa Página. Verifique as permissões de Página e leads.",
       lead_form_create_failed: "A Meta recusou a criação do formulário. Veja a resposta técnica abaixo.",
-      lead_form_links_required: "Preencha uma política de privacidade HTTPS e o link HTTPS da tela final.",
+      lead_form_links_required: "Informe dois endereços válidos (http:// ou https://), com um domínio público.",
       lead_form_invalid: "Confira o nome e as perguntas: cada pergunta precisa de duas ou mais respostas distintas.",
-      lead_form_policy_invalid: "A política de privacidade deve ter um link próprio e válido do cliente. A Página comum do Facebook não serve como política nem pode ser idêntica ao link de agradecimento.",
       lead_form_audit_failed: "A Meta criou o formulário, mas o registro no Dashboard falhou. Copie o ID informado antes de tentar novamente.",
     };
     return [messages[type] || type || "Não foi possível concluir.",
@@ -70,19 +69,15 @@ export default function LeadFormComposer({ requestId, clientName, pageId, onSele
     setError("");
     if (!confirmed) { setError("Confirme que autoriza publicar o formulário na Página da Meta."); return; }
     if (name.trim().length < 5) { setError("Informe o nome do formulário."); return; }
-    if (![policyUrl, followUrl].every((url) => /^https:\/\//i.test(url.trim()))) {
-      setError("Os links de privacidade e da página final devem começar com https://."); return;
-    }
     try {
-      const policy = new URL(policyUrl.trim());
-      const host = policy.hostname.toLowerCase().replace(/^www\./, "");
-      if (["facebook.com", "instagram.com", "fb.com", "fb.me"].includes(host) ||
-          host.endsWith(".facebook.com") || host.endsWith(".instagram.com") ||
-          policy.href === new URL(followUrl.trim()).href) {
-        setError("O endereço da Página Facebook não é uma política de privacidade. Informe o link da política real da NC Imóveis."); return;
+      const urls = [policyUrl.trim(), followUrl.trim()].map(value => new URL(value));
+      if (urls.some(url => !["https:", "http:"].includes(url.protocol) ||
+        !url.hostname || url.username || url.password ||
+        ["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(url.hostname.toLowerCase()))) {
+        setError("Informe links públicos válidos, começando com http:// ou https://."); return;
       }
     } catch {
-      setError("Os links informados não são válidos."); return;
+      setError("Os links informados não são URLs válidas. Inclua https:// ou http://."); return;
     }
     const mapped = questions.map(q => ({
       label: q.label.trim(),
@@ -160,7 +155,7 @@ export default function LeadFormComposer({ requestId, clientName, pageId, onSele
       </button>}
       <label style={{ fontSize: 12 }}>URL da política de privacidade do cliente (obrigatória)
         <input type="url" style={inp} value={policyUrl} onChange={e => setPolicyUrl(e.target.value)} placeholder="https://seudominio.com.br/politica-de-privacidade"/>
-        <span style={{ display: "block", marginTop: 5, fontSize: 11, color: "#9ab3c7" }}>Informe a política de privacidade real do cliente. A Página comum do Facebook não substitui esse documento.</span>
+        <span style={{ display: "block", marginTop: 5, fontSize: 11, color: "#9ab3c7" }}>Aceita link público de qualquer domínio, inclusive Facebook. A Meta verificará se o endereço atende às regras para formulários de leads.</span>
       </label>
       <label style={{ fontSize: 12 }}>Link que aparece após o envio (obrigatório)
         <input type="url" style={inp} value={followUrl} onChange={e => setFollowUrl(e.target.value)} placeholder="https://seudominio.com.br/obrigado"/>
