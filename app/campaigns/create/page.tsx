@@ -298,6 +298,13 @@ export default function CampaignCreatePage() {
         </header>
 
         {bootError && <div className="cb-error">{bootError}</div>}
+        {boot && boot.planner_configured === false && (
+          <div className="cb-error">
+            A IA do Campaign Builder ainda não está configurada: falta a secret OPENAI_API_KEY no Supabase.
+            Nenhuma imagem será enviada enquanto o planejador estiver indisponível.
+            Depois de cadastrar a chave, atualize a página.
+          </div>
+        )}
         {result && (
           <div className="cb-success">
             <b>Campanha criada pausada: {result.campaign_name}</b><br />
@@ -383,7 +390,7 @@ export default function CampaignCreatePage() {
             </div>
           )}
           <div className="cb-actions" style={{ marginTop: 12 }}>
-            <button className="cb-btn primary" disabled={!clientName || prompt.trim().length < 15 || drafting || (mode === "TURBINAR" && !selectedPost)} onClick={generate}>
+            <button className="cb-btn primary" disabled={!clientName || prompt.trim().length < 15 || drafting || boot?.planner_configured === false || (mode === "TURBINAR" && !selectedPost)} onClick={generate}>
               {drafting ? (uploadProgress || "Gerando plano…") : draft ? "Gerar de novo" : "Gerar plano"}
             </button>
             {draft && <button className="cb-btn ghost" onClick={discard}>Descartar rascunho</button>}

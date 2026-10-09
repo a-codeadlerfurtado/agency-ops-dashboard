@@ -375,7 +375,7 @@ Deno.serve(async (req: Request) => {
 
   const url = new URL(req.url);
   if (req.method === "GET" && url.searchParams.get("health") === "1") {
-    return reply({ ok: true, service: SERVICE, version: SERVICE_VERSION, planner_env_configured: Boolean(Deno.env.get("OPENAI_API_KEY")) });
+    return reply({ ok: true, service: SERVICE, version: SERVICE_VERSION });
   }
   if (req.method !== "POST") return reply({ error: "method_not_allowed" }, 405);
 
@@ -574,9 +574,14 @@ Deno.serve(async (req: Request) => {
       };
     });
     const nameById = new Map(scoped.map((c: Row) => [c.id, c.display_name]));
+    const { data: plannerVaultKey } = await ops.rpc("get_secret", { p_name: "OPENAI_API_KEY" });
+    const plannerConfigured = Boolean(
+      (typeof plannerVaultKey === "string" && plannerVaultKey.trim()) || Deno.env.get("OPENAI_API_KEY")
+    );
     return reply({
       ok: true,
       profile: { person, role, is_adler: isAdler },
+      planner_configured: plannerConfigured,
       clients: clientsOut,
       history: (history || []).map((h: Row) => ({ ...h, client_name: nameById.get(h.client_id) || null })),
     });
