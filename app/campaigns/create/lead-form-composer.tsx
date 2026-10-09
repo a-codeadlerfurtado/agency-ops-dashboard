@@ -14,11 +14,12 @@ const defaultQuestions: Question[] = [
 type Props = {
   requestId: string;
   clientName: string;
+  pageId: string;
   onSelect: (id: string) => void;
   api: (payload: Row) => Promise<{ ok: boolean; body: Row | null; status: number }>;
 };
 
-export default function LeadFormComposer({ requestId, clientName, onSelect, api }: Props) {
+export default function LeadFormComposer({ requestId, clientName, pageId, onSelect, api }: Props) {
   const [mode, setMode] = useState<"NEW" | "EXISTING">("NEW");
   const [forms, setForms] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
@@ -28,7 +29,7 @@ export default function LeadFormComposer({ requestId, clientName, onSelect, api 
   const [name, setName] = useState("Formulário de interesse — " + clientName);
   const [headline, setHeadline] = useState("Receba informações do empreendimento");
   const [policyUrl, setPolicyUrl] = useState("");
-  const [followUrl, setFollowUrl] = useState("");
+  const [followUrl, setFollowUrl] = useState(/^\d{5,30}$/.test(pageId) ? `https://www.facebook.com/${pageId}` : "");
   const [higherIntent, setHigherIntent] = useState(true);
   const [confirmed, setConfirmed] = useState(false);
   const [questions, setQuestions] = useState<Question[]>(defaultQuestions);
@@ -41,12 +42,15 @@ export default function LeadFormComposer({ requestId, clientName, onSelect, api 
       draft_expired: "Este rascunho expirou. Gere o plano novamente para criar um formulário.",
       lead_form_page_missing: "A Página do cliente não foi encontrada ou mudou no cadastro da Meta.",
       meta_lead_form_permission: "A integração não tem acesso aos formulários dessa Página. Verifique as permissões de Página e leads.",
-      lead_form_create_failed: "A Meta recusou a criação do formulário. Confira as permissões e os links.",
+      lead_form_create_failed: "A Meta recusou a criação do formulário. Veja a resposta técnica abaixo.",
       lead_form_links_required: "Preencha uma política de privacidade HTTPS e o link HTTPS da tela final.",
       lead_form_invalid: "Confira o nome e as perguntas: cada pergunta precisa de duas ou mais respostas distintas.",
       lead_form_audit_failed: "A Meta criou o formulário, mas o registro no Dashboard falhou. Copie o ID informado antes de tentar novamente.",
     };
-    return [messages[type] || type || "Não foi possível concluir.", result?.detail ? String(result.detail).slice(0,300) : ""].filter(Boolean).join(" ");
+    return [messages[type] || type || "Não foi possível concluir.",
+      result?.detail ? String(result.detail).slice(0,350) : "",
+      result?.meta_code ? `(Meta: ${result.meta_code}${result.meta_subcode ? `/${result.meta_subcode}` : ""})` : ""
+    ].filter(Boolean).join(" ");
   };
   async function loadForms() {
     setLoading(true); setError("");
@@ -140,9 +144,11 @@ export default function LeadFormComposer({ requestId, clientName, onSelect, api 
       </button>}
       <label style={{ fontSize: 12 }}>URL da política de privacidade do cliente (obrigatória)
         <input type="url" style={inp} value={policyUrl} onChange={e => setPolicyUrl(e.target.value)} placeholder="https://seudominio.com.br/politica-de-privacidade"/>
+        <span style={{ display: "block", marginTop: 5, fontSize: 11, color: "#9ab3c7" }}>Informe a política de privacidade real do cliente. A Página comum do Facebook não substitui esse documento.</span>
       </label>
       <label style={{ fontSize: 12 }}>Link que aparece após o envio (obrigatório)
         <input type="url" style={inp} value={followUrl} onChange={e => setFollowUrl(e.target.value)} placeholder="https://seudominio.com.br/obrigado"/>
+        <span style={{ display: "block", marginTop: 5, fontSize: 11, color: "#9ab3c7" }}>Já preenchemos a Página do Facebook do cliente como destino final. Você pode alterar o link.</span>
       </label>
       <label style={{ display: "flex", alignItems: "center", gap: 9, fontSize: 12 }}>
         <input type="checkbox" checked={higherIntent} onChange={e => setHigherIntent(e.target.checked)}/>

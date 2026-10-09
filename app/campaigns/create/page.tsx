@@ -90,7 +90,10 @@ const errorMessages: Record<string, string> = {
   planner_failed: "Falha ao consultar a IA. Confira o serviço e tente novamente.",
   planner_not_configured: "A chave de IA do Campaign Builder ainda não está configurada no servidor. A gestão precisa cadastrar OPENAI_API_KEY.",
   too_many_creatives: "Selecione até 10 imagens ou vídeos por campanha.",
-  draft_expired: "O rascunho expirou. Gere o plano de novo.",
+  draft_expired: "Rascunho expirado. Clique em Retomar para renovar o prazo.",
+  draft_incomplete: "Este rascunho contém dados incompletos. Gere um novo plano válido antes de criar.",
+  assets_changed: "A conta de anúncios ou Página do cliente mudou desde a criação do rascunho. Gere outro plano.",
+  request_already_executed: "Este pedido já foi criado na Meta. Não é possível executá-lo novamente.",
   assets_missing: "Conta de anúncio ou Página não cadastradas em Ativos Meta.",
   creative_missing: "Anexe o criativo antes de criar.",
   budget_missing: "Defina o orçamento diário antes de criar.",
@@ -133,6 +136,7 @@ export default function CampaignCreatePage() {
   const [historyDiscardBusy, setHistoryDiscardBusy] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [historyNotice, setHistoryNotice] = useState("");
+  const [resumingId, setResumingId] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Row>({});
   const [confirmWord, setConfirmWord] = useState("");
   const [executing, setExecuting] = useState(false);
@@ -287,6 +291,34 @@ export default function CampaignCreatePage() {
       await loadBoot();
     } catch (error) {
       setDraftError(`Falha de conexão ao descartar: ${String((error as Error)?.message || error).slice(0, 160)}`);
+    }
+  };
+
+
+  const resumeFromHistory = async (entry: Row) => {
+    if (!session?.access_token || resumingId || executing || drafting) return;
+    setResumingId(String(entry.id)); setHistoryError(""); setHistoryNotice("");
+    try {
+      const { ok, body } = await api({ action: "RESUME_DRAFT", request_id: entry.id });
+      if (!ok) {
+        setHistoryError(friendlyError(body, "Não foi possível retomar o rascunho."));
+        return;
+      }
+      setMode(body.mode === "BOOST" ? "TURBINAR" : "NOVA");
+      setClientName(body.client?.display_name || entry.client_name || "");
+      setMethod("PROMPT");
+      setPrompt(body.prompt || "");
+      setFiles([]);
+      setCreatives(body.creatives || []);
+      if (fileRef.current) fileRef.current.value = "";
+      setDraft(body); setOverrides({}); setConfirmWord(""); setResult(null); setDraftError("");
+      setHistoryNotice("Rascunho retomado para revisão. A campanha só será criada pausada após você digitar CRIAR e confirmar.");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      await loadBoot();
+    } catch (err) {
+      setHistoryError(`Falha de conexão: ${String((err as Error)?.message || err).slice(0,160)}`);
+    } finally {
+      setResumingId(null);
     }
   };
 
@@ -574,6 +606,7 @@ export default function CampaignCreatePage() {
                       <span className="cb-hint">Você não precisa localizar um ID: escolha um formulário pelo nome ou crie as perguntas nesta tela.</span>
                     </div>
                     <LeadFormComposer key={draft.request_id} requestId={draft.request_id} clientName={clientName}
+                      pageId={String(draft.assets?.page_id || "")}
                       api={api} onSelect={(id) => setOv("lead_form_id", id)} />
                   </div>
                 )}
@@ -660,6 +693,12 @@ export default function CampaignCreatePage() {
                   </small>
                   {mayDiscard && (
                     <div className="cb-history-actions">
+                      {!confirming && Boolean(session?.user?.id) && session.user.id === h.actor_user_id && (
+                        <button type="button" disabled={Boolean(resumingId) || historyDiscardBusy}
+                          onClick={() => void resumeFromHistory(h)}>
+                          {resumingId === h.id ? "Retomando…" : "Retomar / Criar na Meta (pausada)"}
+                        </button>
+                      )}
                       {!confirming ? (
                         <button type="button" disabled={historyDiscardBusy}
                           onClick={() => { setHistoryDiscardId(h.id); setHistoryError(""); setHistoryNotice(""); }}>

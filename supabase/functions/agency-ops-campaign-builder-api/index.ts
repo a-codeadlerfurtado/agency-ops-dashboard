@@ -581,7 +581,7 @@ Deno.serve(async (req: Request) => {
         const forms = await metaJson(graphUrl(`${assets.page_id}/leadgen_forms`, {
           fields: "id,name,status,created_time",limit: "75",access_token: candidate.token,
         }));
-        return reply({ ok: true, page_id: assets.page_id, forms: (forms?.data || [])
+        return reply({ ok: true, page_id: assets.page_id, page_url: `https://www.facebook.com/${assets.page_id}`, forms: (forms?.data || [])
           .filter((item: Row) => numericId(item.id))
           .map((item: Row) => ({ id: numericId(item.id), name: clean(item.name, 160),
             status: clean(item.status, 30), created_at: item.created_time || null })) });
@@ -649,11 +649,16 @@ Deno.serve(async (req: Request) => {
     for (const candidate of await tokenCandidates(db)) {
       try {
         // The Page access token is preferred, where Meta exposes it to this integration.
-        const page = await metaJson(graphUrl(pageId, {
-          fields: "id,name,access_token",access_token: candidate.token,
-        }));
-        if (numericId(page?.id) !== pageId) continue;
-        const pageToken = clean(page?.access_token, 2000) || candidate.token;
+        let pageToken = candidate.token;
+        // Page token lookup can fail for system-user tokens, even if they can
+        // publish a form. Let Meta check permissions at the actual POST.
+        try {
+          const page = await metaJson(graphUrl(pageId, {
+            fields: "id,name,access_token", access_token: candidate.token,
+          }));
+          if (numericId(page?.id) !== pageId) continue;
+          pageToken = clean(page?.access_token, 2000) || candidate.token;
+        } catch { /* fallback to configured system-user token */ }
         const created = await metaPost(`${pageId}/leadgen_forms`, pageToken, {
           name,locale: "PT_BR",
           privacy_policy: JSON.stringify({ url: privacy, link_text: "Política de privacidade" }),
@@ -673,9 +678,12 @@ Deno.serve(async (req: Request) => {
         return reply({ ok: true, form_id: formId, page_id: pageId, form_name: name });
       } catch (err) {
         reason = clean((err as Error)?.message, 350);
+        return reply({ error: "lead_form_create_failed", detail: reason,
+          meta_code: (err as any)?.metaCode || null,
+          meta_subcode: (err as any)?.metaSubcode || null }, 502);
       }
     }
-    return reply({ error: "lead_form_create_failed", detail: reason }, 502);
+    return reply({ error: "meta_lead_form_permission", detail: reason }, 403);
   }
 
   // --- BOOTSTRAP ---
@@ -889,6 +897,60 @@ Deno.serve(async (req: Request) => {
     });
   }
 
+
+  // --- RESUME_DRAFT ---
+  if (action === "RESUME_DRAFT") {
+    const requestId = clean(body?.request_id, 60);
+    if (!requestId) return reply({ error: "request_required" }, 400);
+    const { data: row, error: readError } = await ops.from("campaign_build_requests")
+      .select("*").eq("id", requestId).maybeSingle();
+    if (readError) return reply({ error: "query_failed" }, 500);
+    if (!row) return reply({ error: "request_not_found" }, 404);
+    if (row.actor_user_id !== user.id) return reply({ error: "forbidden" }, 403);
+    if (row.status !== "DRAFTED") return reply({ error: "request_not_draft" }, 409);
+    if (row.created_campaign_id || row.created_adset_id || row.created_ad_id)
+      return reply({ error: "request_already_executed" }, 409);
+    const { data: clientRow } = await ops.from("clients").select("id,display_name,gt_owner,lifecycle")
+      .eq("id", row.client_id).maybeSingle();
+    if (!clientRow || !inScope(clientRow) || clientRow.lifecycle === "CHURNED")
+      return reply({ error: "forbidden" }, 403);
+    const assets = await loadAssets(row.client_id);
+    if (!assets.account_id || assets.account_id !== numericId(row.meta_ad_account_id))
+      return reply({ error: "assets_changed", detail: "A conta de anúncios mudou." }, 409);
+    if (row.request_metadata?.mode !== "BOOST" && assets.page_id !== numericId(row.meta_page_id))
+      return reply({ error: "assets_changed", detail: "A Página da Meta mudou." }, 409);
+    const creatives: Row[] = Array.isArray(row.request_metadata?.creatives) &&
+      row.request_metadata.creatives.length ? row.request_metadata.creatives :
+      row.creative_path ? [{ bucket: row.creative_bucket, path: row.creative_path,
+        type: row.creative_type, file_name: row.creative_file_name }] : [];
+    if (row.request_metadata?.mode !== "BOOST") {
+      if (!creatives.length || creatives.length > MAX_CREATIVES || !creatives.every((item) =>
+        item.bucket === BUCKET && typeof item.path === "string" &&
+        item.path.startsWith(`campaign-builder/${row.client_id}/`) &&
+        ["IMAGE","VIDEO"].includes(item.type))) return reply({ error: "creative_missing" }, 409);
+      const exists = await Promise.all(creatives.map(async (item) => {
+        const path = String(item.path), slash = path.lastIndexOf("/");
+        const { data, error } = await db.storage.from(BUCKET).list(path.slice(0, slash),
+          { search: path.slice(slash + 1), limit: 30 });
+        return !error && (data || []).some((file: Row) => file.name === path.slice(slash + 1));
+      }));
+      if (exists.some((present) => !present)) return reply({ error: "creative_missing",
+        detail: "Um ou mais arquivos do rascunho não estão mais disponíveis." }, 409);
+    }
+    const expiresAt = new Date(Date.now() + DRAFT_TTL_MS).toISOString();
+    const { data: renewed, error: saveError } = await ops.from("campaign_build_requests")
+      .update({ expires_at: expiresAt }).eq("id", requestId).eq("status", "DRAFTED")
+      .select("id").maybeSingle();
+    if (saveError) return reply({ error: "query_failed" }, 500);
+    if (!renewed?.id) return reply({ error: "request_not_draft" }, 409);
+    return reply({ ok: true, request_id: requestId, plan: row.plan, prompt: row.prompt,
+      client: { id: clientRow.id, display_name: clientRow.display_name },
+      mode: row.request_metadata?.mode === "BOOST" ? "BOOST" : "NEW",
+      creatives, warnings: row.plan_warnings || [], expires_at: expiresAt,
+      assets: { account_id: assets.account_id, page_id: assets.page_id,
+        instagram_id: assets.instagram_id } });
+  }
+
   // --- DISCARD ---
   if (action === "DISCARD") {
     const requestId = clean(body?.request_id, 60);
@@ -924,6 +986,13 @@ Deno.serve(async (req: Request) => {
     if (clean(clientRow.lifecycle, 30).toUpperCase() === "CHURNED") return reply({ error: "client_churned" }, 409);
 
     const plan = row.plan as Row;
+    if (!plan?.campaign || !plan?.adset || !plan?.ad ||
+        clean(plan.campaign.name,120) === "Campanha sem nome" ||
+        !clean(plan.campaign.name,120) || !clean(plan.adset.name,120) ||
+        Number(plan.adset.daily_budget_brl) <= 0 ||
+        (row.request_metadata?.mode !== "BOOST" &&
+          (!clean(plan.ad.primary_text,900) || !clean(plan.ad.headline,60))))
+      return reply({ error: "draft_incomplete" }, 409);
     const boostMode = clean(row.request_metadata?.mode, 10) === "BOOST" && Boolean(plan?.boost?.post_id);
     const creativeRows: Row[] = Array.isArray(row.request_metadata?.creatives) && row.request_metadata.creatives.length
       ? row.request_metadata.creatives
