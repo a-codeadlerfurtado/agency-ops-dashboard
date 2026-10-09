@@ -119,6 +119,7 @@ export default function CampaignCreatePage() {
   const [boot, setBoot] = useState<Row | null>(null);
   const [bootError, setBootError] = useState("");
   const [clientName, setClientName] = useState("");
+  const [metaAccess, setMetaAccess] = useState<Row | null>(null);
   const [mode, setMode] = useState<"NOVA" | "TURBINAR">("NOVA");
   const [posts, setPosts] = useState<Row | null>(null);
   const [postsLoading, setPostsLoading] = useState(false);
@@ -169,6 +170,31 @@ export default function CampaignCreatePage() {
   }, [api, session?.access_token]);
 
   useEffect(() => { loadBoot(); }, [loadBoot]);
+
+  useEffect(() => {
+    if (!session?.access_token || !clientName) {
+      setMetaAccess(null);
+      return;
+    }
+    let cancelled = false;
+    const requestedClient = clientName;
+    setMetaAccess({ client_name: requestedClient, checking: true });
+    api({ action: "CHECK_META_ACCESS", client_name: requestedClient }).then(({ ok, body }) => {
+      if (cancelled) return;
+      setMetaAccess({ client_name: requestedClient, checking: false,
+        account_access: ok && body?.account_access === true,
+        page_access: ok && body?.page_access === true,
+        ready: ok && body?.ready === true,
+        error: !ok ? friendlyError(body, "Não foi possível verificar o acesso Meta.") : null,
+      });
+    }).catch(() => {
+      if (!cancelled) setMetaAccess({ client_name: requestedClient, checking: false,
+        error: "Falha de conexão ao verificar as permissões da Meta." });
+    });
+    return () => { cancelled = true; };
+  }, [api, clientName, session?.access_token]);
+
+
 
   const selectedClient = useMemo(
     () => (boot?.clients || []).find((c: Row) => c.display_name === clientName) || null,
@@ -465,10 +491,37 @@ export default function CampaignCreatePage() {
                 ))}
               </select>
               {selectedClient && (
-                <div className="cb-asset-flags">
-                  <span className={`cb-pill ${selectedClient.has_ad_account ? "ok" : "bad"}`}>{selectedClient.has_ad_account ? "Conta de anúncio OK" : "Sem conta de anúncio"}</span>
-                  <span className={`cb-pill ${selectedClient.has_page ? "ok" : "bad"}`}>{selectedClient.has_page ? "Página OK" : "Sem Página cadastrada"}</span>
-                </div>
+                <>
+                  <div className="cb-asset-flags">
+                    <span className={`cb-pill ${!selectedClient.has_ad_account ? "bad" :
+                      metaAccess?.client_name === clientName && !metaAccess.checking ?
+                        (metaAccess.account_access ? "ok" : "bad") : "muted"}`}>
+                      {!selectedClient.has_ad_account ? "Sem conta de anúncio" :
+                        metaAccess?.client_name !== clientName || metaAccess.checking ? "Conta: verificando acesso" :
+                        metaAccess.account_access ? "Conta de anúncio: acesso confirmado" : "Conta: acesso Meta negado"}
+                    </span>
+                    <span className={`cb-pill ${!selectedClient.has_page ? "bad" :
+                      metaAccess?.client_name === clientName && !metaAccess.checking ?
+                        (metaAccess.page_access ? "ok" : "bad") : "muted"}`}>
+                      {!selectedClient.has_page ? "Página não cadastrada" :
+                        metaAccess?.client_name !== clientName || metaAccess.checking ? "Página: verificando acesso" :
+                        metaAccess.page_access ? "Página: acesso confirmado" : "Página: acesso Meta negado"}
+                    </span>
+                  </div>
+                  {metaAccess?.client_name === clientName && !metaAccess.checking &&
+                    selectedClient.has_page && selectedClient.has_ad_account &&
+                    (!metaAccess.page_access || !metaAccess.account_access) && (
+                    <div className="cb-error" role="alert" style={{ marginTop: 8 }}>
+                      A Página e/ou a conta estão cadastradas, mas a Meta não autorizou a credencial da agência a operar nesses ativos.
+                      O administrador do cliente precisa compartilhar a Página e a conta no
+                      {" "}<a href="https://business.facebook.com/settings" target="_blank" rel="noopener noreferrer"
+                        style={{ color: "#ffcfaf", textDecoration: "underline" }}>Gerenciador de Negócios</a>,
+                      atribuindo acesso para gerenciar anúncios e leads. Depois atualize a tela.
+                    </div>
+                  )}
+                  {metaAccess?.client_name === clientName && !metaAccess.checking && metaAccess.error &&
+                    <div className="cb-error" role="alert">{metaAccess.error}</div>}
+                </>
               )}
               {selectedClient && (!selectedClient.has_ad_account || !selectedClient.has_page) && (
                 <span className="cb-hint">Preencha os Ativos Meta do cliente (card Ativos Meta) antes de criar.</span>

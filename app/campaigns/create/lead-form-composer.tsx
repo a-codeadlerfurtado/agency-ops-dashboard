@@ -38,6 +38,10 @@ export default function LeadFormComposer({ requestId, clientName, pageId, onSele
 
   const describeError = (result: Row | null) => {
     const type = String(result?.error || "");
+    if (String(result?.meta_code) === "10" ||
+      /insufficient privileges on the page|requires pages_manage_ads/i.test(String(result?.detail || ""))) {
+      return "A Meta negou permissão para administrar a Página. É preciso atribuir à integração da agência acesso à Página e gerenciamento de leads/anúncios no Gerenciador de Negócios do cliente. Nenhum formulário foi publicado.";
+    }
     const messages: Record<string, string> = {
       draft_expired: "Este rascunho expirou. Gere o plano novamente para criar um formulário.",
       lead_form_page_missing: "A Página do cliente não foi encontrada ou mudou no cadastro da Meta.",
@@ -45,6 +49,7 @@ export default function LeadFormComposer({ requestId, clientName, pageId, onSele
       lead_form_create_failed: "A Meta recusou a criação do formulário. Veja a resposta técnica abaixo.",
       lead_form_links_required: "Preencha uma política de privacidade HTTPS e o link HTTPS da tela final.",
       lead_form_invalid: "Confira o nome e as perguntas: cada pergunta precisa de duas ou mais respostas distintas.",
+      lead_form_policy_invalid: "A política de privacidade deve ter um link próprio e válido do cliente. A Página comum do Facebook não serve como política nem pode ser idêntica ao link de agradecimento.",
       lead_form_audit_failed: "A Meta criou o formulário, mas o registro no Dashboard falhou. Copie o ID informado antes de tentar novamente.",
     };
     return [messages[type] || type || "Não foi possível concluir.",
@@ -67,6 +72,17 @@ export default function LeadFormComposer({ requestId, clientName, pageId, onSele
     if (name.trim().length < 5) { setError("Informe o nome do formulário."); return; }
     if (![policyUrl, followUrl].every((url) => /^https:\/\//i.test(url.trim()))) {
       setError("Os links de privacidade e da página final devem começar com https://."); return;
+    }
+    try {
+      const policy = new URL(policyUrl.trim());
+      const host = policy.hostname.toLowerCase().replace(/^www\./, "");
+      if (["facebook.com", "instagram.com", "fb.com", "fb.me"].includes(host) ||
+          host.endsWith(".facebook.com") || host.endsWith(".instagram.com") ||
+          policy.href === new URL(followUrl.trim()).href) {
+        setError("O endereço da Página Facebook não é uma política de privacidade. Informe o link da política real da NC Imóveis."); return;
+      }
+    } catch {
+      setError("Os links informados não são válidos."); return;
     }
     const mapped = questions.map(q => ({
       label: q.label.trim(),

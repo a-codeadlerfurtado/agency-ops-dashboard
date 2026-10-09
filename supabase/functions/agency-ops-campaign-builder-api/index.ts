@@ -568,6 +568,44 @@ Deno.serve(async (req: Request) => {
   }
 
 
+
+  // --- CHECK_META_ACCESS ---
+  // Read-only diagnosis, scoped to clients that the logged-in GT can see.
+  // Having an ID registered is not evidence of Meta Page/Ad Account rights.
+  if (action === "CHECK_META_ACCESS") {
+    const scoped = await loadScopedClient(clean(body?.client_name,160));
+    if ("error" in scoped) return scoped.error;
+    const assets = await loadAssets(scoped.client.id);
+    const pageId = numericId(assets.page_id);
+    const accountId = numericId(assets.account_id);
+    const tokens = await tokenCandidates(db);
+    if (!tokens.length) return reply({ ok: true, page_id: pageId, account_id: accountId,
+      page_access: false, account_access: false, ready: false,
+      reason: "Nenhuma credencial Meta disponível." });
+    let pageAccess = false, accountAccess = false, sameToken = false;
+    let pageError = "", accountError = "";
+    for (const candidate of tokens) {
+      let page = false, account = false;
+      const [pageResult, accountResult] = await Promise.allSettled([
+        pageId ? metaJson(graphUrl(`${pageId}/leadgen_forms`, {
+          fields: "id", limit: "1", access_token: candidate.token,
+        })) : Promise.reject(new Error("Página não cadastrada")),
+        accountId ? metaJson(graphUrl(`act_${accountId}`, {
+          fields: "id,name", access_token: candidate.token,
+        })) : Promise.reject(new Error("Conta de anúncio não cadastrada")),
+      ]);
+      if (pageResult.status === "fulfilled") page = pageAccess = true;
+      else pageError = clean((pageResult.reason as Error)?.message,160);
+      if (accountResult.status === "fulfilled") account = accountAccess = true;
+      else accountError = clean((accountResult.reason as Error)?.message,160);
+      if (page && account) { sameToken = true; break; }
+    }
+    return reply({ ok: true, page_id: pageId, account_id: accountId,
+      page_access: pageAccess, account_access: accountAccess,
+      ready: sameToken, page_error: pageAccess ? null : pageError,
+      account_error: accountAccess ? null : accountError });
+  }
+
   // --- LIST_LEAD_FORMS ---
   // Lists only forms from this client's configured Facebook Page.
   if (action === "LIST_LEAD_FORMS") {
@@ -621,6 +659,12 @@ Deno.serve(async (req: Request) => {
     }
     try {
       const policyUrl = new URL(privacy), actionUrl = new URL(followUp);
+      const policyHost = policyUrl.hostname.toLowerCase().replace(/^www\./, "");
+      if (["facebook.com", "instagram.com", "fb.com", "fb.me"].includes(policyHost) ||
+          policyHost.endsWith(".facebook.com") || policyHost.endsWith(".instagram.com") ||
+          policyUrl.href === actionUrl.href) {
+        return reply({ error: "lead_form_policy_invalid" }, 400);
+      }
       if (policyUrl.username || policyUrl.password || actionUrl.username || actionUrl.password ||
         ["localhost", "127.0.0.1"].includes(policyUrl.hostname) ||
         ["localhost", "127.0.0.1"].includes(actionUrl.hostname)) {
