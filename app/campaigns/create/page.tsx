@@ -185,6 +185,7 @@ export default function CampaignCreatePage() {
         account_access: ok && body?.account_access === true,
         page_access: ok && body?.page_access === true,
         ready: ok && body?.ready === true,
+        diagnostics: Array.isArray(body?.diagnostics) ? body.diagnostics : [],
         error: !ok ? friendlyError(body, "Não foi possível verificar o acesso Meta.") : null,
       });
     }).catch(() => {
@@ -517,6 +518,20 @@ export default function CampaignCreatePage() {
                       {" "}<a href="https://business.facebook.com/settings" target="_blank" rel="noopener noreferrer"
                         style={{ color: "#ffcfaf", textDecoration: "underline" }}>Gerenciador de Negócios</a>,
                       atribuindo acesso para gerenciar anúncios e leads. Depois atualize a tela.
+                      {Array.isArray(metaAccess.diagnostics) && metaAccess.diagnostics.length > 0 && (
+                        <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6 }}>
+                          <b>Diagnóstico das credenciais Meta:</b>
+                          {metaAccess.diagnostics.map((item: Row, index: number) => (
+                            <div key={index}>
+                              {item.source}: {item.actor?.name || "Usuário não identificado"}
+                              {item.actor?.id ? ` (#${item.actor.id})` : ""} · Página: {item.page_access ? "autorizada" : `negada, código ${item.page_code ?? "não informado"}`}
+                              {!item.page_access && item.page_error ? <> · {String(item.page_error).slice(0, 175)}</> : null}
+                              {" "}· Escopos: {(item.permissions || []).filter((v: string) =>
+                                /^(pages_|leads_retrieval|ads_management|business_management)/.test(v)).join(", ") || "nenhum identificado"}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                   {metaAccess?.client_name === clientName && !metaAccess.checking && metaAccess.error &&

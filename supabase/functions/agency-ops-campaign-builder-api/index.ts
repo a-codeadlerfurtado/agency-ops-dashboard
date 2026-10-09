@@ -584,8 +584,24 @@ Deno.serve(async (req: Request) => {
       reason: "Nenhuma credencial Meta disponível." });
     let pageAccess = false, accountAccess = false, sameToken = false;
     let pageError = "", accountError = "";
+    const diagnostics: Row[] = [];
     for (const candidate of tokens) {
       let page = false, account = false;
+      let actor: Row | null = null;
+      let granted: string[] = [];
+      if (isAdler) {
+        const [identity, permissions] = await Promise.allSettled([
+          metaJson(graphUrl("me", { fields: "id,name", access_token: candidate.token })),
+          metaJson(graphUrl("me/permissions", { access_token: candidate.token })),
+        ]);
+        if (identity.status === "fulfilled") {
+          actor = { id: clean(identity.value?.id, 40), name: clean(identity.value?.name, 100) };
+        }
+        if (permissions.status === "fulfilled") {
+          granted = (permissions.value?.data || []).filter((item:Row) => item.status === "granted")
+            .map((item:Row) => clean(item.permission, 60));
+        }
+      }
       const [pageResult, accountResult] = await Promise.allSettled([
         pageId ? metaJson(graphUrl(`${pageId}/leadgen_forms`, {
           fields: "id", limit: "1", access_token: candidate.token,
@@ -598,12 +614,23 @@ Deno.serve(async (req: Request) => {
       else pageError = clean((pageResult.reason as Error)?.message,160);
       if (accountResult.status === "fulfilled") account = accountAccess = true;
       else accountError = clean((accountResult.reason as Error)?.message,160);
+      if (isAdler) diagnostics.push({
+        source: candidate.source, actor, permissions: granted,
+        page_access: page, account_access: account,
+        page_error: pageResult.status === "rejected" ?
+          clean((pageResult.reason as Error)?.message, 200) : null,
+        page_code: pageResult.status === "rejected" ?
+          ((pageResult.reason as any)?.metaCode ?? null) : null,
+        account_error: accountResult.status === "rejected" ?
+          clean((accountResult.reason as Error)?.message, 200) : null,
+      });
       if (page && account) { sameToken = true; break; }
     }
     return reply({ ok: true, page_id: pageId, account_id: accountId,
       page_access: pageAccess, account_access: accountAccess,
       ready: sameToken, page_error: pageAccess ? null : pageError,
-      account_error: accountAccess ? null : accountError });
+      account_error: accountAccess ? null : accountError,
+      diagnostics: isAdler ? diagnostics : undefined });
   }
 
   // --- LIST_LEAD_FORMS ---
