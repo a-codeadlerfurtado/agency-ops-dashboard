@@ -614,6 +614,26 @@ Deno.serve(async (req: Request) => {
     if (creatives.length && !creativeValid) return reply({ error: "creative_missing" }, 400);
     const creative = creatives[0] || null;
 
+
+    let guided: Row | null = null;
+    if (body?.guided != null) {
+      const g=body.guided;
+      if (!g || typeof g!=="object" || Array.isArray(g)) return reply({error:"guided_invalid"},400);
+      const objective=clean(g.objective,24),destination=clean(g.destination,16);
+      const budget=Number(g.budget), radius=g.radius?Number(g.radius):null;
+      const cities=clean(g.cities,300).split(/[;\n]+/).map((s:string)=>s.trim()).filter(Boolean).slice(0,10);
+      const formId=clean(g.formId,40),url=clean(g.siteUrl,500),start=clean(g.start,10),end=clean(g.end,10);
+      if (clean(g.product,120).length<3 || !Number.isFinite(budget) || budget<1 || budget>100000 ||
+          !cities.length || (radius!==null && (!Number.isFinite(radius)||radius<1||radius>80)) ||
+          !((objective==="OUTCOME_LEADS"&&["LEAD_FORM","WHATSAPP"].includes(destination)) ||
+            (objective==="OUTCOME_TRAFFIC"&&destination==="SITE")) ||
+          (destination==="SITE"&&!/^https:\/\//.test(url)) || (formId&&!/^\d{5,30}$/.test(formId)) ||
+          (start&&!/^\d{4}-\d{2}-\d{2}$/.test(start)) || (end&&!/^\d{4}-\d{2}-\d{2}$/.test(end)) ||
+          (start&&end&&start>end))return reply({error:"guided_invalid"},400);
+      guided={objective,destination,budget:Math.round(budget),radius,cities,
+        formId:formId||null,url:url||null,start:start||"NOW",end:end||null,
+        name:clean(g.campaignName,120),text:clean(g.text,900),headline:clean(g.headline,60)};
+    }
     // Turbinar: publicação existente no lugar do criativo
     const boost = body?.boost && typeof body.boost === "object" ? {
       source: ["FACEBOOK", "INSTAGRAM"].includes(clean(body.boost.source, 12)) ? clean(body.boost.source, 12) : null,
@@ -646,6 +666,22 @@ Deno.serve(async (req: Request) => {
       plan.boost = boost;
     }
 
+
+    // As escolhas feitas pelo GT são autoritativas: a IA não pode alterar orçamento ou destino.
+    if (guided&&!boostValid) {
+      plan.campaign.objective=guided.objective;
+      if (guided.name) plan.campaign.name=guided.name;
+      plan.adset.daily_budget_brl=guided.budget;
+      plan.adset.geo.cities=guided.cities;
+      plan.adset.geo.radius_km=guided.radius;
+      plan.adset.age_min=18;plan.adset.age_max=65;plan.adset.genders="all";
+      plan.adset.start=guided.start;plan.adset.end=guided.end;
+      plan.adset.destination={type:guided.destination,url:guided.destination==="SITE"?guided.url:null,
+        lead_form_id:guided.destination==="LEAD_FORM"?guided.formId:null};
+      if(guided.text)plan.ad.primary_text=guided.text;
+      if(guided.headline)plan.ad.headline=guided.headline;
+      plan.ad.cta=guided.destination==="LEAD_FORM"?"SIGN_UP":guided.destination==="WHATSAPP"?"WHATSAPP_MESSAGE":"LEARN_MORE";
+    }
     // Resolve geolocalização com o token de leitura/escrita disponível
     let geo: { resolved: Row[]; unresolved: string[] } = { resolved: [], unresolved: plan.adset.geo.cities };
     const tokens = await tokenCandidates(db);
@@ -690,7 +726,7 @@ Deno.serve(async (req: Request) => {
       creative_type: !boostValid && creativeValid ? creative?.type : null,
       creative_file_name: !boostValid && creativeValid ? creative?.file_name : null,
       expires_at: expiresAt,
-      request_metadata: { source: "CAMPAIGN_BUILDER_V2", mode: boostValid ? "BOOST" : "NEW", model: planned.model, instagram_id: assets.instagram_id, pixel_id: assets.pixel_id, geo_unresolved: geo.unresolved, creatives: !boostValid && creativeValid ? creatives : [] },
+      request_metadata: { source: "CAMPAIGN_BUILDER_V2", input_mode: guided ? "GUIDED" : "PROMPT", mode: boostValid ? "BOOST" : "NEW", model: planned.model, instagram_id: assets.instagram_id, pixel_id: assets.pixel_id, geo_unresolved: geo.unresolved, creatives: !boostValid && creativeValid ? creatives : [] },
     }).select("id").single();
     if (insertError || !inserted?.id) return reply({ error: "audit_store_failed" }, 500);
 

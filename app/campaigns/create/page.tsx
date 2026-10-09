@@ -14,6 +14,46 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 type Row = Record<string, any>;
 
+
+type Guided = {
+ objective:"OUTCOME_LEADS"|"OUTCOME_TRAFFIC"; destination:"LEAD_FORM"|"WHATSAPP"|"SITE";
+ product:string; budget:string; cities:string; radius:string; intent:string;
+ campaignName:string; formId:string; siteUrl:string; start:string; end:string;
+ text:string; headline:string; notes:string;
+};
+const guidedDefault:Guided = {
+ objective:"OUTCOME_LEADS",destination:"LEAD_FORM",product:"",budget:"10",cities:"",radius:"",
+ intent:"TODOS",campaignName:"",formId:"",siteUrl:"",start:"",end:"",text:"",headline:"",notes:""
+};
+const guidedValidate=(g:Guided):string=>{
+ if(g.product.trim().length<3)return "Informe o nome do imóvel ou empreendimento.";
+ if(!Number.isFinite(Number(g.budget))||Number(g.budget)<1||Number(g.budget)>100000)return "Informe um orçamento diário válido entre R$ 1 e R$ 100.000.";
+ if(g.cities.trim().length<3)return "Informe a cidade ou região desejada.";
+ if(g.radius&&(!Number.isFinite(Number(g.radius))||Number(g.radius)<1||Number(g.radius)>80))return "O raio deve ser de 1 a 80 km.";
+ if(g.objective==="OUTCOME_TRAFFIC"&&g.destination!=="SITE")return "Tráfego precisa ter o site como destino.";
+ if(g.objective==="OUTCOME_LEADS"&&!["LEAD_FORM","WHATSAPP"].includes(g.destination))return "Selecione formulário ou WhatsApp como destino.";
+ if(g.destination==="SITE"&&!/^https:\/\//.test(g.siteUrl.trim()))return "Informe um link HTTPS para a página.";
+ if(g.formId&&!/^\d{5,30}$/.test(g.formId))return "O ID do formulário deve conter apenas números.";
+ if(g.start&&g.end&&g.start>g.end)return "A data de término deve ser posterior à data de início.";
+ return "";
+};
+const guidedToPrompt=(g:Guided):string=>([
+ "Configure uma campanha Meta Ads para o empreendimento "+g.product.trim()+".",
+ "Objetivo "+g.objective+". Destino: "+g.destination+".",
+ "Orçamento único para o conjunto: R$ "+Number(g.budget).toFixed(2)+" por dia; NÃO multiplicar pela quantidade de anúncios.",
+ "Região: "+g.cities.trim()+"; idade abrangente e segmentação compatível com políticas Meta de moradia.",
+ g.radius?"Raio geográfico: "+g.radius+" km.":"",
+ "Interesse comercial do lead: "+(g.intent==="INVESTIMENTO"?"investimento":g.intent==="MORADIA"?"moradia":"moradia ou investimento")+".",
+ g.formId?"Usar formulário Meta existente ID "+g.formId+".":"",
+ g.siteUrl?"Site: "+g.siteUrl+".":"",
+ g.campaignName?"Nome da campanha: "+g.campaignName+".":"",
+ g.start?"Data inicial: "+g.start+".":"Iniciar após ativação manual.",
+ g.end?"Data final: "+g.end+".":"Sem data final.",
+ g.text?"Texto principal: "+g.text+".":"Sugerir um texto profissional com apenas fatos fornecidos.",
+ g.headline?"Título: "+g.headline+".":"",
+ g.notes?"Observações: "+g.notes+".":"",
+ "Criar um anúncio pausado por criativo, todos dentro do mesmo conjunto. Nunca ativar automaticamente."
+].filter(Boolean).join("\n"));
 const statusLabel: Record<string, string> = {
   DRAFTED: "Rascunho",
   EXECUTING: "Criando…",
@@ -44,6 +84,7 @@ const errorMessages: Record<string, string> = {
   rate_limited: "Limite de pedidos por hora atingido. Aguarde um pouco.",
   client_churned: "Cliente churned não recebe campanha nova.",
   forbidden: "Esse cliente não está na sua carteira.",
+  guided_invalid: "As opções da Configuração guiada estão incompletas ou inválidas.",
   planner_failed: "Falha ao consultar a IA. Confira o serviço e tente novamente.",
   planner_not_configured: "A chave de IA do Campaign Builder ainda não está configurada no servidor. A gestão precisa cadastrar OPENAI_API_KEY.",
   too_many_creatives: "Selecione até 10 imagens ou vídeos por campanha.",
@@ -78,6 +119,8 @@ export default function CampaignCreatePage() {
   const [postsLoading, setPostsLoading] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Row | null>(null);
   const [prompt, setPrompt] = useState("");
+  const [method,setMethod] = useState<"PROMPT"|"GUIDED">("PROMPT");
+  const [guided,setGuided] = useState<Guided>(guidedDefault);
   const [files, setFiles] = useState<File[]>([]);
   const [creatives, setCreatives] = useState<Row[]>([]);
   const [uploadProgress, setUploadProgress] = useState("");
@@ -122,6 +165,10 @@ export default function CampaignCreatePage() {
     [boot, clientName],
   );
 
+  const changeGuided=(key:keyof Guided,value:string)=>{
+    setGuided((old)=>({...old,[key]:value,...(key==="objective"?{destination:value==="OUTCOME_TRAFFIC"?"SITE":"LEAD_FORM"}:{})}));
+    setDraft(null);setDraftError("");setOverrides({});setConfirmWord("");setResult(null);
+  };
   const resetFlow = () => {
     setDraft(null); setDraftError(""); setOverrides({}); setConfirmWord(""); setResult(null);
   };
@@ -143,7 +190,13 @@ export default function CampaignCreatePage() {
   }, [mode, clientName, loadPosts]);
 
   const generate = async () => {
-    if (!session?.access_token || !clientName || prompt.trim().length < 15 || drafting) return;
+    const useGuided=mode==="NOVA"&&method==="GUIDED";
+    const effectivePrompt=useGuided?guidedToPrompt(guided):prompt.trim();
+    if (!session?.access_token || !clientName || drafting) return;
+    if(useGuided){
+      const validation=guidedValidate(guided);
+      if(validation){setDraftError(validation);return;}
+    }else if(effectivePrompt.length<15){setDraftError("Descreva a campanha em uma frase completa.");return;}
     if (mode === "TURBINAR" && !selectedPost) { setDraftError("Escolha a publicação que vai turbinar."); return; }
     setDrafting(true); setDraftError(""); setDraft(null); setResult(null); setOverrides({}); setConfirmWord("");
     try {
@@ -183,7 +236,8 @@ export default function CampaignCreatePage() {
       const { ok, body } = await api({
         action: "DRAFT",
         client_name: clientName,
-        prompt: prompt.trim(),
+        prompt: effectivePrompt,
+        guided: useGuided ? guided : null,
         creatives: mode === "NOVA" ? creativePayloads : [],
         boost: mode === "TURBINAR" && selectedPost ? {
           source: selectedPost.source,
@@ -289,12 +343,21 @@ export default function CampaignCreatePage() {
         .cb-post .noimg{width:100%;height:96px;border-radius:8px;background:#0d1b2c;display:flex;align-items:center;justify-content:center;color:#52708c;font-size:11px}
         .cb-post small{font-size:11px;color:#9fb3c4;line-height:1.35;max-height:44px;overflow:hidden}
         .cb-post .net{font-size:10px;font-weight:900;letter-spacing:.06em;color:#7e97ab}
+
+        .cb-methods{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:14px 0}
+        .cb-methods button{background:#091826;border:1px solid #25445c;color:#9eb9cd;border-radius:12px;padding:13px 15px;text-align:left;cursor:pointer;font:800 14px inherit}
+        .cb-methods button.chosen{background:rgba(242,107,33,.12);border-color:#f26b21;color:#fff}
+        .cb-methods small{display:block;font-size:11px;color:#9db3c6;font-weight:500;margin-top:5px}
+        .cb-guided{margin-top:16px;display:grid;gap:12px}
+        .cb-guide-section{padding:16px;border:1px solid #1b3d58;border-radius:12px;background:rgba(5,17,30,.65)}
+        .cb-guide-section h3{margin:0 0 14px;font-size:14px;color:#eef7ff}
+        @media(max-width:760px){.cb-methods{grid-template-columns:1fr}}
         @media (max-width:760px){.cb-grid{grid-template-columns:1fr}.cb-kv{grid-template-columns:1fr}}
       `}</style>
       <div className="cb-shell">
         <header className="cb-head">
           <h1>Criar Campanha</h1>
-          <p>Descreva a campanha como você explicaria para outro GT: cliente, produto/imóvel, orçamento, região e destino do lead. A IA monta o plano, você revisa e tudo é criado <b>pausado</b> na conta do cliente.</p>
+          <p>Crie campanhas descrevendo um pedido para a IA ou escolhendo opções na Configuração guiada. Você revisa o plano antes de criar e tudo permanece <b>pausado</b> na conta do cliente.</p>
         </header>
 
         {bootError && <div className="cb-error">{bootError}</div>}
@@ -318,6 +381,15 @@ export default function CampaignCreatePage() {
             <button className={mode === "NOVA" ? "active" : ""} onClick={() => { setMode("NOVA"); resetFlow(); }}>Campanha nova</button>
             <button className={mode === "TURBINAR" ? "active" : ""} onClick={() => { setMode("TURBINAR"); resetFlow(); }}>Turbinar publicação</button>
           </div>
+
+          {mode==="NOVA"&&<div className="cb-methods" role="group" aria-label="Forma de configurar campanha">
+            <button type="button" className={method==="PROMPT"?"chosen":""} onClick={()=>{setMethod("PROMPT");resetFlow();}}>
+              Criar com IA <small>Descreva sua campanha</small>
+            </button>
+            <button type="button" className={method==="GUIDED"?"chosen":""} onClick={()=>{setMethod("GUIDED");resetFlow();}}>
+              Configuração guiada <small>Escolha as opções</small>
+            </button>
+          </div>}
           <div className="cb-grid">
             <div className="cb-field">
               <label>Cliente</label>
@@ -358,17 +430,58 @@ export default function CampaignCreatePage() {
                 <span className="cb-hint">{selectedPost ? `${selectedPost.source === "INSTAGRAM" ? "Instagram" : "Facebook"} · ${(selectedPost.caption || "(sem legenda)").slice(0, 70)}` : "Escolha uma publicação abaixo."}</span>
               </div>
             )}
-            <div className="cb-field full">
-              <label>Pedido</label>
-              <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                placeholder={mode === "NOVA"
-                  ? 'Ex.: "Campanha de leads para o lançamento Vista Mar, R$ 40 por dia, Caraguatatuba e região, público 28 a 55, lead cai no WhatsApp. Começa segunda."'
-                  : 'Ex.: "Turbinar com R$ 20 por dia durante 7 dias, Guarujá e Santos, público acima de 30."'}
-              />
-            </div>
+            {(mode==="TURBINAR"||method==="PROMPT")&&<div className="cb-field full">
+              <label>Pedido para a IA</label>
+              <textarea value={prompt} onChange={(ev)=>{setPrompt(ev.target.value);resetFlow();}}
+                placeholder='Ex.: campanha de leads no litoral norte, R$ 20/dia, formulário instantâneo, com meus criativos.'/>
+            </div>}
           </div>
+
+          {mode==="NOVA"&&method==="GUIDED"&&<div className="cb-guided">
+            <section className="cb-guide-section">
+              <h3>1. Objetivo e produto</h3>
+              <div className="cb-grid">
+                <div className="cb-field"><label>Objetivo</label><select value={guided.objective} onChange={ev=>changeGuided("objective",ev.target.value)}>
+                  <option value="OUTCOME_LEADS">Captar leads</option><option value="OUTCOME_TRAFFIC">Tráfego para site</option>
+                </select></div>
+                <div className="cb-field"><label>Destino</label><select value={guided.destination} onChange={ev=>changeGuided("destination",ev.target.value)}>
+                  {guided.objective==="OUTCOME_LEADS"?<><option value="LEAD_FORM">Formulário da Meta</option><option value="WHATSAPP">WhatsApp</option></>:<option value="SITE">Landing page / site</option>}
+                </select></div>
+                <div className="cb-field full"><label>Imóvel ou empreendimento</label><input maxLength={120} value={guided.product} onChange={ev=>changeGuided("product",ev.target.value)} placeholder="Ex.: AP Martim Praia Clube"/></div>
+                <div className="cb-field full"><label>Nome da campanha (opcional)</label><input maxLength={120} value={guided.campaignName} onChange={ev=>changeGuided("campaignName",ev.target.value)} placeholder="Deixe vazio para a IA sugerir"/></div>
+              </div>
+            </section>
+            <section className="cb-guide-section">
+              <h3>2. Orçamento e público</h3>
+              <div className="cb-grid">
+                <div className="cb-field"><label>Orçamento diário total (R$)</label><input type="number" min="1" max="100000" value={guided.budget} onChange={ev=>changeGuided("budget",ev.target.value)}/></div>
+                <div className="cb-field"><label>Interesse principal</label><select value={guided.intent} onChange={ev=>changeGuided("intent",ev.target.value)}>
+                  <option value="TODOS">Moradia e investimento</option><option value="MORADIA">Moradia</option><option value="INVESTIMENTO">Investimento</option>
+                </select></div>
+                <div className="cb-field full"><label>Cidades ou regiões</label><input maxLength={300} value={guided.cities} onChange={ev=>changeGuided("cities",ev.target.value)} placeholder="Ex.: Caraguatatuba; São Sebastião"/>
+                  <span className="cb-hint">Separe as cidades por ponto e vírgula. Respeitar restrições de anúncios imobiliários da Meta.</span></div>
+                <div className="cb-field"><label>Raio em km (opcional)</label><input type="number" min="1" max="80" value={guided.radius} onChange={ev=>changeGuided("radius",ev.target.value)} placeholder="Padrão da Meta"/></div>
+              </div>
+            </section>
+            <section className="cb-guide-section">
+              <h3>3. Contato e período</h3>
+              <div className="cb-grid">
+                {guided.destination==="LEAD_FORM"&&<div className="cb-field full"><label>ID do formulário Meta (opcional para gerar plano)</label><input inputMode="numeric" value={guided.formId} onChange={ev=>changeGuided("formId",ev.target.value)} placeholder="ID do formulário já existente"/><span className="cb-hint">As perguntas do formulário ainda devem ser configuradas na Meta. Sem ID, será possível revisar o plano, mas não executar a criação.</span></div>}
+                {guided.destination==="SITE"&&<div className="cb-field full"><label>Link da landing page</label><input type="url" value={guided.siteUrl} onChange={ev=>changeGuided("siteUrl",ev.target.value)} placeholder="https://..."/></div>}
+                <div className="cb-field"><label>Início (opcional)</label><input type="date" value={guided.start} onChange={ev=>changeGuided("start",ev.target.value)}/></div>
+                <div className="cb-field"><label>Fim (opcional)</label><input type="date" value={guided.end} onChange={ev=>changeGuided("end",ev.target.value)}/></div>
+              </div>
+            </section>
+            <section className="cb-guide-section">
+              <h3>4. Texto do anúncio</h3>
+              <div className="cb-grid">
+                <div className="cb-field full"><label>Texto principal (opcional)</label><textarea maxLength={900} value={guided.text} onChange={ev=>changeGuided("text",ev.target.value)} placeholder="Deixe vazio para a IA sugerir"/></div>
+                <div className="cb-field full"><label>Título (opcional)</label><input maxLength={60} value={guided.headline} onChange={ev=>changeGuided("headline",ev.target.value)} placeholder="Título curto do anúncio"/></div>
+                <div className="cb-field full"><label>Observações (opcional)</label><textarea maxLength={800} value={guided.notes} onChange={ev=>changeGuided("notes",ev.target.value)} placeholder="Detalhes importantes e perguntas que deseja no formulário"/></div>
+              </div>
+            </section>
+            <div className="cb-hint">A IA prepara a proposta e as escolhas são aplicadas ao plano no servidor. Cada criativo vira um anúncio pausado dentro do mesmo conjunto, sem duplicar o orçamento.</div>
+          </div>}
           {mode === "TURBINAR" && clientName && (
             <div style={{ marginTop: 12 }}>
               {postsLoading && <span className="cb-hint">Buscando publicações…</span>}
@@ -390,7 +503,7 @@ export default function CampaignCreatePage() {
             </div>
           )}
           <div className="cb-actions" style={{ marginTop: 12 }}>
-            <button className="cb-btn primary" disabled={!clientName || prompt.trim().length < 15 || drafting || boot?.planner_configured === false || (mode === "TURBINAR" && !selectedPost)} onClick={generate}>
+            <button className="cb-btn primary" disabled={!clientName || (mode==="TURBINAR"||method==="PROMPT" ? prompt.trim().length<15 : false) || drafting || boot?.planner_configured===false || (mode==="TURBINAR" && !selectedPost)} onClick={generate}>
               {drafting ? (uploadProgress || "Gerando plano…") : draft ? "Gerar de novo" : "Gerar plano"}
             </button>
             {draft && <button className="cb-btn ghost" onClick={discard}>Descartar rascunho</button>}
