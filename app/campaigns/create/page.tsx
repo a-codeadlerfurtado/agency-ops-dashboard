@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
+import LeadFormComposer from "./lead-form-composer";
 
 const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
@@ -93,7 +94,7 @@ const errorMessages: Record<string, string> = {
   creative_missing: "Anexe o criativo antes de criar.",
   budget_missing: "Defina o orçamento diário antes de criar.",
   site_url_missing: "Informe a URL do site.",
-  lead_form_missing: "Informe o ID do formulário nativo.",
+  lead_form_missing: "Crie ou selecione o formulário nativo antes de confirmar a campanha.",
   meta_token_missing: "Token de escrita da Meta não configurado. Avise a gestão.",
   meta_write_permission_missing: "O token da agência não tem permissão de escrita (ads_management).",
   meta_account_access_missing: "O token da agência não acessa a conta de anúncio deste cliente.",
@@ -466,7 +467,7 @@ export default function CampaignCreatePage() {
             <section className="cb-guide-section">
               <h3>3. Contato e período</h3>
               <div className="cb-grid">
-                {guided.destination==="LEAD_FORM"&&<div className="cb-field full"><label>ID do formulário Meta (opcional para gerar plano)</label><input inputMode="numeric" value={guided.formId} onChange={ev=>changeGuided("formId",ev.target.value)} placeholder="ID do formulário já existente"/><span className="cb-hint">As perguntas do formulário ainda devem ser configuradas na Meta. Sem ID, será possível revisar o plano, mas não executar a criação.</span></div>}
+                {guided.destination==="LEAD_FORM"&&<div className="cb-field full"><label>ID do formulário Meta (opcional para gerar plano)</label><input inputMode="numeric" value={guided.formId} onChange={ev=>changeGuided("formId",ev.target.value)} placeholder="ID do formulário já existente"/><span className="cb-hint">Você poderá criar um formulário com perguntas diretamente na revisão do plano, sem precisar procurar o ID na Meta.</span></div>}
                 {guided.destination==="SITE"&&<div className="cb-field full"><label>Link da landing page</label><input type="url" value={guided.siteUrl} onChange={ev=>changeGuided("siteUrl",ev.target.value)} placeholder="https://..."/></div>}
                 <div className="cb-field"><label>Início (opcional)</label><input type="date" value={guided.start} onChange={ev=>changeGuided("start",ev.target.value)}/></div>
                 <div className="cb-field"><label>Fim (opcional)</label><input type="date" value={guided.end} onChange={ev=>changeGuided("end",ev.target.value)}/></div>
@@ -535,7 +536,14 @@ export default function CampaignCreatePage() {
                   <div className="cb-field" style={{ marginTop: 10 }}><label>URL do site</label><input value={ov("site_url", plan.adset?.destination?.url || "")} onChange={(e) => setOv("site_url", e.target.value)} placeholder="https://…" /></div>
                 )}
                 {plan.adset?.destination?.type === "LEAD_FORM" && (
-                  <div className="cb-field" style={{ marginTop: 10 }}><label>ID do formulário nativo</label><input value={ov("lead_form_id", plan.adset?.destination?.lead_form_id || "")} onChange={(e) => setOv("lead_form_id", e.target.value)} placeholder="Somente números" /></div>
+                  <div style={{ marginTop: 12 }}>
+                    <div className="cb-field"><label>Formulário da Meta (criar aqui ou selecionar existente)</label>
+                      <input value={ov("lead_form_id", plan.adset?.destination?.lead_form_id || "")} onChange={(e) => setOv("lead_form_id", e.target.value)} placeholder="ID preenchido automaticamente ao selecionar ou criar" />
+                      <span className="cb-hint">Você não precisa localizar um ID: escolha um formulário pelo nome ou crie as perguntas nesta tela.</span>
+                    </div>
+                    <LeadFormComposer key={draft.request_id} requestId={draft.request_id} clientName={clientName}
+                      api={api} onSelect={(id) => setOv("lead_form_id", id)} />
+                  </div>
                 )}
               </div>
               <div className="cb-plan-section">
@@ -563,7 +571,7 @@ export default function CampaignCreatePage() {
               {(draft.warnings || []).length > 0 && (
                 <div className="cb-plan-section">
                   <h3>Atenção</h3>
-                  <ul className="cb-warnings">{(draft.warnings || []).map((w: string, i: number) => <li key={i}>{w}</li>)}</ul>
+                  <ul className="cb-warnings">{(draft.warnings || []).filter((w: string) => !(ov("lead_form_id",plan.adset?.destination?.lead_form_id) && w.includes("ID do formulário"))).map((w: string, i: number) => <li key={i}>{w}</li>)}</ul>
                 </div>
               )}
               {(plan.questions || []).length > 0 && (

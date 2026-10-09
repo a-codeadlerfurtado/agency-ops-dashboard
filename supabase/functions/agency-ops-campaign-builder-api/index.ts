@@ -537,6 +537,117 @@ Deno.serve(async (req: Request) => {
     return reply({ ok: true, ...out });
   }
 
+
+  // --- LIST_LEAD_FORMS ---
+  // Lists only forms from this client's configured Facebook Page.
+  if (action === "LIST_LEAD_FORMS") {
+    const scoped = await loadScopedClient(clean(body?.client_name, 160));
+    if ("error" in scoped) return scoped.error;
+    const assets = await loadAssets(scoped.client.id);
+    if (!assets.page_id) return reply({ error: "lead_form_page_missing" }, 409);
+    let reason = "meta_lead_form_permission";
+    for (const candidate of await tokenCandidates(db)) {
+      try {
+        const forms = await metaJson(graphUrl(`${assets.page_id}/leadgen_forms`, {
+          fields: "id,name,status,created_time",limit: "75",access_token: candidate.token,
+        }));
+        return reply({ ok: true, page_id: assets.page_id, forms: (forms?.data || [])
+          .filter((item: Row) => numericId(item.id))
+          .map((item: Row) => ({ id: numericId(item.id), name: clean(item.name, 160),
+            status: clean(item.status, 30), created_at: item.created_time || null })) });
+      } catch (err) { reason = clean((err as Error)?.message, 220); }
+    }
+    return reply({ error: "meta_lead_form_permission", detail: reason }, 403);
+  }
+
+  // --- CREATE_LEAD_FORM ---
+  // Publishes a native Facebook Page form only after an explicit authenticated click.
+  // Does not create a campaign or enable ads; one form per campaign draft (idempotent).
+  if (action === "CREATE_LEAD_FORM") {
+    const requestId = clean(body?.request_id, 60);
+    const { data: row } = await ops.from("campaign_build_requests")
+      .select("id,actor_user_id,client_id,status,expires_at,meta_page_id,plan,request_metadata")
+      .eq("id", requestId).maybeSingle();
+    if (!row) return reply({ error: "request_not_found" }, 404);
+    if (row.actor_user_id !== user.id || row.status !== "DRAFTED") return reply({ error: "forbidden" }, 403);
+    if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) return reply({ error: "draft_expired" }, 409);
+    const { data: clientRow } = await ops.from("clients")
+      .select("id,display_name,gt_owner,lifecycle").eq("id", row.client_id).maybeSingle();
+    if (!clientRow || !inScope(clientRow) || clientRow.lifecycle === "CHURNED") return reply({ error: "forbidden" }, 403);
+    if (row.plan?.adset?.destination?.type !== "LEAD_FORM") return reply({ error: "lead_form_not_applicable" }, 409);
+    const assets = await loadAssets(row.client_id);
+    const pageId = numericId(row.meta_page_id);
+    if (!pageId || pageId !== numericId(assets.page_id)) return reply({ error: "lead_form_page_missing" }, 409);
+    const existingId = numericId(row.request_metadata?.created_lead_form_id);
+    if (existingId) return reply({ ok: true, form_id: existingId, page_id: pageId, reused: true });
+
+    const form = body?.form;
+    if (!form || typeof form !== "object" || Array.isArray(form)) return reply({ error: "lead_form_invalid" }, 400);
+    const name = clean(form.name, 120);
+    const privacy = clean(form.privacy_policy_url, 500);
+    const followUp = clean(form.follow_up_action_url, 500);
+    if (name.length < 5 || !/^https:\/\//i.test(privacy) || !/^https:\/\//i.test(followUp)) {
+      return reply({ error: "lead_form_links_required" }, 400);
+    }
+    try {
+      const policyUrl = new URL(privacy), actionUrl = new URL(followUp);
+      if (policyUrl.username || policyUrl.password || actionUrl.username || actionUrl.password ||
+        ["localhost", "127.0.0.1"].includes(policyUrl.hostname) ||
+        ["localhost", "127.0.0.1"].includes(actionUrl.hostname)) {
+        return reply({ error: "lead_form_links_required" }, 400);
+      }
+    } catch { return reply({ error: "lead_form_links_required" }, 400); }
+    const rawQuestions = Array.isArray(form.questions) ? form.questions : [];
+    if (rawQuestions.length > 8) return reply({ error: "lead_form_invalid" }, 400);
+    const customQuestions: Row[] = [];
+    for (const raw of rawQuestions) {
+      const label = clean(raw?.label, 160);
+      const options = Array.isArray(raw?.options) ?
+        raw.options.map((option: unknown) => clean(option, 90)).filter(Boolean) : [];
+      if (label.length < 8 || options.length < 2 || options.length > 8 ||
+          new Set(options.map((option: string) => option.toLowerCase())).size !== options.length) {
+        return reply({ error: "lead_form_invalid" }, 400);
+      }
+      customQuestions.push({ type: "CUSTOM", label,
+        options: options.map((value: string, idx: number) => ({ key: String(idx + 1), value })) });
+    }
+    if (!customQuestions.length) return reply({ error: "lead_form_invalid" }, 400);
+    const fields = [
+      { type: "FULL_NAME" }, { type: "PHONE" }, { type: "EMAIL" }, ...customQuestions,
+    ];
+    let reason = "meta_lead_form_permission";
+    for (const candidate of await tokenCandidates(db)) {
+      try {
+        // The Page access token is preferred, where Meta exposes it to this integration.
+        const page = await metaJson(graphUrl(pageId, {
+          fields: "id,name,access_token",access_token: candidate.token,
+        }));
+        if (numericId(page?.id) !== pageId) continue;
+        const pageToken = clean(page?.access_token, 2000) || candidate.token;
+        const created = await metaPost(`${pageId}/leadgen_forms`, pageToken, {
+          name,locale: "PT_BR",
+          privacy_policy: JSON.stringify({ url: privacy, link_text: "Política de privacidade" }),
+          follow_up_action_url: followUp,
+          is_optimized_for_quality: clean(form.higher_intent, 10) === "false" ? "false" : "true",
+          question_page_custom_headline: clean(form.headline, 100) || "Conte um pouco sobre você",
+          questions: JSON.stringify(fields),
+        });
+        const formId = numericId(created?.id);
+        if (!formId) throw new Error("A Meta não devolveu ID de formulário.");
+        const updateMeta = { ...(row.request_metadata || {}), created_lead_form_id: formId,
+          created_lead_form_page_id: pageId, created_lead_form_name: name,
+          created_lead_form_at: new Date().toISOString(), created_lead_form_by: person };
+        const { error: saveError } = await ops.from("campaign_build_requests")
+          .update({ request_metadata: updateMeta }).eq("id", requestId).eq("status", "DRAFTED");
+        if (saveError) return reply({ error: "lead_form_audit_failed", form_id: formId }, 502);
+        return reply({ ok: true, form_id: formId, page_id: pageId, form_name: name });
+      } catch (err) {
+        reason = clean((err as Error)?.message, 350);
+      }
+    }
+    return reply({ error: "lead_form_create_failed", detail: reason }, 502);
+  }
+
   // --- BOOTSTRAP ---
   if (action === "BOOTSTRAP") {
     const { data: clients } = await ops.from("clients").select("id,display_name,gt_owner,lifecycle").neq("lifecycle", "CHURNED").order("display_name");
