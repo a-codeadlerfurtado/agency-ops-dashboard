@@ -2,7 +2,7 @@
 
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
-import { API_URL, CONTRACTS_API, DASHBOARD_CLIENT_VERSION, SUPABASE_ANON_KEY, SUPABASE_URL, BrandMark, Chip, Metric, api, apiPost, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
+import { API_URL, CONTRACTS_API, DASHBOARD_CLIENT_VERSION, SUPABASE_ANON_KEY, SUPABASE_URL, BrandMark, Chip, Metric, api, apiPost, authenticatedFetch, clickupAction, daysSince, formatDate, formatDay, formatMoney, formatNumber, healthScore, initials, priorityRank, taskCompletion, pt, relativeDate, supabase, text, useDialogFocus } from "./shared";
 import type { HomeData, Row, TeamMember, View } from "./shared";
 import { nextLabel } from "./material-triage-bridge";
 import { TabHelp } from "./tab-help";
@@ -232,10 +232,11 @@ export default function Dashboard() {
             const url = new URL(API_URL);
             url.searchParams.set("view", "home");
             url.searchParams.set("client", DASHBOARD_CLIENT_VERSION);
-            const response = await fetch(url, {
+            const response = await authenticatedFetch(url, {
               cache: "no-store",
-              headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },
-              signal: AbortSignal.timeout(15_000),
+              // A Home e mais pesada que as consultas normais; preservar a tentativa
+              // durante picos do Supabase, com refresh de sessao em caso de 401.
+              signal: AbortSignal.timeout(30_000),
             });
             if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
             return response.json() as Promise<HomeData>;
@@ -247,6 +248,8 @@ export default function Dashboard() {
         const profileResponse = await fetch(`${SUPABASE_URL}/functions/v1/agency-ops-profile-data-api`, {
           headers: { Authorization: `Bearer ${session.access_token}`, apikey: SUPABASE_ANON_KEY },
           cache: "no-store",
+          // O complemento nao pode bloquear a exibicao dos KPIs da Home.
+          signal: AbortSignal.timeout(5_000),
         });
         if (profileResponse.ok) {
           const extra = await profileResponse.json();
@@ -277,12 +280,21 @@ export default function Dashboard() {
       setData(next);
       loadedRef.current = true;
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Falha desconhecida");
+      setError(caught instanceof Error && /timed out|timeout|abort/i.test(caught.message) ? "O servidor demorou a responder. Nova tentativa automatica em instantes." : caught instanceof Error ? caught.message : "Falha desconhecida");
     } finally {
       loadInFlightRef.current = false;
       setLoading(false);
     }
   }, [playTone, session?.access_token]);
+
+  // Em instabilidade transitoria, uma falha nao deve deixar a Home vazia
+  // ate o proximo refresh manual ou o intervalo de dois minutos.
+  useEffect(() => {
+    if (!session?.access_token || !error) return;
+    if (!/timeout|timed out|demorou|failed to fetch|network|API 50[234]/i.test(error)) return;
+    const retry = window.setTimeout(() => { void load(); }, 8_000);
+    return () => window.clearTimeout(retry);
+  }, [error, load, session?.access_token]);
 
   const loadNotificationCenter = useCallback(async () => {
     if (!session?.access_token || notificationLoadInFlightRef.current) return;
