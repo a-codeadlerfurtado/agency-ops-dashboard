@@ -786,7 +786,7 @@ Deno.serve(async (req: Request) => {
       ids.length ? ops.from("client_meta_assets").select("client_id,meta_ad_account_id,meta_page_id").in("client_id", ids) : Promise.resolve({ data: [] }),
       ids.length ? ops.from("client_integrations").select("client_id,external_id,is_primary,meta_ad_account_id").eq("system", "META_BM").in("client_id", ids) : Promise.resolve({ data: [] }),
       ops.from("campaign_build_requests")
-        .select("id,client_id,actor_person,actor_user_id,prompt,status,plan,plan_warnings,created_campaign_id,created_adset_id,created_ad_id,error,executed_at,created_at,expires_at,creative_type,creative_file_name")
+        .select("id,client_id,actor_person,actor_user_id,prompt,status,plan,plan_warnings,created_campaign_id,created_adset_id,created_ad_id,error,executed_at,created_at,expires_at,creative_type,creative_file_name,request_metadata")
         .in("client_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"])
         .order("created_at", { ascending: false }).limit(25),
     ]);
@@ -823,7 +823,11 @@ Deno.serve(async (req: Request) => {
       profile: { person, role, is_adler: isAdler },
       planner_configured: plannerConfigured,
       clients: clientsOut,
-      history: (history || []).map((h: Row) => ({ ...h, client_name: nameById.get(h.client_id) || null })),
+      history: (history || []).map((h: Row) => {
+        const { request_metadata, ...safe } = h;
+        return { ...safe, client_name: nameById.get(h.client_id) || null,
+          activation_verified_at: request_metadata?.activation_verified_at || null };
+      }),
     });
   }
 
@@ -1060,6 +1064,182 @@ Deno.serve(async (req: Request) => {
       resumed_failed_token_attempt: recoverableFailure,
       assets: { account_id: assets.account_id, page_id: assets.page_id,
         instagram_id: assets.instagram_id } });
+  }
+
+  // --- ACTIVATE_CREATED ---
+  // O construtor cria os tres niveis PAUSADOS. Ativar somente a campanha
+  // deixaria conjuntos/anuncios parados. Esta acao usa exclusivamente IDs
+  // persistidos no pedido, confere o vinculo real na Meta e audita cada clique.
+  if (action === "ACTIVATE_CREATED") {
+    const requestId = clean(body?.request_id, 60);
+    if (!/^[0-9a-f-]{36}$/i.test(requestId)) return reply({ error: "request_required" }, 400);
+    if (clean(body?.confirmation, 20).toUpperCase() !== "ATIVAR")
+      return reply({ error: "activation_confirmation_required" }, 400);
+
+    const { data: row, error: rowError } = await ops.from("campaign_build_requests")
+      .select("*").eq("id", requestId).maybeSingle();
+    if (rowError) return reply({ error: "query_failed" }, 500);
+    if (!row) return reply({ error: "request_not_found" }, 404);
+    if (row.actor_user_id !== user.id && !isAdler && role !== "MGMT")
+      return reply({ error: "forbidden" }, 403);
+    if (row.status !== "CREATED") return reply({ error: "campaign_not_created" }, 409);
+
+    const { data: clientRow } = await ops.from("clients")
+      .select("id,display_name,gt_owner,lifecycle").eq("id", row.client_id).maybeSingle();
+    if (!clientRow || !inScope(clientRow)) return reply({ error: "forbidden" }, 403);
+    if (clean(clientRow.lifecycle, 30).toUpperCase() === "CHURNED")
+      return reply({ error: "client_churned" }, 409);
+
+    const campaignId = numericId(row.created_campaign_id);
+    const adsetId = numericId(row.created_adset_id);
+    const accountId = numericId(row.meta_ad_account_id);
+    const savedAds = Array.isArray(row.request_metadata?.created_ad_ids)
+      ? row.request_metadata.created_ad_ids : [row.created_ad_id];
+    const adIds = [...new Set(savedAds.map((value: unknown) => numericId(value)).filter(Boolean))] as string[];
+    if (!campaignId || !adsetId || !accountId || !adIds.length ||
+        adIds.length > MAX_CREATIVES || adIds.length !== savedAds.length ||
+        (row.created_ad_id && !adIds.includes(numericId(row.created_ad_id))))
+      return reply({ error: "activation_ids_missing" }, 409);
+
+    // Bloquear ativacao de ativos que foram trocados de cliente/conta.
+    const assets = await loadAssets(clientRow.id);
+    if (assets.account_id !== accountId) return reply({ error: "assets_changed" }, 409);
+    const expectedBudget = Math.round(Number(row.plan?.adset?.daily_budget_brl) * 100);
+    if (!Number.isSafeInteger(expectedBudget) || expectedBudget <= 0)
+      return reply({ error: "budget_missing" }, 409);
+
+    const resolved = await resolveWriteToken(db, accountId);
+    if ("error" in resolved) return reply({ error: resolved.error }, 403);
+    if (clean(resolved.account?.currency).toUpperCase() !== "BRL")
+      return reply({ error: "currency_mismatch" }, 409);
+    if (Number(resolved.account?.account_status) !== 1)
+      return reply({ error: "meta_account_not_active" }, 409);
+    const token = resolved.candidate.token;
+    const getStates = async () => {
+      const [campaign, adset, ...ads] = await Promise.all([
+        metaJson(graphUrl(campaignId, { fields: "id,name,account_id,status,effective_status", access_token: token })),
+        metaJson(graphUrl(adsetId, { fields: "id,campaign_id,status,daily_budget,end_time", access_token: token })),
+        ...adIds.map(id => metaJson(graphUrl(id, { fields: "id,adset_id,status", access_token: token }))),
+      ]);
+      return { campaign, adset, ads };
+    };
+    let before: Awaited<ReturnType<typeof getStates>>;
+    try { before = await getStates(); }
+    catch { return reply({ error: "meta_read_failed" }, 502); }
+
+    const statesLinked = (snapshot: Awaited<ReturnType<typeof getStates>>) =>
+      numericId(snapshot.campaign?.id) === campaignId &&
+      numericId(snapshot.campaign?.account_id) === accountId &&
+      numericId(snapshot.adset?.id) === adsetId &&
+      numericId(snapshot.adset?.campaign_id) === campaignId &&
+      snapshot.ads.every((ad: Row, i: number) => numericId(ad.id) === adIds[i] && numericId(ad.adset_id) === adsetId);
+    const objectStates = (snapshot: Awaited<ReturnType<typeof getStates>>) =>
+      [snapshot.campaign.status, snapshot.adset.status, ...snapshot.ads.map((ad: Row) => ad.status)]
+        .map(status => clean(status, 25).toUpperCase());
+    if (!statesLinked(before)) return reply({ error: "activation_link_mismatch" }, 409);
+    // A ativacao da campanha pode liberar objetos adicionados depois no
+    // Gerenciador. Nunca ativar estruturas que nao pertencam a este pedido.
+    try {
+      const [campaignSets, setAds] = await Promise.all([
+        metaJson(graphUrl(`${campaignId}/adsets`, { fields: "id", limit: "100", access_token: token })),
+        metaJson(graphUrl(`${adsetId}/ads`, { fields: "id", limit: "100", access_token: token })),
+      ]);
+      const liveAdsets = (campaignSets?.data || []).map((item: Row) => numericId(item.id));
+      const liveAds = (setAds?.data || []).map((item: Row) => numericId(item.id));
+      if (campaignSets?.paging?.next || setAds?.paging?.next ||
+          liveAdsets.length !== 1 || liveAdsets[0] !== adsetId ||
+          liveAds.length !== adIds.length || liveAds.some((id: string) => !adIds.includes(id)))
+        return reply({ error: "activation_untracked_objects" }, 409);
+    } catch {
+      return reply({ error: "activation_structure_check_failed" }, 502);
+    }
+    if (objectStates(before).some(status => !["ACTIVE", "PAUSED"].includes(status)))
+      return reply({ error: "campaign_state_not_toggleable" }, 409);
+    if (Number(before.adset.daily_budget) !== expectedBudget)
+      return reply({ error: "activation_budget_changed", budget_brl: Number(before.adset.daily_budget) / 100 }, 409);
+    if (before.adset.end_time && Date.parse(before.adset.end_time) <= Date.now())
+      return reply({ error: "activation_end_date_passed" }, 409);
+
+    const beforeState = [
+      { id: campaignId, kind: "CAMPAIGN", status: before.campaign.status },
+      { id: adsetId, kind: "ADSET", status: before.adset.status },
+      ...before.ads.map((ad: Row) => ({ id: ad.id, kind: "AD", status: ad.status })),
+    ];
+    const now = new Date().toISOString();
+    const hash = await sha256(JSON.stringify({ user: user.id, requestId, beforeState, action: "ACTIVATE_CREATED" }));
+    const { data: audit, error: auditError } = await ops.from("safe_action_requests").insert({
+      actor_user_id: user.id, actor_person: person, actor_role: role,
+      client_id: clientRow.id, action_type: "META_RESUME_CAMPAIGNS",
+      target_ids: [campaignId, adsetId, ...adIds],
+      preview_state: beforeState, preview_hash: hash, before_state: beforeState,
+      expires_at: new Date(Date.now() + 600_000).toISOString(),
+      status: "EXECUTING", confirmed_at: now,
+      request_metadata: { source: "CAMPAIGN_BUILDER", request_id: requestId, account_id: accountId, expected_daily_budget_brl: expectedBudget / 100 },
+    }).select("id").single();
+    if (auditError || !audit?.id) return reply({ error: "audit_store_failed" }, 500);
+
+    try {
+      // Meta pode aceitar o POST e depois rejeitar a publicacao do anuncio.
+      // Por isso todos os IDs e estados sao lidos novamente antes de confirmar.
+      for (let i = 0; i < adIds.length; i++) {
+        if (clean(before.ads[i].status).toUpperCase() !== "ACTIVE")
+          await metaPost(adIds[i], token, { status: "ACTIVE" });
+      }
+      if (clean(before.adset.status).toUpperCase() !== "ACTIVE")
+        await metaPost(adsetId, token, { status: "ACTIVE" });
+      if (clean(before.campaign.status).toUpperCase() !== "ACTIVE")
+        await metaPost(campaignId, token, { status: "ACTIVE" });
+
+      const after = await getStates();
+      if (!statesLinked(after) || objectStates(after).some(status => status !== "ACTIVE"))
+        throw new Error("activation_verification_failed");
+      const afterState = [
+        { id: campaignId, kind: "CAMPAIGN", status: after.campaign.status, effective_status: after.campaign.effective_status },
+        { id: adsetId, kind: "ADSET", status: after.adset.status },
+        ...after.ads.map((ad: Row) => ({ id: ad.id, kind: "AD", status: ad.status })),
+      ];
+      const verifiedAt = new Date().toISOString();
+      await ops.from("safe_action_requests").update({
+        status: "VERIFIED", executed_at: verifiedAt, after_state: afterState,
+        verification: { verified: true, verified_at: verifiedAt, configured_status: "ACTIVE" },
+      }).eq("id", audit.id);
+      await ops.from("campaign_build_requests").update({
+        request_metadata: { ...(row.request_metadata || {}), activation_verified_at: verifiedAt, activation_audit_id: audit.id },
+      }).eq("id", requestId).eq("status", "CREATED");
+      await ops.from("meta_campaign_inventory").update({
+        campaign_status: "ACTIVE", checked_at: verifiedAt,
+      }).eq("client_id", clientRow.id).eq("campaign_id", campaignId);
+      return reply({ ok: true, status: "VERIFIED", campaign_id: campaignId, adset_id: adsetId,
+        ad_ids: adIds, audit_id: audit.id, verified_at: verifiedAt,
+        note: "Status ACTIVE confirmado nos objetos. A entrega depende da revisao da Meta, saldo e configuracao da conta." });
+    } catch (error) {
+      // Pausar a campanha PRIMEIRO limita gasto durante recuperacao de falha parcial.
+      // Depois restaura os estados originais dos conjuntos e anuncios.
+      let rollbackOk = true;
+      try { await metaPost(campaignId, token, { status: "PAUSED" }); } catch { rollbackOk = false; }
+      for (const state of beforeState.filter(s => s.kind !== "CAMPAIGN")) {
+        try { await metaPost(state.id, token, { status: state.status }); } catch { rollbackOk = false; }
+      }
+      // Nao restaurar uma campanha originalmente ativa se a restauracao dos
+      // objetos filhos falhou: o fail-safe e mantê-la PAUSADA.
+      if (rollbackOk) {
+        try { await metaPost(campaignId, token, { status: before.campaign.status }); }
+        catch { rollbackOk = false; }
+      }
+      try {
+        const restored = await getStates();
+        rollbackOk = rollbackOk && statesLinked(restored) &&
+          objectStates(restored).every((state, i) => state === objectStates(before)[i]);
+      } catch { rollbackOk = false; }
+      await ops.from("safe_action_requests").update({
+        status: rollbackOk ? "ROLLED_BACK" : "FAILED",
+        executed_at: new Date().toISOString(),
+        error: clean((error as Error)?.message, 380),
+        verification: { verified: false, rollback_attempted: true, rollback_ok: rollbackOk },
+      }).eq("id", audit.id);
+      return reply({ error: "activation_failed", detail: clean((error as Error)?.message, 180),
+        rollback_ok: rollbackOk, audit_id: audit.id }, 502);
+    }
   }
 
   // --- DISCARD ---

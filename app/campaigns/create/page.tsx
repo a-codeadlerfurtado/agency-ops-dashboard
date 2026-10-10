@@ -106,6 +106,18 @@ const errorMessages: Record<string, string> = {
   file_too_large: "Arquivo acima de 25 MB. Comprima ou use outra versão.",
   unsupported_file_type: "Só imagem ou vídeo.",
   confirmation_required: "Digite CRIAR para confirmar.",
+  activation_confirmation_required: "Digite ATIVAR para confirmar a campanha.",
+  campaign_not_created: "Somente campanhas realmente criadas na Meta podem ser ativadas.",
+  activation_ids_missing: "Faltam IDs reais de campanha, conjunto ou anuncio. A ativacao foi bloqueada.",
+  activation_link_mismatch: "Os objetos na Meta nao correspondem aos IDs criados neste pedido.",
+  activation_untracked_objects: "A estrutura na Meta tem conjuntos ou anuncios que nao foram criados neste pedido. Confira antes de ativar.",
+  activation_structure_check_failed: "Nao foi possivel conferir todos os conjuntos e anuncios da campanha na Meta.",
+  activation_budget_changed: "O orcamento na Meta mudou desde a criacao. Confirme pelo Gerenciador antes de ativar.",
+  activation_end_date_passed: "O conjunto de anuncios ja passou da data de termino.",
+  campaign_state_not_toggleable: "A campanha, conjunto ou algum anuncio nao permite ativacao.",
+  currency_mismatch: "A moeda da conta Meta nao corresponde ao orcamento em reais.",
+  meta_account_not_active: "A conta de anuncios nao esta ativa na Meta.",
+  activation_failed: "Falha ao ativar. Verifique a auditoria e os status reais na Meta.",
 };
 function friendlyError(body: Row | null, fallback: string) {
   const key = String(body?.error || "");
@@ -139,6 +151,9 @@ export default function CampaignCreatePage() {
   const [historyError, setHistoryError] = useState("");
   const [historyNotice, setHistoryNotice] = useState("");
   const [resumingId, setResumingId] = useState<string | null>(null);
+  const [activationConfirmId, setActivationConfirmId] = useState<string | null>(null);
+  const [activationConfirmWord, setActivationConfirmWord] = useState("");
+  const [activationBusyId, setActivationBusyId] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Row>({});
   const [confirmWord, setConfirmWord] = useState("");
   const [executing, setExecuting] = useState(false);
@@ -371,6 +386,31 @@ export default function CampaignCreatePage() {
     }
   };
 
+  const activateFromHistory = async (entry: Row) => {
+    if (!entry?.id || activationBusyId || activationConfirmId !== entry.id ||
+        activationConfirmWord.trim().toUpperCase() !== "ATIVAR") return;
+    setActivationBusyId(String(entry.id));
+    setHistoryError(""); setHistoryNotice("");
+    try {
+      const { ok, body } = await api({
+        action: "ACTIVATE_CREATED", request_id: entry.id, confirmation: "ATIVAR",
+      });
+      if (!ok) {
+        setHistoryError(friendlyError(body, "Falha ao ativar na Meta.") +
+          (body?.audit_id ? ` Auditoria: ${body.audit_id}.` : "") +
+          (body?.rollback_ok === false ? " ATENCAO: restauracao incompleta; verifique a Meta antes de tentar novamente." : ""));
+        return;
+      }
+      setHistoryNotice(`Campanha ${body.campaign_id}, conjunto ${body.adset_id} e ${body.ad_ids?.length || 0} anuncio(s) configurados como ATIVOS e verificados na Meta. A veiculacao depende de revisao, saldo e politicas da Meta.`);
+      setActivationConfirmId(null); setActivationConfirmWord("");
+      await loadBoot();
+    } catch (error) {
+      setHistoryError(`Falha de conexao ao ativar: ${String((error as Error)?.message || error).slice(0, 160)}. Confira o status na Meta antes de repetir.`);
+    } finally {
+      setActivationBusyId(null);
+    }
+  };
+
   const plan = draft?.plan as Row | undefined;
   const ov = (key: string, fallback: unknown) => (overrides[key] != null && overrides[key] !== "" ? overrides[key] : fallback ?? "");
   const setOv = (key: string, value: string) => setOverrides((prev: Row) => ({ ...prev, [key]: value }));
@@ -426,6 +466,11 @@ export default function CampaignCreatePage() {
         .cb-history-actions button{border:1px solid #37536d;border-radius:8px;background:transparent;color:#bcd1df;padding:7px 10px;font-family:inherit;font-weight:700;font-size:12px;cursor:pointer}
         .cb-history-actions button:hover{border-color:#fa975e;color:#fff}
         .cb-history-actions button.danger{border-color:#a04545;color:#ffb4b4}
+        .cb-history-actions button.cb-activate-button{background:rgba(34,197,94,.13);border-color:rgba(34,197,94,.5);color:#95f1b2}
+        .cb-history-actions button.cb-activate-button:hover:not(:disabled){background:rgba(34,197,94,.22);border-color:#4ade80;color:#fff}
+        .cb-activation-confirm{display:flex;align-items:center;flex-wrap:wrap;gap:8px;border:1px solid rgba(34,197,94,.3);border-radius:9px;padding:10px;width:100%}
+        .cb-activation-confirm .cb-hint{flex-basis:100%;line-height:1.5}
+        .cb-activation-confirm input{width:165px;max-width:100%;background:#111d2a;color:#fff;border:1px solid #456076;border-radius:8px;padding:8px 10px;font:inherit}
         .cb-history-actions button:disabled{opacity:.5;cursor:not-allowed}
         .cb-confirm{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:12px}
         .cb-confirm input{background:#08131f;border:1px solid #1d3a55;border-radius:10px;color:#e9f3fb;padding:10px 12px;font-size:14px;width:130px;text-transform:uppercase;font-family:inherit}
@@ -746,7 +791,7 @@ export default function CampaignCreatePage() {
           <div className="cb-history">
             {(boot?.history || []).length === 0 && <span className="cb-hint">Nenhum pedido ainda.</span>}
             {(boot?.history || []).map((h: Row) => {
-              const ownedByMe = Boolean(session?.user?.id) && h.actor_user_id === session.user.id;
+              const ownedByMe = Boolean(session?.user?.id) && h.actor_user_id === session?.user?.id;
               const recoverableFailure = h.status === "FAILED" &&
                 /^token:\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(String(h.error || "").trim()) &&
                 !h.created_campaign_id && !h.created_adset_id && !h.created_ad_id;
@@ -754,6 +799,9 @@ export default function CampaignCreatePage() {
               const mayDiscard = h.status === "DRAFTED" &&
                 (boot?.profile?.is_adler || boot?.profile?.role === "MGMT" || ownedByMe);
               const confirming = historyDiscardId === h.id;
+              const activationConfirming = activationConfirmId === h.id;
+              const mayActivate = h.status === "CREATED" && Boolean(h.created_campaign_id && h.created_adset_id && h.created_ad_id) &&
+                (boot?.profile?.is_adler || boot?.profile?.role === "MGMT" || ownedByMe);
               return (
                 <article key={h.id} className="cb-history-item">
                   <div className="cb-history-top">
@@ -765,10 +813,11 @@ export default function CampaignCreatePage() {
                     {h.actor_person} · {dateTime(h.created_at)}
                     {h.plan?.adset?.daily_budget_brl ? <> · {money(h.plan.adset.daily_budget_brl)}/dia</> : null}
                     {h.created_campaign_id ? <> · campanha {h.created_campaign_id}</> : null}
+                    {h.activation_verified_at ? <> · última ativação verificada em {dateTime(h.activation_verified_at)}</> : null}
                     {h.status === "FAILED" && h.error ? <> · {String(h.error).slice(0, 140)}</> : null}
                     {h.status === "DRAFTED" && h.expires_at && Date.parse(h.expires_at) < Date.now() ? <> · prazo expirado</> : null}
                   </small>
-                  {(mayResume || mayDiscard) && (
+                  {(mayResume || mayDiscard || mayActivate) && (
                     <div className="cb-history-actions">
                       {mayResume && !confirming && (
                         <button type="button" disabled={Boolean(resumingId) || historyDiscardBusy}
@@ -794,6 +843,30 @@ export default function CampaignCreatePage() {
                             Cancelar
                           </button>
                         </>
+                      ))}
+                      {mayActivate && (!activationConfirming ? (
+                        <button type="button" className="cb-activate-button"
+                          disabled={Boolean(activationBusyId)}
+                          onClick={() => { setActivationConfirmId(String(h.id)); setActivationConfirmWord(""); setHistoryError(""); setHistoryNotice(""); }}>
+                          {h.activation_verified_at ? "Ativar novamente" : "Ativar campanha na Meta"}
+                        </button>
+                      ) : (
+                        <div className="cb-activation-confirm" role="group" aria-label="Confirmar ativação de campanha">
+                          <span className="cb-hint">
+                            Ativar campanha, conjunto e anúncios na Meta pode iniciar gastos de até {money(h.plan?.adset?.daily_budget_brl)} por dia, conforme o orçamento salvo. Confira a conta e o orçamento antes de prosseguir.
+                          </span>
+                          <input aria-label="Digite ATIVAR para confirmar" value={activationConfirmWord} placeholder="Digite ATIVAR"
+                            onChange={(e) => setActivationConfirmWord(e.target.value)} />
+                          <button type="button" className="cb-activate-button"
+                            disabled={Boolean(activationBusyId) || activationConfirmWord.trim().toUpperCase() !== "ATIVAR"}
+                            onClick={() => void activateFromHistory(h)}>
+                            {activationBusyId === h.id ? "Ativando e verificando…" : "Confirmar ativação"}
+                          </button>
+                          <button type="button" disabled={Boolean(activationBusyId)}
+                            onClick={() => { setActivationConfirmId(null); setActivationConfirmWord(""); }}>
+                            Cancelar
+                          </button>
+                        </div>
                       ))}
                     </div>
                   )}
