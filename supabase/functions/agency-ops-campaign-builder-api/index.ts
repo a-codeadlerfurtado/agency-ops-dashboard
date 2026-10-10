@@ -642,12 +642,14 @@ Deno.serve(async (req: Request) => {
       if (isAdler) diagnostics.push({
         source: candidate.source, actor, permissions: granted,
         page_access: page, account_access: account,
+        ads_management_granted: adsWritable,
         page_error: pageResult.status === "rejected" ?
           clean((pageResult.reason as Error)?.message, 200) : null,
         page_code: pageResult.status === "rejected" ?
           ((pageResult.reason as any)?.metaCode ?? null) : null,
-        account_error: accountResult.status === "rejected" ?
-          clean((accountResult.reason as Error)?.message, 200) : null,
+        account_error: !account ? accountError : null,
+        account_code: accountResult.status === "rejected" ?
+          ((accountResult.reason as any)?.metaCode ?? null) : null,
       });
       if (page && account) { sameToken = true; break; }
     }

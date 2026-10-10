@@ -133,6 +133,7 @@ export default function CampaignCreatePage() {
   const [bootError, setBootError] = useState("");
   const [clientName, setClientName] = useState("");
   const [metaAccess, setMetaAccess] = useState<Row | null>(null);
+  const [metaAccessCheckNonce, setMetaAccessCheckNonce] = useState(0);
   const [mode, setMode] = useState<"NOVA" | "TURBINAR">("NOVA");
   const [posts, setPosts] = useState<Row | null>(null);
   const [postsLoading, setPostsLoading] = useState(false);
@@ -211,7 +212,7 @@ export default function CampaignCreatePage() {
         error: "Falha de conexão ao verificar as permissões da Meta." });
     });
     return () => { cancelled = true; };
-  }, [api, clientName, session?.access_token]);
+  }, [api, clientName, session?.access_token, metaAccessCheckNonce]);
 
 
 
@@ -610,11 +611,31 @@ export default function CampaignCreatePage() {
                     selectedClient.has_page && selectedClient.has_ad_account &&
                     (!metaAccess.page_access || !metaAccess.account_access) && (
                     <div className="cb-error" role="alert" style={{ marginTop: 8 }}>
-                      A Página e/ou a conta estão cadastradas, mas a Meta não autorizou a credencial da agência a operar nesses ativos.
-                      O administrador do cliente precisa compartilhar a Página e a conta no
-                      {" "}<a href="https://business.facebook.com/settings" target="_blank" rel="noopener noreferrer"
-                        style={{ color: "#ffcfaf", textDecoration: "underline" }}>Gerenciador de Negócios</a>,
-                      atribuindo acesso para gerenciar anúncios e leads. Depois atualize a tela.
+                      {metaAccess.page_access && !metaAccess.account_access ? (
+                        <>
+                          <b>Conta de anúncios sem autorização de criação.</b> A Página da NC já está autorizada.
+                          Falta conceder à credencial da agência acesso para gerenciar campanhas na conta <b>385332010919725</b>.
+                          No portfólio <b>BM NC Imóveis - Litoral</b>, abra {" "}
+                          <a href="https://business.facebook.com/settings" target="_blank" rel="noopener noreferrer"
+                            style={{ color: "#ffcfaf", textDecoration: "underline" }}>Configurações do negócio</a>,
+                          entre em Contas de anúncios, selecione a conta da NC e verifique o compartilhamento com a empresa parceira Leonardo Imobi,
+                          com permissão para gerenciar campanhas. No portfólio da agência, confira em Usuários do sistema se
+                          <b> Conversions API System User</b> possui essa conta atribuída para administrar anúncios.
+                        </>
+                      ) : (
+                        <>
+                          A Meta não autorizou todos os ativos necessários à criação. Confira a Página e a conta em{" "}
+                          <a href="https://business.facebook.com/settings" target="_blank" rel="noopener noreferrer"
+                            style={{ color: "#ffcfaf", textDecoration: "underline" }}>Configurações do negócio</a>
+                          {" "}e conceda à empresa parceira as permissões de anúncios e, para formulários, leads.
+                        </>
+                      )}
+                      <div style={{ marginTop: 10 }}>
+                        <button type="button" disabled={Boolean(metaAccess.checking)}
+                          onClick={() => setMetaAccessCheckNonce((value) => value + 1)}>
+                          {metaAccess.checking ? "Verificando…" : "Verificar acesso novamente"}
+                        </button>
+                      </div>
                       {Array.isArray(metaAccess.diagnostics) && metaAccess.diagnostics.length > 0 && (
                         <div style={{ marginTop: 10, fontSize: 12, lineHeight: 1.6 }}>
                           <b>Diagnóstico das credenciais Meta:</b>
@@ -623,6 +644,8 @@ export default function CampaignCreatePage() {
                               {item.source}: {item.actor?.name || "Usuário não identificado"}
                               {item.actor?.id ? ` (#${item.actor.id})` : ""} · Página: {item.page_access ? "autorizada" : `negada, código ${item.page_code ?? "não informado"}`}
                               {!item.page_access && item.page_error ? <> · {String(item.page_error).slice(0, 175)}</> : null}
+                              {" "}· Conta de anúncios: {item.account_access ? "autorizada" : `negada${item.account_code ? `, código ${item.account_code}` : ""}`}
+                              {!item.account_access && item.account_error ? <> · {String(item.account_error).slice(0, 180)}</> : null}
                               {" "}· Escopos: {(item.permissions || []).filter((v: string) =>
                                 /^(pages_|leads_retrieval|ads_management|business_management)/.test(v)).join(", ") || "nenhum identificado"}
                             </div>
