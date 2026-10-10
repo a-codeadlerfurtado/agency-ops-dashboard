@@ -748,7 +748,7 @@ export default function CampaignCreatePage() {
             {(boot?.history || []).map((h: Row) => {
               const ownedByMe = Boolean(session?.user?.id) && h.actor_user_id === session.user.id;
               const recoverableFailure = h.status === "FAILED" &&
-                /^token:\\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(String(h.error || "").trim()) &&
+                /^token:\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(String(h.error || "").trim()) &&
                 !h.created_campaign_id && !h.created_adset_id && !h.created_ad_id;
               const mayResume = ownedByMe && (h.status === "DRAFTED" || recoverableFailure);
               const mayDiscard = h.status === "DRAFTED" &&

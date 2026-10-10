@@ -1002,7 +1002,7 @@ Deno.serve(async (req: Request) => {
     // Other FAILED jobs may have partially created Meta objects and must never
     // be silently resumed because that could duplicate paid campaigns.
     const recoverableFailure = row.status === "FAILED" &&
-      /^token:\\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(String(row.error || "").trim()) &&
+      /^token:\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(String(row.error || "").trim()) &&
       !row.created_campaign_id && !row.created_adset_id && !row.created_ad_id;
     if (row.status !== "DRAFTED" && !recoverableFailure)
       return reply({ error: "request_not_resumable" }, 409);
