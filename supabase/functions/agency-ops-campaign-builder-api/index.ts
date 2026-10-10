@@ -621,6 +621,8 @@ Deno.serve(async (req: Request) => {
             .map((item:Row) => clean(item.permission, 60));
         }
       }
+      // Leitura da conta nao significa permissao para CRIAR anuncios.
+      const adsWritable = await adsManagementGranted(candidate.token).catch(() => false);
       const [pageResult, accountResult] = await Promise.allSettled([
         pageId ? (async () => {
           const pageToken = await resolveNcPageToken(candidate.token, pageId);
@@ -634,8 +636,9 @@ Deno.serve(async (req: Request) => {
       ]);
       if (pageResult.status === "fulfilled") page = pageAccess = true;
       else pageError = clean((pageResult.reason as Error)?.message,160);
-      if (accountResult.status === "fulfilled") account = accountAccess = true;
-      else accountError = clean((accountResult.reason as Error)?.message,160);
+      if (accountResult.status === "fulfilled" && adsWritable) account = accountAccess = true;
+      else accountError = !adsWritable ? "Token sem permissao ads_management para criar campanhas." :
+        clean((accountResult as PromiseRejectedResult).reason?.message,160);
       if (isAdler) diagnostics.push({
         source: candidate.source, actor, permissions: granted,
         page_access: page, account_access: account,
@@ -1060,7 +1063,8 @@ Deno.serve(async (req: Request) => {
       client: { id: clientRow.id, display_name: clientRow.display_name },
       mode: row.request_metadata?.mode === "BOOST" ? "BOOST" : "NEW",
       creatives, warnings: row.plan_warnings || [], expires_at: expiresAt,
-      existing_form_id: numericId(row.request_metadata?.created_lead_form_id),
+      // Preserva o formulario selecionado no plano; nao troca pelo ultimo formulario criado incidentalmente.
+      existing_form_id: numericId(row.plan?.adset?.destination?.lead_form_id) || numericId(row.request_metadata?.created_lead_form_id),
       resumed_failed_token_attempt: recoverableFailure,
       assets: { account_id: assets.account_id, page_id: assets.page_id,
         instagram_id: assets.instagram_id } });
@@ -1280,7 +1284,6 @@ Deno.serve(async (req: Request) => {
     if (!plan?.campaign || !plan?.adset || !plan?.ad ||
         clean(plan.campaign.name,120) === "Campanha sem nome" ||
         !clean(plan.campaign.name,120) || !clean(plan.adset.name,120) ||
-        Number(plan.adset.daily_budget_brl) <= 0 ||
         (row.request_metadata?.mode !== "BOOST" &&
           (!clean(plan.ad.primary_text,900) || !clean(plan.ad.headline,60))))
       return reply({ error: "draft_incomplete" }, 409);
@@ -1320,10 +1323,28 @@ Deno.serve(async (req: Request) => {
       if (clean(overrides.site_url, 500) && plan.adset.destination.type === "SITE") plan.adset.destination.url = clean(overrides.site_url, 500);
       if (numericId(overrides.lead_form_id) && plan.adset.destination.type === "LEAD_FORM") plan.adset.destination.lead_form_id = numericId(overrides.lead_form_id);
     }
+    // Validar o plano FINAL, depois de aplicar os ajustes do preview.
+    const finalBudget = Number(plan.adset.daily_budget_brl);
+    if (!Number.isFinite(finalBudget) || finalBudget < 1 || finalBudget > 100000)
+      return reply({ error: "budget_missing" }, 409);
     if (!boostMode && plan.adset.destination.type === "SITE" && !plan.adset.destination.url) return reply({ error: "site_url_missing" }, 409);
     if (!boostMode && plan.adset.destination.type === "LEAD_FORM" && !plan.adset.destination.lead_form_id) return reply({ error: "lead_form_missing" }, 409);
 
-    await ops.from("campaign_build_requests").update({ status: "EXECUTING", overrides, executed_at: new Date().toISOString() }).eq("id", requestId);
+    // Nunca consumir o rascunho por falta de acesso: o cliente pode liberar
+    // a conta na Meta e clicar novamente, sem subir os criativos outra vez.
+    const resolved = await resolveWriteToken(db, accountId);
+    if ("error" in resolved && resolved.error)
+      return reply({ error: resolved.error, account_id: accountId,
+        detail: "A credencial Meta precisa ter ads_management e acesso a esta conta de anuncios." }, 403);
+
+    // Compare-and-set: somente UM clique pode reivindicar o pedido.
+    // Impede POSTs simultaneos de criarem campanhas duplicadas.
+    const { data: claimed, error: claimError } = await ops.from("campaign_build_requests")
+      .update({ status: "EXECUTING", overrides, executed_at: new Date().toISOString() })
+      .eq("id", requestId).eq("status", "DRAFTED").select("id").maybeSingle();
+    if (claimError) return reply({ error: "query_failed" }, 500);
+    if (!claimed?.id) return reply({ error: "request_already_executed" }, 409);
+
     const fail = async (stage: string, error: unknown, created: Row) => {
       const message = clean((error as Error)?.message || error, 500);
       // rollback: apaga o que já foi criado, na ordem inversa
@@ -1353,9 +1374,7 @@ Deno.serve(async (req: Request) => {
 
     const created: Row = {};
     try {
-      // token com ads_management e acesso à conta
-      const resolved = await resolveWriteToken(db, accountId);
-      if ("error" in resolved && resolved.error) return await fail("token", new Error(resolved.error), created);
+      // Token ja validado antes de reivindicar o rascunho.
       const token = (resolved as any).candidate.token as string;
       created.token = token;
 
@@ -1463,7 +1482,7 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      await ops.from("campaign_build_requests").update({
+      const { data: savedRequest, error: createdSaveError } = await ops.from("campaign_build_requests").update({
         status: "CREATED",
         created_campaign_id: created.campaign_id,
         created_adset_id: created.adset_id,
@@ -1472,7 +1491,14 @@ Deno.serve(async (req: Request) => {
         error: null,
         plan,
         request_metadata: { ...(row.request_metadata || {}), token_source: (resolved as any).candidate.source, account_name: (resolved as any).account?.name || null, created_ad_ids: created.ad_ids, created_creative_ids: created.creative_ids },
-      }).eq("id", requestId);
+      }).eq("id", requestId).eq("status", "EXECUTING").select("id").maybeSingle();
+      if (createdSaveError || !savedRequest?.id) {
+        // Os objetos existem na Meta, mas o registro nao confirmou: proibir
+        // retry automatico para evitar uma segunda campanha.
+        return reply({ error: "campaign_created_persistence_failed",
+          request_id: requestId, campaign_id: created.campaign_id,
+          adset_id: created.adset_id, ad_ids: created.ad_ids }, 502);
+      }
 
       // inventário canônico fica coerente sem esperar o próximo sync
       await ops.from("meta_campaign_inventory").upsert({

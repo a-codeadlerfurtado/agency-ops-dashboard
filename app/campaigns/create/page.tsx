@@ -157,6 +157,8 @@ export default function CampaignCreatePage() {
   const [overrides, setOverrides] = useState<Row>({});
   const [confirmWord, setConfirmWord] = useState("");
   const [executing, setExecuting] = useState(false);
+  const [creationStatus, setCreationStatus] = useState<"PAUSED" | "ACTIVE">("PAUSED");
+  const [executionStep, setExecutionStep] = useState("");
   const [result, setResult] = useState<Row | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
@@ -224,6 +226,7 @@ export default function CampaignCreatePage() {
   };
   const resetFlow = () => {
     setDraft(null); setDraftError(""); setOverrides({}); setConfirmWord(""); setResult(null);
+    setCreationStatus("PAUSED");
   };
 
   const loadPosts = useCallback(async (name: string) => {
@@ -311,17 +314,54 @@ export default function CampaignCreatePage() {
 
   const execute = async () => {
     if (!draft?.request_id || executing) return;
-    if (confirmWord.trim().toUpperCase() !== "CRIAR") { setDraftError("Digite CRIAR para confirmar."); return; }
-    setExecuting(true); setDraftError("");
+    const budget = Number(overrides.daily_budget_brl || draft.plan?.adset?.daily_budget_brl);
+    const formId = String(overrides.lead_form_id || draft.plan?.adset?.destination?.lead_form_id || "").trim();
+    const destination = draft.plan?.adset?.destination?.type;
+    const creativeCount = Array.isArray(draft.creatives) ? draft.creatives.length : creatives.length;
+    if (!Number.isFinite(budget) || budget < 1 || budget > 100000) {
+      setDraftError("Defina um orçamento diário válido antes de criar na Meta."); return;
+    }
+    if (destination === "LEAD_FORM" && !/^\d{5,30}$/.test(formId)) {
+      setDraftError("Selecione um formulário instantâneo válido antes de criar."); return;
+    }
+    if (draft.mode !== "BOOST" && creativeCount < 1) {
+      setDraftError("Anexe ao menos um criativo e gere novamente o plano antes de criar."); return;
+    }
+    setExecuting(true); setDraftError(""); setExecutionStep("Criando campanha, conjunto e anúncios na Meta...");
     try {
       const { ok, body } = await api({ action: "EXECUTE", request_id: draft.request_id, confirmation: "CRIAR", overrides });
-      if (!ok) { setDraftError(friendlyError(body, "A criação falhou. Nenhuma campanha foi ativada; revise o histórico e os itens pausados na Meta.")); await loadBoot(); return; }
-      setResult(body);
-      setDraft(null); setPrompt(""); setFiles([]); setCreatives([]); setConfirmWord("");
+      if (!ok) {
+        setDraftError(friendlyError(body, "A criação falhou. Nenhuma campanha foi ativada.") +
+          (body?.stage ? ` Etapa: ${body.stage}.` : ""));
+        await loadBoot();
+        return;
+      }
+      if (creationStatus === "ACTIVE") {
+        setExecutionStep("Campanha criada. Ativando e verificando campanha, conjunto e anúncios...");
+        try {
+          const activation = await api({ action: "ACTIVATE_CREATED", request_id: draft.request_id, confirmation: "ATIVAR" });
+          if (!activation.ok || activation.body?.status !== "VERIFIED") {
+            setResult({ ...body, desired_status: "ACTIVE", campaign_status: "PAUSED", activation_error: friendlyError(activation.body, "Não foi possível confirmar a ativação."), activation_audit_id: activation.body?.audit_id || null });
+            setDraftError("A campanha foi criada na Meta, mas a ativação não foi confirmada. Confira o status real na Meta antes de tentar novamente.");
+          } else {
+            setResult({ ...body, desired_status: "ACTIVE", campaign_status: "ACTIVE", activation_audit_id: activation.body?.audit_id || null });
+          }
+        } catch (activationError) {
+          setResult({ ...body, desired_status: "ACTIVE", campaign_status: "UNKNOWN", activation_error: String((activationError as Error)?.message || activationError) });
+          setDraftError("Campanha criada, mas houve falha de rede na confirmação da ativação. Verifique o status na Meta antes de repetir.");
+        }
+      } else {
+        setResult({ ...body, desired_status: "PAUSED", campaign_status: "PAUSED" });
+      }
+      setDraft(null); setPrompt(""); setFiles([]); setCreatives([]); setConfirmWord(""); setCreationStatus("PAUSED");
       if (fileRef.current) fileRef.current.value = "";
       await loadBoot();
+    } catch (error) {
+      setDraftError("A conexão foi interrompida durante a criação: " + String((error as Error)?.message || error).slice(0, 160) +
+        ". Consulte Últimos pedidos e a Meta antes de tentar novamente para evitar duplicações.");
+      await loadBoot();
     } finally {
-      setExecuting(false);
+      setExecuting(false); setExecutionStep("");
     }
   };
 
@@ -511,10 +551,17 @@ export default function CampaignCreatePage() {
           </div>
         )}
         {result && (
-          <div className="cb-success">
-            <b>Campanha criada pausada: {result.campaign_name}</b><br />
-            IDs — campanha {result.campaign_id} · conjunto {result.adset_id} · anúncios {(result.ad_ids || [result.ad_id]).join(", ")}.<br />
-            Revise no Gerenciador de Anúncios e ative quando estiver tudo certo.
+          <div className="cb-success" role="status">
+            <b>{result.campaign_status === "ACTIVE" ? "Campanha criada e ativada na Meta" :
+              result.campaign_status === "PAUSED" ? "Campanha criada e pausada na Meta" :
+              "Campanha criada; confirme o status na Meta"}: {result.campaign_name}</b>
+            <div style={{ marginTop: 8 }}>IDs reais — campanha {result.campaign_id} · conjunto {result.adset_id} · anúncios {(result.ad_ids || [result.ad_id]).join(", ")}.</div>
+            {result.activation_error ? <div style={{ marginTop: 8, color: "#ffbd9e" }}>
+              Falha na ativação: {result.activation_error}. Não repita a criação; use o histórico e confira o status na Meta.
+            </div> : <div style={{ marginTop: 8 }}>
+              {result.campaign_status === "ACTIVE" ? "Status ACTIVE verificado na Meta. A entrega depende da análise dos anúncios, do saldo e das políticas da plataforma." :
+                "Nenhum gasto novo será iniciado por esta criação. Você pode ativar depois pelo histórico."}
+            </div>}
           </div>
         )}
 
@@ -771,12 +818,30 @@ export default function CampaignCreatePage() {
                 </div>
               )}
               <div className="cb-plan-section">
-                <h3>Confirmar</h3>
-                <p className="cb-hint">A campanha, o conjunto e o anúncio serão criados <b>pausados</b> na conta do cliente. Nada roda nem gasta até você ativar no Gerenciador.</p>
+                <h3>Criar campanha na Meta</h3>
+                <p className="cb-hint">Escolha como a campanha deve ficar após a criação. O clique em <b>Criar campanha</b> executa todas as etapas; não é necessário digitar CRIAR nem publicar novamente.</p>
+                <div className="cb-methods" role="group" aria-label="Status inicial da campanha">
+                  <button type="button" aria-pressed={creationStatus === "PAUSED"} disabled={executing}
+                    className={creationStatus === "PAUSED" ? "chosen" : ""}
+                    onClick={() => setCreationStatus("PAUSED")}>
+                    Criar pausada (padrão)
+                    <small>Campanha, conjunto e anúncios ficam pausados. Sem novos gastos.</small>
+                  </button>
+                  <button type="button" aria-pressed={creationStatus === "ACTIVE"} disabled={executing}
+                    className={creationStatus === "ACTIVE" ? "chosen" : ""}
+                    onClick={() => setCreationStatus("ACTIVE")}>
+                    Criar ativa
+                    <small>Após criar, ativa e verifica campanha, conjunto e anúncios na Meta. Pode iniciar gastos.</small>
+                  </button>
+                </div>
+                <p className="cb-hint" role="status">
+                  Conta: {clientName} · orçamento do conjunto: <b>{money(ov("daily_budget_brl", plan.adset?.daily_budget_brl))}/dia</b> ·
+                  destino: <b>{destinationLabel[plan.adset?.destination?.type] || plan.adset?.destination?.type}</b>.
+                  {creationStatus === "ACTIVE" ? " Ao confirmar, você autoriza o início da veiculação e os gastos previstos." : " A campanha será criada e permanecerá desativada."}
+                </p>
                 <div className="cb-confirm">
-                  <input value={confirmWord} onChange={(e) => setConfirmWord(e.target.value)} placeholder="CRIAR" />
-                  <button className="cb-btn primary" disabled={executing || confirmWord.trim().toUpperCase() !== "CRIAR"} onClick={execute}>
-                    {executing ? "Criando na Meta…" : "Criar campanha pausada"}
+                  <button type="button" className="cb-btn primary" disabled={executing} onClick={() => void execute()}>
+                    {executing ? (executionStep || "Processando na Meta…") : creationStatus === "ACTIVE" ? "Criar campanha ativa" : "Criar campanha pausada"}
                   </button>
                 </div>
               </div>
