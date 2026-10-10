@@ -100,6 +100,25 @@ async function tokenCandidates(db: any): Promise<TokenCandidate[]> {
   return out;
 }
 
+
+/**
+ * Resolve a Page-scoped credential only for NC Imóveis.
+ * Meta leadgen_forms requires a Page token, not a system-user token.
+ * Never return, log, or persist this derived credential.
+ */
+async function resolveNcPageToken(systemToken: string, pageId: string): Promise<string | null> {
+  if (pageId !== "132141753324688") return null;
+  const pages = await metaJson(graphUrl("me/accounts", {
+    fields: "id,tasks,access_token", limit: "100", access_token: systemToken,
+  }));
+  const page = (pages?.data || []).find((item: Row) =>
+    numericId(item?.id) === pageId &&
+    Array.isArray(item?.tasks) && item.tasks.includes("MANAGE_LEADS") &&
+    item.tasks.includes("ADVERTISE")
+  );
+  return page ? clean(page.access_token, 3000) || null : null;
+}
+
 async function resolveWriteToken(db: any, accountId: string) {
   const candidates = await tokenCandidates(db);
   if (!candidates.length) return { error: "meta_token_missing" as const };
@@ -603,9 +622,12 @@ Deno.serve(async (req: Request) => {
         }
       }
       const [pageResult, accountResult] = await Promise.allSettled([
-        pageId ? metaJson(graphUrl(`${pageId}/leadgen_forms`, {
-          fields: "id", limit: "1", access_token: candidate.token,
-        })) : Promise.reject(new Error("Página não cadastrada")),
+        pageId ? (async () => {
+          const pageToken = await resolveNcPageToken(candidate.token, pageId);
+          return await metaJson(graphUrl(`${pageId}/leadgen_forms`, {
+            fields: "id", limit: "1", access_token: pageToken || candidate.token,
+          }));
+        })() : Promise.reject(new Error("Página não cadastrada")),
         accountId ? metaJson(graphUrl(`act_${accountId}`, {
           fields: "id,name", access_token: candidate.token,
         })) : Promise.reject(new Error("Conta de anúncio não cadastrada")),
@@ -643,8 +665,10 @@ Deno.serve(async (req: Request) => {
     let reason = "meta_lead_form_permission";
     for (const candidate of await tokenCandidates(db)) {
       try {
+        const pageToken = await resolveNcPageToken(candidate.token, assets.page_id);
         const forms = await metaJson(graphUrl(`${assets.page_id}/leadgen_forms`, {
-          fields: "id,name,status,created_time",limit: "75",access_token: candidate.token,
+          fields: "id,name,status,created_time",limit: "75",
+          access_token: pageToken || candidate.token,
         }));
         return reply({ ok: true, page_id: assets.page_id, page_url: `https://www.facebook.com/${assets.page_id}`, forms: (forms?.data || [])
           .filter((item: Row) => numericId(item.id))
@@ -713,17 +737,19 @@ Deno.serve(async (req: Request) => {
     let reason = "meta_lead_form_permission";
     for (const candidate of await tokenCandidates(db)) {
       try {
-        // The Page access token is preferred, where Meta exposes it to this integration.
-        let pageToken = candidate.token;
+        // Resolve the exact Page token required by Meta for NC Imóveis.
+        let pageToken = await resolveNcPageToken(candidate.token, pageId) || candidate.token;
         // Page token lookup can fail for system-user tokens, even if they can
         // publish a form. Let Meta check permissions at the actual POST.
-        try {
-          const page = await metaJson(graphUrl(pageId, {
-            fields: "id,name,access_token", access_token: candidate.token,
-          }));
-          if (numericId(page?.id) !== pageId) continue;
-          pageToken = clean(page?.access_token, 2000) || candidate.token;
-        } catch { /* fallback to configured system-user token */ }
+        if (pageToken === candidate.token) {
+          try {
+            const page = await metaJson(graphUrl(pageId, {
+              fields: "id,name,access_token", access_token: candidate.token,
+            }));
+            if (numericId(page?.id) !== pageId) continue;
+            pageToken = clean(page?.access_token, 3000) || candidate.token;
+          } catch { /* Meta decides access at the actual POST. */ }
+        }
         const created = await metaPost(`${pageId}/leadgen_forms`, pageToken, {
           name,locale: "PT_BR",
           privacy_policy: JSON.stringify({ url: privacy, link_text: "Política de privacidade" }),
