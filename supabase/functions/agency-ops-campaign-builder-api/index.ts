@@ -998,7 +998,14 @@ Deno.serve(async (req: Request) => {
     if (readError) return reply({ error: "query_failed" }, 500);
     if (!row) return reply({ error: "request_not_found" }, 404);
     if (row.actor_user_id !== user.id) return reply({ error: "forbidden" }, 403);
-    if (row.status !== "DRAFTED") return reply({ error: "request_not_draft" }, 409);
+    // Allow retry only for a token failure before the very first Meta mutation.
+    // Other FAILED jobs may have partially created Meta objects and must never
+    // be silently resumed because that could duplicate paid campaigns.
+    const recoverableFailure = row.status === "FAILED" &&
+      /^token:\\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(String(row.error || "").trim()) &&
+      !row.created_campaign_id && !row.created_adset_id && !row.created_ad_id;
+    if (row.status !== "DRAFTED" && !recoverableFailure)
+      return reply({ error: "request_not_resumable" }, 409);
     if (row.created_campaign_id || row.created_adset_id || row.created_ad_id)
       return reply({ error: "request_already_executed" }, 409);
     const { data: clientRow } = await ops.from("clients").select("id,display_name,gt_owner,lifecycle")
@@ -1030,7 +1037,18 @@ Deno.serve(async (req: Request) => {
     }
     const expiresAt = new Date(Date.now() + DRAFT_TTL_MS).toISOString();
     const { data: renewed, error: saveError } = await ops.from("campaign_build_requests")
-      .update({ expires_at: expiresAt }).eq("id", requestId).eq("status", "DRAFTED")
+      .update({
+        expires_at: expiresAt,
+        ...(recoverableFailure ? {
+          status: "DRAFTED", error: null, executed_at: null,
+          request_metadata: { ...(row.request_metadata || {}),
+            safe_retry_count: Number(row.request_metadata?.safe_retry_count || 0) + 1,
+            safe_retry_at: new Date().toISOString(),
+            safe_retry_original_error: String(row.error || "").slice(0, 160),
+          },
+        } : {}),
+      })
+      .eq("id", requestId).eq("status", row.status)
       .select("id").maybeSingle();
     if (saveError) return reply({ error: "query_failed" }, 500);
     if (!renewed?.id) return reply({ error: "request_not_draft" }, 409);
@@ -1038,6 +1056,8 @@ Deno.serve(async (req: Request) => {
       client: { id: clientRow.id, display_name: clientRow.display_name },
       mode: row.request_metadata?.mode === "BOOST" ? "BOOST" : "NEW",
       creatives, warnings: row.plan_warnings || [], expires_at: expiresAt,
+      existing_form_id: numericId(row.request_metadata?.created_lead_form_id),
+      resumed_failed_token_attempt: recoverableFailure,
       assets: { account_id: assets.account_id, page_id: assets.page_id,
         instagram_id: assets.instagram_id } });
   }

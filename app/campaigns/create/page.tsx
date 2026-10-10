@@ -94,6 +94,7 @@ const errorMessages: Record<string, string> = {
   draft_incomplete: "Este rascunho contém dados incompletos. Gere um novo plano válido antes de criar.",
   assets_changed: "A conta de anúncios ou Página do cliente mudou desde a criação do rascunho. Gere outro plano.",
   request_already_executed: "Este pedido já foi criado na Meta. Não é possível executá-lo novamente.",
+  request_not_resumable: "Essa tentativa não é segura para retomar automaticamente. Gere um plano novo para evitar anúncios duplicados.",
   assets_missing: "Conta de anúncio ou Página não cadastradas em Ativos Meta.",
   creative_missing: "Anexe o criativo antes de criar.",
   budget_missing: "Defina o orçamento diário antes de criar.",
@@ -338,8 +339,12 @@ export default function CampaignCreatePage() {
       setFiles([]);
       setCreatives(body.creatives || []);
       if (fileRef.current) fileRef.current.value = "";
-      setDraft(body); setOverrides({}); setConfirmWord(""); setResult(null); setDraftError("");
-      setHistoryNotice("Rascunho retomado para revisão. A campanha só será criada pausada após você digitar CRIAR e confirmar.");
+      setDraft(body);
+      setOverrides(body.existing_form_id ? { lead_form_id: String(body.existing_form_id) } : {});
+      setConfirmWord(""); setResult(null); setDraftError("");
+      setHistoryNotice(body.resumed_failed_token_attempt
+        ? "Tentativa recuperada, com o formulário e os criativos preservados. Confira se a Meta já liberou a conta antes de confirmar CRIAR."
+        : "Rascunho retomado para revisão. A campanha só será criada pausada após você digitar CRIAR e confirmar.");
       window.scrollTo({ top: 0, behavior: "smooth" });
       await loadBoot();
     } catch (err) {
@@ -741,9 +746,13 @@ export default function CampaignCreatePage() {
           <div className="cb-history">
             {(boot?.history || []).length === 0 && <span className="cb-hint">Nenhum pedido ainda.</span>}
             {(boot?.history || []).map((h: Row) => {
+              const ownedByMe = Boolean(session?.user?.id) && h.actor_user_id === session.user.id;
+              const recoverableFailure = h.status === "FAILED" &&
+                /^token:\\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(String(h.error || "").trim()) &&
+                !h.created_campaign_id && !h.created_adset_id && !h.created_ad_id;
+              const mayResume = ownedByMe && (h.status === "DRAFTED" || recoverableFailure);
               const mayDiscard = h.status === "DRAFTED" &&
-                (boot?.profile?.is_adler || boot?.profile?.role === "MGMT" ||
-                  (Boolean(session?.user?.id) && h.actor_user_id === session?.user?.id));
+                (boot?.profile?.is_adler || boot?.profile?.role === "MGMT" || ownedByMe);
               const confirming = historyDiscardId === h.id;
               return (
                 <article key={h.id} className="cb-history-item">
@@ -759,15 +768,17 @@ export default function CampaignCreatePage() {
                     {h.status === "FAILED" && h.error ? <> · {String(h.error).slice(0, 140)}</> : null}
                     {h.status === "DRAFTED" && h.expires_at && Date.parse(h.expires_at) < Date.now() ? <> · prazo expirado</> : null}
                   </small>
-                  {mayDiscard && (
+                  {(mayResume || mayDiscard) && (
                     <div className="cb-history-actions">
-                      {!confirming && Boolean(session?.user?.id) && session.user.id === h.actor_user_id && (
+                      {mayResume && !confirming && (
                         <button type="button" disabled={Boolean(resumingId) || historyDiscardBusy}
                           onClick={() => void resumeFromHistory(h)}>
-                          {resumingId === h.id ? "Retomando…" : "Retomar / Criar na Meta (pausada)"}
+                          {resumingId === h.id ? "Retomando…" :
+                            recoverableFailure ? "Retomar tentativa com formulário salvo" :
+                              "Retomar / Criar na Meta (pausada)"}
                         </button>
                       )}
-                      {!confirming ? (
+                      {mayDiscard && (!confirming ? (
                         <button type="button" disabled={historyDiscardBusy}
                           onClick={() => { setHistoryDiscardId(h.id); setHistoryError(""); setHistoryNotice(""); }}>
                           Descartar rascunho
@@ -783,7 +794,7 @@ export default function CampaignCreatePage() {
                             Cancelar
                           </button>
                         </>
-                      )}
+                      ))}
                     </div>
                   )}
                 </article>
