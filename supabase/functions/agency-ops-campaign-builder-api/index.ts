@@ -340,6 +340,41 @@ async function callPlanner(ops: any, prompt: string, context: Row) {
   throw new Error("planner_incomplete");
 }
 
+const VISION_PAIR_PROMPT = `Voce recebe artes de anuncios imobiliarios. As marcadas F1, F2... sao versoes FEED (1:1 ou 4:5) e as marcadas S1, S2... sao versoes STORY (9:16).
+A producao entrega cada peca nas duas versoes: mesma foto ou cena principal, mesmo titulo, mesma oferta, mesmo preco e mesma identidade visual, apenas diagramada em outra proporcao.
+Tarefa: dizer qual STORY e a mesma peca de qual FEED.
+Regras:
+- So pareie quando tiver certeza de que e a MESMA peca. Pecas diferentes do mesmo imovel (titulo, oferta, preco ou chamada diferentes) NAO sao a mesma peca.
+- Variacoes costumam ter os MESMOS textos e trocar so as fotos. Por isso compare primeiro as fotos: a mesma peca usa as mesmas fotos, na mesma ordem e posicao relativa (o que esta em cima no feed continua em cima no story). Se a foto principal for outra ou a ordem das fotos mudar, NAO e a mesma peca, mesmo com textos iguais.
+- Nao force um par so porque existe um unico F e um unico S.
+- Cada F e cada S aparece no maximo uma vez. Pode sobrar F ou S sem par.
+- confidence de 0 a 1. Use menos de 0.8 quando houver qualquer duvida.
+Responda somente JSON: {"pairs":[{"feed":"F1","story":"S2","confidence":0.95,"reason":"curto"}]}`;
+
+/** Fallback do pareamento por nome: a IA olha as artes e sugere os pares feed + story. */
+async function visionPairCreatives(ops: any, feedUrls: string[], storyUrls: string[]) {
+  const { data: vaultKey } = await ops.rpc("get_secret", { p_name: "OPENAI_API_KEY" });
+  const key = typeof vaultKey === "string" && vaultKey.trim() ? vaultKey.trim() : clean(Deno.env.get("OPENAI_API_KEY"), 2000);
+  if (!key) throw new Error("vision_not_configured");
+  const { data: modelSetting } = await ops.from("automation_settings").select("value").eq("key", "CAMPAIGN_BUILDER_VISION_MODEL").maybeSingle();
+  const model = clean(modelSetting?.value, 60) || clean(Deno.env.get("CAMPAIGN_BUILDER_VISION_MODEL"), 60) || "gpt-5-mini";
+  const content: Row[] = [{ type: "text", text: VISION_PAIR_PROMPT }];
+  feedUrls.forEach((url, i) => { content.push({ type: "text", text: `F${i + 1}` }); content.push({ type: "image_url", image_url: { url, detail: "high" } }); });
+  storyUrls.forEach((url, i) => { content.push({ type: "text", text: `S${i + 1}` }); content.push({ type: "image_url", image_url: { url, detail: "high" } }); });
+  const payload: Row = { model, response_format: { type: "json_object" }, max_completion_tokens: 3000, messages: [{ role: "user", content }] };
+  if (/^gpt-5/i.test(model)) payload.reasoning_effort = "low";
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(60000),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(`openai ${response.status}: ${raw.slice(0, 200)}`);
+  const text = JSON.parse(raw)?.choices?.[0]?.message?.content;
+  return { model, result: parseJsonText(String(text || "{}")) };
+}
+
 async function resolveGeo(token: string, cities: string[]) {
   const resolved: Row[] = [];
   const unresolved: string[] = [];
@@ -575,11 +610,13 @@ function creativeBaseName(name: unknown): string {
 
 /**
  * Agrupa os criativos em unidades de anuncio. Um par = feed + story do mesmo tipo
- * (imagem com imagem, video com video), casados pelo nome da variacao; o que sobrar
- * casa pela ordem de envio quando as quantidades batem. O resto vira anuncio unico.
+ * (imagem com imagem, video com video). Prioridade: (1) mesmo nome de variacao;
+ * (2) pares sugeridos pela IA de visao (hints), so se o formato real confirmar.
+ * Nunca pareia "no chute" pela ordem de envio. O que sobrar vira anuncio unico.
  */
-function pairCreatives(items: Array<{ type?: unknown; file_name?: unknown; orientation?: unknown }>): Array<{ feed?: number; story?: number; single?: number }> {
-  const units: Array<{ feed?: number; story?: number; single?: number; order: number }> = [];
+function pairCreatives(items: Array<{ type?: unknown; file_name?: unknown; orientation?: unknown }>,
+  hints: Array<{ feed: number; story: number }> = []): Array<{ feed?: number; story?: number; single?: number; via?: string }> {
+  const units: Array<{ feed?: number; story?: number; single?: number; via?: string; order: number }> = [];
   const used = new Set<number>();
   for (const kind of ["IMAGE", "VIDEO"]) {
     const feeds = items.map((it, i) => ({ it, i })).filter(({ it }) => it?.type === kind && it?.orientation === "FEED").map(({ i }) => i);
@@ -590,18 +627,62 @@ function pairCreatives(items: Array<{ type?: unknown; file_name?: unknown; orien
       const f = feeds.find((idx) => !used.has(idx) && creativeBaseName(items[idx]?.file_name) === base);
       if (f === undefined) continue;
       used.add(f); used.add(s);
-      units.push({ feed: f, story: s, order: Math.min(f, s) });
+      units.push({ feed: f, story: s, via: "NAME", order: Math.min(f, s) });
     }
-    const restF = feeds.filter((i) => !used.has(i)), restS = stories.filter((i) => !used.has(i));
-    if (restF.length && restF.length === restS.length) {
-      restF.forEach((f, k) => {
-        used.add(f); used.add(restS[k]);
-        units.push({ feed: f, story: restS[k], order: Math.min(f, restS[k]) });
-      });
-    }
+  }
+  for (const h of hints || []) {
+    const f = Number(h?.feed), s = Number(h?.story);
+    if (!Number.isInteger(f) || !Number.isInteger(s) || f === s || used.has(f) || used.has(s)) continue;
+    if (!items[f] || !items[s] || items[f].type !== items[s].type) continue;
+    if (items[f].orientation !== "FEED" || items[s].orientation !== "STORY") continue;
+    used.add(f); used.add(s);
+    units.push({ feed: f, story: s, via: "AI", order: Math.min(f, s) });
   }
   items.forEach((_, i) => { if (!used.has(i)) units.push({ single: i, order: i }); });
   return units.sort((a, b) => a.order - b.order).map(({ order: _order, ...unit }) => unit);
+}
+
+/** Feeds e stories de imagem que o nome nao conseguiu parear (candidatos para a IA). */
+function unpairedForVision(items: Array<{ type?: unknown; file_name?: unknown; orientation?: unknown }>) {
+  const units = pairCreatives(items);
+  const singles = units.filter((u) => u.single !== undefined).map((u) => u.single!);
+  const feeds = singles.filter((i) => items[i]?.type === "IMAGE" && items[i]?.orientation === "FEED");
+  const stories = singles.filter((i) => items[i]?.type === "IMAGE" && items[i]?.orientation === "STORY");
+  // Com um unico feed e um unico story a IA nao tem com o que comparar e tende a forcar o par
+  // (testado com variacoes que so trocam a ordem das fotos). Nesse caso nao pareia.
+  return feeds.length >= 2 && stories.length >= 2 ? { feeds, stories } : null;
+}
+
+/** Valida a resposta da IA: so pares 1 para 1, com confianca alta, entre candidatos validos. */
+function parseVisionPairs(raw: unknown, feeds: number[], stories: number[]) {
+  const out: Array<{ feed: number; story: number; confidence: number }> = [];
+  const usedF = new Set<number>(), usedS = new Set<number>();
+  const pairs = Array.isArray((raw as any)?.pairs) ? (raw as any).pairs : [];
+  for (const p of pairs) {
+    const fi = Number(String(p?.feed || "").replace(/\D/g, "")) - 1;
+    const si = Number(String(p?.story || "").replace(/\D/g, "")) - 1;
+    const confidence = Number(p?.confidence);
+    if (!Number.isFinite(confidence) || confidence < 0.9) continue;
+    const f = feeds[fi], s = stories[si];
+    if (f === undefined || s === undefined || usedF.has(f) || usedS.has(s)) continue;
+    usedF.add(f); usedS.add(s);
+    out.push({ feed: f, story: s, confidence: Math.round(confidence * 100) / 100 });
+  }
+  return out;
+}
+
+/** Interseccao das duas leituras da IA: mesmo feed com o mesmo story, confianca minima. */
+function agreedVisionPairs(a: Array<{ feed: number; story: number; confidence: number }>, b: Array<{ feed: number; story: number; confidence: number }>) {
+  return a.filter((x) => b.some((y) => y.feed === x.feed && y.story === x.story))
+    .map((x) => ({ feed: x.feed, story: x.story, confidence: Math.min(x.confidence, b.find((y) => y.feed === x.feed && y.story === x.story)!.confidence) }));
+}
+
+/** Converte os pares salvos no rascunho (por caminho do arquivo) em indices da lista atual. */
+function hintsFromStored(items: Array<{ path?: unknown }>, stored: unknown) {
+  const list = Array.isArray(stored) ? stored : [];
+  const index = new Map(items.map((it, i) => [String(it?.path || ""), i]));
+  return list.map((h: any) => ({ feed: index.get(String(h?.feed_path || "")), story: index.get(String(h?.story_path || "")) }))
+    .filter((h) => h.feed !== undefined && h.story !== undefined) as Array<{ feed: number; story: number }>;
 }
 
 /** Criativo unico com versao feed e versao story (Personalizacao de posicionamento da Meta). */
@@ -652,7 +733,7 @@ function placementCreativeSpec(plan: Row, pageId: string, instagramId: string,
 }
 
 /** Resumo para o preview: quantos anuncios e quais pares feed+story. */
-function adUnitsSummary(items: Row[]) {
+function adUnitsSummary(items: Row[], hints: Array<{ feed: number; story: number }> = []) {
   // Rascunhos antigos nao tem medidas: arquivo sem pista no nome, com o mesmo nome
   // de variacao de um story/feed, e tratado como o formato complementar (so no preview;
   // na criacao as medidas reais do arquivo decidem).
@@ -664,10 +745,10 @@ function adUnitsSummary(items: Row[]) {
     if (base && twin) it.orientation = twin.orientation === "STORY" ? "FEED" : "STORY";
   }
   items = known;
-  const units = pairCreatives(items);
+  const units = pairCreatives(items, hints);
   return units.map((u) => u.single !== undefined
     ? { kind: "SINGLE", files: [items[u.single]?.file_name || null], orientation: items[u.single]?.orientation || null }
-    : { kind: "FEED_STORY", files: [items[u.feed!]?.file_name || null, items[u.story!]?.file_name || null] });
+    : { kind: "FEED_STORY", via: u.via || "NAME", files: [items[u.feed!]?.file_name || null, items[u.story!]?.file_name || null] });
 }
 
 // ---------------------------------------------------------------------------
@@ -1233,6 +1314,36 @@ Deno.serve(async (req: Request) => {
       if (monthly < Number(assets.minimum_ad_budget)) warnings.push(`Orçamento mensal estimado (R$ ${Math.round(monthly)}) abaixo do mínimo contratado (R$ ${assets.minimum_ad_budget}).`);
     }
 
+    // Pareamento feed + story: o nome tem prioridade; a IA de visao so entra para
+    // as imagens que o nome nao conseguiu parear. Falha da IA nunca bloqueia o rascunho.
+    let pairingHints: Array<{ feed: number; story: number; confidence?: number }> = [];
+    let pairingAi: Row | null = null;
+    if (!boostValid && creativeValid) {
+      const pending = unpairedForVision(creatives);
+      if (pending) {
+        try {
+          const sign = async (i: number) => (await db.storage.from(BUCKET).createSignedUrl(creatives[i].path, 900)).data?.signedUrl || "";
+          const feedUrls = await Promise.all(pending.feeds.map(sign));
+          const storyUrls = await Promise.all(pending.stories.map(sign));
+          if (feedUrls.every(Boolean) && storyUrls.every(Boolean)) {
+            // Duas leituras independentes, com as artes em ordens diferentes. So vale o par
+            // que as duas leituras confirmarem (evita "par forcado" entre variacoes parecidas).
+            const rev = <T,>(list: T[]) => [...list].reverse();
+            const [first, second] = await Promise.all([
+              visionPairCreatives(ops, feedUrls, storyUrls),
+              visionPairCreatives(ops, rev(feedUrls), rev(storyUrls)),
+            ]);
+            const a = parseVisionPairs(first.result, pending.feeds, pending.stories);
+            const b = parseVisionPairs(second.result, rev(pending.feeds), rev(pending.stories));
+            pairingHints = agreedVisionPairs(a, b);
+            pairingAi = { model: first.model, pairs: pairingHints, first: a, second: b, at: new Date().toISOString() };
+          }
+        } catch (err) {
+          pairingAi = { error: clean((err as Error)?.message, 200), at: new Date().toISOString() };
+        }
+      }
+    }
+    const pairingStored = pairingHints.map((h) => ({ feed_path: creatives[h.feed].path, story_path: creatives[h.story].path, confidence: h.confidence ?? null }));
     const planHash = await sha256(JSON.stringify({ actor: user.id, client: scoped.client.id, plan, geo: geo.resolved, creatives: creativeValid ? creatives.map((c) => c.path) : [] }));
     const expiresAt = new Date(Date.now() + DRAFT_TTL_MS).toISOString();
     const { data: inserted, error: insertError } = await ops.from("campaign_build_requests").insert({
@@ -1252,7 +1363,7 @@ Deno.serve(async (req: Request) => {
       creative_type: !boostValid && creativeValid ? creative?.type : null,
       creative_file_name: !boostValid && creativeValid ? creative?.file_name : null,
       expires_at: expiresAt,
-      request_metadata: { source: "CAMPAIGN_BUILDER_V2", input_mode: guided ? "GUIDED" : "PROMPT", mode: boostValid ? "BOOST" : "NEW", model: planned.model, instagram_id: assets.instagram_id, pixel_id: assets.pixel_id, geo_unresolved: geo.unresolved, creatives: !boostValid && creativeValid ? creatives : [] },
+      request_metadata: { source: "CAMPAIGN_BUILDER_V2", input_mode: guided ? "GUIDED" : "PROMPT", mode: boostValid ? "BOOST" : "NEW", model: planned.model, instagram_id: assets.instagram_id, pixel_id: assets.pixel_id, geo_unresolved: geo.unresolved, creatives: !boostValid && creativeValid ? creatives : [], pairing_hints: pairingStored, pairing_ai: pairingAi },
     }).select("id").single();
     if (insertError || !inserted?.id) return reply({ error: "audit_store_failed" }, 500);
 
@@ -1264,7 +1375,7 @@ Deno.serve(async (req: Request) => {
       warnings,
       expires_at: expiresAt,
       assets: { account_id: assets.account_id, page_id: assets.page_id, instagram_id: assets.instagram_id },
-      ad_units: !boostValid && creativeValid ? adUnitsSummary(creatives) : [],
+      ad_units: !boostValid && creativeValid ? adUnitsSummary(creatives, pairingHints) : [],
       mode: boostValid ? "BOOST" : "NEW",
       can_execute: Boolean(assets.account_id && plan.adset.daily_budget_brl > 0 && (boostValid
         ? (boost?.source === "INSTAGRAM" ? assets.instagram_id : assets.page_id)
@@ -1340,7 +1451,7 @@ Deno.serve(async (req: Request) => {
       client: { id: clientRow.id, display_name: clientRow.display_name },
       mode: row.request_metadata?.mode === "BOOST" ? "BOOST" : "NEW",
       creatives, warnings: row.plan_warnings || [], expires_at: expiresAt,
-      ad_units: row.request_metadata?.mode === "BOOST" ? [] : adUnitsSummary(creatives.map((c) => ({ ...c, orientation: c.orientation || creativeOrientation(c) }))),
+      ad_units: row.request_metadata?.mode === "BOOST" ? [] : adUnitsSummary(creatives.map((c) => ({ ...c, orientation: c.orientation || creativeOrientation(c) })), hintsFromStored(creatives, row.request_metadata?.pairing_hints)),
       // Preserva o formulario selecionado no plano; nao troca pelo ultimo formulario criado incidentalmente.
       existing_form_id: numericId(row.plan?.adset?.destination?.lead_form_id) || numericId(row.request_metadata?.created_lead_form_id),
       resumed_failed_token_attempt: recoverableFailure,
@@ -1784,7 +1895,7 @@ Deno.serve(async (req: Request) => {
         media.push(entry);
       }
 
-      const units: Array<{ feed?: number; story?: number; single?: number }> = boostMode ? [{ single: -1 }] : pairCreatives(media);
+      const units: Array<{ feed?: number; story?: number; single?: number; via?: string }> = boostMode ? [{ single: -1 }] : pairCreatives(media, hintsFromStored(creativeRows, row.request_metadata?.pairing_hints));
       // A personalizacao feed/story exige a conta do Instagram no criativo.
       let placementInstagramId: string | null = instagramId;
       if (!boostMode && !placementInstagramId && units.some((u) => u.single === undefined)) {
@@ -1796,7 +1907,7 @@ Deno.serve(async (req: Request) => {
           } catch { /* sem Instagram vinculado */ }
         }
       }
-      const placement: Row = { pairs: 0, fallbacks: [], instagram_id: placementInstagramId };
+      const placement: Row = { pairs: 0, pairs_by_ai: units.filter((x: Row) => x.via === "AI").length, fallbacks: [], instagram_id: placementInstagramId };
 
       const createCreativeAndAd = async (step: string, adName: string, creativeFields: Record<string, string>) => {
         activeStage = `creative_${step}_create`;

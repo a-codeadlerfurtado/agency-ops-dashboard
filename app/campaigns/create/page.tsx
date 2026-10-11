@@ -836,11 +836,12 @@ export default function CampaignCreatePage() {
                             {draft.ad_units.map((u: Row, i: number) => (
                               <li key={i}>
                                 {u.kind === "FEED_STORY"
-                                  ? `${i + 1}: feed ${u.files?.[0] || ""} + story ${u.files?.[1] || ""}`
+                                  ? `${i + 1}: feed ${u.files?.[0] || ""} + story ${u.files?.[1] || ""}${u.via === "AI" ? " (pareado pela IA, confira)" : " (pareado pelo nome)"}`
                                   : `${i + 1}: ${u.files?.[0] || ""} (${u.orientation === "STORY" ? "story" : u.orientation === "FEED" ? "feed" : "formato não identificado"}, todos os posicionamentos)`}
                               </li>
                             ))}
                           </ul>
+                          {draft.ad_units.some((u: Row) => u.kind === "SINGLE" && (u.orientation === "FEED" || u.orientation === "STORY")) ? <div style={{ marginTop: 6, fontWeight: 400, color: "#ffcf7a" }}>Feed e story que deveriam ir juntos? Use o mesmo nome nos dois arquivos, mudando só a palavra FEED/STORY, e gere o plano de novo.</div> : null}
                         </b>
                       </> : null}
                     </div>

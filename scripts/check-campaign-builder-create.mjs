@@ -7,15 +7,15 @@ import ts from "typescript";
 const path = "supabase/functions/agency-ops-campaign-builder-api/index.ts";
 const source = fs.readFileSync(path, "utf8");
 const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-const names = new Set(["buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink", "successMetadata", "mediaDimensions", "creativeOrientation", "creativeBaseName", "pairCreatives", "placementCreativeSpec", "adUnitsSummary"]);
+const names = new Set(["buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink", "successMetadata", "mediaDimensions", "creativeOrientation", "creativeBaseName", "pairCreatives", "placementCreativeSpec", "adUnitsSummary", "unpairedForVision", "parseVisionPairs", "hintsFromStored", "agreedVisionPairs"]);
 const declarations = ast.statements.filter(s => ts.isFunctionDeclaration(s) && names.has(s.name?.text)).map(s => s.getText(ast));
 assert.equal(declarations.length, names.size, "All payload/guard functions must exist");
 const js = ts.transpileModule(declarations.join("\n"), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
-const ctx = vm.createContext({ URL, String, Uint8Array });
-vm.runInContext(js + "\nthis.builder = { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary };", ctx);
-const { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary } = ctx.builder;
+const ctx = vm.createContext({ URL, String, Uint8Array, Map });
+vm.runInContext(js + "\nthis.builder = { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs };", ctx);
+const { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs } = ctx.builder;
 const p = {
   campaign: { objective: "OUTCOME_LEADS" },
   adset: {
@@ -106,19 +106,37 @@ assert.equal(creativeBaseName("Martim 1080x1920.png"), "martim");
 const mk = (file_name, type, orientation) => ({ file_name, type, orientation });
 // two variations x two formats -> two ads
 let units = pairCreatives([mk("v1 feed.png", "IMAGE", "FEED"), mk("v1 story.png", "IMAGE", "STORY"), mk("v2 feed.png", "IMAGE", "FEED"), mk("v2 story.png", "IMAGE", "STORY")]);
-assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 0, story: 1 }, { feed: 2, story: 3 }]);
+assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 0, story: 1, via: "NAME" }, { feed: 2, story: 3, via: "NAME" }]);
 // names match even out of order
 units = pairCreatives([mk("B story.png", "IMAGE", "STORY"), mk("A feed.png", "IMAGE", "FEED"), mk("A story.png", "IMAGE", "STORY"), mk("B feed.png", "IMAGE", "FEED")]);
-assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 3, story: 0 }, { feed: 1, story: 2 }]);
-// no name relation, equal counts -> by upload order
-units = pairCreatives([mk("x.png", "IMAGE", "FEED"), mk("y.png", "IMAGE", "FEED"), mk("z.png", "IMAGE", "STORY"), mk("w.png", "IMAGE", "STORY")]);
-assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 0, story: 2 }, { feed: 1, story: 3 }]);
+assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 3, story: 0, via: "NAME" }, { feed: 1, story: 2, via: "NAME" }]);
+// no name relation -> never paired by upload order (singles) ...
+const loose = [mk("x.png", "IMAGE", "FEED"), mk("y.png", "IMAGE", "FEED"), mk("z.png", "IMAGE", "STORY"), mk("w.png", "IMAGE", "STORY")];
+units = pairCreatives(loose);
+assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ single: 0 }, { single: 1 }, { single: 2 }, { single: 3 }]);
+// ... unless the vision AI suggested the pair (hint), validated against real orientation
+units = pairCreatives(loose, [{ feed: 0, story: 3 }, { feed: 1, story: 0 }]);
+assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 0, story: 3, via: "AI" }, { single: 1 }, { single: 2 }]);
+// name wins over AI hint
+units = pairCreatives([mk("A feed.png", "IMAGE", "FEED"), mk("A story.png", "IMAGE", "STORY")], [{ feed: 0, story: 1 }]);
+assert.equal(units[0].via, "NAME");
+const pend = unpairedForVision([mk("A feed.png", "IMAGE", "FEED"), mk("A story.png", "IMAGE", "STORY"), ...loose]);
+assert.deepEqual(JSON.parse(JSON.stringify(pend)), { feeds: [2, 3], stories: [4, 5] });
+assert.equal(unpairedForVision([mk("A feed.png", "IMAGE", "FEED"), mk("A story.png", "IMAGE", "STORY")]), null);
+assert.equal(unpairedForVision([mk("x.png", "IMAGE", "FEED"), mk("z.png", "IMAGE", "STORY")]), null, "single candidate is never sent to AI");
+const vp = parseVisionPairs({ pairs: [{ feed: "F1", story: "S2", confidence: 0.93 }, { feed: "F2", story: "S2", confidence: 0.99 }, { feed: "F2", story: "S1", confidence: 0.85 }, { feed: "F9", story: "S1", confidence: 0.99 }] }, [2, 3], [4, 5]);
+assert.deepEqual(JSON.parse(JSON.stringify(vp)), [{ feed: 2, story: 5, confidence: 0.93 }]);
+assert.deepEqual(JSON.parse(JSON.stringify(parseVisionPairs({ nope: 1 }, [1], [2]))), []);
+const agreed = agreedVisionPairs([{ feed: 2, story: 5, confidence: 0.95 }, { feed: 3, story: 4, confidence: 0.97 }], [{ feed: 2, story: 5, confidence: 0.91 }, { feed: 3, story: 5, confidence: 0.99 }]);
+assert.deepEqual(JSON.parse(JSON.stringify(agreed)), [{ feed: 2, story: 5, confidence: 0.91 }]);
+const hs = hintsFromStored([{ path: "a" }, { path: "b" }, { path: "c" }], [{ feed_path: "c", story_path: "a" }, { feed_path: "x", story_path: "b" }]);
+assert.deepEqual(JSON.parse(JSON.stringify(hs)), [{ feed: 2, story: 0 }]);
 // image never pairs with video; unknown stays single
 units = pairCreatives([mk("a feed.png", "IMAGE", "FEED"), mk("a story.mp4", "VIDEO", "STORY"), mk("c.png", "IMAGE", null)]);
 assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ single: 0 }, { single: 1 }, { single: 2 }]);
 // real NC upload naming: STORY (2), feed (2), STORY (1), feed (1) -> 2 ads
 units = pairCreatives([mk("[NC] - Criativos STORY - AP MARTIM PRAIA CLUBE (2).png", "IMAGE", "STORY"), mk("[NC] - Criativos - AP MARTIM PRAIA CLUBE (2).png", "IMAGE", "FEED"), mk("[NC] - Criativos STORY - AP MARTIM PRAIA CLUBE (1).png", "IMAGE", "STORY"), mk("[NC] - Criativos - AP MARTIM PRAIA CLUBE (1).png", "IMAGE", "FEED")]);
-assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 1, story: 0 }, { feed: 3, story: 2 }]);
+assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 1, story: 0, via: "NAME" }, { feed: 3, story: 2, via: "NAME" }]);
 const legacy = adUnitsSummary(["[NC] - Criativos STORY - AP MARTIM PRAIA CLUBE (2).png", "[NC] - Criativos - AP MARTIM PRAIA CLUBE (2).png", "[NC] - Criativos STORY - AP MARTIM PRAIA CLUBE (1).png", "[NC] - Criativos - AP MARTIM PRAIA CLUBE (1).png"].map((f) => ({ file_name: f, type: "IMAGE", orientation: creativeOrientation({ file_name: f }) })));
 assert.equal(legacy.length, 2);
 assert.ok(legacy.every((u) => u.kind === "FEED_STORY"));
@@ -143,4 +161,4 @@ const pv = placementCreativeSpec(p, "1", "2", { video: { id: "v1", thumb: "t1" }
 assert.deepEqual(JSON.parse(JSON.stringify(pv.asset_feed_spec.ad_formats)), ["SINGLE_VIDEO"]);
 assert.equal(pv.asset_feed_spec.asset_customization_rules[0].video_label.name, "l_story");
 assert.match(source, /placement\.fallbacks\.push/);
-console.log("Campaign Builder create regression guard: OK (feed+story pairing) (lead form, site, targeting, budget, ownership, duplicate guard)");
+console.log("Campaign Builder create regression guard: OK (feed+story pairing, name first, AI fallback) (lead form, site, targeting, budget, ownership, duplicate guard)");
