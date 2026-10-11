@@ -91,11 +91,63 @@ async function adsManagementGranted(token: string) {
   return (body?.data || []).some((item: Row) => item.permission === "ads_management" && item.status === "granted");
 }
 
+/**
+ * Campaign payload (ABO: the budget lives on the ad set).
+ * Meta Marketing API v24+ rejects campaigns without campaign budget unless
+ * is_adset_budget_sharing_enabled is explicit (error 100 / subcode 4834011).
+ * "false" keeps the exact daily budget the GT approved on each ad set.
+ */
+function campaignFields(plan: any) {
+  return {
+    name: String(plan.campaign.name),
+    objective: String(plan.campaign.objective),
+    status: "PAUSED",
+    special_ad_categories: "[]",
+    buying_type: "AUCTION",
+    is_adset_budget_sharing_enabled: "false",
+  };
+}
+
+/**
+ * A FAILED job may be retried only when Meta provably holds nothing from it:
+ * a token failure before any mutation, a definitive validation error
+ * (Meta code 100) on campaign_create, or a code-100 failure in a later stage
+ * whose rollback completed (all created objects deleted).
+ */
+function safeRetryEligible(row: any) {
+  if (!row || row.status !== "FAILED") return false;
+  if (row.created_campaign_id || row.created_adset_id || row.created_ad_id) return false;
+  const md = row.request_metadata || {};
+  if (md.rollback_incomplete) return false;
+  // IDs recorded before a completed rollback were deleted from Meta.
+  if (((md.created_ad_ids || []).length || (md.created_creative_ids || []).length) && md.rollback_incomplete !== false) return false;
+  const err = String(row.error || "").trim();
+  if (/^token:\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(err)) return true;
+  if (md.failed_stage === "campaign_create" && Number(md.meta_code) === 100 && /^campaign_create:/.test(err)) return true;
+  // Later stages: only a definitive Meta validation error (code 100) whose
+  // rollback finished cleanly (rollback_incomplete explicitly false).
+  return Number(md.meta_code) === 100 && md.rollback_incomplete === false &&
+    typeof md.failed_stage === "string" && err.startsWith(`${md.failed_stage}:`);
+}
+
+/** Drops failure fields left by earlier attempts once a run succeeds. */
+function successMetadata(md: any) {
+  const out = { ...(md || {}) };
+  for (const key of ["failed_stage", "meta_code", "meta_subcode", "rollback", "rollback_incomplete"]) delete out[key];
+  return out;
+}
+
 async function tokenCandidates(db: any): Promise<TokenCandidate[]> {
   const out: TokenCandidate[] = [];
+  // Preferred: imobi-board system user (app Imobi-Board, Live mode). Apps in
+  // development mode cannot create ad creatives (Meta 100/1885183).
+  const { data: builderToken, error: builderError } = await db.schema("agency_ops")
+    .rpc("get_secret", { p_name: "META_CAMPAIGN_BUILDER_TOKEN" });
+  const builder = !builderError && typeof builderToken === "string" ? builderToken.trim() : "";
+  if (builder) out.push({ token: builder, source: "CAMPAIGN_BUILDER_VAULT" });
   const { data, error } = await db.schema("agency_ops").rpc("get_meta_system_user_token");
   const vault = !error && typeof data === "string" ? data.trim() : "";
-  if (vault) out.push({ token: vault, source: "SUPABASE_VAULT" });
+  if (vault && !out.some((item) => item.token === vault)) out.push({ token: vault, source: "SUPABASE_VAULT" });
   const env = clean(Deno.env.get("META_SYSTEM_USER_TOKEN"), 1000);
   if (env && !out.some((item) => item.token === env)) out.push({ token: env, source: "EDGE_ENV" });
   return out;
@@ -377,11 +429,29 @@ function adsetFields(plan: Row, campaignId: string, targeting: Row, boostMode: b
   return fields;
 }
 
-function creativeSpec(plan: Row, pageId: string, instagramId: string | null, imageHash: string | null, video: { id: string; thumb: string } | null) {
+/**
+ * Lead ads must link to external content (Meta 100 / subcode 1815316 rejects
+ * a link to the Facebook Page). Picks the first http(s) URL that is not a
+ * Meta-owned domain, e.g. from the Page "website" field.
+ */
+function externalLeadLink(raw: unknown): string | null {
+  for (const part of String(raw ?? "").split(/[\s,;]+/)) {
+    const candidate = part.trim();
+    if (!candidate) continue;
+    try {
+      const url = new URL(/^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`);
+      if (!/^https?:$/.test(url.protocol) || !url.hostname.includes(".")) continue;
+      if (/(^|\.)(facebook\.com|fb\.com|fb\.me|instagram\.com|whatsapp\.com|wa\.me|messenger\.com)$/i.test(url.hostname)) continue;
+      return url.toString();
+    } catch { continue; }
+  }
+  return null;
+}
+
+function creativeSpec(plan: Row, pageId: string, instagramId: string | null, imageHash: string | null, video: { id: string; thumb: string } | null, leadLink: string | null = null) {
   const dest = plan.adset.destination;
-  // Criativos de formularios devem apontar para a propria Pagina.
-  // Antes, o fallback era um link generico de WhatsApp, inadequado ao LEAD_FORM.
-  const link = dest.type === "LEAD_FORM" ? `https://www.facebook.com/${pageId}` :
+  // Formularios: a Meta exige link externo (site do anunciante), nunca a Pagina.
+  const link = dest.type === "LEAD_FORM" ? (leadLink || `https://www.facebook.com/${pageId}`) :
     dest.type === "SITE" && dest.url ? dest.url : "https://api.whatsapp.com/send";
   const cta: Row = { type: plan.ad.cta };
   if (dest.type === "WHATSAPP") cta.type = "WHATSAPP_MESSAGE";
@@ -837,7 +907,8 @@ Deno.serve(async (req: Request) => {
       history: (history || []).map((h: Row) => {
         const { request_metadata, ...safe } = h;
         return { ...safe, client_name: nameById.get(h.client_id) || null,
-          activation_verified_at: request_metadata?.activation_verified_at || null };
+          activation_verified_at: request_metadata?.activation_verified_at || null,
+          safe_retry_eligible: safeRetryEligible(h) };
       }),
     });
   }
@@ -1013,12 +1084,10 @@ Deno.serve(async (req: Request) => {
     if (readError) return reply({ error: "query_failed" }, 500);
     if (!row) return reply({ error: "request_not_found" }, 404);
     if (row.actor_user_id !== user.id) return reply({ error: "forbidden" }, 403);
-    // Allow retry only for a token failure before the very first Meta mutation.
+    // Allow retry only when Meta provably created nothing (see safeRetryEligible):
     // Other FAILED jobs may have partially created Meta objects and must never
     // be silently resumed because that could duplicate paid campaigns.
-    const recoverableFailure = row.status === "FAILED" &&
-      /^token:\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(String(row.error || "").trim()) &&
-      !row.created_campaign_id && !row.created_adset_id && !row.created_ad_id;
+    const recoverableFailure = safeRetryEligible(row);
     if (row.status !== "DRAFTED" && !recoverableFailure)
       return reply({ error: "request_not_resumable" }, 409);
     if (row.created_campaign_id || row.created_adset_id || row.created_ad_id)
@@ -1351,6 +1420,7 @@ Deno.serve(async (req: Request) => {
     if (clean(account?.currency, 8).toUpperCase() !== "BRL")
       return reply({ error: "currency_mismatch", account_currency: clean(account?.currency, 8) }, 409);
     // Verifica formulario e propriedade ANTES de criar a campanha na Meta.
+    let leadLink: string | null = null;
     if (!boostMode && plan.adset.destination.type === "LEAD_FORM") {
       const formId = numericId(plan.adset.destination.lead_form_id);
       const accessToken = (resolved as any).candidate.token as string;
@@ -1379,6 +1449,16 @@ Deno.serve(async (req: Request) => {
         return reply({ error: "lead_form_page_mismatch", page_id: pageId, form_id: formId }, 409);
       if (clean(liveForm.status, 30).toUpperCase() !== "ACTIVE")
         return reply({ error: "lead_form_not_active", status: clean(liveForm.status, 30) }, 409);
+      // Link externo obrigatorio no criativo de formulario: override do preview
+      // ou o site cadastrado na Pagina. Sem ele, nada e criado na Meta.
+      let pageWebsite: unknown = null;
+      try {
+        pageWebsite = (await metaJson(graphUrl(pageId, { fields: "website", access_token: accessToken })))?.website;
+      } catch { pageWebsite = null; }
+      leadLink = externalLeadLink(clean(overrides?.site_url, 500)) || externalLeadLink(pageWebsite);
+      if (!leadLink)
+        return reply({ error: "lead_form_external_link_missing",
+          detail: "Anúncios de formulário precisam de um link externo (site do cliente). Cadastre o site na Página ou informe a URL do site no preview." }, 409);
     }
 
     // Compare-and-set: somente UM clique pode reivindicar o pedido.
@@ -1437,13 +1517,7 @@ Deno.serve(async (req: Request) => {
       created.token = token;
 
       // campanha
-      const campaign = await metaPost(`act_${accountId}/campaigns`, token, {
-        name: plan.campaign.name,
-        objective: plan.campaign.objective,
-        status: "PAUSED",
-        special_ad_categories: "[]",
-        buying_type: "AUCTION",
-      });
+      const campaign = await metaPost(`act_${accountId}/campaigns`, token, campaignFields(plan));
       created.campaign_id = clean(campaign?.id, 40);
       if (!created.campaign_id) return await fail("campaign_create", new Error("Meta não devolveu o ID da campanha."), created);
 
@@ -1509,7 +1583,7 @@ Deno.serve(async (req: Request) => {
         } else {
           creativeFields = {
             name: `${itemName} — criativo`,
-            object_story_spec: JSON.stringify(creativeSpec(plan, pageId, instagramId, imageHash, video)),
+            object_story_spec: JSON.stringify(creativeSpec(plan, pageId, instagramId, imageHash, video, leadLink)),
           };
         }
         activeStage = `creative_${index + 1}_create`;
@@ -1565,7 +1639,7 @@ Deno.serve(async (req: Request) => {
         created_ad_id: created.ad_id,
         error: null,
         plan,
-        request_metadata: { ...(row.request_metadata || {}), token_source: (resolved as any).candidate.source, account_name: (resolved as any).account?.name || null, created_ad_ids: created.ad_ids, created_creative_ids: created.creative_ids },
+        request_metadata: { ...successMetadata(row.request_metadata), token_source: (resolved as any).candidate.source, account_name: (resolved as any).account?.name || null, created_ad_ids: created.ad_ids, created_creative_ids: created.creative_ids },
       }).eq("id", requestId).eq("status", "EXECUTING").select("id").maybeSingle();
       if (createdSaveError || !savedRequest?.id) {
         // Os objetos existem na Meta, mas o registro nao confirmou: proibir
