@@ -7,15 +7,15 @@ import ts from "typescript";
 const path = "supabase/functions/agency-ops-campaign-builder-api/index.ts";
 const source = fs.readFileSync(path, "utf8");
 const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-const names = new Set(["buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible"]);
+const names = new Set(["buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink"]);
 const declarations = ast.statements.filter(s => ts.isFunctionDeclaration(s) && names.has(s.name?.text)).map(s => s.getText(ast));
 assert.equal(declarations.length, names.size, "All payload/guard functions must exist");
 const js = ts.transpileModule(declarations.join("\n"), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
-const ctx = vm.createContext({});
-vm.runInContext(js + "\nthis.builder = { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible };", ctx);
-const { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible } = ctx.builder;
+const ctx = vm.createContext({ URL });
+vm.runInContext(js + "\nthis.builder = { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink };", ctx);
+const { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink } = ctx.builder;
 const p = {
   campaign: { objective: "OUTCOME_LEADS" },
   adset: {
@@ -33,9 +33,14 @@ assert.equal(adset.daily_budget, "1000");
 assert.equal(adset.destination_type, "ON_AD");
 assert.equal(adset.optimization_goal, "LEAD_GENERATION");
 assert.deepEqual(JSON.parse(adset.promoted_object), { page_id: "132141753324688" });
-const creative = creativeSpec(p, "132141753324688", "1717171717171", "abcd1234", null);
+const creative = creativeSpec(p, "132141753324688", "1717171717171", "abcd1234", null, "https://www.ncimoveis.com/");
 assert.equal(creative.instagram_user_id, "1717171717171");
-assert.equal(creative.link_data.link, "https://www.facebook.com/132141753324688");
+assert.equal(creative.link_data.link, "https://www.ncimoveis.com/");
+assert.equal(externalLeadLink("http://www.ncimoveis.com/"), "http://www.ncimoveis.com/");
+assert.equal(externalLeadLink("www.ncimoveis.com"), "https://www.ncimoveis.com/");
+assert.equal(externalLeadLink("https://www.facebook.com/132141753324688 https://site.com.br"), "https://site.com.br/");
+assert.equal(externalLeadLink("https://instagram.com/x"), null);
+assert.equal(externalLeadLink(""), null);
 assert.equal(creative.link_data.call_to_action.value.lead_gen_form_id, "1802574407825742");
 assert.equal(creative.link_data.call_to_action.type, "SIGN_UP");
 assert.equal(creative.link_data.image_hash, "abcd1234");
@@ -59,6 +64,7 @@ assert.equal(safeRetryEligible(failed({ error: "creative_1_create: x", request_m
 assert.match(source, /META_CAMPAIGN_BUILDER_TOKEN/);
 assert.equal(safeRetryEligible(failed({ error: "campaign_create: x", created_campaign_id: "1", request_metadata: { failed_stage: "campaign_create", meta_code: 100 } })), false);
 assert.equal(safeRetryEligible(failed({ error: "campaign_create: x", request_metadata: { failed_stage: "campaign_create", meta_code: 100, created_creative_ids: ["9"] } })), false);
+assert.equal(safeRetryEligible(failed({ error: "ad_1_create: x", request_metadata: { failed_stage: "ad_1_create", meta_code: 100, rollback_incomplete: false, created_creative_ids: ["9"] } })), true);
 assert.equal(safeRetryEligible({ status: "CREATED", error: "token: meta_account_access_missing" }), false);
 assert.match(source, /const GRAPH = "v26\.0"/);
 assert.match(source, /lead_form_page_mismatch/);

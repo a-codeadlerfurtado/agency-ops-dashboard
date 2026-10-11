@@ -118,7 +118,9 @@ function safeRetryEligible(row: any) {
   if (!row || row.status !== "FAILED") return false;
   if (row.created_campaign_id || row.created_adset_id || row.created_ad_id) return false;
   const md = row.request_metadata || {};
-  if ((md.created_ad_ids || []).length || (md.created_creative_ids || []).length || md.rollback_incomplete) return false;
+  if (md.rollback_incomplete) return false;
+  // IDs recorded before a completed rollback were deleted from Meta.
+  if (((md.created_ad_ids || []).length || (md.created_creative_ids || []).length) && md.rollback_incomplete !== false) return false;
   const err = String(row.error || "").trim();
   if (/^token:\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(err)) return true;
   if (md.failed_stage === "campaign_create" && Number(md.meta_code) === 100 && /^campaign_create:/.test(err)) return true;
@@ -420,11 +422,29 @@ function adsetFields(plan: Row, campaignId: string, targeting: Row, boostMode: b
   return fields;
 }
 
-function creativeSpec(plan: Row, pageId: string, instagramId: string | null, imageHash: string | null, video: { id: string; thumb: string } | null) {
+/**
+ * Lead ads must link to external content (Meta 100 / subcode 1815316 rejects
+ * a link to the Facebook Page). Picks the first http(s) URL that is not a
+ * Meta-owned domain, e.g. from the Page "website" field.
+ */
+function externalLeadLink(raw: unknown): string | null {
+  for (const part of String(raw ?? "").split(/[\s,;]+/)) {
+    const candidate = part.trim();
+    if (!candidate) continue;
+    try {
+      const url = new URL(/^https?:\/\//i.test(candidate) ? candidate : `https://${candidate}`);
+      if (!/^https?:$/.test(url.protocol) || !url.hostname.includes(".")) continue;
+      if (/(^|\.)(facebook\.com|fb\.com|fb\.me|instagram\.com|whatsapp\.com|wa\.me|messenger\.com)$/i.test(url.hostname)) continue;
+      return url.toString();
+    } catch { continue; }
+  }
+  return null;
+}
+
+function creativeSpec(plan: Row, pageId: string, instagramId: string | null, imageHash: string | null, video: { id: string; thumb: string } | null, leadLink: string | null = null) {
   const dest = plan.adset.destination;
-  // Criativos de formularios devem apontar para a propria Pagina.
-  // Antes, o fallback era um link generico de WhatsApp, inadequado ao LEAD_FORM.
-  const link = dest.type === "LEAD_FORM" ? `https://www.facebook.com/${pageId}` :
+  // Formularios: a Meta exige link externo (site do anunciante), nunca a Pagina.
+  const link = dest.type === "LEAD_FORM" ? (leadLink || `https://www.facebook.com/${pageId}`) :
     dest.type === "SITE" && dest.url ? dest.url : "https://api.whatsapp.com/send";
   const cta: Row = { type: plan.ad.cta };
   if (dest.type === "WHATSAPP") cta.type = "WHATSAPP_MESSAGE";
@@ -1393,6 +1413,7 @@ Deno.serve(async (req: Request) => {
     if (clean(account?.currency, 8).toUpperCase() !== "BRL")
       return reply({ error: "currency_mismatch", account_currency: clean(account?.currency, 8) }, 409);
     // Verifica formulario e propriedade ANTES de criar a campanha na Meta.
+    let leadLink: string | null = null;
     if (!boostMode && plan.adset.destination.type === "LEAD_FORM") {
       const formId = numericId(plan.adset.destination.lead_form_id);
       const accessToken = (resolved as any).candidate.token as string;
@@ -1421,6 +1442,16 @@ Deno.serve(async (req: Request) => {
         return reply({ error: "lead_form_page_mismatch", page_id: pageId, form_id: formId }, 409);
       if (clean(liveForm.status, 30).toUpperCase() !== "ACTIVE")
         return reply({ error: "lead_form_not_active", status: clean(liveForm.status, 30) }, 409);
+      // Link externo obrigatorio no criativo de formulario: override do preview
+      // ou o site cadastrado na Pagina. Sem ele, nada e criado na Meta.
+      let pageWebsite: unknown = null;
+      try {
+        pageWebsite = (await metaJson(graphUrl(pageId, { fields: "website", access_token: accessToken })))?.website;
+      } catch { pageWebsite = null; }
+      leadLink = externalLeadLink(clean(overrides?.site_url, 500)) || externalLeadLink(pageWebsite);
+      if (!leadLink)
+        return reply({ error: "lead_form_external_link_missing",
+          detail: "Anúncios de formulário precisam de um link externo (site do cliente). Cadastre o site na Página ou informe a URL do site no preview." }, 409);
     }
 
     // Compare-and-set: somente UM clique pode reivindicar o pedido.
@@ -1545,7 +1576,7 @@ Deno.serve(async (req: Request) => {
         } else {
           creativeFields = {
             name: `${itemName} — criativo`,
-            object_story_spec: JSON.stringify(creativeSpec(plan, pageId, instagramId, imageHash, video)),
+            object_story_spec: JSON.stringify(creativeSpec(plan, pageId, instagramId, imageHash, video, leadLink)),
           };
         }
         activeStage = `creative_${index + 1}_create`;
