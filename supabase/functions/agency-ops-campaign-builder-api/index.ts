@@ -91,6 +91,38 @@ async function adsManagementGranted(token: string) {
   return (body?.data || []).some((item: Row) => item.permission === "ads_management" && item.status === "granted");
 }
 
+/**
+ * Campaign payload (ABO: the budget lives on the ad set).
+ * Meta Marketing API v24+ rejects campaigns without campaign budget unless
+ * is_adset_budget_sharing_enabled is explicit (error 100 / subcode 4834011).
+ * "false" keeps the exact daily budget the GT approved on each ad set.
+ */
+function campaignFields(plan: any) {
+  return {
+    name: String(plan.campaign.name),
+    objective: String(plan.campaign.objective),
+    status: "PAUSED",
+    special_ad_categories: "[]",
+    buying_type: "AUCTION",
+    is_adset_budget_sharing_enabled: "false",
+  };
+}
+
+/**
+ * A FAILED job may be retried only when Meta provably created nothing:
+ * a token failure before any mutation, or a definitive validation error
+ * (Meta code 100) on campaign_create, the very first mutation.
+ */
+function safeRetryEligible(row: any) {
+  if (!row || row.status !== "FAILED") return false;
+  if (row.created_campaign_id || row.created_adset_id || row.created_ad_id) return false;
+  const md = row.request_metadata || {};
+  if ((md.created_ad_ids || []).length || (md.created_creative_ids || []).length || md.rollback_incomplete) return false;
+  const err = String(row.error || "").trim();
+  if (/^token:\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(err)) return true;
+  return md.failed_stage === "campaign_create" && Number(md.meta_code) === 100 && /^campaign_create:/.test(err);
+}
+
 async function tokenCandidates(db: any): Promise<TokenCandidate[]> {
   const out: TokenCandidate[] = [];
   const { data, error } = await db.schema("agency_ops").rpc("get_meta_system_user_token");
@@ -837,7 +869,8 @@ Deno.serve(async (req: Request) => {
       history: (history || []).map((h: Row) => {
         const { request_metadata, ...safe } = h;
         return { ...safe, client_name: nameById.get(h.client_id) || null,
-          activation_verified_at: request_metadata?.activation_verified_at || null };
+          activation_verified_at: request_metadata?.activation_verified_at || null,
+          safe_retry_eligible: safeRetryEligible(h) };
       }),
     });
   }
@@ -1013,12 +1046,10 @@ Deno.serve(async (req: Request) => {
     if (readError) return reply({ error: "query_failed" }, 500);
     if (!row) return reply({ error: "request_not_found" }, 404);
     if (row.actor_user_id !== user.id) return reply({ error: "forbidden" }, 403);
-    // Allow retry only for a token failure before the very first Meta mutation.
+    // Allow retry only when Meta provably created nothing (see safeRetryEligible):
     // Other FAILED jobs may have partially created Meta objects and must never
     // be silently resumed because that could duplicate paid campaigns.
-    const recoverableFailure = row.status === "FAILED" &&
-      /^token:\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(String(row.error || "").trim()) &&
-      !row.created_campaign_id && !row.created_adset_id && !row.created_ad_id;
+    const recoverableFailure = safeRetryEligible(row);
     if (row.status !== "DRAFTED" && !recoverableFailure)
       return reply({ error: "request_not_resumable" }, 409);
     if (row.created_campaign_id || row.created_adset_id || row.created_ad_id)
@@ -1437,13 +1468,7 @@ Deno.serve(async (req: Request) => {
       created.token = token;
 
       // campanha
-      const campaign = await metaPost(`act_${accountId}/campaigns`, token, {
-        name: plan.campaign.name,
-        objective: plan.campaign.objective,
-        status: "PAUSED",
-        special_ad_categories: "[]",
-        buying_type: "AUCTION",
-      });
+      const campaign = await metaPost(`act_${accountId}/campaigns`, token, campaignFields(plan));
       created.campaign_id = clean(campaign?.id, 40);
       if (!created.campaign_id) return await fail("campaign_create", new Error("Meta não devolveu o ID da campanha."), created);
 
