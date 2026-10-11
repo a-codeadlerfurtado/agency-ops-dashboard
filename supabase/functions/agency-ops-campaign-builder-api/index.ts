@@ -130,6 +130,13 @@ function safeRetryEligible(row: any) {
     typeof md.failed_stage === "string" && err.startsWith(`${md.failed_stage}:`);
 }
 
+/** Drops failure fields left by earlier attempts once a run succeeds. */
+function successMetadata(md: any) {
+  const out = { ...(md || {}) };
+  for (const key of ["failed_stage", "meta_code", "meta_subcode", "rollback", "rollback_incomplete"]) delete out[key];
+  return out;
+}
+
 async function tokenCandidates(db: any): Promise<TokenCandidate[]> {
   const out: TokenCandidate[] = [];
   // Preferred: imobi-board system user (app Imobi-Board, Live mode). Apps in
@@ -1632,7 +1639,7 @@ Deno.serve(async (req: Request) => {
         created_ad_id: created.ad_id,
         error: null,
         plan,
-        request_metadata: { ...(row.request_metadata || {}), token_source: (resolved as any).candidate.source, account_name: (resolved as any).account?.name || null, created_ad_ids: created.ad_ids, created_creative_ids: created.creative_ids },
+        request_metadata: { ...successMetadata(row.request_metadata), token_source: (resolved as any).candidate.source, account_name: (resolved as any).account?.name || null, created_ad_ids: created.ad_ids, created_creative_ids: created.creative_ids },
       }).eq("id", requestId).eq("status", "EXECUTING").select("id").maybeSingle();
       if (createdSaveError || !savedRequest?.id) {
         // Os objetos existem na Meta, mas o registro nao confirmou: proibir

@@ -7,15 +7,15 @@ import ts from "typescript";
 const path = "supabase/functions/agency-ops-campaign-builder-api/index.ts";
 const source = fs.readFileSync(path, "utf8");
 const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-const names = new Set(["buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink"]);
+const names = new Set(["buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink", "successMetadata"]);
 const declarations = ast.statements.filter(s => ts.isFunctionDeclaration(s) && names.has(s.name?.text)).map(s => s.getText(ast));
 assert.equal(declarations.length, names.size, "All payload/guard functions must exist");
 const js = ts.transpileModule(declarations.join("\n"), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
 const ctx = vm.createContext({ URL });
-vm.runInContext(js + "\nthis.builder = { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink };", ctx);
-const { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink } = ctx.builder;
+vm.runInContext(js + "\nthis.builder = { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata };", ctx);
+const { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata } = ctx.builder;
 const p = {
   campaign: { objective: "OUTCOME_LEADS" },
   adset: {
@@ -62,6 +62,8 @@ assert.equal(safeRetryEligible(failed({ error: "creative_1_create: x", request_m
 assert.equal(safeRetryEligible(failed({ error: "creative_1_create: x", request_metadata: { failed_stage: "creative_1_create", meta_code: 100, rollback_incomplete: true } })), false);
 assert.equal(safeRetryEligible(failed({ error: "creative_1_create: x", request_metadata: { failed_stage: "creative_1_create", meta_code: 2, rollback_incomplete: false } })), false);
 assert.match(source, /META_CAMPAIGN_BUILDER_TOKEN/);
+const cleaned = successMetadata({ failed_stage: "ad_1_create", meta_code: 100, meta_subcode: 1, rollback: {}, rollback_incomplete: false, safe_retry_count: 3, creatives: [1] });
+assert.deepEqual(Object.keys(cleaned).sort(), ["creatives", "safe_retry_count"]);
 assert.equal(safeRetryEligible(failed({ error: "campaign_create: x", created_campaign_id: "1", request_metadata: { failed_stage: "campaign_create", meta_code: 100 } })), false);
 assert.equal(safeRetryEligible(failed({ error: "campaign_create: x", request_metadata: { failed_stage: "campaign_create", meta_code: 100, created_creative_ids: ["9"] } })), false);
 assert.equal(safeRetryEligible(failed({ error: "ad_1_create: x", request_metadata: { failed_stage: "ad_1_create", meta_code: 100, rollback_incomplete: false, created_creative_ids: ["9"] } })), true);

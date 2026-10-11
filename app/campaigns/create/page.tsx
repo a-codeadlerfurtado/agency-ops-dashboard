@@ -407,8 +407,8 @@ export default function CampaignCreatePage() {
       setOverrides(body.existing_form_id ? { lead_form_id: String(body.existing_form_id) } : {});
       setConfirmWord(""); setResult(null); setDraftError("");
       setHistoryNotice(body.resumed_failed_token_attempt
-        ? "Tentativa recuperada, com o formulário e os criativos preservados. Confira se a Meta já liberou a conta antes de confirmar CRIAR."
-        : "Rascunho retomado para revisão. A campanha só será criada pausada após você digitar CRIAR e confirmar.");
+        ? "Tentativa recuperada com segurança, com o formulário e os criativos preservados. Revise o plano e clique em Criar campanha."
+        : "Rascunho retomado para revisão. Confira o plano e clique em Criar campanha; ela é criada pausada por padrão.");
       window.scrollTo({ top: 0, behavior: "smooth" });
       await loadBoot();
     } catch (err) {
