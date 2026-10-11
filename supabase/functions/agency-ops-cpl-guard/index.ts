@@ -542,7 +542,9 @@ async function notify(cfg: Row) {
            action_url: v.url, button_label: "Abrir no Gerenciador",
          })})
       on conflict (event_key) do nothing`;
-    await sql`update agency_ops.cpl_guard_events set notify_result = notify_result || ${sql.json({ dash_at: new Date().toISOString() })} where id = ${ev.id}`;
+    // Aviso de tela cheia para o GT e o Adler (Ciente / Alertar GT).
+    await sql`select agency_ops.cpl_guard_open_screen_alerts(${ev.id}, ${sql.json({ ...v, executed_at: ev.executed_at, ad_account_id: ev.ad_account_id, entity_id: ev.entity_id })}, ${cfg.notify_adler})`;
+    await sql`update agency_ops.cpl_guard_events set notify_result = notify_result || ${sql.json({ dash_at: new Date().toISOString(), screen_at: new Date().toISOString() })} where id = ${ev.id}`;
     dash++;
   }
 
