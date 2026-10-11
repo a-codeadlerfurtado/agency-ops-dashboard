@@ -53,6 +53,10 @@ assert.equal(safeRetryEligible(failed({ error: "token: meta_account_access_missi
 assert.equal(safeRetryEligible(failed({ error: "campaign_create: x", request_metadata: { failed_stage: "campaign_create", meta_code: 100 } })), true);
 assert.equal(safeRetryEligible(failed({ error: "campaign_create: timeout", request_metadata: { failed_stage: "campaign_create" } })), false);
 assert.equal(safeRetryEligible(failed({ error: "adset_create: x", request_metadata: { failed_stage: "adset_create", meta_code: 100 } })), false);
+assert.equal(safeRetryEligible(failed({ error: "creative_1_create: x", request_metadata: { failed_stage: "creative_1_create", meta_code: 100, rollback_incomplete: false, created_ad_ids: [], created_creative_ids: [] } })), true);
+assert.equal(safeRetryEligible(failed({ error: "creative_1_create: x", request_metadata: { failed_stage: "creative_1_create", meta_code: 100, rollback_incomplete: true } })), false);
+assert.equal(safeRetryEligible(failed({ error: "creative_1_create: x", request_metadata: { failed_stage: "creative_1_create", meta_code: 2, rollback_incomplete: false } })), false);
+assert.match(source, /META_CAMPAIGN_BUILDER_TOKEN/);
 assert.equal(safeRetryEligible(failed({ error: "campaign_create: x", created_campaign_id: "1", request_metadata: { failed_stage: "campaign_create", meta_code: 100 } })), false);
 assert.equal(safeRetryEligible(failed({ error: "campaign_create: x", request_metadata: { failed_stage: "campaign_create", meta_code: 100, created_creative_ids: ["9"] } })), false);
 assert.equal(safeRetryEligible({ status: "CREATED", error: "token: meta_account_access_missing" }), false);

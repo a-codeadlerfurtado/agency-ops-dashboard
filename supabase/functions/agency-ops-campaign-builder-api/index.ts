@@ -109,9 +109,10 @@ function campaignFields(plan: any) {
 }
 
 /**
- * A FAILED job may be retried only when Meta provably created nothing:
- * a token failure before any mutation, or a definitive validation error
- * (Meta code 100) on campaign_create, the very first mutation.
+ * A FAILED job may be retried only when Meta provably holds nothing from it:
+ * a token failure before any mutation, a definitive validation error
+ * (Meta code 100) on campaign_create, or a code-100 failure in a later stage
+ * whose rollback completed (all created objects deleted).
  */
 function safeRetryEligible(row: any) {
   if (!row || row.status !== "FAILED") return false;
@@ -120,14 +121,24 @@ function safeRetryEligible(row: any) {
   if ((md.created_ad_ids || []).length || (md.created_creative_ids || []).length || md.rollback_incomplete) return false;
   const err = String(row.error || "").trim();
   if (/^token:\s*(meta_account_access_missing|meta_write_permission_missing|meta_token_missing)$/.test(err)) return true;
-  return md.failed_stage === "campaign_create" && Number(md.meta_code) === 100 && /^campaign_create:/.test(err);
+  if (md.failed_stage === "campaign_create" && Number(md.meta_code) === 100 && /^campaign_create:/.test(err)) return true;
+  // Later stages: only a definitive Meta validation error (code 100) whose
+  // rollback finished cleanly (rollback_incomplete explicitly false).
+  return Number(md.meta_code) === 100 && md.rollback_incomplete === false &&
+    typeof md.failed_stage === "string" && err.startsWith(`${md.failed_stage}:`);
 }
 
 async function tokenCandidates(db: any): Promise<TokenCandidate[]> {
   const out: TokenCandidate[] = [];
+  // Preferred: imobi-board system user (app Imobi-Board, Live mode). Apps in
+  // development mode cannot create ad creatives (Meta 100/1885183).
+  const { data: builderToken, error: builderError } = await db.schema("agency_ops")
+    .rpc("get_secret", { p_name: "META_CAMPAIGN_BUILDER_TOKEN" });
+  const builder = !builderError && typeof builderToken === "string" ? builderToken.trim() : "";
+  if (builder) out.push({ token: builder, source: "CAMPAIGN_BUILDER_VAULT" });
   const { data, error } = await db.schema("agency_ops").rpc("get_meta_system_user_token");
   const vault = !error && typeof data === "string" ? data.trim() : "";
-  if (vault) out.push({ token: vault, source: "SUPABASE_VAULT" });
+  if (vault && !out.some((item) => item.token === vault)) out.push({ token: vault, source: "SUPABASE_VAULT" });
   const env = clean(Deno.env.get("META_SYSTEM_USER_TOKEN"), 1000);
   if (env && !out.some((item) => item.token === env)) out.push({ token: env, source: "EDGE_ENV" });
   return out;
