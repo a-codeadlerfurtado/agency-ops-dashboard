@@ -16,8 +16,9 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const SERVICE = "agency-ops-campaign-builder-api";
-const SERVICE_VERSION = "v1.1.0";
-const GRAPH = "v21.0";
+const SERVICE_VERSION = "v1.2.0";
+// Marketing API v26.0 e a versao vigente para novas operacoes em outubro de 2026.
+const GRAPH = "v26.0";
 const BUCKET = "agency-ai-private";
 const DRAFT_TTL_MS = 45 * 60_000;
 const MAX_FILE_MB = 25;
@@ -343,7 +344,7 @@ function buildTargeting(plan: Row, geoResolved: Row[]) {
   return targeting;
 }
 
-function adsetFields(plan: Row, campaignId: string, targeting: Row, boostMode: boolean) {
+function adsetFields(plan: Row, campaignId: string, targeting: Row, boostMode: boolean, pageId: string) {
   const dest = plan.adset.destination;
   const fields: Row = {
     name: plan.adset.name,
@@ -362,6 +363,8 @@ function adsetFields(plan: Row, campaignId: string, targeting: Row, boostMode: b
   } else if (dest.type === "LEAD_FORM") {
     fields.optimization_goal = "LEAD_GENERATION";
     fields.destination_type = "ON_AD";
+    // Formulario instantaneo necessita vincular a pagina ao conjunto.
+    fields.promoted_object = JSON.stringify({ page_id: pageId });
   } else {
     fields.optimization_goal = "LINK_CLICKS";
   }
@@ -376,7 +379,10 @@ function adsetFields(plan: Row, campaignId: string, targeting: Row, boostMode: b
 
 function creativeSpec(plan: Row, pageId: string, instagramId: string | null, imageHash: string | null, video: { id: string; thumb: string } | null) {
   const dest = plan.adset.destination;
-  const link = dest.type === "SITE" && dest.url ? dest.url : "https://api.whatsapp.com/send";
+  // Criativos de formularios devem apontar para a propria Pagina.
+  // Antes, o fallback era um link generico de WhatsApp, inadequado ao LEAD_FORM.
+  const link = dest.type === "LEAD_FORM" ? `https://www.facebook.com/${pageId}` :
+    dest.type === "SITE" && dest.url ? dest.url : "https://api.whatsapp.com/send";
   const cta: Row = { type: plan.ad.cta };
   if (dest.type === "WHATSAPP") cta.type = "WHATSAPP_MESSAGE";
   if (dest.type === "LEAD_FORM" && dest.lead_form_id) {
@@ -386,7 +392,7 @@ function creativeSpec(plan: Row, pageId: string, instagramId: string | null, ima
     cta.value = { link };
   }
   const spec: Row = { page_id: pageId };
-  if (instagramId) spec.instagram_actor_id = instagramId;
+  if (instagramId) spec.instagram_user_id = instagramId;
   if (video) {
     spec.video_data = {
       video_id: video.id,
@@ -1311,7 +1317,7 @@ Deno.serve(async (req: Request) => {
       if (!pageId) return reply({ error: "assets_missing" }, 409);
       if (!validCreativeRows) return reply({ error: "creative_missing" }, 409);
     }
-    if (!plan?.adset?.daily_budget_brl || plan.adset.daily_budget_brl <= 0) return reply({ error: "budget_missing" }, 409);
+    // Orçamento e formulario sao validados DEPOIS dos overrides do preview.
 
     // Overrides limitados vindos do preview (nomes, textos, orçamento)
     const overrides = body?.overrides && typeof body.overrides === "object" ? body.overrides : null;
@@ -1330,7 +1336,7 @@ Deno.serve(async (req: Request) => {
     if (!Number.isFinite(finalBudget) || finalBudget < 1 || finalBudget > 100000)
       return reply({ error: "budget_missing" }, 409);
     if (!boostMode && plan.adset.destination.type === "SITE" && !plan.adset.destination.url) return reply({ error: "site_url_missing" }, 409);
-    if (!boostMode && plan.adset.destination.type === "LEAD_FORM" && !plan.adset.destination.lead_form_id) return reply({ error: "lead_form_missing" }, 409);
+    if (!boostMode && plan.adset.destination.type === "LEAD_FORM" && !numericId(plan.adset.destination.lead_form_id)) return reply({ error: "lead_form_missing" }, 409);
 
     // Nunca consumir o rascunho por falta de acesso: o cliente pode liberar
     // a conta na Meta e clicar novamente, sem subir os criativos outra vez.
@@ -1338,6 +1344,42 @@ Deno.serve(async (req: Request) => {
     if ("error" in resolved && resolved.error)
       return reply({ error: resolved.error, account_id: accountId,
         detail: "A credencial Meta precisa ter ads_management e acesso a esta conta de anuncios." }, 403);
+
+    const account = (resolved as any).account as Row;
+    if (Number(account?.account_status) !== 1)
+      return reply({ error: "meta_account_not_active", account_id: accountId }, 409);
+    if (clean(account?.currency, 8).toUpperCase() !== "BRL")
+      return reply({ error: "currency_mismatch", account_currency: clean(account?.currency, 8) }, 409);
+    // Verifica formulario e propriedade ANTES de criar a campanha na Meta.
+    if (!boostMode && plan.adset.destination.type === "LEAD_FORM") {
+      const formId = numericId(plan.adset.destination.lead_form_id);
+      const accessToken = (resolved as any).candidate.token as string;
+      let liveForm: Row | null = null;
+      let formError: unknown = null;
+      try {
+        liveForm = await metaJson(graphUrl(formId, {
+          fields: "id,page_id,status", access_token: accessToken,
+        }));
+      } catch (err) {
+        formError = err;
+        // Tokens de sistema podem ler a conta mas precisar do token de pagina
+        // para validar formularios instantaneos.
+        try {
+          const pageToken = await resolveNcPageToken(accessToken, pageId);
+          if (pageToken) liveForm = await metaJson(graphUrl(formId, {
+            fields: "id,page_id,status", access_token: pageToken,
+          }));
+        } catch (pageError) { formError = pageError; }
+      }
+      if (!liveForm)
+        return reply({ error: "lead_form_read_denied",
+          detail: clean((formError as Error)?.message, 190),
+          meta_code: (formError as any)?.metaCode ?? null }, 403);
+      if (numericId(liveForm.id) !== formId || numericId(liveForm.page_id) !== pageId)
+        return reply({ error: "lead_form_page_mismatch", page_id: pageId, form_id: formId }, 409);
+      if (clean(liveForm.status, 30).toUpperCase() !== "ACTIVE")
+        return reply({ error: "lead_form_not_active", status: clean(liveForm.status, 30) }, 409);
+    }
 
     // Compare-and-set: somente UM clique pode reivindicar o pedido.
     // Impede POSTs simultaneos de criarem campanhas duplicadas.
@@ -1349,6 +1391,8 @@ Deno.serve(async (req: Request) => {
 
     const fail = async (stage: string, error: unknown, created: Row) => {
       const message = clean((error as Error)?.message || error, 500);
+      const metaCode = (error as any)?.metaCode ?? null;
+      const metaSubcode = (error as any)?.metaSubcode ?? null;
       // rollback: apaga o que já foi criado, na ordem inversa
       const rollback: Row = {};
       rollback.ads = [];
@@ -1366,15 +1410,27 @@ Deno.serve(async (req: Request) => {
       }
       try { if (created.adset_id) { await metaDelete(created.adset_id, created.token); rollback.adset = true; } } catch { rollback.adset = false; }
       try { if (created.campaign_id) { await metaDelete(created.campaign_id, created.token); rollback.campaign = true; } } catch { rollback.campaign = false; }
+      const rollbackIncomplete = (rollback.ads || []).some((item: Row) => !item.deleted) ||
+        (rollback.creatives || []).some((item: Row) => !item.deleted) ||
+        (Boolean(created.adset_id) && rollback.adset !== true) ||
+        (Boolean(created.campaign_id) && rollback.campaign !== true);
       await ops.from("campaign_build_requests").update({
         status: "FAILED",
         error: `${stage}: ${message}`,
-        request_metadata: { ...(row.request_metadata || {}), rollback, failed_stage: stage },
+        created_campaign_id: rollbackIncomplete ? (created.campaign_id || null) : null,
+        created_adset_id: rollbackIncomplete ? (created.adset_id || null) : null,
+        created_ad_id: rollbackIncomplete ? (created.ad_ids?.[0] || null) : null,
+        request_metadata: { ...(row.request_metadata || {}), rollback, failed_stage: stage,
+          rollback_incomplete: rollbackIncomplete, meta_code: metaCode,
+          meta_subcode: metaSubcode, created_ad_ids: created.ad_ids || [],
+          created_creative_ids: created.creative_ids || [] },
       }).eq("id", requestId);
-      return reply({ error: "execution_failed", stage, detail: message, request_id: requestId }, 502);
+      return reply({ error: "execution_failed", stage, detail: message, request_id: requestId,
+        meta_code: metaCode, meta_subcode: metaSubcode, rollback_incomplete: rollbackIncomplete }, 502);
     };
 
     const created: Row = {};
+    let activeStage = "campaign_create";
     try {
       // Token ja validado antes de reivindicar o rascunho.
       const token = (resolved as any).candidate.token as string;
@@ -1392,8 +1448,9 @@ Deno.serve(async (req: Request) => {
       if (!created.campaign_id) return await fail("campaign_create", new Error("Meta não devolveu o ID da campanha."), created);
 
       // conjunto
+      activeStage = "adset_create";
       const targeting = buildTargeting(plan, plan.geo_resolved || []);
-      const adset = await metaPost(`act_${accountId}/adsets`, token, adsetFields(plan, created.campaign_id, targeting, boostMode) as Record<string, string>);
+      const adset = await metaPost(`act_${accountId}/adsets`, token, adsetFields(plan, created.campaign_id, targeting, boostMode, pageId) as Record<string, string>);
       created.adset_id = clean(adset?.id, 40);
       if (!created.adset_id) return await fail("adset_create", new Error("Meta não devolveu o ID do conjunto."), created);
 
@@ -1403,6 +1460,7 @@ Deno.serve(async (req: Request) => {
       created.video_ids = [];
       for (let index = 0; index < (boostMode ? 1 : creativeRows.length); index++) {
         const item = boostMode ? null : creativeRows[index];
+        activeStage = `creative_${index + 1}_upload`;
         let imageHash: string | null = null;
         let video: { id: string; thumb: string } | null = null;
         if (item) {
@@ -1454,11 +1512,13 @@ Deno.serve(async (req: Request) => {
             object_story_spec: JSON.stringify(creativeSpec(plan, pageId, instagramId, imageHash, video)),
           };
         }
+        activeStage = `creative_${index + 1}_create`;
         const creative = await metaPost(`act_${accountId}/adcreatives`, token, creativeFields);
         const creativeId = clean(creative?.id, 40);
         if (!creativeId) return await fail(`creative_create_${index + 1}`, new Error("Meta não devolveu o ID do criativo."), created);
         created.creative_ids.push(creativeId);
 
+        activeStage = `ad_${index + 1}_create`;
         const ad = await metaPost(`act_${accountId}/ads`, token, {
           name: itemName,
           adset_id: created.adset_id,
@@ -1472,14 +1532,27 @@ Deno.serve(async (req: Request) => {
       created.ad_id = created.ad_ids[0] || null;
       created.creative_id = created.creative_ids[0] || null;
 
-      // verificação: campanha existe e está pausada
-      const live = await metaJson(graphUrl(created.campaign_id, { fields: "id,name,status,effective_status", access_token: token }));
-      if (clean(live?.status, 20).toUpperCase() !== "PAUSED") {
+      // Verificar que TODAS as entidades existem, estao pausadas e vinculadas
+      // aos IDs que acabamos de receber. A resposta do POST nao basta.
+      activeStage = "verification";
+      const live = await metaJson(graphUrl(created.campaign_id, { fields: "id,name,account_id,status,effective_status", access_token: token }));
+      if (numericId(live?.id) !== numericId(created.campaign_id) ||
+          numericId(live?.account_id) !== accountId ||
+          clean(live?.status, 20).toUpperCase() !== "PAUSED") {
         return await fail("verification", new Error(`Campanha criada mas com status inesperado: ${live?.status}.`), created);
       }
+      const adsetCheck = await metaJson(graphUrl(created.adset_id, {
+        fields: "id,campaign_id,status", access_token: token,
+      }));
+      if (numericId(adsetCheck?.id) !== numericId(created.adset_id) ||
+          numericId(adsetCheck?.campaign_id) !== numericId(created.campaign_id) ||
+          clean(adsetCheck?.status, 20).toUpperCase() !== "PAUSED")
+        return await fail("verification_adset", new Error("Conjunto nao confirmado na Meta."), created);
       for (const adId of created.ad_ids) {
-        const adCheck = await metaJson(graphUrl(adId, { fields: "id,status", access_token: token }));
-        if (clean(adCheck?.status, 20).toUpperCase() !== "PAUSED") {
+        const adCheck = await metaJson(graphUrl(adId, { fields: "id,adset_id,status", access_token: token }));
+        if (numericId(adCheck?.id) !== numericId(adId) ||
+            numericId(adCheck?.adset_id) !== numericId(created.adset_id) ||
+            clean(adCheck?.status, 20).toUpperCase() !== "PAUSED") {
           return await fail("verification_ads", new Error(`Anúncio ${adId} não está pausado.`), created);
         }
       }
@@ -1527,7 +1600,7 @@ Deno.serve(async (req: Request) => {
         note: "Tudo criado PAUSADO. Revise no Gerenciador de Anúncios e ative por lá ou pela Central de Tráfego.",
       });
     } catch (error) {
-      return await fail("unexpected", error, created);
+      return await fail(activeStage, error, created);
     }
   }
 

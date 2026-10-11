@@ -58,7 +58,7 @@ const guidedToPrompt=(g:Guided):string=>([
 const statusLabel: Record<string, string> = {
   DRAFTED: "Rascunho",
   EXECUTING: "Criando…",
-  CREATED: "Criada (pausada)",
+  CREATED: "Criada na Meta",
   FAILED: "Falhou",
   DISCARDED: "Descartada",
 };
@@ -100,6 +100,11 @@ const errorMessages: Record<string, string> = {
   budget_missing: "Defina o orçamento diário antes de criar.",
   site_url_missing: "Informe a URL do site.",
   lead_form_missing: "Crie ou selecione o formulário nativo antes de confirmar a campanha.",
+  lead_form_read_denied: "Não foi possível consultar o formulário na Meta. Confira as permissões da Página e de leads.",
+  lead_form_page_mismatch: "O formulário informado pertence a outra Página do Facebook. Selecione o da Página deste cliente.",
+  lead_form_not_active: "O formulário está arquivado, em rascunho ou indisponível. Selecione um formulário ATIVO.",
+  execution_failed: "A Meta recusou uma etapa da criação. Confira abaixo a causa antes de tentar novamente.",
+  campaign_created_persistence_failed: "A Meta criou objetos, mas o registro local falhou. Não crie de novo; verifique os IDs no histórico.",
   meta_token_missing: "Token de escrita da Meta não configurado. Avise a gestão.",
   meta_write_permission_missing: "O token da agência não tem permissão de escrita (ads_management).",
   meta_account_access_missing: "O token da agência não acessa a conta de anúncio deste cliente.",
@@ -333,7 +338,10 @@ export default function CampaignCreatePage() {
       const { ok, body } = await api({ action: "EXECUTE", request_id: draft.request_id, confirmation: "CRIAR", overrides });
       if (!ok) {
         setDraftError(friendlyError(body, "A criação falhou. Nenhuma campanha foi ativada.") +
-          (body?.stage ? ` Etapa: ${body.stage}.` : ""));
+          (body?.detail ? ` Detalhe Meta: ${String(body.detail).slice(0, 230)}.` : "") +
+          (body?.stage ? ` Etapa: ${body.stage}.` : "") +
+          (body?.meta_code ? ` Código: ${body.meta_code}.` : "") +
+          (body?.rollback_incomplete ? " Atenção: a reversão ficou incompleta. Confira o histórico antes de nova tentativa." : ""));
         await loadBoot();
         return;
       }
