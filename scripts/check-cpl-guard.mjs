@@ -57,6 +57,7 @@ const base = {
 };
 let codes = L.diagnose(base).map((s) => s.code);
 assert.ok(codes.includes("LOW_CTR"), "CTR 0,3% contra 1% da conta");
+assert.ok(L.diagnose(base).find((s) => s.code === "LOW_CTR").text.includes("0,30% contra 1,00%"), "decimal com vírgula");
 assert.ok(codes.includes("CLICKS_NO_LEAD"), "9 cliques e nenhum lead");
 assert.ok(codes.includes("WAS_GOOD"), "vinha bem em 7 dias");
 assert.ok(!codes.includes("HIGH_CPM"));

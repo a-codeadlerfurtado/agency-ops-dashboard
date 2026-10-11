@@ -365,7 +365,7 @@ async function enrich(ev: Row, cfg: Row) {
       cpl_ideal: cpl,
       limite_do_dia: facts.threshold_brl,
       horas_desde_criacao: facts.hours_since_created !== null ? Math.round(facts.hours_since_created) : null,
-      aprendizado: facts.learning_status,
+      aprendizado: facts.learning_status ? (L.LEARNING_PT[facts.learning_status] || facts.learning_status) : null,
       hoje: compact(today),
       ultimos_7_dias: compact(last7),
       conta_7_dias_campanhas_de_lead: compact(acc),

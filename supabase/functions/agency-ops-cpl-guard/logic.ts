@@ -14,6 +14,16 @@ export function num(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+export function dec(v: number, digits = 2): string {
+  return v.toFixed(digits).replace(".", ",");
+}
+
+export const LEARNING_PT: Record<string, string> = {
+  SUCCESS: "aprendizado concluído",
+  LEARNING: "em fase de aprendizado",
+  FAIL: "aprendizado limitado",
+};
+
 export function brl(v: number | null | undefined): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return "R$ -";
   return "R$ " + v.toFixed(2).replace(".", ",").replace(/\B(?=(\d{3})+(?!\d))/g, ".");
@@ -134,7 +144,7 @@ export function diagnose(f: Facts): Signal[] {
     out.push({ code: "LOW_DELIVERY", text: `Entregou pouco hoje (${impressions} impressões): leilão caro ou público muito restrito.` });
   }
   if (ctr !== null && accCtr !== null && accCtr > 0 && impressions >= 400 && ctr < accCtr * 0.6) {
-    out.push({ code: "LOW_CTR", text: `O criativo não está fazendo a pessoa clicar: CTR de link ${ctr.toFixed(2)}% contra ${accCtr.toFixed(2)}% da conta nos últimos 7 dias.` });
+    out.push({ code: "LOW_CTR", text: `O criativo não está fazendo a pessoa clicar: CTR de link ${dec(ctr)}% contra ${dec(accCtr)}% da conta nos últimos 7 dias.` });
   }
   if (clicks >= 8 || (ctr !== null && accCtr !== null && accCtr > 0 && ctr >= accCtr && clicks >= 4)) {
     out.push({ code: "CLICKS_NO_LEAD", text: `Teve ${clicks} cliques no link e nenhum lead: o problema tende a estar depois do clique (formulário, mensagem do WhatsApp ou página), não no criativo.` });
@@ -143,7 +153,7 @@ export function diagnose(f: Facts): Signal[] {
     out.push({ code: "HIGH_CPM", text: `CPM alto: ${brl(cpm)} contra ${brl(accCpm)} da conta. Público pequeno, sobreposição ou concorrência no leilão.` });
   }
   if (freq7 !== null && freq7 >= 3) {
-    out.push({ code: "FATIGUE", text: `Frequência de ${freq7.toFixed(1)} em 7 dias: o público já viu muito esse anúncio (saturação).` });
+    out.push({ code: "FATIGUE", text: `Frequência de ${dec(freq7, 1)} em 7 dias: o público já viu muito esse anúncio (saturação).` });
   }
   const below = Object.entries(f.rankings || {}).filter(([, v]) => String(v || "").startsWith("BELOW_AVERAGE"));
   if (below.length) {
