@@ -706,8 +706,11 @@ function placementCreativeSpec(plan: Row, pageId: string, instagramId: string,
         customization_spec: { publisher_platforms: ["facebook", "instagram", "messenger"],
           facebook_positions: ["story", "facebook_reels"], instagram_positions: ["story", "reels", "ig_search"],
           messenger_positions: ["story"] } },
+      // Regra "pega tudo" para os demais posicionamentos, igual ao Gerenciador. Com
+      // publisher_platforms aqui a Meta conta 0 regras para feed/marketplace/etc. e o
+      // anuncio NAO veicula nesses posicionamentos (validado na conta NC em 11/10/2026).
       { priority: 2, [isVideo ? "video_label" : "image_label"]: { name: feedLabel },
-        customization_spec: { publisher_platforms: ["facebook", "instagram", "messenger", "audience_network"] } },
+        customization_spec: { age_min: 13, age_max: 65 } },
     ],
   };
   if (plan.ad.description) spec.descriptions = [{ text: plan.ad.description }];
