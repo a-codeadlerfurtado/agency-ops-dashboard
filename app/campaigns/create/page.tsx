@@ -565,6 +565,8 @@ export default function CampaignCreatePage() {
               result.campaign_status === "PAUSED" ? "Campanha criada e pausada na Meta" :
               "Campanha criada; confirme o status na Meta"}: {result.campaign_name}</b>
             <div style={{ marginTop: 8 }}>IDs reais — campanha {result.campaign_id} · conjunto {result.adset_id} · anúncios {(result.ad_ids || [result.ad_id]).join(", ")}.</div>
+            {result.placement?.pairs ? <div style={{ marginTop: 6 }}>{result.placement.pairs} {result.placement.pairs === 1 ? "anúncio criado" : "anúncios criados"} com versão feed e versão story no mesmo anúncio.</div> : null}
+            {(result.placement?.fallbacks || []).length ? <div style={{ marginTop: 6, color: "#ffcf7a" }}>Atenção: {(result.placement.fallbacks || []).length} par(es) feed+story foram criados como anúncios separados ({(result.placement.fallbacks || []).map((f: Row) => f.reason === "instagram_missing" ? "Instagram não vinculado à Página" : "Meta recusou a personalização").join("; ")}).</div> : null}
             {result.activation_error ? <div style={{ marginTop: 8, color: "#ffbd9e" }}>
               Falha na ativação: {result.activation_error}. Não repita a criação; use o histórico e confira o status na Meta.
             </div> : <div style={{ marginTop: 8 }}>
@@ -825,6 +827,22 @@ export default function CampaignCreatePage() {
                     <div className="cb-kv" style={{ marginTop: 10 }}>
                       <span>CTA</span><b>{plan.ad?.cta}</b>
                       <span>Criativos</span><b>{(creatives.length ? creatives.map((c) => c.file_name) : files.map((f) => f.name)).join(", ") || "—"}</b>
+                      {Array.isArray(draft.ad_units) && draft.ad_units.length > 0 ? <>
+                        <span>Anúncios</span>
+                        <b>
+                          {draft.ad_units.length} {draft.ad_units.length === 1 ? "anúncio" : "anúncios"}
+                          {draft.ad_units.some((u: Row) => u.kind === "FEED_STORY") ? " (feed e story juntos no mesmo anúncio)" : ""}
+                          <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontWeight: 400 }}>
+                            {draft.ad_units.map((u: Row, i: number) => (
+                              <li key={i}>
+                                {u.kind === "FEED_STORY"
+                                  ? `${i + 1}: feed ${u.files?.[0] || ""} + story ${u.files?.[1] || ""}`
+                                  : `${i + 1}: ${u.files?.[0] || ""} (${u.orientation === "STORY" ? "story" : u.orientation === "FEED" ? "feed" : "formato não identificado"}, todos os posicionamentos)`}
+                              </li>
+                            ))}
+                          </ul>
+                        </b>
+                      </> : null}
                     </div>
                   </>
                 )}
