@@ -134,7 +134,10 @@ begin
   end if;
   select net.http_post(
     url := 'https://bfzdetibfcwihfkltbkp.supabase.co/functions/v1/agency-ops-cpl-guard',
-    headers := jsonb_build_object('Content-Type', 'application/json', 'x-cpl-guard-secret', v_secret),
+    headers := jsonb_build_object(
+      'Content-Type', 'application/json',
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' limit 1),
+      'x-cpl-guard-secret', v_secret),
     body := jsonb_build_object('action', p_action, 'client_id', p_client_id),
     timeout_milliseconds := 300000
   ) into v_request_id;
