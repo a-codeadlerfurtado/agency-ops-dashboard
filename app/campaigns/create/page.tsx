@@ -110,7 +110,7 @@ const errorMessages: Record<string, string> = {
   meta_account_access_missing: "O token da agência não acessa a conta de anúncio deste cliente.",
   file_too_large: "Arquivo acima de 25 MB. Comprima ou use outra versão.",
   unsupported_file_type: "Só imagem ou vídeo.",
-  confirmation_required: "Digite CRIAR para confirmar.",
+  confirmation_required: "A confirmação de criação não foi reconhecida. Clique em Criar campanha novamente, sem digitar nenhuma palavra.",
   activation_confirmation_required: "Digite ATIVAR para confirmar a campanha.",
   campaign_not_created: "Somente campanhas realmente criadas na Meta podem ser ativadas.",
   activation_ids_missing: "Faltam IDs reais de campanha, conjunto ou anuncio. A ativacao foi bloqueada.",
