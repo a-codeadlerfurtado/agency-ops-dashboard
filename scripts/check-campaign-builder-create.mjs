@@ -7,15 +7,15 @@ import ts from "typescript";
 const path = "supabase/functions/agency-ops-campaign-builder-api/index.ts";
 const source = fs.readFileSync(path, "utf8");
 const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-const names = new Set(["buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink", "successMetadata"]);
+const names = new Set(["buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink", "successMetadata", "mediaDimensions", "creativeOrientation", "creativeBaseName", "pairCreatives", "placementCreativeSpec", "adUnitsSummary", "unpairedForVision", "parseVisionPairs", "hintsFromStored", "agreedVisionPairs"]);
 const declarations = ast.statements.filter(s => ts.isFunctionDeclaration(s) && names.has(s.name?.text)).map(s => s.getText(ast));
 assert.equal(declarations.length, names.size, "All payload/guard functions must exist");
 const js = ts.transpileModule(declarations.join("\n"), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
-const ctx = vm.createContext({ URL });
-vm.runInContext(js + "\nthis.builder = { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata };", ctx);
-const { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata } = ctx.builder;
+const ctx = vm.createContext({ URL, String, Uint8Array, Map });
+vm.runInContext(js + "\nthis.builder = { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs };", ctx);
+const { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs } = ctx.builder;
 const p = {
   campaign: { objective: "OUTCOME_LEADS" },
   adset: {
@@ -73,4 +73,95 @@ assert.match(source, /lead_form_page_mismatch/);
 assert.match(source, /\.eq\("status", "DRAFTED"\)\.select\("id"\)\.maybeSingle\(\)/);
 assert.match(source, /rollback_incomplete/);
 assert.ok(source.indexOf("// Overrides limitados") < source.indexOf("const finalBudget"), "Budget must be checked after overrides");
-console.log("Campaign Builder create regression guard: OK (lead form, site, targeting, budget, ownership, duplicate guard)");
+
+// --- feed x story ---
+const be32 = (n) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+const png = (w, h) => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, ...be32(w), ...be32(h), 8, 6, 0, 0, 0]);
+assert.deepEqual({ ...mediaDimensions(png(1080, 1350), "IMAGE") }, { width: 1080, height: 1350 });
+const jpeg = (w, h, orient) => {
+  const exif = orient ? [0xff, 0xe1, 0, 34, 0x45, 0x78, 0x69, 0x66, 0, 0, 0x4d, 0x4d, 0, 42, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, orient, 0, 0, 0, 0, 0, 0] : [];
+  return new Uint8Array([0xff, 0xd8, ...exif, 0xff, 0xc0, 0, 17, 8, (h >> 8) & 255, h & 255, (w >> 8) & 255, w & 255, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xd9]);
+};
+assert.deepEqual({ ...mediaDimensions(jpeg(1080, 1920), "IMAGE") }, { width: 1080, height: 1920 });
+assert.deepEqual({ ...mediaDimensions(jpeg(1920, 1080, 6), "IMAGE") }, { width: 1080, height: 1920 }, "EXIF rotation swaps dims");
+const tkhd = (w, h, rotated) => {
+  const box = new Uint8Array(92); box.set(be32(92), 0); box.set([0x74, 0x6b, 0x68, 0x64], 4);
+  const m = rotated ? [0, 0x10000, 0, -0x10000, 0, 0, 0, 0, 0x40000000] : [0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000];
+  m.forEach((v, k) => box.set(be32(v >>> 0), 48 + k * 4));
+  box.set(be32(w * 65536), 84); box.set(be32(h * 65536), 88); return box;
+};
+const mp4 = (w, h, r) => { const b = new Uint8Array(400); b.set(tkhd(0, 0, false), 20); b.set(tkhd(w, h, r), 150); return b; };
+assert.deepEqual({ ...mediaDimensions(mp4(1080, 1920, false), "VIDEO") }, { width: 1080, height: 1920 });
+assert.deepEqual({ ...mediaDimensions(mp4(1920, 1080, true), "VIDEO") }, { width: 1080, height: 1920 }, "rotated phone video");
+assert.equal(mediaDimensions(new Uint8Array([1, 2, 3]), "IMAGE"), null);
+assert.equal(creativeOrientation({ width: 1080, height: 1920 }), "STORY");
+assert.equal(creativeOrientation({ width: 1080, height: 1350 }), "FEED");
+assert.equal(creativeOrientation({ width: 1080, height: 1080 }), "FEED");
+assert.equal(creativeOrientation({ file_name: "Criativo 2 - STORIES.png" }), "STORY");
+assert.equal(creativeOrientation({ file_name: "criativo2_4x5.jpg" }), "FEED");
+assert.equal(creativeOrientation({ file_name: "foto.jpg" }), null);
+assert.equal(creativeBaseName("Criativo 1 - Story.MP4"), "criativo 1");
+assert.equal(creativeBaseName("criativo_1_feed.mp4"), "criativo 1");
+assert.equal(creativeBaseName("Martim 1080x1920.png"), "martim");
+const mk = (file_name, type, orientation) => ({ file_name, type, orientation });
+// two variations x two formats -> two ads
+let units = pairCreatives([mk("v1 feed.png", "IMAGE", "FEED"), mk("v1 story.png", "IMAGE", "STORY"), mk("v2 feed.png", "IMAGE", "FEED"), mk("v2 story.png", "IMAGE", "STORY")]);
+assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 0, story: 1, via: "NAME" }, { feed: 2, story: 3, via: "NAME" }]);
+// names match even out of order
+units = pairCreatives([mk("B story.png", "IMAGE", "STORY"), mk("A feed.png", "IMAGE", "FEED"), mk("A story.png", "IMAGE", "STORY"), mk("B feed.png", "IMAGE", "FEED")]);
+assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 3, story: 0, via: "NAME" }, { feed: 1, story: 2, via: "NAME" }]);
+// no name relation -> never paired by upload order (singles) ...
+const loose = [mk("x.png", "IMAGE", "FEED"), mk("y.png", "IMAGE", "FEED"), mk("z.png", "IMAGE", "STORY"), mk("w.png", "IMAGE", "STORY")];
+units = pairCreatives(loose);
+assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ single: 0 }, { single: 1 }, { single: 2 }, { single: 3 }]);
+// ... unless the vision AI suggested the pair (hint), validated against real orientation
+units = pairCreatives(loose, [{ feed: 0, story: 3 }, { feed: 1, story: 0 }]);
+assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 0, story: 3, via: "AI" }, { single: 1 }, { single: 2 }]);
+// name wins over AI hint
+units = pairCreatives([mk("A feed.png", "IMAGE", "FEED"), mk("A story.png", "IMAGE", "STORY")], [{ feed: 0, story: 1 }]);
+assert.equal(units[0].via, "NAME");
+const pend = unpairedForVision([mk("A feed.png", "IMAGE", "FEED"), mk("A story.png", "IMAGE", "STORY"), ...loose]);
+assert.deepEqual(JSON.parse(JSON.stringify(pend)), { feeds: [2, 3], stories: [4, 5] });
+assert.equal(unpairedForVision([mk("A feed.png", "IMAGE", "FEED"), mk("A story.png", "IMAGE", "STORY")]), null);
+assert.equal(unpairedForVision([mk("x.png", "IMAGE", "FEED"), mk("z.png", "IMAGE", "STORY")]), null, "single candidate is never sent to AI");
+const vp = parseVisionPairs({ pairs: [{ feed: "F1", story: "S2", confidence: 0.93 }, { feed: "F2", story: "S2", confidence: 0.99 }, { feed: "F2", story: "S1", confidence: 0.85 }, { feed: "F9", story: "S1", confidence: 0.99 }] }, [2, 3], [4, 5]);
+assert.deepEqual(JSON.parse(JSON.stringify(vp)), [{ feed: 2, story: 5, confidence: 0.93 }]);
+assert.deepEqual(JSON.parse(JSON.stringify(parseVisionPairs({ nope: 1 }, [1], [2]))), []);
+const agreed = agreedVisionPairs([{ feed: 2, story: 5, confidence: 0.95 }, { feed: 3, story: 4, confidence: 0.97 }], [{ feed: 2, story: 5, confidence: 0.91 }, { feed: 3, story: 5, confidence: 0.99 }]);
+assert.deepEqual(JSON.parse(JSON.stringify(agreed)), [{ feed: 2, story: 5, confidence: 0.91 }]);
+const hs = hintsFromStored([{ path: "a" }, { path: "b" }, { path: "c" }], [{ feed_path: "c", story_path: "a" }, { feed_path: "x", story_path: "b" }]);
+assert.deepEqual(JSON.parse(JSON.stringify(hs)), [{ feed: 2, story: 0 }]);
+// image never pairs with video; unknown stays single
+units = pairCreatives([mk("a feed.png", "IMAGE", "FEED"), mk("a story.mp4", "VIDEO", "STORY"), mk("c.png", "IMAGE", null)]);
+assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ single: 0 }, { single: 1 }, { single: 2 }]);
+// real NC upload naming: STORY (2), feed (2), STORY (1), feed (1) -> 2 ads
+units = pairCreatives([mk("[NC] - Criativos STORY - AP MARTIM PRAIA CLUBE (2).png", "IMAGE", "STORY"), mk("[NC] - Criativos - AP MARTIM PRAIA CLUBE (2).png", "IMAGE", "FEED"), mk("[NC] - Criativos STORY - AP MARTIM PRAIA CLUBE (1).png", "IMAGE", "STORY"), mk("[NC] - Criativos - AP MARTIM PRAIA CLUBE (1).png", "IMAGE", "FEED")]);
+assert.deepEqual(JSON.parse(JSON.stringify(units)), [{ feed: 1, story: 0, via: "NAME" }, { feed: 3, story: 2, via: "NAME" }]);
+const legacy = adUnitsSummary(["[NC] - Criativos STORY - AP MARTIM PRAIA CLUBE (2).png", "[NC] - Criativos - AP MARTIM PRAIA CLUBE (2).png", "[NC] - Criativos STORY - AP MARTIM PRAIA CLUBE (1).png", "[NC] - Criativos - AP MARTIM PRAIA CLUBE (1).png"].map((f) => ({ file_name: f, type: "IMAGE", orientation: creativeOrientation({ file_name: f }) })));
+assert.equal(legacy.length, 2);
+assert.ok(legacy.every((u) => u.kind === "FEED_STORY"));
+// only feeds -> one ad each (old behaviour)
+assert.equal(pairCreatives([mk("a.png", "IMAGE", "FEED"), mk("b.png", "IMAGE", "FEED")]).length, 2);
+assert.equal(adUnitsSummary([mk("v1 feed.png", "IMAGE", "FEED"), mk("v1 story.png", "IMAGE", "STORY")])[0].kind, "FEED_STORY");
+const pc = placementCreativeSpec(p, "132141753324688", "17841403012425516", { hash: "feedhash" }, { hash: "storyhash" }, "https://www.ncimoveis.com/", "cb_x_1");
+const afs = JSON.parse(JSON.stringify(pc.asset_feed_spec));
+assert.equal(pc.object_story_spec.instagram_user_id, "17841403012425516");
+assert.equal(afs.optimization_type, "PLACEMENT");
+assert.deepEqual(afs.ad_formats, ["SINGLE_IMAGE"]);
+assert.equal(afs.images.length, 2);
+assert.equal(afs.asset_customization_rules.length, 2);
+const storyRule = afs.asset_customization_rules.find((r) => r.priority === 1);
+assert.equal(storyRule.image_label.name, "cb_x_1_story");
+assert.ok(storyRule.customization_spec.instagram_positions.includes("story"));
+assert.ok(storyRule.customization_spec.facebook_positions.includes("story"));
+assert.equal(afs.images.find((i) => i.adlabels[0].name === "cb_x_1_story").hash, "storyhash");
+assert.equal(afs.call_to_actions[0].value.lead_gen_form_id, "1802574407825742");
+const feedRule = afs.asset_customization_rules.find((r) => r.priority === 2);
+assert.equal(feedRule.image_label.name, "cb_x_1_feed");
+assert.equal(feedRule.customization_spec.publisher_platforms, undefined, "feed rule must be catch-all, or Meta skips feed placements");
+assert.equal(afs.link_urls[0].website_url, "https://www.ncimoveis.com/");
+const pv = placementCreativeSpec(p, "1", "2", { video: { id: "v1", thumb: "t1" } }, { video: { id: "v2", thumb: "t2" } }, "https://x.com/", "l");
+assert.deepEqual(JSON.parse(JSON.stringify(pv.asset_feed_spec.ad_formats)), ["SINGLE_VIDEO"]);
+assert.equal(pv.asset_feed_spec.asset_customization_rules[0].video_label.name, "l_story");
+assert.match(source, /placement\.fallbacks\.push/);
+console.log("Campaign Builder create regression guard: OK (feed+story pairing, name first, AI fallback) (lead form, site, targeting, budget, ownership, duplicate guard)");

@@ -340,6 +340,41 @@ async function callPlanner(ops: any, prompt: string, context: Row) {
   throw new Error("planner_incomplete");
 }
 
+const VISION_PAIR_PROMPT = `Voce recebe artes de anuncios imobiliarios. As marcadas F1, F2... sao versoes FEED (1:1 ou 4:5) e as marcadas S1, S2... sao versoes STORY (9:16).
+A producao entrega cada peca nas duas versoes: mesma foto ou cena principal, mesmo titulo, mesma oferta, mesmo preco e mesma identidade visual, apenas diagramada em outra proporcao.
+Tarefa: dizer qual STORY e a mesma peca de qual FEED.
+Regras:
+- So pareie quando tiver certeza de que e a MESMA peca. Pecas diferentes do mesmo imovel (titulo, oferta, preco ou chamada diferentes) NAO sao a mesma peca.
+- Variacoes costumam ter os MESMOS textos e trocar so as fotos. Por isso compare primeiro as fotos: a mesma peca usa as mesmas fotos, na mesma ordem e posicao relativa (o que esta em cima no feed continua em cima no story). Se a foto principal for outra ou a ordem das fotos mudar, NAO e a mesma peca, mesmo com textos iguais.
+- Nao force um par so porque existe um unico F e um unico S.
+- Cada F e cada S aparece no maximo uma vez. Pode sobrar F ou S sem par.
+- confidence de 0 a 1. Use menos de 0.8 quando houver qualquer duvida.
+Responda somente JSON: {"pairs":[{"feed":"F1","story":"S2","confidence":0.95,"reason":"curto"}]}`;
+
+/** Fallback do pareamento por nome: a IA olha as artes e sugere os pares feed + story. */
+async function visionPairCreatives(ops: any, feedUrls: string[], storyUrls: string[]) {
+  const { data: vaultKey } = await ops.rpc("get_secret", { p_name: "OPENAI_API_KEY" });
+  const key = typeof vaultKey === "string" && vaultKey.trim() ? vaultKey.trim() : clean(Deno.env.get("OPENAI_API_KEY"), 2000);
+  if (!key) throw new Error("vision_not_configured");
+  const { data: modelSetting } = await ops.from("automation_settings").select("value").eq("key", "CAMPAIGN_BUILDER_VISION_MODEL").maybeSingle();
+  const model = clean(modelSetting?.value, 60) || clean(Deno.env.get("CAMPAIGN_BUILDER_VISION_MODEL"), 60) || "gpt-5-mini";
+  const content: Row[] = [{ type: "text", text: VISION_PAIR_PROMPT }];
+  feedUrls.forEach((url, i) => { content.push({ type: "text", text: `F${i + 1}` }); content.push({ type: "image_url", image_url: { url, detail: "high" } }); });
+  storyUrls.forEach((url, i) => { content.push({ type: "text", text: `S${i + 1}` }); content.push({ type: "image_url", image_url: { url, detail: "high" } }); });
+  const payload: Row = { model, response_format: { type: "json_object" }, max_completion_tokens: 3000, messages: [{ role: "user", content }] };
+  if (/^gpt-5/i.test(model)) payload.reasoning_effort = "low";
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(60000),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(`openai ${response.status}: ${raw.slice(0, 200)}`);
+  const text = JSON.parse(raw)?.choices?.[0]?.message?.content;
+  return { model, result: parseJsonText(String(text || "{}")) };
+}
+
 async function resolveGeo(token: string, cities: string[]) {
   const resolved: Row[] = [];
   const unresolved: string[] = [];
@@ -485,6 +520,240 @@ function creativeSpec(plan: Row, pageId: string, instagramId: string | null, ima
   return spec;
 }
 
+// --- Feed x Story -----------------------------------------------------------
+// A producao entrega cada variacao em dois formatos (feed 1:1/4:5 e story 9:16).
+// Cada par vira UM anuncio com personalizacao de posicionamento (asset_feed_spec),
+// em vez de dois anuncios separados.
+
+/** Largura/altura reais lidas do arquivo (PNG, JPEG com EXIF, WebP, GIF, MP4/MOV). */
+function mediaDimensions(bytes: Uint8Array, kind: string): { width: number; height: number } | null {
+  const n = bytes.length;
+  const u16 = (o: number) => (bytes[o] << 8) | bytes[o + 1];
+  const u32 = (o: number) => ((bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3]) >>> 0;
+  const s32 = (o: number) => (bytes[o] << 24) | (bytes[o + 1] << 16) | (bytes[o + 2] << 8) | bytes[o + 3];
+  const ascii = (o: number, len: number) => String.fromCharCode(...bytes.subarray(o, o + len));
+  const ok = (w: number, h: number) => (w > 0 && h > 0 && w < 20000 && h < 20000 ? { width: w, height: h } : null);
+  if (kind === "IMAGE") {
+    if (n > 24 && bytes[0] === 0x89 && ascii(1, 3) === "PNG") return ok(u32(16), u32(20));
+    if (n > 10 && ascii(0, 3) === "GIF") return ok(bytes[6] | (bytes[7] << 8), bytes[8] | (bytes[9] << 8));
+    if (n > 30 && ascii(0, 4) === "RIFF" && ascii(8, 4) === "WEBP") {
+      const chunk = ascii(12, 4);
+      if (chunk === "VP8X") return ok(1 + (bytes[24] | (bytes[25] << 8) | (bytes[26] << 16)), 1 + (bytes[27] | (bytes[28] << 8) | (bytes[29] << 16)));
+      if (chunk === "VP8 ") return ok((bytes[26] | (bytes[27] << 8)) & 0x3fff, (bytes[28] | (bytes[29] << 8)) & 0x3fff);
+      if (chunk === "VP8L") return ok(1 + (((bytes[22] & 0x3f) << 8) | bytes[21]), 1 + (((bytes[24] & 0x0f) << 10) | (bytes[23] << 2) | ((bytes[22] & 0xc0) >> 6)));
+      return null;
+    }
+    if (n > 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+      let o = 2, rotate = false;
+      while (o + 9 < n) {
+        if (bytes[o] !== 0xff) { o++; continue; }
+        const marker = bytes[o + 1];
+        if (marker === 0xff) { o++; continue; }
+        if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { o += 2; continue; }
+        const len = u16(o + 2);
+        if (marker === 0xe1 && ascii(o + 4, 4) === "Exif") {
+          const t = o + 10, le = ascii(t, 2) === "II";
+          const r16 = (p: number) => le ? bytes[p] | (bytes[p + 1] << 8) : u16(p);
+          const r32 = (p: number) => le ? (bytes[p] | (bytes[p + 1] << 8) | (bytes[p + 2] << 16) | (bytes[p + 3] << 24)) >>> 0 : u32(p);
+          const ifd = t + r32(t + 4), count = ifd + 2 < n ? r16(ifd) : 0;
+          for (let i = 0; i < count && ifd + 2 + i * 12 + 10 < n; i++) {
+            const e = ifd + 2 + i * 12;
+            if (r16(e) === 0x0112) { rotate = r16(e + 8) >= 5 && r16(e + 8) <= 8; break; }
+          }
+        }
+        if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+          const h = u16(o + 5), w = u16(o + 7);
+          return rotate ? ok(h, w) : ok(w, h);
+        }
+        if (len < 2) return null;
+        o += 2 + len;
+      }
+    }
+    return null;
+  }
+  // MP4/MOV: maior trilha de video em 'tkhd' (respeitando rotacao da matriz).
+  let best: { width: number; height: number } | null = null;
+  for (let i = 4; i + 100 < n; i++) {
+    if (bytes[i] !== 0x74 || bytes[i + 1] !== 0x6b || bytes[i + 2] !== 0x68 || bytes[i + 3] !== 0x64) continue;
+    const start = i - 4, version = bytes[i + 4];
+    if (version > 1) continue;
+    const wOff = start + (version === 1 ? 96 : 84);
+    if (wOff + 8 > n) continue;
+    let w = Math.round(u32(wOff) / 65536), h = Math.round(u32(wOff + 4) / 65536);
+    const a = s32(wOff - 36), b = s32(wOff - 32);
+    if (Math.abs(b) > Math.abs(a)) [w, h] = [h, w];
+    const dims = ok(w, h);
+    if (dims && (!best || dims.width * dims.height > best.width * best.height)) best = dims;
+  }
+  return best;
+}
+
+/** FEED (1:1, 4:5, paisagem) ou STORY (9:16). Sem dimensao, usa pistas do nome do arquivo. */
+function creativeOrientation(item: { width?: unknown; height?: unknown; file_name?: unknown }): "FEED" | "STORY" | null {
+  const w = Number(item?.width), h = Number(item?.height);
+  if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) return w / h <= 0.7 ? "STORY" : "FEED";
+  const name = String(item?.file_name || "").toLowerCase();
+  if (/(stor(y|ies)|reels?|vertical|9\s*[x:×_-]\s*16|1080\s*[x×]\s*1920)/.test(name)) return "STORY";
+  if (/(feed|quadrad|square|4\s*[x:×_-]\s*5|1\s*[x:×_-]\s*1(?!\d)|1080\s*[x×]\s*(1350|1080))/.test(name)) return "FEED";
+  return null;
+}
+
+/** Nome da variacao sem extensao, medidas e palavras de formato. "Criativo 1 - Story.mp4" -> "criativo 1". */
+function creativeBaseName(name: unknown): string {
+  return String(name || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .replace(/\.[a-z0-9]{2,5}$/, "")
+    .replace(/\d{3,4}\s*[x×]\s*\d{3,4}/g, " ")
+    .replace(/(^|[^0-9])(9\s*[x:×_-]\s*16|4\s*[x:×_-]\s*5|1\s*[x:×_-]\s*1|16\s*[x:×_-]\s*9)(?![0-9])/g, "$1 ")
+    .replace(/stories|story|reels?|vertical|feed|quadrado|square|copia|copy/g, " ")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+/**
+ * Agrupa os criativos em unidades de anuncio. Um par = feed + story do mesmo tipo
+ * (imagem com imagem, video com video). Prioridade: (1) mesmo nome de variacao;
+ * (2) pares sugeridos pela IA de visao (hints), so se o formato real confirmar.
+ * Nunca pareia "no chute" pela ordem de envio. O que sobrar vira anuncio unico.
+ */
+function pairCreatives(items: Array<{ type?: unknown; file_name?: unknown; orientation?: unknown }>,
+  hints: Array<{ feed: number; story: number }> = []): Array<{ feed?: number; story?: number; single?: number; via?: string }> {
+  const units: Array<{ feed?: number; story?: number; single?: number; via?: string; order: number }> = [];
+  const used = new Set<number>();
+  for (const kind of ["IMAGE", "VIDEO"]) {
+    const feeds = items.map((it, i) => ({ it, i })).filter(({ it }) => it?.type === kind && it?.orientation === "FEED").map(({ i }) => i);
+    const stories = items.map((it, i) => ({ it, i })).filter(({ it }) => it?.type === kind && it?.orientation === "STORY").map(({ i }) => i);
+    for (const s of stories) {
+      const base = creativeBaseName(items[s]?.file_name);
+      if (!base) continue;
+      const f = feeds.find((idx) => !used.has(idx) && creativeBaseName(items[idx]?.file_name) === base);
+      if (f === undefined) continue;
+      used.add(f); used.add(s);
+      units.push({ feed: f, story: s, via: "NAME", order: Math.min(f, s) });
+    }
+  }
+  for (const h of hints || []) {
+    const f = Number(h?.feed), s = Number(h?.story);
+    if (!Number.isInteger(f) || !Number.isInteger(s) || f === s || used.has(f) || used.has(s)) continue;
+    if (!items[f] || !items[s] || items[f].type !== items[s].type) continue;
+    if (items[f].orientation !== "FEED" || items[s].orientation !== "STORY") continue;
+    used.add(f); used.add(s);
+    units.push({ feed: f, story: s, via: "AI", order: Math.min(f, s) });
+  }
+  items.forEach((_, i) => { if (!used.has(i)) units.push({ single: i, order: i }); });
+  return units.sort((a, b) => a.order - b.order).map(({ order: _order, ...unit }) => unit);
+}
+
+/** Feeds e stories de imagem que o nome nao conseguiu parear (candidatos para a IA). */
+function unpairedForVision(items: Array<{ type?: unknown; file_name?: unknown; orientation?: unknown }>) {
+  const units = pairCreatives(items);
+  const singles = units.filter((u) => u.single !== undefined).map((u) => u.single!);
+  const feeds = singles.filter((i) => items[i]?.type === "IMAGE" && items[i]?.orientation === "FEED");
+  const stories = singles.filter((i) => items[i]?.type === "IMAGE" && items[i]?.orientation === "STORY");
+  // Com um unico feed e um unico story a IA nao tem com o que comparar e tende a forcar o par
+  // (testado com variacoes que so trocam a ordem das fotos). Nesse caso nao pareia.
+  return feeds.length >= 2 && stories.length >= 2 ? { feeds, stories } : null;
+}
+
+/** Valida a resposta da IA: so pares 1 para 1, com confianca alta, entre candidatos validos. */
+function parseVisionPairs(raw: unknown, feeds: number[], stories: number[]) {
+  const out: Array<{ feed: number; story: number; confidence: number }> = [];
+  const usedF = new Set<number>(), usedS = new Set<number>();
+  const pairs = Array.isArray((raw as any)?.pairs) ? (raw as any).pairs : [];
+  for (const p of pairs) {
+    const fi = Number(String(p?.feed || "").replace(/\D/g, "")) - 1;
+    const si = Number(String(p?.story || "").replace(/\D/g, "")) - 1;
+    const confidence = Number(p?.confidence);
+    if (!Number.isFinite(confidence) || confidence < 0.9) continue;
+    const f = feeds[fi], s = stories[si];
+    if (f === undefined || s === undefined || usedF.has(f) || usedS.has(s)) continue;
+    usedF.add(f); usedS.add(s);
+    out.push({ feed: f, story: s, confidence: Math.round(confidence * 100) / 100 });
+  }
+  return out;
+}
+
+/** Interseccao das duas leituras da IA: mesmo feed com o mesmo story, confianca minima. */
+function agreedVisionPairs(a: Array<{ feed: number; story: number; confidence: number }>, b: Array<{ feed: number; story: number; confidence: number }>) {
+  return a.filter((x) => b.some((y) => y.feed === x.feed && y.story === x.story))
+    .map((x) => ({ feed: x.feed, story: x.story, confidence: Math.min(x.confidence, b.find((y) => y.feed === x.feed && y.story === x.story)!.confidence) }));
+}
+
+/** Converte os pares salvos no rascunho (por caminho do arquivo) em indices da lista atual. */
+function hintsFromStored(items: Array<{ path?: unknown }>, stored: unknown) {
+  const list = Array.isArray(stored) ? stored : [];
+  const index = new Map(items.map((it, i) => [String(it?.path || ""), i]));
+  return list.map((h: any) => ({ feed: index.get(String(h?.feed_path || "")), story: index.get(String(h?.story_path || "")) }))
+    .filter((h) => h.feed !== undefined && h.story !== undefined) as Array<{ feed: number; story: number }>;
+}
+
+/** Criativo unico com versao feed e versao story (Personalizacao de posicionamento da Meta). */
+function placementCreativeSpec(plan: Row, pageId: string, instagramId: string,
+  feed: { hash?: string | null; video?: { id: string; thumb: string } | null },
+  story: { hash?: string | null; video?: { id: string; thumb: string } | null },
+  leadLink: string | null, labelPrefix: string) {
+  const dest = plan.adset.destination;
+  const link = dest.type === "LEAD_FORM" ? (leadLink || `https://www.facebook.com/${pageId}`) :
+    dest.type === "SITE" && dest.url ? dest.url : "https://api.whatsapp.com/send";
+  const feedLabel = `${labelPrefix}_feed`, storyLabel = `${labelPrefix}_story`;
+  const isVideo = Boolean(feed.video && story.video);
+  const spec: Row = {
+    bodies: [{ text: plan.ad.primary_text }],
+    titles: [{ text: plan.ad.headline }],
+    link_urls: [{ website_url: link }],
+    ad_formats: [isVideo ? "SINGLE_VIDEO" : "SINGLE_IMAGE"],
+    optimization_type: "PLACEMENT",
+    asset_customization_rules: [
+      { priority: 1, [isVideo ? "video_label" : "image_label"]: { name: storyLabel },
+        customization_spec: { publisher_platforms: ["facebook", "instagram", "messenger"],
+          facebook_positions: ["story", "facebook_reels"], instagram_positions: ["story", "reels", "ig_search"],
+          messenger_positions: ["story"] } },
+      // Regra "pega tudo" para os demais posicionamentos, igual ao Gerenciador. Com
+      // publisher_platforms aqui a Meta conta 0 regras para feed/marketplace/etc. e o
+      // anuncio NAO veicula nesses posicionamentos (validado na conta NC em 11/10/2026).
+      { priority: 2, [isVideo ? "video_label" : "image_label"]: { name: feedLabel },
+        customization_spec: { age_min: 13, age_max: 65 } },
+    ],
+  };
+  if (plan.ad.description) spec.descriptions = [{ text: plan.ad.description }];
+  if (isVideo) {
+    spec.videos = [
+      { video_id: feed.video!.id, thumbnail_url: feed.video!.thumb, adlabels: [{ name: feedLabel }] },
+      { video_id: story.video!.id, thumbnail_url: story.video!.thumb, adlabels: [{ name: storyLabel }] },
+    ];
+  } else {
+    spec.images = [{ hash: feed.hash, adlabels: [{ name: feedLabel }] }, { hash: story.hash, adlabels: [{ name: storyLabel }] }];
+  }
+  if (dest.type === "LEAD_FORM" && dest.lead_form_id) {
+    spec.call_to_action_types = ["SIGN_UP"];
+    spec.call_to_actions = [{ type: "SIGN_UP", value: { lead_gen_form_id: String(dest.lead_form_id) } }];
+  } else if (dest.type === "WHATSAPP") {
+    // Mesmo formato que o Gerenciador grava em anuncios de clique para WhatsApp com posicionamento.
+    spec.call_to_action_types = ["WHATSAPP_MESSAGE"];
+    spec.additional_data = { is_click_to_message: true };
+  } else {
+    spec.call_to_action_types = [plan.ad.cta || "LEARN_MORE"];
+  }
+  return { object_story_spec: { page_id: pageId, instagram_user_id: instagramId }, asset_feed_spec: spec };
+}
+
+/** Resumo para o preview: quantos anuncios e quais pares feed+story. */
+function adUnitsSummary(items: Row[], hints: Array<{ feed: number; story: number }> = []) {
+  // Rascunhos antigos nao tem medidas: arquivo sem pista no nome, com o mesmo nome
+  // de variacao de um story/feed, e tratado como o formato complementar (so no preview;
+  // na criacao as medidas reais do arquivo decidem).
+  const known = items.map((it) => ({ ...it }));
+  for (const it of known) {
+    if (it.orientation) continue;
+    const base = creativeBaseName(it.file_name);
+    const twin = known.find((o) => o !== it && o.type === it.type && o.orientation && creativeBaseName(o.file_name) === base);
+    if (base && twin) it.orientation = twin.orientation === "STORY" ? "FEED" : "STORY";
+  }
+  items = known;
+  const units = pairCreatives(items, hints);
+  return units.map((u) => u.single !== undefined
+    ? { kind: "SINGLE", files: [items[u.single]?.file_name || null], orientation: items[u.single]?.orientation || null }
+    : { kind: "FEED_STORY", via: u.via || "NAME", files: [items[u.feed!]?.file_name || null, items[u.story!]?.file_name || null] });
+}
+
 // ---------------------------------------------------------------------------
 
 Deno.serve(async (req: Request) => {
@@ -596,9 +865,13 @@ Deno.serve(async (req: Request) => {
     const up = await db.storage.from(BUCKET).upload(path, file, { contentType: file.type, upsert: false });
     if (up.error) return reply({ error: "upload_failed", detail: clean(up.error.message, 200) }, 500);
     const { data: signed } = await db.storage.from(BUCKET).createSignedUrl(path, 600);
+    const kind = isImage ? "IMAGE" : "VIDEO";
+    let dims: { width: number; height: number } | null = null;
+    try { dims = mediaDimensions(new Uint8Array(await file.arrayBuffer()), kind); } catch { dims = null; }
+    const described = { type: kind, file_name: clean(file.name, 200), width: dims?.width ?? null, height: dims?.height ?? null };
     return reply({
       ok: true,
-      creative: { bucket: BUCKET, path, type: isImage ? "IMAGE" : "VIDEO", file_name: clean(file.name, 200), preview_url: signed?.signedUrl || null },
+      creative: { bucket: BUCKET, path, ...described, orientation: creativeOrientation(described), preview_url: signed?.signedUrl || null },
     });
   }
 
@@ -926,12 +1199,22 @@ Deno.serve(async (req: Request) => {
     const inputs = Array.isArray(body?.creatives)
       ? body.creatives : (body?.creative ? [body.creative] : []);
     if (inputs.length > MAX_CREATIVES) return reply({ error: "too_many_creatives", max: MAX_CREATIVES }, 400);
-    const creatives: Row[] = inputs.map((item: Row) => ({
-      bucket: clean(item?.bucket, 80) === BUCKET ? BUCKET : null,
-      path: clean(item?.path, 300) || null,
-      type: ["IMAGE", "VIDEO"].includes(clean(item?.type, 10)) ? clean(item.type, 10) : null,
-      file_name: clean(item?.file_name, 200) || null,
-    }));
+    const dim = (value: unknown) => {
+      const n = Math.round(Number(value));
+      return Number.isFinite(n) && n > 0 && n < 20000 ? n : null;
+    };
+    const creatives: Row[] = inputs.map((item: Row) => {
+      const described: Row = {
+        bucket: clean(item?.bucket, 80) === BUCKET ? BUCKET : null,
+        path: clean(item?.path, 300) || null,
+        type: ["IMAGE", "VIDEO"].includes(clean(item?.type, 10)) ? clean(item.type, 10) : null,
+        file_name: clean(item?.file_name, 200) || null,
+        width: dim(item?.width),
+        height: dim(item?.height),
+      };
+      described.orientation = creativeOrientation(described);
+      return described;
+    });
     const paths = creatives.map((item) => item.path);
     const creativeValid = creatives.length > 0 && creatives.every((item) =>
       item.bucket === BUCKET && item.path?.startsWith(`campaign-builder/${scoped.client.id}/`) &&
@@ -1034,6 +1317,36 @@ Deno.serve(async (req: Request) => {
       if (monthly < Number(assets.minimum_ad_budget)) warnings.push(`Orçamento mensal estimado (R$ ${Math.round(monthly)}) abaixo do mínimo contratado (R$ ${assets.minimum_ad_budget}).`);
     }
 
+    // Pareamento feed + story: o nome tem prioridade; a IA de visao so entra para
+    // as imagens que o nome nao conseguiu parear. Falha da IA nunca bloqueia o rascunho.
+    let pairingHints: Array<{ feed: number; story: number; confidence?: number }> = [];
+    let pairingAi: Row | null = null;
+    if (!boostValid && creativeValid) {
+      const pending = unpairedForVision(creatives);
+      if (pending) {
+        try {
+          const sign = async (i: number) => (await db.storage.from(BUCKET).createSignedUrl(creatives[i].path, 900)).data?.signedUrl || "";
+          const feedUrls = await Promise.all(pending.feeds.map(sign));
+          const storyUrls = await Promise.all(pending.stories.map(sign));
+          if (feedUrls.every(Boolean) && storyUrls.every(Boolean)) {
+            // Duas leituras independentes, com as artes em ordens diferentes. So vale o par
+            // que as duas leituras confirmarem (evita "par forcado" entre variacoes parecidas).
+            const rev = <T,>(list: T[]) => [...list].reverse();
+            const [first, second] = await Promise.all([
+              visionPairCreatives(ops, feedUrls, storyUrls),
+              visionPairCreatives(ops, rev(feedUrls), rev(storyUrls)),
+            ]);
+            const a = parseVisionPairs(first.result, pending.feeds, pending.stories);
+            const b = parseVisionPairs(second.result, rev(pending.feeds), rev(pending.stories));
+            pairingHints = agreedVisionPairs(a, b);
+            pairingAi = { model: first.model, pairs: pairingHints, first: a, second: b, at: new Date().toISOString() };
+          }
+        } catch (err) {
+          pairingAi = { error: clean((err as Error)?.message, 200), at: new Date().toISOString() };
+        }
+      }
+    }
+    const pairingStored = pairingHints.map((h) => ({ feed_path: creatives[h.feed].path, story_path: creatives[h.story].path, confidence: h.confidence ?? null }));
     const planHash = await sha256(JSON.stringify({ actor: user.id, client: scoped.client.id, plan, geo: geo.resolved, creatives: creativeValid ? creatives.map((c) => c.path) : [] }));
     const expiresAt = new Date(Date.now() + DRAFT_TTL_MS).toISOString();
     const { data: inserted, error: insertError } = await ops.from("campaign_build_requests").insert({
@@ -1053,7 +1366,7 @@ Deno.serve(async (req: Request) => {
       creative_type: !boostValid && creativeValid ? creative?.type : null,
       creative_file_name: !boostValid && creativeValid ? creative?.file_name : null,
       expires_at: expiresAt,
-      request_metadata: { source: "CAMPAIGN_BUILDER_V2", input_mode: guided ? "GUIDED" : "PROMPT", mode: boostValid ? "BOOST" : "NEW", model: planned.model, instagram_id: assets.instagram_id, pixel_id: assets.pixel_id, geo_unresolved: geo.unresolved, creatives: !boostValid && creativeValid ? creatives : [] },
+      request_metadata: { source: "CAMPAIGN_BUILDER_V2", input_mode: guided ? "GUIDED" : "PROMPT", mode: boostValid ? "BOOST" : "NEW", model: planned.model, instagram_id: assets.instagram_id, pixel_id: assets.pixel_id, geo_unresolved: geo.unresolved, creatives: !boostValid && creativeValid ? creatives : [], pairing_hints: pairingStored, pairing_ai: pairingAi },
     }).select("id").single();
     if (insertError || !inserted?.id) return reply({ error: "audit_store_failed" }, 500);
 
@@ -1065,6 +1378,7 @@ Deno.serve(async (req: Request) => {
       warnings,
       expires_at: expiresAt,
       assets: { account_id: assets.account_id, page_id: assets.page_id, instagram_id: assets.instagram_id },
+      ad_units: !boostValid && creativeValid ? adUnitsSummary(creatives, pairingHints) : [],
       mode: boostValid ? "BOOST" : "NEW",
       can_execute: Boolean(assets.account_id && plan.adset.daily_budget_brl > 0 && (boostValid
         ? (boost?.source === "INSTAGRAM" ? assets.instagram_id : assets.page_id)
@@ -1140,6 +1454,7 @@ Deno.serve(async (req: Request) => {
       client: { id: clientRow.id, display_name: clientRow.display_name },
       mode: row.request_metadata?.mode === "BOOST" ? "BOOST" : "NEW",
       creatives, warnings: row.plan_warnings || [], expires_at: expiresAt,
+      ad_units: row.request_metadata?.mode === "BOOST" ? [] : adUnitsSummary(creatives.map((c) => ({ ...c, orientation: c.orientation || creativeOrientation(c) })), hintsFromStored(creatives, row.request_metadata?.pairing_hints)),
       // Preserva o formulario selecionado no plano; nao troca pelo ultimo formulario criado incidentalmente.
       existing_form_id: numericId(row.plan?.adset?.destination?.lead_form_id) || numericId(row.request_metadata?.created_lead_form_id),
       resumed_failed_token_attempt: recoverableFailure,
@@ -1528,80 +1843,144 @@ Deno.serve(async (req: Request) => {
       created.adset_id = clean(adset?.id, 40);
       if (!created.adset_id) return await fail("adset_create", new Error("Meta não devolveu o ID do conjunto."), created);
 
-      // Um anúncio pausado por criativo, todos no mesmo conjunto e mesma campanha.
+      // 1) Sobe todas as midias e mede o formato real (feed x story) de cada uma.
+      // 2) Agrupa feed + story da mesma variacao em UM anuncio (personalizacao de
+      //    posicionamento). Criativo sem par vira anuncio unico, como antes.
       created.ad_ids = [];
       created.creative_ids = [];
       created.video_ids = [];
-      for (let index = 0; index < (boostMode ? 1 : creativeRows.length); index++) {
-        const item = boostMode ? null : creativeRows[index];
+      type UploadedMedia = { type: string; file_name: string; hash: string | null;
+        video: { id: string; thumb: string } | null; orientation: "FEED" | "STORY" | null;
+        width: number | null; height: number | null };
+      const media: UploadedMedia[] = [];
+      for (let index = 0; !boostMode && index < creativeRows.length; index++) {
+        const item = creativeRows[index];
         activeStage = `creative_${index + 1}_upload`;
-        let imageHash: string | null = null;
-        let video: { id: string; thumb: string } | null = null;
-        if (item) {
-          const { data: fileData, error: downloadError } = await db.storage.from(item.bucket).download(item.path);
-          if (downloadError || !fileData) return await fail(`creative_download_${index + 1}`, downloadError || new Error("empty_file"), created);
-          if (item.type === "IMAGE") {
-            const form = new FormData();
-            form.set("access_token", token);
-            form.set("source", new File([fileData], item.file_name || "creative.jpg", { type: fileData.type || "image/jpeg" }));
-            const uploaded = await metaJson(`https://graph.facebook.com/${GRAPH}/act_${accountId}/adimages`, { method: "POST", body: form });
-            const images = uploaded?.images || {};
-            imageHash = images[Object.keys(images)[0]]?.hash || null;
-            if (!imageHash) return await fail(`image_upload_${index + 1}`, new Error("Meta não devolveu image_hash."), created);
-          } else {
-            const form = new FormData();
-            form.set("access_token", token);
-            form.set("source", new File([fileData], item.file_name || "creative.mp4", { type: fileData.type || "video/mp4" }));
-            const uploaded = await metaJson(`https://graph.facebook.com/${GRAPH}/act_${accountId}/advideos`, { method: "POST", body: form });
-            const videoId = clean(uploaded?.id, 40);
-            if (!videoId) return await fail(`video_upload_${index + 1}`, new Error("Meta não devolveu o ID do vídeo."), created);
-            created.video_ids.push(videoId);
-            let thumb = "";
-            for (let attempt = 0; attempt < 12; attempt++) {
-              await new Promise((resolve) => setTimeout(resolve, 5000));
-              try {
-                const status = await metaJson(graphUrl(videoId, { fields: "status", access_token: token }));
-                if (clean(status?.status?.video_status, 40).toLowerCase() === "ready") {
-                  const thumbs = await metaJson(graphUrl(`${videoId}/thumbnails`, { access_token: token }));
-                  thumb = clean((thumbs?.data || []).find((t: Row) => t.is_preferred)?.uri || thumbs?.data?.[0]?.uri, 1000);
-                  break;
-                }
-              } catch { /* tenta de novo */ }
-            }
-            if (!thumb) return await fail(`video_processing_${index + 1}`, new Error("Vídeo ainda em processamento na Meta. Tente de novo em alguns minutos."), created);
-            video = { id: videoId, thumb };
-          }
-        }
-        const itemName = (boostMode ? plan.ad.name : `${plan.ad.name} — ${index + 1}/${creativeRows.length}`).slice(0, 120);
-        let creativeFields: Record<string, string>;
-        if (boostMode && plan.boost.source === "FACEBOOK") {
-          creativeFields = { name: `${itemName} — turbinar`, object_story_id: plan.boost.post_id };
-        } else if (boostMode) {
-          const igFields: Row = { name: `${itemName} — turbinar`, instagram_user_id: instagramId, source_instagram_media_id: plan.boost.post_id };
-          if (pageId) igFields.object_id = pageId;
-          creativeFields = igFields as Record<string, string>;
+        const { data: fileData, error: downloadError } = await db.storage.from(item.bucket).download(item.path);
+        if (downloadError || !fileData) return await fail(`creative_download_${index + 1}`, downloadError || new Error("empty_file"), created);
+        let dims: { width: number; height: number } | null = null;
+        try { dims = mediaDimensions(new Uint8Array(await fileData.arrayBuffer()), item.type); } catch { dims = null; }
+        const width = dims?.width ?? (Number(item.width) || null);
+        const height = dims?.height ?? (Number(item.height) || null);
+        const entry: UploadedMedia = { type: item.type, file_name: item.file_name || "", hash: null, video: null,
+          orientation: creativeOrientation({ width, height, file_name: item.file_name }), width, height };
+        if (item.type === "IMAGE") {
+          const form = new FormData();
+          form.set("access_token", token);
+          form.set("source", new File([fileData], item.file_name || "creative.jpg", { type: fileData.type || "image/jpeg" }));
+          const uploaded = await metaJson(`https://graph.facebook.com/${GRAPH}/act_${accountId}/adimages`, { method: "POST", body: form });
+          const images = uploaded?.images || {};
+          entry.hash = images[Object.keys(images)[0]]?.hash || null;
+          if (!entry.hash) return await fail(`image_upload_${index + 1}`, new Error("Meta não devolveu image_hash."), created);
         } else {
-          creativeFields = {
-            name: `${itemName} — criativo`,
-            object_story_spec: JSON.stringify(creativeSpec(plan, pageId, instagramId, imageHash, video, leadLink)),
-          };
+          const form = new FormData();
+          form.set("access_token", token);
+          form.set("source", new File([fileData], item.file_name || "creative.mp4", { type: fileData.type || "video/mp4" }));
+          const uploaded = await metaJson(`https://graph.facebook.com/${GRAPH}/act_${accountId}/advideos`, { method: "POST", body: form });
+          const videoId = clean(uploaded?.id, 40);
+          if (!videoId) return await fail(`video_upload_${index + 1}`, new Error("Meta não devolveu o ID do vídeo."), created);
+          created.video_ids.push(videoId);
+          let thumb = "";
+          for (let attempt = 0; attempt < 12; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+            try {
+              const status = await metaJson(graphUrl(videoId, { fields: "status", access_token: token }));
+              if (clean(status?.status?.video_status, 40).toLowerCase() === "ready") {
+                const thumbs = await metaJson(graphUrl(`${videoId}/thumbnails`, { access_token: token }));
+                thumb = clean((thumbs?.data || []).find((t: Row) => t.is_preferred)?.uri || thumbs?.data?.[0]?.uri, 1000);
+                break;
+              }
+            } catch { /* tenta de novo */ }
+          }
+          if (!thumb) return await fail(`video_processing_${index + 1}`, new Error("Vídeo ainda em processamento na Meta. Tente de novo em alguns minutos."), created);
+          entry.video = { id: videoId, thumb };
         }
-        activeStage = `creative_${index + 1}_create`;
+        media.push(entry);
+      }
+
+      const units: Array<{ feed?: number; story?: number; single?: number; via?: string }> = boostMode ? [{ single: -1 }] : pairCreatives(media, hintsFromStored(creativeRows, row.request_metadata?.pairing_hints));
+      // A personalizacao feed/story exige a conta do Instagram no criativo.
+      let placementInstagramId: string | null = instagramId;
+      if (!boostMode && !placementInstagramId && units.some((u) => u.single === undefined)) {
+        for (const tk of [token, await resolveNcPageToken(token, pageId).catch(() => null)]) {
+          if (!tk || placementInstagramId) continue;
+          try {
+            const pageInfo = await metaJson(graphUrl(pageId, { fields: "instagram_business_account{id}", access_token: tk }));
+            placementInstagramId = numericId(pageInfo?.instagram_business_account?.id) || null;
+          } catch { /* sem Instagram vinculado */ }
+        }
+      }
+      const placement: Row = { pairs: 0, pairs_by_ai: units.filter((x: Row) => x.via === "AI").length, fallbacks: [], instagram_id: placementInstagramId };
+
+      const createCreativeAndAd = async (step: string, adName: string, creativeFields: Record<string, string>) => {
+        activeStage = `creative_${step}_create`;
         const creative = await metaPost(`act_${accountId}/adcreatives`, token, creativeFields);
         const creativeId = clean(creative?.id, 40);
-        if (!creativeId) return await fail(`creative_create_${index + 1}`, new Error("Meta não devolveu o ID do criativo."), created);
+        if (!creativeId) throw new Error("Meta não devolveu o ID do criativo.");
         created.creative_ids.push(creativeId);
-
-        activeStage = `ad_${index + 1}_create`;
+        activeStage = `ad_${step}_create`;
         const ad = await metaPost(`act_${accountId}/ads`, token, {
-          name: itemName,
+          name: adName,
           adset_id: created.adset_id,
           creative: JSON.stringify({ creative_id: creativeId }),
           status: "PAUSED",
         });
         const adId = clean(ad?.id, 40);
-        if (!adId) return await fail(`ad_create_${index + 1}`, new Error("Meta não devolveu o ID do anúncio."), created);
+        if (!adId) throw new Error("Meta não devolveu o ID do anúncio.");
         created.ad_ids.push(adId);
+      };
+      const singleFields = (adName: string, m: UploadedMedia): Record<string, string> => ({
+        name: `${adName} — criativo`,
+        object_story_spec: JSON.stringify(creativeSpec(plan, pageId, instagramId, m.hash, m.video, leadLink)),
+      });
+
+      for (let u = 0; u < units.length; u++) {
+        const unit = units[u];
+        const step = `${u + 1}`;
+        const adName = (boostMode ? plan.ad.name : `${plan.ad.name} — ${u + 1}/${units.length}`).slice(0, 120);
+        if (boostMode) {
+          let creativeFields: Record<string, string>;
+          if (plan.boost.source === "FACEBOOK") {
+            creativeFields = { name: `${adName} — turbinar`, object_story_id: plan.boost.post_id };
+          } else {
+            const igFields: Row = { name: `${adName} — turbinar`, instagram_user_id: instagramId, source_instagram_media_id: plan.boost.post_id };
+            if (pageId) igFields.object_id = pageId;
+            creativeFields = igFields as Record<string, string>;
+          }
+          await createCreativeAndAd(step, adName, creativeFields);
+          continue;
+        }
+        if (unit.single !== undefined) {
+          await createCreativeAndAd(step, adName, singleFields(adName, media[unit.single]));
+          continue;
+        }
+        const feed = media[unit.feed!], story = media[unit.story!];
+        if (placementInstagramId) {
+          const before = { creatives: created.creative_ids.length, ads: created.ad_ids.length };
+          try {
+            const label = `cb_${requestId.replace(/[^a-z0-9]/gi, "").slice(0, 10)}_${u + 1}`;
+            const spec = placementCreativeSpec(plan, pageId, placementInstagramId, feed, story, leadLink, label);
+            await createCreativeAndAd(step, adName, {
+              name: `${adName} — feed + story`,
+              object_story_spec: JSON.stringify(spec.object_story_spec),
+              asset_feed_spec: JSON.stringify(spec.asset_feed_spec),
+            });
+            placement.pairs++;
+            continue;
+          } catch (err) {
+            // Somente "parametro invalido" antes de existir anuncio cai no modo antigo.
+            if (Number((err as any)?.metaCode) !== 100 || created.ad_ids.length > before.ads) throw err;
+            while (created.creative_ids.length > before.creatives) {
+              const orphan = created.creative_ids.pop();
+              try { await metaDelete(String(orphan), token); } catch { /* removido no rollback se falhar depois */ created.creative_ids.push(orphan); break; }
+            }
+            placement.fallbacks.push({ unit: u + 1, reason: clean((err as Error)?.message, 160) });
+          }
+        } else {
+          placement.fallbacks.push({ unit: u + 1, reason: "instagram_missing" });
+        }
+        await createCreativeAndAd(`${step}a`, `${adName} (feed)`.slice(0, 120), singleFields(`${adName} (feed)`, feed));
+        await createCreativeAndAd(`${step}b`, `${adName} (story)`.slice(0, 120), singleFields(`${adName} (story)`, story));
       }
       created.ad_id = created.ad_ids[0] || null;
       created.creative_id = created.creative_ids[0] || null;
@@ -1639,7 +2018,7 @@ Deno.serve(async (req: Request) => {
         created_ad_id: created.ad_id,
         error: null,
         plan,
-        request_metadata: { ...successMetadata(row.request_metadata), token_source: (resolved as any).candidate.source, account_name: (resolved as any).account?.name || null, created_ad_ids: created.ad_ids, created_creative_ids: created.creative_ids },
+        request_metadata: { ...successMetadata(row.request_metadata), token_source: (resolved as any).candidate.source, account_name: (resolved as any).account?.name || null, created_ad_ids: created.ad_ids, created_creative_ids: created.creative_ids, placement },
       }).eq("id", requestId).eq("status", "EXECUTING").select("id").maybeSingle();
       if (createdSaveError || !savedRequest?.id) {
         // Os objetos existem na Meta, mas o registro nao confirmou: proibir
@@ -1671,6 +2050,7 @@ Deno.serve(async (req: Request) => {
         ad_ids: created.ad_ids,
         creative_ids: created.creative_ids,
         campaign_name: plan.campaign.name,
+        placement,
         note: "Tudo criado PAUSADO. Revise no Gerenciador de Anúncios e ative por lá ou pela Central de Tráfego.",
       });
     } catch (error) {
