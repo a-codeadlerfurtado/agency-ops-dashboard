@@ -123,6 +123,21 @@ const errorMessages: Record<string, string> = {
   currency_mismatch: "A moeda da conta Meta nao corresponde ao orcamento em reais.",
   meta_account_not_active: "A conta de anuncios nao esta ativa na Meta.",
   activation_failed: "Falha ao ativar. Verifique a auditoria e os status reais na Meta.",
+  geo_unresolved: "A Meta não reconheceu nenhuma das cidades informadas. Corrija as cidades (ex.: \"Caraguatatuba; São Sebastião\") e gere o plano de novo. Nada foi criado.",
+  lead_form_external_link_missing: "Anúncios de formulário precisam de um link externo. Cadastre o site na Página do cliente ou informe a URL do site no preview.",
+  make_delivery_not_configured: "Entrega via Make indisponível: a credencial do Make e a conexão Facebook Lead Ads ainda não estão configuradas no servidor.",
+  make_delivery_requires_form: "O envio via Make só funciona com destino Formulário nativo.",
+  make_product_required: "Informe o nome do produto que aparecerá no título NOVO LEAD (mínimo 3 letras).",
+  make_recipient_invalid: "Número do destinatário inválido. Use 55 + DDD + número, somente dígitos.",
+  make_roleta_recipients_invalid: "Roleta inválida: informe de 2 a 25 corretores, com nome e WhatsApp válidos e sem números repetidos.",
+  make_delivery_not_requested: "Este pedido foi criado sem entrega via Make.",
+  make_delivery_not_ready: "A entrega de leads no Make ainda não está pronta. Configure ou repare a automação antes de ativar.",
+  make_delivery_manual_recovery_required: "Já existe um cenário ou webhook parcialmente criado no Make para este pedido. Confira no Make antes de tentar de novo.",
+  make_delivery_form_changed: "O formulário ou a Página mudaram desde a criação. Não é seguro configurar a automação.",
+  make_delivery_form_already_routed: "Este formulário já tem uma automação ativa com outro destinatário. Reaproveite a existente ou use outro formulário.",
+  make_form_questions_missing: "O formulário não devolveu as perguntas (nome, telefone, e-mail). Não é possível montar a mensagem.",
+  make_delivery_already_processing: "A configuração do Make já está em andamento para este pedido. Aguarde e recarregue o histórico.",
+  make_delivery_audit_failed: "O cenário foi criado no Make, mas o registro local falhou. Não crie outro: anote o número do cenário.",
 };
 function friendlyError(body: Row | null, fallback: string) {
   const key = String(body?.error || "");

@@ -13,7 +13,8 @@
     "test:home-policy": "node scripts/check-home-overview-policy.mjs",
     "test:relato-policy": "node scripts/check-relato-call-policy.mjs",
     "test:adler-warning-policy": "node scripts/check-adler-warning-policy.mjs",
-    "test:cpl-guard": "node scripts/check-cpl-guard.mjs"
+    "test:cpl-guard": "node scripts/check-cpl-guard.mjs",
+    "test:campaign-builder": "node scripts/check-campaign-builder-create.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
