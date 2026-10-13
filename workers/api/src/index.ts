@@ -96,9 +96,26 @@ async function rotear(req: Request, env: EnvComLimite): Promise<Response> {
         if (partes[2] === "webhook") {
           if (req.method === "GET") return verificarWebhookDoApp(url, env);
           if (req.method === "POST") {
-            const wpp = await encaminharWebhookWhatsAppImobia(req.clone(), env);
+            // A assinatura e conferida ANTES de qualquer leitura do corpo. Sem
+            // isso, qualquer um que descubra a URL dispara consultas a Graph e
+            // enche a fonte de erro -- o lead nao entra, mas o ruido entra.
+            const corpoBruto = await req.arrayBuffer();
+            const assinatura = req.headers.get("x-hub-signature-256");
+            const confere = await assinaturaDaMetaConfere(assinatura, corpoBruto, env.META_APP_SECRET);
+            if (!confere) {
+              console.warn(JSON.stringify({
+                evento: "meta.webhook_assinatura_invalida",
+                tem_assinatura: Boolean(assinatura),
+                tamanho: corpoBruto.byteLength,
+              }));
+              return json({ erro: "Assinatura invalida." }, 401);
+            }
+            const comCorpo = () => new Request(req.url, {
+              method: "POST", headers: req.headers, body: corpoBruto,
+            });
+            const wpp = await encaminharWebhookWhatsAppImobia(comCorpo(), env);
             if (wpp) return wpp;
-            return webhookDoApp(req, env);
+            return webhookDoApp(comCorpo(), env);
           }
           return json({ erro: "Metodo nao permitido." }, 405);
         }
@@ -196,6 +213,25 @@ async function performanceDaAgencia(
   });
 
   return json(dados);
+}
+
+/**
+ * Confere o X-Hub-Signature-256 que a Meta manda em todo webhook: HMAC-SHA256
+ * do corpo bruto com o App Secret. Sem o secret configurado o Worker recusa,
+ * em vez de aceitar tudo em silencio -- e o mesmo secret que o caminho de
+ * WhatsApp ja exige.
+ */
+async function assinaturaDaMetaConfere(
+  assinatura: string | null, corpo: ArrayBuffer, appSecret: string | undefined
+): Promise<boolean> {
+  if (!appSecret || !assinatura?.startsWith("sha256=")) return false;
+  const chave = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(appSecret),
+    { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+  );
+  const digest = await crypto.subtle.sign("HMAC", chave, corpo);
+  const esperado = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return comparacaoConstante(assinatura.slice(7).toLowerCase(), esperado);
 }
 
 /** Comparacao em tempo constante: nao entrega o token por timing. */
