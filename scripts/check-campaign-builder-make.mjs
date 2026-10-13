@@ -43,6 +43,9 @@ assert.ok(message.includes(makeLeadExpression("phone_number")));
 assert.ok(message.includes(makeLeadExpression("qual_é_sua_faixa_de_renda?")));
 assert.ok(message.includes("Você pretende comprar quando?"));
 assert.equal(message.split('{{1.data.').length-1,5);
+const noEmail=buildMakeLeadMessage("AP MARTIM",questions.filter(q=>q.type!=="EMAIL"));
+assert.ok(noEmail.includes("EMAIL: não solicitado no formulário"));
+assert.throws(()=>buildMakeLeadMessage("AP MARTIM",questions.filter(q=>q.type!=="PHONE")),/make_form_standard_fields_missing/);
 const base={token:"fake-token",teamId:600315,pageId:"12345678901",formId:"1234567890",
  recipient:"5511999999999",facebookConnectionId:333,zapiConnectionId:4651755,
  clientName:"Teste",product:"AP MARTIM",requestId:"abc-def-1",questions};

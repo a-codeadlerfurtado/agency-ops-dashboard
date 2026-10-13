@@ -26,11 +26,13 @@ export function buildMakeLeadMessage(product: string, questions: LeadQuestion[])
     else if (type==="EMAIL" && !found.email) found.email=token;
     else extras.push(label + "\n" + token);
   }
-  if (!found.name || !found.phone || !found.email) throw new Error("make_form_standard_fields_missing");
+  // Nome e telefone são obrigatórios para a entrega; e-mail nem sempre existe
+  // nos formulários imobiliários e não pode bloquear a automação.
+  if (!found.name || !found.phone) throw new Error("make_form_standard_fields_missing");
   const title = product.trim().slice(0,110).replace(/[\r\n{}]/g," ");
   if (!title) throw new Error("make_product_required");
   return ["NOVO LEAD - " + title, "NOME DO LEAD: " + found.name,
-    "TELEFONE: " + found.phone, "EMAIL: " + found.email, ...extras].join("\n\n");
+    "TELEFONE: " + found.phone, "EMAIL: " + (found.email || "não solicitado no formulário"), ...extras].join("\n\n");
 }
 const API = "https://us1.make.com/api/v2";
 async function requestMake(token:string,path:string,init:RequestInit={}):Promise<any> {
