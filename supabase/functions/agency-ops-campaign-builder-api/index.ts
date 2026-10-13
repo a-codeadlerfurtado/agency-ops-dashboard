@@ -376,28 +376,96 @@ async function visionPairCreatives(ops: any, feedUrls: string[], storyUrls: stri
   return { model, result: parseJsonText(String(text || "{}")) };
 }
 
+// Siglas e nomes de estados aceitos como sufixo ("Caraguatatuba, SP",
+// "Santos - São Paulo", "Ubatuba (SP)"). A busca da Meta não entende o
+// sufixo e devolvia vazio, e o conjunto acabava criado para o Brasil inteiro.
+const BR_STATES: Record<string, string> = {
+  AC: "Acre", AL: "Alagoas", AP: "Amapá", AM: "Amazonas", BA: "Bahia", CE: "Ceará",
+  DF: "Distrito Federal", ES: "Espírito Santo", GO: "Goiás", MA: "Maranhão",
+  MT: "Mato Grosso", MS: "Mato Grosso do Sul", MG: "Minas Gerais", PA: "Pará",
+  PB: "Paraíba", PR: "Paraná", PE: "Pernambuco", PI: "Piauí", RJ: "Rio de Janeiro",
+  RN: "Rio Grande do Norte", RS: "Rio Grande do Sul", RO: "Rondônia", RR: "Roraima",
+  SC: "Santa Catarina", SP: "São Paulo", SE: "Sergipe", TO: "Tocantins",
+};
+function foldText(value: string) {
+  return value.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+}
+function stateFromSuffix(raw: string): { uf: string; name: string } | null {
+  const text = raw.trim();
+  const match = text.match(/^(.*?)\s*(?:,|-|–|\/|\()\s*([^,()\-–/]+?)\s*\)?\s*$/u);
+  if (!match) return null;
+  const tail = match[2].trim();
+  const byUf = BR_STATES[tail.toUpperCase()];
+  if (byUf && match[1].trim().length >= 3) return { uf: tail.toUpperCase(), name: byUf };
+  const byName = Object.entries(BR_STATES).find(([, name]) => foldText(name) === foldText(tail));
+  if (byName && match[1].trim().length >= 3) return { uf: byName[0], name: byName[1] };
+  return null;
+}
+type GeoQueryPlan = {
+  // Formas tentadas em ordem até a primeira que a Meta reconhece.
+  attempts: Array<{ q: string; state: string | null }>;
+  // Partes separadas por vírgula ("Santos, Praia Grande"): cada uma vira um local.
+  parts: string[];
+};
+function geoQueryPlan(raw: string): GeoQueryPlan {
+  const text = raw.replace(/\s+/g, " ").trim();
+  if (!text) return { attempts: [], parts: [] };
+  const state = stateFromSuffix(text);
+  const attempts: Array<{ q: string; state: string | null }> = [];
+  if (state) {
+    const base = text.replace(/\s*(?:,|-|–|\/|\()\s*[^,()\-–/]+?\s*\)?\s*$/u, "").trim();
+    if (base.length >= 3) attempts.push({ q: base, state: state.name });
+  }
+  attempts.push({ q: text, state: null });
+  const parts = !state && text.includes(",")
+    ? text.split(",").map((p) => p.trim()).filter((p) => p.length >= 3) : [];
+  return { attempts, parts: parts.length > 1 ? parts : [] };
+}
+async function searchGeo(token: string, q: string, state: string | null): Promise<Row | null> {
+  const body = await metaJson(graphUrl("search", {
+    type: "adgeolocation",
+    q,
+    location_types: JSON.stringify(["city", "region", "geo_market"]),
+    country_code: "BR",
+    limit: "5",
+    access_token: token,
+  }));
+  const hits: Row[] = (body?.data || []).filter((h: Row) => h?.key);
+  const hit = state
+    ? hits.find((h) => foldText(String(h.region || "")).includes(foldText(state)))
+    : hits[0];
+  return hit?.key ? hit : null;
+}
 async function resolveGeo(token: string, cities: string[]) {
   const resolved: Row[] = [];
   const unresolved: string[] = [];
+  const seen = new Set<string>();
+  const push = (query: string, hit: Row) => {
+    if (seen.has(String(hit.key))) return;
+    seen.add(String(hit.key));
+    resolved.push({ query, key: hit.key, name: hit.name, type: hit.type, region: hit.region || null });
+  };
   for (const city of cities.slice(0, 10)) {
-    try {
-      const body = await metaJson(graphUrl("search", {
-        type: "adgeolocation",
-        q: city,
-        location_types: JSON.stringify(["city", "region", "geo_market"]),
-        country_code: "BR",
-        limit: "3",
-        access_token: token,
-      }));
-      const hit = (body?.data || [])[0];
-      if (hit?.key) {
-        resolved.push({ query: city, key: hit.key, name: hit.name, type: hit.type, region: hit.region || null });
-      } else {
-        unresolved.push(city);
-      }
-    } catch {
-      unresolved.push(city);
+    const plan = geoQueryPlan(city);
+    let found = false;
+    for (const attempt of plan.attempts) {
+      try {
+        const hit = await searchGeo(token, attempt.q, attempt.state);
+        if (hit) { push(city, hit); found = true; break; }
+      } catch { /* tenta a próxima forma */ }
     }
+    if (!found && plan.parts.length) {
+      const missing: string[] = [];
+      for (const part of plan.parts) {
+        try {
+          const hit = await searchGeo(token, part, null);
+          if (hit) { push(part, hit); found = true; } else missing.push(part);
+        } catch { missing.push(part); }
+      }
+      if (missing.length) unresolved.push(...missing);
+      continue;
+    }
+    if (!found) unresolved.push(city);
   }
   return { resolved, unresolved };
 }
@@ -1686,7 +1754,7 @@ Deno.serve(async (req: Request) => {
     if (!saved?.enabled || !saved.recipient) return reply({ error: "make_delivery_not_requested" }, 409);
     if (saved.status === "READY" && saved.scenario_id)
       return reply({ ok: true, status: "READY", scenario_id: saved.scenario_id, reused: true });
-    if (saved.scenario_id || saved.hook_id)
+    if (saved.scenario_id || saved.hook_id || saved.data_store_id)
       return reply({ error: "make_delivery_manual_recovery_required",
         scenario_id: saved.scenario_id || null }, 409);
     const { data: clientRow } = await ops.from("clients")
@@ -1779,8 +1847,13 @@ Deno.serve(async (req: Request) => {
     } catch (err) {
       const next = { ...saved, status: "ERROR",
         error: clean((err as Error).message, 140),
+        failed_at: new Date().toISOString(),
+        // IDs ficam preenchidos somente quando a limpeza automática falhou;
+        // aí a retentativa pelo histórico exige conferência manual no Make.
         scenario_id: (err as any).scenarioId || null,
-        hook_id: (err as any).hookId || null };
+        hook_id: (err as any).hookId || null,
+        data_store_id: (err as any).dataStoreId || null,
+        cleanup: (err as any).cleanup || null };
       await ops.from("campaign_build_requests").update({
         request_metadata: { ...row.request_metadata, make_delivery: next },
       }).eq("id", requestId).eq("status", "CREATED");
@@ -1882,6 +1955,13 @@ Deno.serve(async (req: Request) => {
       return reply({ error: "budget_missing" }, 409);
     if (!boostMode && plan.adset.destination.type === "SITE" && !plan.adset.destination.url) return reply({ error: "site_url_missing" }, 409);
     if (!boostMode && plan.adset.destination.type === "LEAD_FORM" && !numericId(plan.adset.destination.lead_form_id)) return reply({ error: "lead_form_missing" }, 409);
+    // Fail-closed: o GT pediu cidades e nenhuma foi reconhecida pela Meta.
+    // Sem este bloqueio o conjunto seria criado para o Brasil inteiro.
+    const requestedCities = Array.isArray(plan.adset?.geo?.cities)
+      ? plan.adset.geo.cities.map((c: unknown) => clean(c, 120)).filter(Boolean) : [];
+    if (requestedCities.length && !(Array.isArray(plan.geo_resolved) && plan.geo_resolved.length))
+      return reply({ error: "geo_unresolved", cities: requestedCities,
+        detail: "Nenhuma das cidades informadas foi reconhecida pela Meta. Corrija as cidades (ex.: \"Caraguatatuba; São Sebastião\") e gere o plano de novo." }, 409);
 
     // Nunca consumir o rascunho por falta de acesso: o cliente pode liberar
     // a conta na Meta e clicar novamente, sem subir os criativos outra vez.

@@ -26,11 +26,13 @@ export function buildMakeLeadMessage(product: string, questions: LeadQuestion[])
     else if (type==="EMAIL" && !found.email) found.email=token;
     else extras.push(label + "\n" + token);
   }
-  if (!found.name || !found.phone || !found.email) throw new Error("make_form_standard_fields_missing");
+  // Nome e telefone são obrigatórios para a entrega; e-mail nem sempre existe
+  // nos formulários imobiliários e não pode bloquear a automação.
+  if (!found.name || !found.phone) throw new Error("make_form_standard_fields_missing");
   const title = product.trim().slice(0,110).replace(/[\r\n{}]/g," ");
   if (!title) throw new Error("make_product_required");
   return ["NOVO LEAD - " + title, "NOME DO LEAD: " + found.name,
-    "TELEFONE: " + found.phone, "EMAIL: " + found.email, ...extras].join("\n\n");
+    "TELEFONE: " + found.phone, "EMAIL: " + (found.email || "não solicitado no formulário"), ...extras].join("\n\n");
 }
 const API = "https://us1.make.com/api/v2";
 async function requestMake(token:string,path:string,init:RequestInit={}):Promise<any> {
@@ -58,7 +60,7 @@ export async function provisionMakeLeads(i:MakeProvisionInput) {
     !Number.isInteger(i.zapiConnectionId)||i.zapiConnectionId<=0)
     throw new Error("make_configuration_invalid");
   const name="[CB] "+i.clientName.slice(0,30)+" - "+i.product.slice(0,30)+" - "+i.formId+" - "+i.requestId.slice(0,8);
-  let hookId=0,scenarioId=0,dataStoreId=0;
+  let hookId=0,scenarioId=0,dataStoreId=0,structureId=0;
   try {
     // An existing live Make webhook for this exact form must not be cloned:
     // duplicate subscriptions would deliver every lead more than once.
@@ -92,7 +94,7 @@ export async function provisionMakeLeads(i:MakeProvisionInput) {
       const structure=await requestMake(i.token,"/data-structures",{method:"POST",
         body:JSON.stringify({teamId:i.teamId,name:"CB Roleta "+i.formId,strict:true,
           spec:[{type:"text",name:"ultimo_corretor",label:"Último corretor",required:true}]})});
-      const structureId=Number(structure?.dataStructure?.id||0);
+      structureId=Number(structure?.dataStructure?.id||0);
       if(!structureId) throw new Error("make_roleta_structure_create_failed");
       const store=await requestMake(i.token,"/data-stores",{method:"POST",
         body:JSON.stringify({name:"CB Roleta "+i.clientName.slice(0,40)+" "+i.formId,
@@ -154,11 +156,33 @@ export async function provisionMakeLeads(i:MakeProvisionInput) {
     return {scenarioId,hookId,formId:i.formId,pageId:i.pageId,recipient,
       recipients:recipients.map(r=>({name:r.name,phone:r.phone})),dataStoreId};
   }catch(e){
-    if(scenarioId) await requestMake(i.token,"/scenarios/"+scenarioId+"/stop",{method:"POST"}).catch(()=>{});
+    // Nothing here ever delivered a lead: every object was created by this
+    // call and the scenario never ran. Remove them so the GT can retry from
+    // the history instead of hitting a dead end; whatever cannot be removed
+    // stays recorded for manual recovery.
+    const cleanup=await cleanupMakeObjects(i.token,i.teamId,{scenarioId,hookId,dataStoreId,structureId});
     const err=new Error((e as Error).message);
-    (err as any).scenarioId=scenarioId||null;
-    (err as any).hookId=hookId||null;
-    (err as any).dataStoreId=dataStoreId||null;
+    (err as any).scenarioId=cleanup.scenario?null:(scenarioId||null);
+    (err as any).hookId=cleanup.hook?null:(hookId||null);
+    (err as any).dataStoreId=cleanup.dataStore?null:(dataStoreId||null);
+    (err as any).cleanup=cleanup;
     throw err;
   }
+}
+export type MakeCleanupResult={scenario:boolean|null;hook:boolean|null;dataStore:boolean|null;structure:boolean|null};
+export async function cleanupMakeObjects(token:string,teamId:number,
+  ids:{scenarioId:number;hookId:number;dataStoreId:number;structureId:number}):Promise<MakeCleanupResult>{
+  const out:MakeCleanupResult={scenario:null,hook:null,dataStore:null,structure:null};
+  if(ids.scenarioId){
+    await requestMake(token,"/scenarios/"+ids.scenarioId+"/stop",{method:"POST"}).catch(()=>{});
+    out.scenario=await requestMake(token,"/scenarios/"+ids.scenarioId,{method:"DELETE"})
+      .then(()=>true).catch(()=>false);
+  }
+  if(ids.hookId) out.hook=await requestMake(token,"/hooks/"+ids.hookId+"?confirmed=true",{method:"DELETE"})
+    .then(()=>true).catch(()=>false);
+  if(ids.dataStoreId) out.dataStore=await requestMake(token,"/data-stores?teamId="+teamId+"&confirmed=true",
+    {method:"DELETE",body:JSON.stringify({ids:[ids.dataStoreId]})}).then(()=>true).catch(()=>false);
+  if(ids.structureId) out.structure=await requestMake(token,"/data-structures/"+ids.structureId+"?confirmed=true",
+    {method:"DELETE"}).then(()=>true).catch(()=>false);
+  return out;
 }

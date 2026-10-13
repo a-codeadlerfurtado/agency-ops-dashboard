@@ -7,15 +7,17 @@ import ts from "typescript";
 const path = "supabase/functions/agency-ops-campaign-builder-api/index.ts";
 const source = fs.readFileSync(path, "utf8");
 const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-const names = new Set(["buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink", "successMetadata", "mediaDimensions", "creativeOrientation", "creativeBaseName", "pairCreatives", "placementCreativeSpec", "adUnitsSummary", "unpairedForVision", "parseVisionPairs", "hintsFromStored", "agreedVisionPairs"]);
+const names = new Set(["geoQueryPlan", "stateFromSuffix", "foldText", "buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink", "successMetadata", "mediaDimensions", "creativeOrientation", "creativeBaseName", "pairCreatives", "placementCreativeSpec", "adUnitsSummary", "unpairedForVision", "parseVisionPairs", "hintsFromStored", "agreedVisionPairs"]);
 const declarations = ast.statements.filter(s => ts.isFunctionDeclaration(s) && names.has(s.name?.text)).map(s => s.getText(ast));
 assert.equal(declarations.length, names.size, "All payload/guard functions must exist");
-const js = ts.transpileModule(declarations.join("\n"), {
+const consts = ast.statements.filter(s => ts.isVariableStatement(s) && s.declarationList.declarations.some(d => d.name.getText(ast) === "BR_STATES")).map(s => s.getText(ast));
+assert.equal(consts.length, 1, "BR_STATES table must exist");
+const js = ts.transpileModule([...consts, ...declarations].join("\n"), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
 const ctx = vm.createContext({ URL, String, Uint8Array, Map });
-vm.runInContext(js + "\nthis.builder = { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs };", ctx);
-const { buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs } = ctx.builder;
+vm.runInContext(js + "\nthis.builder = { geoQueryPlan, buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs };", ctx);
+const { geoQueryPlan, buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs } = ctx.builder;
 const p = {
   campaign: { objective: "OUTCOME_LEADS" },
   adset: {
@@ -164,6 +166,18 @@ const pv = placementCreativeSpec(p, "1", "2", { video: { id: "v1", thumb: "t1" }
 assert.deepEqual(JSON.parse(JSON.stringify(pv.asset_feed_spec.ad_formats)), ["SINGLE_VIDEO"]);
 assert.equal(pv.asset_feed_spec.asset_customization_rules[0].video_label.name, "l_story");
 assert.match(source, /placement\.fallbacks\.push/);
+
+// Cidades com sufixo de estado ou separadas por vírgula não podem virar "Brasil inteiro".
+const geo = (raw) => JSON.parse(JSON.stringify(geoQueryPlan(raw)));
+assert.deepEqual(geo("Caraguatatuba, SP").attempts[0], { q: "Caraguatatuba", state: "São Paulo" });
+assert.deepEqual(geo("Ubatuba - São Paulo").attempts[0], { q: "Ubatuba", state: "São Paulo" });
+assert.deepEqual(geo("Santos (SP)").attempts[0], { q: "Santos", state: "São Paulo" });
+assert.deepEqual(geo("Caraguatatuba, SP").parts, []);
+assert.deepEqual(geo("Santos, Praia Grande").parts, ["Santos", "Praia Grande"]);
+assert.deepEqual(geo("Santos, Praia Grande").attempts, [{ q: "Santos, Praia Grande", state: null }]);
+assert.deepEqual(geo("Caraguatatuba").attempts, [{ q: "Caraguatatuba", state: null }]);
+assert.deepEqual(geo("   ").attempts, []);
+assert.match(source, /error: "geo_unresolved"/);
 console.log("Campaign Builder create regression guard: OK (feed+story pairing, name first, AI fallback) (lead form, site, targeting, budget, ownership, duplicate guard)");
 
 await import("./check-campaign-builder-make.mjs");
