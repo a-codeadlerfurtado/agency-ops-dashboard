@@ -28,9 +28,15 @@ function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+// "Animações" desligado nas Configurações do perfil (ver motion-live-preferences.ts).
+function animationsDisabled() {
+  return document.documentElement.dataset.animations === "off";
+}
+
 function animateReveal(elements: Element[], seen: WeakSet<Element>) {
   const fresh = elements.filter((element) => !seen.has(element)).slice(0, 32);
   fresh.forEach((element) => seen.add(element));
+  if (animationsDisabled()) return;
 
   fresh.forEach((element, index) => {
     if (!(element instanceof HTMLElement)) return;
@@ -60,6 +66,7 @@ function animateReveal(elements: Element[], seen: WeakSet<Element>) {
 function animateSurface(element: Element, seen: WeakSet<Element>) {
   if (!(element instanceof HTMLElement) || seen.has(element)) return;
   seen.add(element);
+  if (animationsDisabled()) return;
 
   const isDrawer = element.classList.contains("ops-360");
   element.animate(
@@ -207,7 +214,7 @@ export default function MotionSystem() {
 
     const onPointerDown = (event: PointerEvent) => {
       const target = event.target instanceof Element ? event.target.closest(INTERACTIVE_SELECTOR) : null;
-      if (!(target instanceof HTMLElement) || target.matches(":disabled")) return;
+      if (!(target instanceof HTMLElement) || target.matches(":disabled") || animationsDisabled()) return;
       target.animate(
         [
           { transform: "scale(1)" },

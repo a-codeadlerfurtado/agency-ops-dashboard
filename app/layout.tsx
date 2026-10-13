@@ -20,6 +20,7 @@ import "./system-update-center.css";
 import "./security-center.css";
 import "./client-360.css";
 import "./sidebar-stability-fix.css";
+import "./motion-live.css";
 import IntegrationHealthBar from "./integration-health-bar";
 import CampaignsNavBridge from "./campaigns-nav-bridge";
 import CampaignNotesBridge from "./campaign-notes-bridge";
@@ -86,6 +87,7 @@ import NotificationPanelDismiss from "./notification-panel-dismiss";
 import DashboardEnhancementsGate from "./dashboard-enhancements-gate";
 import CockpitCollapseBridge from "./cockpit-collapse-bridge";
 import MotionSystem from "./motion-system";
+import MotionLive from "./motion-live";
 import GreetingAudioBridge from "./greeting-audio-bridge";
 import PreGreetingShield from "./pre-greeting-shield";
 import DailyGreeting from "./daily-greeting-v3";
@@ -164,6 +166,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <PreGreetingShield />
         <PreclientsKanbanBridge />
         <MotionSystem />
+        <MotionLive />
         <AIHeadRouter />
         <CampaignsNavBridge />
         <CampaignNotesBridge />
