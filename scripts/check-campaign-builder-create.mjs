@@ -165,3 +165,5 @@ assert.deepEqual(JSON.parse(JSON.stringify(pv.asset_feed_spec.ad_formats)), ["SI
 assert.equal(pv.asset_feed_spec.asset_customization_rules[0].video_label.name, "l_story");
 assert.match(source, /placement\.fallbacks\.push/);
 console.log("Campaign Builder create regression guard: OK (feed+story pairing, name first, AI fallback) (lead form, site, targeting, budget, ownership, duplicate guard)");
+
+await import("./check-campaign-builder-make.mjs");
