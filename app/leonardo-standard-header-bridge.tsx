@@ -4,6 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Session } from "@supabase/supabase-js";
 import { SUPABASE_URL, authenticatedFetch, initials, loadProfileLite, supabase, text, useDialogFocus } from "./shared";
+import MotionBackgroundSetting from "./motion-live-setting";
+import { syncAnimationsEnabled } from "./motion-live-preferences";
 
 type Row = Record<string, any>;
 
@@ -35,7 +37,7 @@ function SettingsModal({ preferences, close, save }: { preferences: Row; close: 
     <div className="panel-heading"><div><span className="eyebrow">Configurações</span><h2>Conta e preferências</h2></div><button className="leo-close" onClick={close}>×</button></div>
     <div className="leo-settings-grid">
       <div><h3>Conta</h3><label>Nome<input value={preferences.name || "Leonardo Augusto"} disabled/></label><label>Cargo<input value={preferences.role || "Direção Comercial"} disabled/></label></div>
-      <div><h3>Notificações e interface</h3>{[["sounds_enabled","Som das notificações"],["win_sound_enabled","Som de novo cliente"],["win_celebration_enabled","Celebração de novo cliente"],["notifications_enabled","Notificações"],["animations_enabled","Animações"]].map(([key,label]) => <button className="leo-setting-toggle" key={key} onClick={() => toggle(key)}><span>{label}</span><i className={prefs[key] === false ? "" : "on"}/></button>)}</div>
+      <div><h3>Notificações e interface</h3>{[["sounds_enabled","Som das notificações"],["win_sound_enabled","Som de novo cliente"],["win_celebration_enabled","Celebração de novo cliente"],["notifications_enabled","Notificações"],["animations_enabled","Animações"]].map(([key,label]) => <button className="leo-setting-toggle" key={key} onClick={() => toggle(key)}><span>{label}</span><i className={prefs[key] === false ? "" : "on"}/></button>)}<MotionBackgroundSetting /></div>
       <div><h3>Acesso</h3><p className="leo-small">Direção Comercial · perfil de gestão. As permissões continuam definidas pelo servidor.</p><p className="leo-small">Central Criativa com o mesmo escopo do Adler.</p></div>
     </div>
     <div className="leo-modal-actions"><button onClick={close}>Cancelar</button><button className="primary" onClick={submit} disabled={saving}>{saving ? "Salvando…" : "Salvar alterações"}</button></div>
@@ -71,7 +73,11 @@ export default function LeonardoStandardHeaderBridge() {
     const response = await authenticatedFetch(`${SAFE_API}?view=home`, { cache: "no-store" });
     if (!response.ok) return;
     const body = await response.json().catch(() => ({}));
-    if (body?.preferences) setPreferences(body.preferences);
+    if (body?.preferences) {
+      setPreferences(body.preferences);
+      // Espelha "Animações" do perfil para as outras páginas (ver motion-live-preferences.ts).
+      syncAnimationsEnabled(body.preferences.animations_enabled !== false);
+    }
   }, [session?.access_token, isLeonardo]);
 
   useEffect(() => { loadPreferences(); }, [loadPreferences]);
@@ -96,6 +102,7 @@ export default function LeonardoStandardHeaderBridge() {
     if (!response.ok) throw new Error("Não foi possível salvar as preferências.");
     const body = await response.json().catch(() => ({}));
     setPreferences(body?.preferences ? { ...next, ...body.preferences, role: "Direção Comercial" } : next);
+    syncAnimationsEnabled(next.animations_enabled !== false);
   }
 
   if (!isLeonardo || !target || !session) return null;
