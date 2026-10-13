@@ -140,6 +140,77 @@ async function eventResult(event: any, account: any, resolved = { emails: [] as 
   const meetUrl = event?.hangoutLink || event?.conferenceData?.entryPoints?.find((x:any)=>x.entryPointType === "video")?.uri || null;
   return { ok: true, event_id: event?.id || null, html_link: event?.htmlLink || null, meet_url: meetUrl, organizer_email: account?.account_email || null, attendee_emails: resolved.emails, unresolved_attendees: resolved.unresolved, start_time: event?.start?.dateTime || event?.start?.date || null, end_time: event?.end?.dateTime || event?.end?.date || null, title: event?.summary || null };
 }
+const GROUP_MEETING_MARKER = "Agendamento detectado automaticamente no WhatsApp.";
+
+function isGroupMeetingRequest(body: any) {
+  return String(body?.description || "").startsWith(GROUP_MEETING_MARKER);
+}
+function groupMeetingClientName(body: any) {
+  if (!isGroupMeetingRequest(body)) return "";
+  const bracket = clean(body?.title, 300).match(/^\s*\[([^\]]+)\]/);
+  const name = clean(bracket?.[1], 160);
+  return name.length >= 4 && !/^cliente a definir$/i.test(name) ? name : "";
+}
+function normalizeMeetingName(value: unknown) {
+  return String(value || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+}
+function eventTitleMatchesClient(title: unknown, clientName: string) {
+  const wanted = normalizeMeetingName(clientName);
+  if (wanted.length < 4) return false;
+  const raw = String(title || "");
+  const bracket = raw.match(/^\s*\[([^\]]+)\]/);
+  if (bracket) return normalizeMeetingName(bracket[1]) === wanted;
+  const normalizedTitle = normalizeMeetingName(raw);
+  return normalizedTitle === wanted || normalizedTitle.endsWith(" " + wanted)
+    || normalizedTitle.startsWith(wanted + " reuniao")
+    || normalizedTitle.startsWith(wanted + " onboarding");
+}
+function automationOwnsGroupEvent(event: any) {
+  return event?.extendedProperties?.private?.agencyOpsSource === "GROUP_WHATSAPP"
+    || String(event?.description || "").startsWith(GROUP_MEETING_MARKER);
+}
+async function fetchGoogleEvent(access: string, eventId: string) {
+  const url = "https://www.googleapis.com/calendar/v3/calendars/primary/events/" + encodeURIComponent(eventId) + "?conferenceDataVersion=1";
+  const res = await fetch(url, { headers: { authorization: "Bearer " + access } });
+  if (res.status === 404 || res.status === 410) return null;
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error("google_calendar_" + res.status), { status: res.status });
+  return payload;
+}
+async function findExistingGroupMeeting(access: string, start: Date, clientName: string) {
+  // A small time window avoids linking a different meeting with the same client.
+  const windowMs = 10 * 60_000;
+  const timeMin = new Date(start.getTime() - windowMs).toISOString();
+  const timeMax = new Date(start.getTime() + windowMs).toISOString();
+  const matches: any[] = [];
+  let pageToken = "";
+  for (let page = 0; page < 4; page++) {
+    const url = new URL("https://www.googleapis.com/calendar/v3/calendars/primary/events");
+    url.searchParams.set("timeMin", timeMin);
+    url.searchParams.set("timeMax", timeMax);
+    url.searchParams.set("singleEvents", "true");
+    url.searchParams.set("orderBy", "startTime");
+    url.searchParams.set("maxResults", "250");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const res = await fetch(url, { headers: { authorization: "Bearer " + access } });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error("google_calendar_lookup_" + res.status), { status: res.status });
+    for (const event of Array.isArray(payload.items) ? payload.items : []) {
+      if (event?.status === "cancelled" || !event?.start?.dateTime) continue;
+      const eventStart = new Date(event.start.dateTime);
+      if (Number.isNaN(eventStart.getTime()) || Math.abs(eventStart.getTime() - start.getTime()) > windowMs) continue;
+      if (eventTitleMatchesClient(event.summary, clientName)) matches.push(event);
+    }
+    // Multiple matching events are ambiguous; NEVER create another one.
+    if (matches.length > 1) throw Object.assign(new Error("calendar_existing_match_ambiguous"), { status: 409 });
+    pageToken = String(payload.nextPageToken || "");
+    if (!pageToken) return matches[0] || null;
+  }
+  // Fail closed if Google returned too many events to check exhaustively.
+  throw Object.assign(new Error("calendar_lookup_not_exhaustive"), { status: 409 });
+}
+
 async function listEvents(req: Request, body: any) {
   try {
     const person = await dashboardPerson(req);
@@ -189,7 +260,12 @@ async function createEvent(body: any) {
     const { account, access } = await googleAccount(body.owner_person);
     const { start, end } = eventTimes(body);
     const resolved = await resolveAttendees(Array.isArray(body.attendee_names) ? body.attendee_names : [], Array.isArray(body.attendee_emails) ? body.attendee_emails : []);
-    const payload = { summary: clean(body.title, 300) || "Reunião", description: clean(body.description, 5000) || undefined, start: { dateTime: start.toISOString(), timeZone: "America/Sao_Paulo" }, end: { dateTime: end.toISOString(), timeZone: "America/Sao_Paulo" }, attendees: resolved.emails.map((email)=>({ email })), conferenceData: { createRequest: { requestId: `li-${crypto.randomUUID()}` } } };
+    const clientName = groupMeetingClientName(body);
+    if (clientName) {
+      const existing = await findExistingGroupMeeting(access, start, clientName);
+      if (existing) return json({ ...(await eventResult(existing, account, resolved)), reused_existing: true, matched_by: "client_and_time" });
+    }
+    const payload = { summary: clean(body.title, 300) || "Reunião", description: clean(body.description, 5000) || undefined, start: { dateTime: start.toISOString(), timeZone: "America/Sao_Paulo" }, end: { dateTime: end.toISOString(), timeZone: "America/Sao_Paulo" }, attendees: resolved.emails.map((email)=>({ email })), conferenceData: { createRequest: { requestId: `li-${crypto.randomUUID()}` } }, ...(isGroupMeetingRequest(body) ? { extendedProperties: { private: { agencyOpsSource: "GROUP_WHATSAPP" } } } : {}) };
     const insert = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all", { method: "POST", headers: { authorization: `Bearer ${access}`, "content-type": "application/json" }, body: JSON.stringify(payload) });
     let event = await insert.json();
     if (!insert.ok) throw Object.assign(new Error(`google_calendar_${insert.status}:${JSON.stringify(event).slice(0,500)}`), { status: insert.status });
@@ -202,6 +278,12 @@ async function updateEvent(body: any) {
     const eventId = clean(body.event_id, 500);
     if (!eventId) return json({ error: "event_id_required" }, 400);
     const { account, access } = await googleAccount(body.owner_person);
+    if (isGroupMeetingRequest(body)) {
+      const previous = await fetchGoogleEvent(access, eventId);
+      // A manual meeting was linked by the dedupe guard. Do not overwrite its title,
+      // Meet link, guest list or time; re-check the agenda instead.
+      if (!previous || !automationOwnsGroupEvent(previous)) return await createEvent(body);
+    }
     const { start, end } = eventTimes(body);
     const resolved = await resolveAttendees(Array.isArray(body.attendee_names) ? body.attendee_names : [], Array.isArray(body.attendee_emails) ? body.attendee_emails : []);
     const payload = { summary: clean(body.title, 300) || "Reunião", description: clean(body.description, 5000) || undefined, start: { dateTime: start.toISOString(), timeZone: "America/Sao_Paulo" }, end: { dateTime: end.toISOString(), timeZone: "America/Sao_Paulo" }, attendees: resolved.emails.map((email)=>({ email })) };
@@ -216,6 +298,12 @@ async function cancelEvent(body: any) {
     const eventId = clean(body.event_id, 500);
     if (!eventId) return json({ error: "event_id_required" }, 400);
     const { account, access } = await googleAccount(body.owner_person);
+    const previous = await fetchGoogleEvent(access, eventId);
+    // This endpoint is called by the group-meeting worker. An event the worker
+    // linked but did not create must never be deleted when a WhatsApp entry changes.
+    if (previous && !automationOwnsGroupEvent(previous)) {
+      return json({ ok: true, cancelled: false, preserved_existing: true, event_id: eventId, organizer_email: account.account_email });
+    }
     const res = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${encodeURIComponent(eventId)}?sendUpdates=all`, { method: "DELETE", headers: { authorization: `Bearer ${access}` } });
     if (!res.ok && res.status !== 404 && res.status !== 410) throw Object.assign(new Error(`google_calendar_${res.status}:${(await res.text()).slice(0,500)}`), { status: res.status });
     return json({ ok: true, cancelled: true, event_id: eventId, organizer_email: account.account_email, already_absent: res.status === 404 || res.status === 410 });
