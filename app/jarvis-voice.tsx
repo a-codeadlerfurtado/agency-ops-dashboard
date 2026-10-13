@@ -8,9 +8,13 @@
  *
  * Duas decisoes que valem explicacao:
  *
- *  - A fala e enfileirada FRASE A FRASE conforme os tokens chegam, nao no fim.
- *    Esperar a resposta inteira antes de abrir a boca acrescenta o tempo do
- *    modelo ao tempo da fala, e a conversa fica com cara de radio via satelite.
+ *  - A fala sai em ate DOIS blocos: a primeira frase e o restante (ver
+ *    jarvis-speech.ts). O primeiro pedido de sintese e' curto e volta rapido; o
+ *    segundo sintetiza enquanto o primeiro toca. Esperar a sintese do texto
+ *    inteiro antes de abrir a boca deixa a conversa com cara de radio via satelite.
+ *
+ *  - Da' para interromper a Jarvis falando por cima dela (desktop, com o
+ *    microfone ja autorizado) ou com Esc. O orbe acompanha o volume da voz.
  *
  *  - O unico estado persistido no navegador e o ID opaco da conversa, por usuario.
  *    Mensagens, pendencias e dados operacionais continuam server-owned; assim voz e
@@ -20,6 +24,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./shared";
+import { dividirFala, suavizarNivel, passoInterrupcao, INTERRUPCAO, type EstadoInterrupcao } from "./jarvis-speech";
 
 type Linha =
   | { tipo: "usuario"; texto: string }
@@ -54,11 +59,38 @@ const PULSO_CSS = `
   background:currentColor;animation:jvOnda .9s ease-in-out infinite}
 @keyframes jvPulso{0%{transform:scale(.7);opacity:.55}100%{transform:scale(1.5);opacity:0}}
 @keyframes jvOnda{0%,100%{opacity:.35;transform:scale(.7)}50%{opacity:1;transform:scale(1)}}
+.jv-vivo{transform:scale(calc(1 + var(--jv-nivel,0) * .85));
+  box-shadow:0 0 calc(4px + var(--jv-nivel,0) * 22px) currentColor;
+  transition:transform .07s linear,box-shadow .07s linear}
+.jv-anel{position:absolute;inset:-7px;border-radius:50%;border:1px solid currentColor;pointer-events:none;
+  opacity:calc(.16 + var(--jv-nivel,0) * .6);transform:scale(calc(1 + var(--jv-nivel,0) * .5));
+  transition:transform .07s linear,opacity .07s linear}
 @media (prefers-reduced-motion: reduce){
   .jv-pulsa::after,.jv-onda{animation:none}
+  .jv-vivo,.jv-anel{transform:none;transition:none}
 }`;
 
 const FIM_DE_FRASE = /(?<=[.!?\n])\s+/;
+
+/** Como um bloco de fala terminou. So "fim" deixa o proximo bloco tocar. */
+type FimDeBloco = "fim" | "bloqueado" | "cancelado" | "erro";
+
+/**
+ * Cliente aberto na tela, publicado pelo dashboard em window.__jarvisTela.
+ * Vai so' o UUID; o servidor valida contra a lista permitida do usuario e so
+ * usa quando a frase aponta para a tela ("ele", "esse cliente").
+ */
+function clienteDaTela(): string | null {
+  try {
+    const id = (window as any).__jarvisTela?.client_id;
+    return typeof id === "string" && id ? id : null;
+  } catch { return null; }
+}
+
+/** Kill switch local da interrupcao por voz: localStorage "jarvis:bargein" = "off". */
+function interrupcaoPorVozLigada(): boolean {
+  try { return window.localStorage.getItem("jarvis:bargein") !== "off"; } catch { return true; }
+}
 
 function corrigirTranscricaoJarvis(v: string): string {
   return String(v || "").replace(/\blitros\b/giu, "leads").replace(/\blitro\b/giu, "lead");
@@ -101,6 +133,13 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
   const geracaoAudioRef = useRef(0);
   const responderEmVozRef = useRef(false);
   const warmIdleKeyRef = useRef<string | null>(null);
+  // Saida de audio com medidor: toda fala passa por um AnalyserNode antes do
+  // destino, e o orbe le o volume dali.
+  const saidaRef = useRef<{ ctx: AudioContext; analyser: AnalyserNode } | null>(null);
+  const orbeRef = useRef<HTMLSpanElement | null>(null);
+  const nivelMicRef = useRef(0);
+  const falarRef = useRef<((texto: string) => Promise<void>) | null>(null);
+  const ouvirRef = useRef<(() => void) | null>(null);
 
   // Rollout: MGMT primeiro. O projeto nao tem feature flag, entao a trava e o
   // proprio RBAC. Nao e barreira de seguranca -- o servidor ja filtra as
@@ -223,6 +262,20 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
     bufferFalaRef.current = "";
   }, []);
 
+  /** No de saida com medidor para este contexto; cai no destino direto se falhar. */
+  const saidaDe = useCallback((ctx: AudioContext): AudioNode => {
+    const atual = saidaRef.current;
+    if (atual && atual.ctx === ctx) return atual.analyser;
+    try {
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.5;
+      analyser.connect(ctx.destination);
+      saidaRef.current = { ctx, analyser };
+      return analyser;
+    } catch { return ctx.destination; }
+  }, []);
+
   // Must run in the original click/submit handler, before any network await.
   // MP3 and PCM share this context; unlocking it does not unlock new Audio().
   const liberarAudio = useCallback(() => {
@@ -258,28 +311,31 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
     });
   }, [liberarAudio]);
 
+  /** Dispara a sintese de um bloco. Nao toca nada: quem toca e' tocarBloco. */
+  const pedirTts = useCallback((texto: string): Promise<Response> => {
+    const token = sessaoRef.current?.access_token;
+    if (!token) return Promise.reject(new Error("sem sessao"));
+    return fetch("/api/jarvis/tts", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({ text: texto.slice(0, 1200) }),
+    });
+  }, []);
+
   /**
-   * Fala a resposta inteira usando exclusivamente Cedar via /api/jarvis/tts.
+   * Toca UM bloco ja pedido e so resolve quando o som acabou (ou foi cortado).
    * Nao existe SpeechSynthesis/Web Speech como fallback neste componente.
+   * `falando` e' responsabilidade de falarResposta, que encadeia os blocos.
    */
-  const falarResposta = useCallback(async (texto: string) => {
+  const tocarBloco = useCallback(async (
+    limpo: string, pedido: Promise<Response>, geracao: number, textoCompleto: string, emSequencia: boolean,
+  ): Promise<FimDeBloco> => {
     const ttsInicio = performance.now();
-    const limpo = texto.trim();
-    if (!limpo) return;
-    calar();
-    const geracao = geracaoAudioRef.current;
-    setFalando(true);
+    const repetirTudo = () => falarRef.current?.(textoCompleto) ?? Promise.resolve();
 
     try {
-      const token = sessaoRef.current?.access_token;
-      if (!token) throw new Error("sem sessao");
-
-      const r = await fetch("/api/jarvis/tts", {
-        method: "POST",
-        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ text: limpo.slice(0, 1200) }),
-      });
-      if (geracaoAudioRef.current !== geracao) { void r.body?.cancel(); return; }
+      const r = await pedido;
+      if (geracaoAudioRef.current !== geracao) { void r.body?.cancel(); return "cancelado"; }
       console.info({ event: "jarvis_latency", stage: "tts_headers", ms: Math.round(performance.now() - ttsInicio) });
       if (!r.ok) {
         const detalhe = await r.json().catch(() => null) as { erro?: string } | null;
@@ -308,10 +364,9 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
         if (ctx.state !== "running") {
           // Do not wait forever on Safari's pending resume() promise.
           await r.body.cancel().catch(() => {});
-          retomarAudioRef.current = () => falarResposta(limpo);
+          retomarAudioRef.current = repetirTudo;
           setAudioBloqueado(true);
-          setFalando(false);
-          return;
+          return "bloqueado";
         }
 
         const reader = r.body.getReader();
@@ -324,7 +379,7 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          if (geracaoAudioRef.current !== geracao) { await reader.cancel().catch(() => {}); return; }
+          if (geracaoAudioRef.current !== geracao) { await reader.cancel().catch(() => {}); return "cancelado"; }
           if (!value?.byteLength) continue;
           totalBytes += value.byteLength;
 
@@ -350,7 +405,7 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
 
           const source = ctx.createBufferSource();
           source.buffer = buffer;
-          source.connect(ctx.destination);
+          source.connect(saidaDe(ctx));
           pcmSourcesRef.current.add(source);
           source.onended = () => pcmSourcesRef.current.delete(source);
           const inicio = Math.max(proximoInicio, ctx.currentTime + (iniciou ? 0.02 : 0.08));
@@ -373,11 +428,10 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
 
         if (!iniciou) throw new Error("audio vazio");
         console.info({ event: "jarvis_latency", stage: "tts_stream_end", ms: Math.round(performance.now() - ttsInicio), bytes: totalBytes });
+        // Espera o que ja foi agendado terminar de tocar antes de liberar o proximo bloco.
         const restante = Math.max(0, (fimAgendado - ctx.currentTime) * 1000);
-        window.setTimeout(() => {
-          if (geracaoAudioRef.current === geracao) setFalando(false);
-        }, restante + 60);
-        return;
+        await new Promise<void>((ok) => window.setTimeout(ok, restante + (emSequencia ? 0 : 60)));
+        return geracaoAudioRef.current === geracao ? "fim" : "cancelado";
       }
 
       // Compatibilidade de rollback: ainda toca MP3 Cedar de uma versao anterior,
@@ -385,42 +439,56 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
       const audioBytes = await r.arrayBuffer();
       console.info({ event: "jarvis_latency", stage: "tts_bytes", ms: Math.round(performance.now() - ttsInicio), bytes: audioBytes.byteLength });
       if (!audioBytes.byteLength) throw new Error("audio vazio");
-      if (geracaoAudioRef.current !== geracao) return;
+      if (geracaoAudioRef.current !== geracao) return "cancelado";
       // Play compressed TTS through the same context unlocked by Falar/Enviar.
       // Creating an HTMLAudioElement after the TTS request loses iOS activation.
       const ctx = audioContextRef.current;
       if (ctx?.state === "running") {
         let decoded: AudioBuffer | null = null;
         try { decoded = await ctx.decodeAudioData(audioBytes.slice(0)); } catch { /* media fallback */ }
-        if (geracaoAudioRef.current !== geracao) return;
+        if (geracaoAudioRef.current !== geracao) return "cancelado";
         if (decoded && ctx.state === "running") {
           const source = ctx.createBufferSource();
           source.buffer = decoded;
-          source.connect(ctx.destination);
+          source.connect(saidaDe(ctx));
           pcmSourcesRef.current.add(source);
-          source.onended = () => {
-            pcmSourcesRef.current.delete(source);
-            source.disconnect();
-            if (geracaoAudioRef.current === geracao) setFalando(false);
-          };
+          // onended dispara tanto no fim natural quanto no stop() do calar().
+          const terminou = new Promise<void>((ok) => {
+            source.onended = () => {
+              pcmSourcesRef.current.delete(source);
+              source.disconnect();
+              ok();
+            };
+          });
           source.start();
           setTtsProvider(engine === "local" ? "jarvis" : "cedar");
-          return;
+          console.info({ event: "jarvis_latency", stage: "audio_play", ms: Math.round(performance.now() - ttsInicio), format: "mp3_decoded" });
+          await terminou;
+          return geracaoAudioRef.current === geracao ? "fim" : "cancelado";
         }
       }
       const blob = new Blob([audioBytes], { type: "audio/mpeg" });
-      if (geracaoAudioRef.current !== geracao) return;
+      if (geracaoAudioRef.current !== geracao) return "cancelado";
       const url = URL.createObjectURL(blob);
       blobUrlRef.current = url;
       const audio = new Audio(url);
       audioRef.current = audio;
+      // So' vira true quando o navegador bloqueou o autoplay e a pessoa retomou
+      // pelo botao: ai nao ha' mais cadeia de blocos esperando, e e' este player
+      // que precisa baixar o estado "falando" ao terminar.
+      let retomada = false;
+      let avisarFim: (fim: FimDeBloco) => void = () => {};
+      const terminou = new Promise<FimDeBloco>((ok) => { avisarFim = ok; });
       const encerrar = () => {
         if (geracaoAudioRef.current !== geracao) return;
-        setFalando(false);
+        if (retomada) setFalando(false);
         setAudioBloqueado(false);
         retomarAudioRef.current = null;
         if (blobUrlRef.current === url) { URL.revokeObjectURL(url); blobUrlRef.current = null; }
       };
+      // calar() zera onended/onerror antes de pausar; o evento "pause" e' o que
+      // avisa a cadeia de que este bloco foi cortado.
+      audio.addEventListener("pause", () => { if (!audio.ended) avisarFim("cancelado"); });
       audio.onplay = () => {
         if (geracaoAudioRef.current !== geracao) { audio.pause(); return; }
         setAudioBloqueado(false);
@@ -431,28 +499,65 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
         setTtsProvider(engine === "local" ? "jarvis" : "cedar");
         console.info({ event: "jarvis_cedar_play", engine, voice, bytes: audioBytes.byteLength });
       };
-      audio.onended = encerrar;
+      audio.onended = () => { encerrar(); avisarFim("fim"); };
       audio.onerror = () => {
         encerrar();
         if (geracaoAudioRef.current === geracao) setErro("Voz indisponível (falha de reprodução)");
+        avisarFim("erro");
       };
       try {
         await audio.play();
       } catch (playError) {
-        if (geracaoAudioRef.current !== geracao) return;
+        if (geracaoAudioRef.current !== geracao) return "cancelado";
         if ((playError as { name?: string })?.name !== "NotAllowedError") throw playError;
-        // Keep the existing blob/player: replay needs no new TTS request.
-        retomarAudioRef.current = () => audio.play();
-        setFalando(false);
+        retomada = true;
+        // Bloco unico: reaproveita o blob, sem novo pedido de TTS. Em sequencia,
+        // retomar so este pedaco deixaria o resto mudo, entao repete a fala toda.
+        retomarAudioRef.current = emSequencia
+          ? repetirTudo
+          : () => { setFalando(true); return audio.play(); };
         setAudioBloqueado(true);
+        return "bloqueado";
       }
+      return await terminou;
     } catch (erroTts) {
-      if (geracaoAudioRef.current !== geracao) return;
-      setFalando(false);
+      if (geracaoAudioRef.current !== geracao) return "cancelado";
       const motivo = erroTts instanceof Error ? erroTts.message : String(erroTts);
       setErro(`Voz indisponível (${motivo})`);
+      return "erro";
     }
-  }, [calar]);
+  }, [saidaDe]);
+
+  /**
+   * Fala a resposta usando exclusivamente /api/jarvis/tts, em ate dois blocos.
+   * Os pedidos de sintese saem juntos; a reproducao e' em ordem.
+   */
+  const falarResposta = useCallback(async (texto: string) => {
+    const limpo = texto.trim().slice(0, 1200);
+    if (!limpo) return;
+    calar();
+    const geracao = geracaoAudioRef.current;
+    setFalando(true);
+
+    const blocos = dividirFala(limpo);
+    const pedidos = blocos.map((bloco) => pedirTts(bloco));
+    // O segundo pedido pode falhar enquanto o primeiro ainda toca; quem trata o
+    // erro e' o tocarBloco dele. Isto so evita "unhandled rejection" ate la.
+    for (const pedido of pedidos) pedido.catch(() => {});
+
+    let fim: FimDeBloco = "fim";
+    let tocados = 0;
+    for (; tocados < blocos.length; tocados++) {
+      fim = await tocarBloco(blocos[tocados], pedidos[tocados], geracao, limpo, blocos.length > 1);
+      if (fim !== "fim") break;
+    }
+    // Sintese pedida e nao usada: solta o corpo para nao segurar a conexao.
+    for (const sobra of pedidos.slice(tocados + 1)) void sobra.then((r) => r.body?.cancel()).catch(() => {});
+    if (geracaoAudioRef.current !== geracao) return;
+    setFalando(false);
+  }, [calar, pedirTts, tocarBloco]);
+
+  useEffect(() => { falarRef.current = falarResposta; }, [falarResposta]);
 
   useEffect(() => () => {
     calar();
@@ -511,7 +616,7 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
       resposta = await fetch("/api/jarvis/chat", {
         method: "POST",
         headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
-        body: JSON.stringify({ conversation_id: conversaRef.current, message: texto, voice: viaVoz }),
+        body: JSON.stringify({ conversation_id: conversaRef.current, message: texto, voice: viaVoz, screen_client_id: clienteDaTela() }),
       });
     } catch {
       setErro("não consegui falar com o servidor");
@@ -558,7 +663,8 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
             return copia;
           });
           // Acumula sem falar. Com voz propria, sintetizar frase a frase seria
-          // uma chamada paga por frase e cortes audiveis entre elas.
+          // uma chamada paga por frase e cortes audiveis entre elas; o corte em
+          // no maximo dois blocos acontece dentro de falarResposta.
           bufferFalaRef.current += dados.text;
         } else if (evento === "speech_ready") {
           const fala = String(dados.text ?? "").trim();
@@ -684,6 +790,7 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
           let sum = 0;
           for (const value of samples) { const n = (value - 128) / 128; sum += n * n; }
           const rms = Math.sqrt(sum / samples.length);
+          nivelMicRef.current = rms;
           const now = Date.now();
           if (rms > 0.025) { speechStarted = true; lastVoiceAt = now; }
           if (speechStarted && now - lastVoiceAt > 950 && now - startedAt > 900) stop(false);
@@ -747,13 +854,124 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
   useEffect(() => {
     if (!liberado) return;
     const tecla = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.code === "Space") { e.preventDefault(); alternar(); }
+      if (e.ctrlKey && e.code === "Space") { e.preventDefault(); alternar(); return; }
+      // Esc corta a fala. So age quando ela esta' falando, para nao roubar o Esc
+      // de drawers e modais do dashboard no resto do tempo.
+      if (e.key === "Escape" && falando) { calar(); }
     };
     window.addEventListener("keydown", tecla);
     return () => window.removeEventListener("keydown", tecla);
-  }, [alternar, liberado]);
+  }, [alternar, liberado, falando, calar]);
+
+  useEffect(() => { ouvirRef.current = ouvir; }, [ouvir]);
+
+  /**
+   * Interrupcao por voz: falou por cima, ela para e volta a ouvir.
+   *
+   * So liga quando (1) a pergunta deste turno veio por voz, (2) e' desktop --
+   * no celular abrir o microfone durante a reproducao muda a rota de audio --
+   * e (3) a permissao de microfone JA esta' concedida. Nunca provoca o pedido
+   * de permissao: se o navegador nao confirmar "granted", simplesmente nao liga.
+   *
+   * O microfone abre com cancelamento de eco. Os primeiros instantes da fala so
+   * medem o que sobra da propria voz dela; depois disso so vale som bem acima
+   * desse eco, sustentado (ver INTERRUPCAO em jarvis-speech.ts).
+   */
+  useEffect(() => {
+    if (!falando || !liberado || !responderEmVozRef.current || !interrupcaoPorVozLigada()) return;
+    const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || Boolean(window.matchMedia?.("(pointer: coarse)").matches);
+    if (mobile || !navigator.mediaDevices?.getUserMedia || !(navigator as any).permissions?.query) return;
+
+    let vivo = true;
+    let stream: MediaStream | null = null;
+    let escuta: AudioContext | null = null;
+    let timer = 0;
+    const soltar = () => {
+      if (timer) window.clearInterval(timer);
+      timer = 0;
+      try { stream?.getTracks().forEach((track) => track.stop()); } catch {}
+      try { if (escuta && escuta.state !== "closed") void escuta.close(); } catch {}
+      stream = null; escuta = null;
+    };
+
+    void (async () => {
+      try {
+        const permissao = await (navigator as any).permissions.query({ name: "microphone" });
+        if (!vivo || permissao?.state !== "granted") return;
+        const captura = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false },
+        });
+        if (!vivo) { captura.getTracks().forEach((track) => track.stop()); return; }
+        stream = captura;
+        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioCtx) { soltar(); return; }
+        escuta = new AudioCtx() as AudioContext;
+        const analyser = escuta.createAnalyser();
+        analyser.fftSize = 1024;
+        escuta.createMediaStreamSource(captura).connect(analyser);
+        const amostras = new Uint8Array(analyser.fftSize);
+        const inicio = performance.now();
+        let detector: EstadoInterrupcao = { ecoMax: 0, acimaMs: 0 };
+        timer = window.setInterval(() => {
+          if (!vivo) return;
+          analyser.getByteTimeDomainData(amostras);
+          let soma = 0;
+          for (const valor of amostras) { const n = (valor - 128) / 128; soma += n * n; }
+          const passo = passoInterrupcao(detector, performance.now() - inicio, Math.sqrt(soma / amostras.length));
+          detector = passo.estado;
+          if (!passo.interromper) return;
+          console.info({ event: "jarvis_barge_in", after_ms: Math.round(performance.now() - inicio) });
+          vivo = false;
+          soltar();
+          calar();
+          ouvirRef.current?.();
+        }, INTERRUPCAO.passoMs);
+      } catch {
+        // Sem microfone para a escuta: a fala segue normal, so nao da' para cortar por voz.
+        soltar();
+      }
+    })();
+
+    return () => { vivo = false; soltar(); };
+  }, [falando, liberado, calar]);
 
   const estado: Estado = ouvindo ? "ouvindo" : analisando ? "analisando" : falando ? "respondendo" : "inativo";
+
+  /**
+   * Orbe vivo: escreve o volume em --jv-nivel no elemento, fora do React, a cada
+   * frame. Falando, le a saida de audio; ouvindo pelo gravador, le o microfone;
+   * analisando, respira sozinho. Um unico rAF, desligado quando inativo.
+   */
+  useEffect(() => {
+    if (estado === "inativo") { orbeRef.current?.style.removeProperty("--jv-nivel"); return; }
+    if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    let quadro = 0;
+    let nivel = 0;
+    const amostras = new Uint8Array(256);
+    const desenhar = () => {
+      let alvo = 0;
+      if (estado === "respondendo") {
+        const saida = saidaRef.current;
+        if (saida && saida.ctx.state === "running") {
+          saida.analyser.getByteTimeDomainData(amostras);
+          let soma = 0;
+          for (const valor of amostras) { const n = (valor - 128) / 128; soma += n * n; }
+          alvo = Math.min(1, Math.sqrt(soma / amostras.length) * 4);
+        } else {
+          alvo = 0.25 + 0.2 * Math.sin(performance.now() / 180);
+        }
+      } else if (estado === "ouvindo") {
+        alvo = Math.min(1, nivelMicRef.current * 6);
+      } else {
+        alvo = 0.18 + 0.14 * Math.sin(performance.now() / 320);
+      }
+      nivel = suavizarNivel(nivel, alvo);
+      orbeRef.current?.style.setProperty("--jv-nivel", nivel.toFixed(3));
+      quadro = window.requestAnimationFrame(desenhar);
+    };
+    quadro = window.requestAnimationFrame(desenhar);
+    return () => { window.cancelAnimationFrame(quadro); nivelMicRef.current = 0; };
+  }, [estado]);
 
   if (!liberado) return null;
 
@@ -769,10 +987,13 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
     <div style={overlay} role="status" aria-live="polite">
       <div style={{ ...cartaoEstado, borderColor: COR_ESTADO[estado] }}>
         <span
-          className={estado === "ouvindo" ? "jv-orbe jv-pulsa" : "jv-orbe"}
+          ref={orbeRef}
+          className={estado === "ouvindo" ? "jv-orbe jv-vivo jv-pulsa" : "jv-orbe jv-vivo"}
           style={{ ...orbeGrande, background: COR_ESTADO[estado], color: COR_ESTADO[estado] }}
           aria-hidden="true"
-        />
+        >
+          <span className="jv-anel" />
+        </span>
         <div style={{ minWidth: 0 }}>
           <div style={{ ...rotuloEstado, color: COR_ESTADO[estado] }}>
             {estado === "respondendo" && <span className="jv-onda" aria-hidden="true" />}
@@ -780,6 +1001,9 @@ export default function JarvisVoice({ allowed }: { allowed?: boolean } = {}) {
           </div>
           {estado === "ouvindo" && (
             <div style={transcricao}>{parcial || "pode falar"}</div>
+          )}
+          {estado === "respondendo" && (
+            <div style={transcricao}>Esc ou fale por cima para interromper</div>
           )}
         </div>
         {estado === "ouvindo" && (
@@ -928,7 +1152,7 @@ const cartaoEstado: React.CSSProperties = {
   backdropFilter: "blur(10px)", boxShadow: "0 18px 50px rgba(0,0,0,.45)",
 };
 const orbeGrande: React.CSSProperties = {
-  width: 13, height: 13, borderRadius: "50%", display: "inline-block", flex: "none",
+  width: 16, height: 16, margin: "0 5px", borderRadius: "50%", display: "inline-block", flex: "none",
 };
 const rotuloEstado: React.CSSProperties = {
   display: "flex", alignItems: "center", fontSize: 14.5, fontWeight: 700,
