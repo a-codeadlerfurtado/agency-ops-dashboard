@@ -14,9 +14,10 @@
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { normalizeWhatsAppRecipient, provisionMakeLeads, type LeadQuestion } from "./make-leads.ts";
 
 const SERVICE = "agency-ops-campaign-builder-api";
-const SERVICE_VERSION = "v1.2.0";
+const SERVICE_VERSION = "v1.3.0";
 // Marketing API v26.0 e a versao vigente para novas operacoes em outubro de 2026.
 const GRAPH = "v26.0";
 const BUCKET = "agency-ai-private";
@@ -1172,15 +1173,27 @@ Deno.serve(async (req: Request) => {
     const plannerConfigured = Boolean(
       (typeof plannerVaultKey === "string" && plannerVaultKey.trim()) || Deno.env.get("OPENAI_API_KEY")
     );
+    const { data: makeVaultKey } = await ops.rpc("get_secret", { p_name: "MAKE_API_TOKEN" });
+    const makeReady = Boolean(
+      clean(Deno.env.get("MAKE_API_TOKEN"), 4000) ||
+      (typeof makeVaultKey === "string" && makeVaultKey.trim())
+    ) && Number(Deno.env.get("MAKE_FB_LEADS_CONNECTION_ID")) > 0;
     return reply({
       ok: true,
       profile: { person, role, is_adler: isAdler },
+      make_delivery_available: makeReady,
       planner_configured: plannerConfigured,
       clients: clientsOut,
       history: (history || []).map((h: Row) => {
         const { request_metadata, ...safe } = h;
         return { ...safe, client_name: nameById.get(h.client_id) || null,
           activation_verified_at: request_metadata?.activation_verified_at || null,
+          make_delivery: request_metadata?.make_delivery
+            ? { enabled: true, status: request_metadata.make_delivery.status,
+                recipient: request_metadata.make_delivery.recipient,
+                mode: request_metadata.make_delivery.mode || "SINGLE",
+                recipients: request_metadata.make_delivery.recipients || [],
+                scenario_id: request_metadata.make_delivery.scenario_id || null } : null,
           safe_retry_eligible: safeRetryEligible(h) };
       }),
     });
@@ -1479,6 +1492,10 @@ Deno.serve(async (req: Request) => {
     if (row.actor_user_id !== user.id && !isAdler && role !== "MGMT")
       return reply({ error: "forbidden" }, 403);
     if (row.status !== "CREATED") return reply({ error: "campaign_not_created" }, 409);
+    if (row.request_metadata?.make_delivery?.enabled &&
+        row.request_metadata.make_delivery.status !== "READY") {
+      return reply({ error: "make_delivery_not_ready" }, 409);
+    }
 
     const { data: clientRow } = await ops.from("clients")
       .select("id,display_name,gt_owner,lifecycle").eq("id", row.client_id).maybeSingle();
@@ -1654,6 +1671,124 @@ Deno.serve(async (req: Request) => {
     return reply({ ok: true, request_id: requestId, status: "DISCARDED" });
   }
 
+  // --- CONFIGURE_MAKE_DELIVERY ---
+  // Only a CREATED, PAUSED campaign with a previously selected recipient may
+  // provision Make. Fail closed; never pretend that a missing connection worked.
+  if (action === "CONFIGURE_MAKE_DELIVERY") {
+    const requestId = clean(body?.request_id, 60);
+    const { data: row } = await ops.from("campaign_build_requests")
+      .select("*").eq("id", requestId).maybeSingle();
+    if (!row) return reply({ error: "request_not_found" }, 404);
+    if (row.actor_user_id !== user.id && !isAdler && role !== "MGMT")
+      return reply({ error: "forbidden" }, 403);
+    if (row.status !== "CREATED") return reply({ error: "campaign_not_created" }, 409);
+    const saved = row.request_metadata?.make_delivery;
+    if (!saved?.enabled || !saved.recipient) return reply({ error: "make_delivery_not_requested" }, 409);
+    if (saved.status === "READY" && saved.scenario_id)
+      return reply({ ok: true, status: "READY", scenario_id: saved.scenario_id, reused: true });
+    if (saved.scenario_id || saved.hook_id)
+      return reply({ error: "make_delivery_manual_recovery_required",
+        scenario_id: saved.scenario_id || null }, 409);
+    const { data: clientRow } = await ops.from("clients")
+      .select("id,display_name,gt_owner,lifecycle").eq("id", row.client_id).maybeSingle();
+    if (!clientRow || !inScope(clientRow) || clientRow.lifecycle === "CHURNED")
+      return reply({ error: "forbidden" }, 403);
+    const formId = numericId(row.plan?.adset?.destination?.lead_form_id);
+    const pageId = numericId(row.meta_page_id);
+    const assets = await loadAssets(row.client_id);
+    if (!formId || !pageId || pageId !== numericId(assets.page_id) ||
+        pageId !== numericId(saved.page_id) || formId !== numericId(saved.form_id))
+      return reply({ error: "make_delivery_form_changed" }, 409);
+
+    const { data: existingRows } = await ops.from("campaign_build_requests")
+      .select("id,request_metadata").eq("client_id", row.client_id).eq("status", "CREATED")
+      .neq("id", requestId).limit(100);
+    const already = (existingRows || []).map((x: Row) => x.request_metadata?.make_delivery)
+      .find((x: Row) => x?.status === "READY" && numericId(x.form_id) === formId &&
+        numericId(x.page_id) === pageId);
+    if (already) {
+      if (already.recipient !== saved.recipient ||
+          JSON.stringify(already.recipients || []) !== JSON.stringify(saved.recipients || []))
+        return reply({ error: "make_delivery_form_already_routed" }, 409);
+      const linked = { ...saved, status: "READY", scenario_id: already.scenario_id,
+        hook_id: already.hook_id, reused: true, configured_at: new Date().toISOString() };
+      await ops.from("campaign_build_requests").update({
+        request_metadata: { ...row.request_metadata, make_delivery: linked },
+      }).eq("id", requestId).eq("status", "CREATED");
+      return reply({ ok: true, status: "READY", scenario_id: already.scenario_id, reused: true });
+    }
+    const { data: makeVaultKey } = await ops.rpc("get_secret", { p_name: "MAKE_API_TOKEN" });
+    const makeToken = clean(Deno.env.get("MAKE_API_TOKEN"), 4000) ||
+      (typeof makeVaultKey === "string" ? makeVaultKey.trim() : "");
+    const facebookConnectionId = Number(Deno.env.get("MAKE_FB_LEADS_CONNECTION_ID") || 0);
+    const zapiConnectionId = Number(Deno.env.get("MAKE_ZAPI_ADMIN_CONNECTION_ID") || 4651755);
+    const teamId = Number(Deno.env.get("MAKE_TEAM_ID") || 600315);
+    if (!makeToken || !Number.isInteger(facebookConnectionId) || facebookConnectionId <= 0)
+      return reply({ error: "make_delivery_not_configured" }, 503);
+    let lastFailure = "make_form_fields_unavailable";
+    let candidateForm: Row | null = null;
+    for (const tk of await tokenCandidates(db)) {
+      try {
+        const pt = await resolveNcPageToken(tk.token, pageId);
+        const form = await metaJson(graphUrl(formId, {
+          fields: "id,page_id,status,questions", access_token: pt || tk.token,
+        }));
+        if (numericId(form?.id) === formId && numericId(form?.page_id) === pageId &&
+            clean(form?.status, 30).toUpperCase() === "ACTIVE") {
+          candidateForm = form;
+          break;
+        }
+      } catch (err) { lastFailure = clean((err as Error).message, 150); }
+    }
+    if (!candidateForm) return reply({ error: "make_delivery_form_unavailable", detail: lastFailure }, 409);
+    const questions = (candidateForm.questions?.data || []) as Row[];
+    if (!Array.isArray(questions) || questions.length < 3)
+      return reply({ error: "make_form_questions_missing" }, 409);
+    const mapped: LeadQuestion[] = questions.map((q: Row) => ({
+      key: clean(q.key, 180), label: clean(q.label || q.key, 180),
+      type: clean(q.type, 40),
+    }));
+    const lockedMetadata = { ...row.request_metadata, make_delivery:
+      { ...saved, status: "PROVISIONING", started_at: new Date().toISOString() } };
+    const { data: claimed, error: claimErr } = await ops.from("campaign_build_requests")
+      .update({ request_metadata: lockedMetadata })
+      .eq("id", requestId).eq("status", "CREATED")
+      .filter("request_metadata->make_delivery->>status", "eq", saved.status)
+      .select("id").maybeSingle();
+    if (claimErr || !claimed?.id)
+      return reply({ error: "make_delivery_already_processing" }, 409);
+    row.request_metadata = lockedMetadata;
+    try {
+      const configured = await provisionMakeLeads({
+        token: makeToken, teamId, facebookConnectionId, zapiConnectionId,
+        requestId, pageId, formId, recipient: saved.recipient,
+        clientName: clientRow.display_name, product: saved.product,
+        recipients: saved.mode === "ROUND_ROBIN" ? saved.recipients : undefined,
+        questions: mapped,
+      });
+      const next = { ...saved, status: "READY", scenario_id: configured.scenarioId,
+        hook_id: configured.hookId, data_store_id: configured.dataStoreId || null,
+        configured_at: new Date().toISOString() };
+      const { error: saveErr } = await ops.from("campaign_build_requests")
+        .update({ request_metadata: { ...row.request_metadata, make_delivery: next } })
+        .eq("id", requestId).eq("status", "CREATED");
+      if (saveErr) return reply({ error: "make_delivery_audit_failed",
+        scenario_id: configured.scenarioId }, 502);
+      return reply({ ok: true, status: "READY", scenario_id: configured.scenarioId,
+        page_id: pageId, form_id: formId, recipient: saved.recipient });
+    } catch (err) {
+      const next = { ...saved, status: "ERROR",
+        error: clean((err as Error).message, 140),
+        scenario_id: (err as any).scenarioId || null,
+        hook_id: (err as any).hookId || null };
+      await ops.from("campaign_build_requests").update({
+        request_metadata: { ...row.request_metadata, make_delivery: next },
+      }).eq("id", requestId).eq("status", "CREATED");
+      return reply({ error: "make_delivery_provision_failed", detail: next.error,
+        scenario_id: next.scenario_id }, 502);
+    }
+  }
+
   // --- EXECUTE ---
   if (action === "EXECUTE") {
     const requestId = clean(body?.request_id, 60);
@@ -1705,6 +1840,32 @@ Deno.serve(async (req: Request) => {
 
     // Overrides limitados vindos do preview (nomes, textos, orçamento)
     const overrides = body?.overrides && typeof body.overrides === "object" ? body.overrides : null;
+    const deliveryEnabled = overrides?.make_delivery?.enabled === true;
+    let makeRecipient = "";
+    if (deliveryEnabled) {
+      if (boostMode || plan.adset.destination.type !== "LEAD_FORM")
+        return reply({ error: "make_delivery_requires_form" }, 409);
+      if (clean(overrides.make_delivery.product, 110).length < 3)
+        return reply({ error: "make_product_required" }, 400);
+      try { makeRecipient = normalizeWhatsAppRecipient(overrides.make_delivery.recipient_phone); }
+      catch { return reply({ error: "make_recipient_invalid" }, 400); }
+      if (overrides.make_delivery.mode === "ROUND_ROBIN") {
+        const candidates = overrides.make_delivery.recipients;
+        if (!Array.isArray(candidates) || candidates.length < 2 || candidates.length > 25)
+          return reply({ error: "make_roleta_recipients_invalid" }, 400);
+        try {
+          const phones = candidates.map((r: Row) => normalizeWhatsAppRecipient(r.phone));
+          if (phones.length !== new Set(phones).size ||
+              candidates.some((r: Row) => clean(r.name, 80).length < 2))
+            return reply({ error: "make_roleta_recipients_invalid" }, 400);
+        } catch { return reply({ error: "make_roleta_recipients_invalid" }, 400); }
+      }
+      const { data: makeVaultKey } = await ops.rpc("get_secret", { p_name: "MAKE_API_TOKEN" });
+      const hasToken = Boolean(clean(Deno.env.get("MAKE_API_TOKEN"), 4000) ||
+        (typeof makeVaultKey === "string" && makeVaultKey.trim()));
+      if (!hasToken || Number(Deno.env.get("MAKE_FB_LEADS_CONNECTION_ID")) <= 0)
+        return reply({ error: "make_delivery_not_configured" }, 503);
+    }
     if (overrides) {
       if (clean(overrides.campaign_name, 120)) plan.campaign.name = clean(overrides.campaign_name, 120);
       if (clean(overrides.adset_name, 120)) plan.adset.name = clean(overrides.adset_name, 120);
@@ -2018,7 +2179,14 @@ Deno.serve(async (req: Request) => {
         created_ad_id: created.ad_id,
         error: null,
         plan,
-        request_metadata: { ...successMetadata(row.request_metadata), token_source: (resolved as any).candidate.source, account_name: (resolved as any).account?.name || null, created_ad_ids: created.ad_ids, created_creative_ids: created.creative_ids, placement },
+        request_metadata: { ...successMetadata(row.request_metadata), token_source: (resolved as any).candidate.source, account_name: (resolved as any).account?.name || null, created_ad_ids: created.ad_ids, created_creative_ids: created.creative_ids, placement,
+          ...(deliveryEnabled ? { make_delivery: { enabled: true, status: "PENDING", recipient: makeRecipient,
+            mode: overrides?.make_delivery?.mode === "ROUND_ROBIN" ? "ROUND_ROBIN" : "SINGLE",
+            product: clean(overrides?.make_delivery?.product, 110),
+            recipients: overrides?.make_delivery?.mode === "ROUND_ROBIN" ? overrides.make_delivery.recipients.map((r: Row) => ({
+              name: clean(r.name,80), phone: normalizeWhatsAppRecipient(r.phone),
+            })) : [],
+            page_id: pageId, form_id: numericId(plan.adset.destination.lead_form_id) } } : {}) },
       }).eq("id", requestId).eq("status", "EXECUTING").select("id").maybeSingle();
       if (createdSaveError || !savedRequest?.id) {
         // Os objetos existem na Meta, mas o registro nao confirmou: proibir
@@ -2051,6 +2219,7 @@ Deno.serve(async (req: Request) => {
         creative_ids: created.creative_ids,
         campaign_name: plan.campaign.name,
         placement,
+        make_delivery: deliveryEnabled ? { status: "PENDING", recipient: makeRecipient } : null,
         note: "Tudo criado PAUSADO. Revise no Gerenciador de Anúncios e ative por lá ou pela Central de Tráfego.",
       });
     } catch (error) {

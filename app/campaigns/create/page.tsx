@@ -164,6 +164,14 @@ export default function CampaignCreatePage() {
   const [confirmWord, setConfirmWord] = useState("");
   const [executing, setExecuting] = useState(false);
   const [creationStatus, setCreationStatus] = useState<"PAUSED" | "ACTIVE">("PAUSED");
+  const [makeDelivery, setMakeDelivery] = useState(false);
+  const [makeRecipient, setMakeRecipient] = useState("");
+  const [makeProduct, setMakeProduct] = useState("");
+  const [makeDeliveryMode, setMakeDeliveryMode] = useState<"SINGLE" | "ROUND_ROBIN">("SINGLE");
+  const [makeRecipients, setMakeRecipients] = useState<Array<{name: string;phone: string}>>([
+    { name: "", phone: "" }, { name: "", phone: "" },
+  ]);
+  const [makeBusyId, setMakeBusyId] = useState<string | null>(null);
   const [executionStep, setExecutionStep] = useState("");
   const [result, setResult] = useState<Row | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -233,6 +241,11 @@ export default function CampaignCreatePage() {
   const resetFlow = () => {
     setDraft(null); setDraftError(""); setOverrides({}); setConfirmWord(""); setResult(null);
     setCreationStatus("PAUSED");
+    setMakeDelivery(false);
+    setMakeRecipient("");
+    setMakeProduct("");
+    setMakeDeliveryMode("SINGLE");
+    setMakeRecipients([{ name: "", phone: "" }, { name: "", phone: "" }]);
   };
 
   const loadPosts = useCallback(async (name: string) => {
@@ -330,12 +343,47 @@ export default function CampaignCreatePage() {
     if (destination === "LEAD_FORM" && !/^\d{5,30}$/.test(formId)) {
       setDraftError("Selecione um formulário instantâneo válido antes de criar."); return;
     }
+    const recipient = makeRecipient.replace(/\D/g, "");
+    const makeProductName = (makeProduct || (method === "GUIDED" ? guided.product : "")).trim();
+    const roletaRecipients = makeRecipients.map((r) => ({
+      name: r.name.trim(), phone: r.phone.replace(/\D/g, ""),
+    }));
+    if (makeDelivery) {
+      if (makeProductName.length < 3) {
+        setDraftError("Informe o nome do produto que aparecerá no título NOVO LEAD."); return;
+      }
+      if (destination !== "LEAD_FORM") {
+        setDraftError("O envio via Make exige formulário instantâneo do Facebook."); return;
+      }
+      if (!boot?.make_delivery_available) {
+        setDraftError("Entrega via Make indisponível: é preciso configurar a credencial do Make e a conexão Facebook Lead Ads."); return;
+      }
+      if (makeDeliveryMode === "SINGLE" && !/^55[1-9][0-9]{9,10}$/.test(recipient)) {
+        setDraftError("Informe o número do destinatário com 55 + DDD + telefone, somente dígitos."); return;
+      }
+      if (makeDeliveryMode === "ROUND_ROBIN" && (
+          roletaRecipients.length < 2 || roletaRecipients.length > 25 ||
+          roletaRecipients.some((r) => r.name.length < 2 || !/^55[1-9][0-9]{9,10}$/.test(r.phone)) ||
+          new Set(roletaRecipients.map((r) => r.phone)).size !== roletaRecipients.length
+      )) {
+        setDraftError("Informe pelo menos dois corretores, com nomes e números de WhatsApp válidos e diferentes."); return;
+      }
+      if (creationStatus === "ACTIVE") {
+        setDraftError("Campanhas com entrega via Make devem ser criadas pausadas; ative somente depois da automação estar pronta."); return;
+      }
+    }
     if (draft.mode !== "BOOST" && creativeCount < 1) {
       setDraftError("Anexe ao menos um criativo e gere novamente o plano antes de criar."); return;
     }
     setExecuting(true); setDraftError(""); setExecutionStep("Criando campanha, conjunto e anúncios na Meta...");
     try {
-      const { ok, body } = await api({ action: "EXECUTE", request_id: draft.request_id, confirmation: "CRIAR", overrides });
+      const { ok, body } = await api({ action: "EXECUTE", request_id: draft.request_id, confirmation: "CRIAR",
+        overrides: { ...overrides, make_delivery: makeDelivery ? {
+          enabled: true, mode: makeDeliveryMode,
+          product: makeProductName,
+          recipient_phone: makeDeliveryMode === "SINGLE" ? recipient : roletaRecipients[0].phone,
+          recipients: makeDeliveryMode === "ROUND_ROBIN" ? roletaRecipients : [],
+        } : null } });
       if (!ok) {
         setDraftError(friendlyError(body, "A criação falhou. Nenhuma campanha foi ativada.") +
           (body?.detail ? ` Detalhe Meta: ${String(body.detail).slice(0, 230)}.` : "") +
@@ -345,7 +393,17 @@ export default function CampaignCreatePage() {
         await loadBoot();
         return;
       }
-      if (creationStatus === "ACTIVE") {
+      if (makeDelivery) {
+        setExecutionStep("Campanha pausada. Configurando Facebook Lead Ads e Z-API no Make...");
+        const automation = await api({ action: "CONFIGURE_MAKE_DELIVERY", request_id: draft.request_id });
+        if (automation.ok && automation.body?.status === "READY") {
+          setResult({ ...body, campaign_status: "PAUSED", make_delivery: automation.body });
+        } else {
+          setResult({ ...body, campaign_status: "PAUSED",
+            make_delivery: { status: "ERROR", error: friendlyError(automation.body, "Erro ao criar a automação no Make.") } });
+          setDraftError("Campanha criada PAUSADA, mas a entrega de leads ainda não está configurada. Não ative a campanha: consulte o erro e tente novamente no histórico.");
+        }
+      } else if (creationStatus === "ACTIVE") {
         setExecutionStep("Campanha criada. Ativando e verificando campanha, conjunto e anúncios...");
         try {
           const activation = await api({ action: "ACTIVATE_CREATED", request_id: draft.request_id, confirmation: "ATIVAR" });
@@ -363,6 +421,8 @@ export default function CampaignCreatePage() {
         setResult({ ...body, desired_status: "PAUSED", campaign_status: "PAUSED" });
       }
       setDraft(null); setPrompt(""); setFiles([]); setCreatives([]); setConfirmWord(""); setCreationStatus("PAUSED");
+      setMakeDelivery(false); setMakeRecipient(""); setMakeProduct("");
+      setMakeDeliveryMode("SINGLE"); setMakeRecipients([{ name: "", phone: "" }, { name: "", phone: "" }]);
       if (fileRef.current) fileRef.current.value = "";
       await loadBoot();
     } catch (error) {
@@ -433,6 +493,17 @@ export default function CampaignCreatePage() {
     } finally {
       setHistoryDiscardBusy(false);
     }
+  };
+
+  const configureMakeFromHistory = async (entry: Row) => {
+    if (makeBusyId) return;
+    setMakeBusyId(String(entry.id)); setHistoryError(""); setHistoryNotice("");
+    try {
+      const { ok, body } = await api({ action: "CONFIGURE_MAKE_DELIVERY", request_id: entry.id });
+      if (!ok) setHistoryError(friendlyError(body, "Não foi possível configurar o Make. A campanha permanece pausada."));
+      else setHistoryNotice("Automação ativa e verificada no Make. Cenário #" + String(body.scenario_id || ""));
+      await loadBoot();
+    } finally { setMakeBusyId(null); }
   };
 
   const activateFromHistory = async (entry: Row) => {
@@ -565,6 +636,16 @@ export default function CampaignCreatePage() {
               result.campaign_status === "PAUSED" ? "Campanha criada e pausada na Meta" :
               "Campanha criada; confirme o status na Meta"}: {result.campaign_name}</b>
             <div style={{ marginTop: 8 }}>IDs reais — campanha {result.campaign_id} · conjunto {result.adset_id} · anúncios {(result.ad_ids || [result.ad_id]).join(", ")}.</div>
+            {result.make_delivery?.status === "READY" && (
+              <div style={{ marginTop: 8, color: "#8ee1aa" }}>
+                Make + Z-API configurados · cenário #{result.make_delivery.scenario_id} · destinatário {result.make_delivery.recipient || "confirmado"}.
+              </div>
+            )}
+            {result.make_delivery?.status === "ERROR" && (
+              <div style={{ marginTop: 8, color: "#ffbd9e" }}>
+                Automação NÃO configurada: {result.make_delivery.error}. A campanha deve permanecer PAUSADA até corrigir.
+              </div>
+            )}
             {result.placement?.pairs ? <div style={{ marginTop: 6 }}>{result.placement.pairs} {result.placement.pairs === 1 ? "anúncio criado" : "anúncios criados"} com versão feed e versão story no mesmo anúncio.</div> : null}
             {(result.placement?.fallbacks || []).length ? <div style={{ marginTop: 6, color: "#ffcf7a" }}>Atenção: {(result.placement.fallbacks || []).length} par(es) feed+story foram criados como anúncios separados ({(result.placement.fallbacks || []).map((f: Row) => f.reason === "instagram_missing" ? "Instagram não vinculado à Página" : "Meta recusou a personalização").join("; ")}).</div> : null}
             {result.activation_error ? <div style={{ marginTop: 8, color: "#ffbd9e" }}>
@@ -806,6 +887,86 @@ export default function CampaignCreatePage() {
                     <LeadFormComposer key={draft.request_id} requestId={draft.request_id} clientName={clientName}
                       pageId={String(draft.assets?.page_id || "")}
                       api={api} onSelect={(id) => setOv("lead_form_id", id)} />
+                    <div className="cb-field full" style={{ marginTop: 18, padding: 14, border: "1px solid #254660", borderRadius: 12 }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <input type="checkbox" checked={makeDelivery}
+                          disabled={!boot?.make_delivery_available || executing}
+                          onChange={(e) => {
+                            setMakeDelivery(e.target.checked);
+                            if (e.target.checked) setCreationStatus("PAUSED");
+                          }} />
+                        Entregar novos leads via Make + Z-API (WhatsApp)
+                      </label>
+                      <span className="cb-hint">
+                        Usa a página e o formulário deste cliente. Todas as perguntas são recuperadas do formulário real da Meta e mapeadas automaticamente.
+                        A instância administrativa é o remetente; o destinatário é informado abaixo.
+                      </span>
+                      {!boot?.make_delivery_available && (
+                        <span className="cb-hint" style={{ color: "#ffcf7a" }}>
+                          Configuração pendente: falta integrar a API do Make e a conexão Facebook Lead Ads na Edge Function.
+                          Não será possível selecionar essa entrega até a integração estar pronta.
+                        </span>
+                      )}
+                      {makeDelivery && (
+                        <div className="cb-field" style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                          <label>Produto no cabeçalho NOVO LEAD - [produto] *</label>
+                          <input value={makeProduct} maxLength={110}
+                            onChange={(e) => setMakeProduct(e.target.value)}
+                            placeholder={method === "GUIDED" && guided.product ? guided.product : "Nome do imóvel / produto"} />
+                          <label>Modo de entrega</label>
+                          <div className="cb-methods" role="group" aria-label="Distribuição dos leads">
+                            <button type="button" className={makeDeliveryMode === "SINGLE" ? "chosen" : ""}
+                              onClick={() => setMakeDeliveryMode("SINGLE")}>WhatsApp único</button>
+                            <button type="button" className={makeDeliveryMode === "ROUND_ROBIN" ? "chosen" : ""}
+                              onClick={() => setMakeDeliveryMode("ROUND_ROBIN")}>Roleta de corretores (2 ou mais)</button>
+                          </div>
+                          {makeDeliveryMode === "SINGLE" ? (
+                            <>
+                              <label>WhatsApp que receberá os leads * (55 + DDD + número)</label>
+                              <input type="tel" inputMode="numeric" required maxLength={22}
+                                autoComplete="off" value={makeRecipient} onChange={(e) => setMakeRecipient(e.target.value)}
+                                placeholder="5511999999999" />
+                            </>
+                          ) : (
+                            <>
+                              <span className="cb-hint">Cada novo lead será encaminhado a um corretor por vez, na ordem abaixo. A roleta será sequencial e salvará a posição no Data Store exclusivo da campanha.</span>
+                              {makeRecipients.map((r,idx) => (
+                                <div key={idx} className="cb-grid" style={{ alignItems: "end" }}>
+                                  <div className="cb-field">
+                                    <label>Corretor {idx+1} — nome *</label>
+                                    <input value={r.name} maxLength={80}
+                                      onChange={(e) => setMakeRecipients(old => old.map((v,i) => i === idx ? {...v,name:e.target.value} : v))}
+                                      placeholder="Nome do corretor" />
+                                  </div>
+                                  <div className="cb-field">
+                                    <label>WhatsApp (55 + DDD + número) *</label>
+                                    <input type="tel" inputMode="numeric" maxLength={22}
+                                      value={r.phone}
+                                      onChange={(e) => setMakeRecipients(old => old.map((v,i) => i === idx ? {...v,phone:e.target.value} : v))}
+                                      placeholder="5511999999999" />
+                                  </div>
+                                  {makeRecipients.length > 2 && (
+                                    <button type="button" className="cb-btn ghost"
+                                      onClick={() => setMakeRecipients(old => old.filter((_,i) => i !== idx))}>
+                                      Remover corretor {idx+1}
+                                    </button>
+                                  )}
+                                </div>
+                              ))}
+                              <button type="button" className="cb-btn ghost" disabled={makeRecipients.length>=25}
+                                onClick={() => setMakeRecipients(old => [...old,{name:"",phone:""}])}>+ Adicionar corretor</button>
+                            </>
+                          )}
+                          <span className="cb-hint">
+                            Confirme antes de criar: cliente {clientName || "—"} · página {String(draft.assets?.page_id || "—")} ·
+                            formulário {String(ov("lead_form_id", plan.adset?.destination?.lead_form_id || "") || "não selecionado")} ·
+                            {makeDeliveryMode === "SINGLE" ? " destinatário " + (makeRecipient || "não informado")
+                              : " roleta para " + makeRecipients.length + " corretores"}.
+                            Campanha ficará pausada até a configuração do Make ser verificada.
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
@@ -877,7 +1038,7 @@ export default function CampaignCreatePage() {
                     Criar pausada (padrão)
                     <small>Campanha, conjunto e anúncios ficam pausados. Sem novos gastos.</small>
                   </button>
-                  <button type="button" aria-pressed={creationStatus === "ACTIVE"} disabled={executing}
+                  <button type="button" aria-pressed={creationStatus === "ACTIVE"} disabled={executing || makeDelivery}
                     className={creationStatus === "ACTIVE" ? "chosen" : ""}
                     onClick={() => setCreationStatus("ACTIVE")}>
                     Criar ativa
@@ -916,7 +1077,9 @@ export default function CampaignCreatePage() {
                 (boot?.profile?.is_adler || boot?.profile?.role === "MGMT" || ownedByMe);
               const confirming = historyDiscardId === h.id;
               const activationConfirming = activationConfirmId === h.id;
-              const mayActivate = h.status === "CREATED" && Boolean(h.created_campaign_id && h.created_adset_id && h.created_ad_id) &&
+              const mayActivate = h.status === "CREATED" &&
+                (!h.make_delivery?.enabled || h.make_delivery.status === "READY") &&
+                Boolean(h.created_campaign_id && h.created_adset_id && h.created_ad_id) &&
                 (boot?.profile?.is_adler || boot?.profile?.role === "MGMT" || ownedByMe);
               return (
                 <article key={h.id} className="cb-history-item">
@@ -930,11 +1093,19 @@ export default function CampaignCreatePage() {
                     {h.plan?.adset?.daily_budget_brl ? <> · {money(h.plan.adset.daily_budget_brl)}/dia</> : null}
                     {h.created_campaign_id ? <> · campanha {h.created_campaign_id}</> : null}
                     {h.activation_verified_at ? <> · última ativação verificada em {dateTime(h.activation_verified_at)}</> : null}
+                    {h.make_delivery?.enabled ? <> · Make: {h.make_delivery.status} · destino {h.make_delivery.recipient}</> : null}
                     {h.status === "FAILED" && h.error ? <> · {String(h.error).slice(0, 140)}</> : null}
                     {h.status === "DRAFTED" && h.expires_at && Date.parse(h.expires_at) < Date.now() ? <> · prazo expirado</> : null}
                   </small>
-                  {(mayResume || mayDiscard || mayActivate) && (
+                  {(mayResume || mayDiscard || mayActivate ||
+                    (h.status === "CREATED" && h.make_delivery?.enabled && h.make_delivery.status !== "READY")) && (
                     <div className="cb-history-actions">
+                      {h.status === "CREATED" && h.make_delivery?.enabled && h.make_delivery.status !== "READY" && (
+                        <button type="button" disabled={Boolean(makeBusyId)}
+                          onClick={() => void configureMakeFromHistory(h)}>
+                          {makeBusyId === h.id ? "Configurando Make..." : "Configurar / reparar entrega no Make"}
+                        </button>
+                      )}
                       {mayResume && !confirming && (
                         <button type="button" disabled={Boolean(resumingId) || historyDiscardBusy}
                           onClick={() => void resumeFromHistory(h)}>
