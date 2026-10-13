@@ -20,12 +20,20 @@ html[data-motion-bg="leve"]:not([data-theme="light"]) :is(.motion-live-bg,.motio
 html[data-motion-bg="medio"]:not([data-theme="light"]) :is(.motion-live-bg,.motion-live-fx,.motion-live-grid),
 html[data-motion-bg="forte"]:not([data-theme="light"]) :is(.motion-live-bg,.motion-live-fx,.motion-live-grid){opacity:1}
 
-/* Paginas com fundo proprio e opaco (Campanhas, Financeiro, Radar...): o canvas
-   nao aparece por tras, entao a luz passa por cima em "screen", bem mais fraca,
-   e sem os pulsos e a malha, que atrapalhariam a leitura. */
-.motion-live-bg.is-overlay{z-index:1;mix-blend-mode:screen}
+/* Paginas opacas (Campanhas, Financeiro, Radar...): a luz, os pulsos e a
+   malha passam suavemente por cima em "screen", com opacidade limitada.
+   Nenhuma camada intercepta cliques ou muda as dimensoes da pagina. */
+/* Em rotas que desenham um fundo opaco, manter TODAS as camadas discretas
+   acima desse fundo. Sem isso, as abas pareciam nao ter Motion Live. */
+.motion-live-bg.is-overlay,
 .motion-live-fx.is-overlay,
-.motion-live-grid.is-overlay{display:none}
+.motion-live-grid.is-overlay{z-index:1;mix-blend-mode:screen}
+html[data-motion-bg="leve"]:not([data-theme="light"]) .motion-live-fx.is-overlay,
+html[data-motion-bg="leve"]:not([data-theme="light"]) .motion-live-grid.is-overlay{opacity:.14}
+html[data-motion-bg="medio"]:not([data-theme="light"]) .motion-live-fx.is-overlay,
+html[data-motion-bg="medio"]:not([data-theme="light"]) .motion-live-grid.is-overlay{opacity:.22}
+html[data-motion-bg="forte"]:not([data-theme="light"]) .motion-live-fx.is-overlay,
+html[data-motion-bg="forte"]:not([data-theme="light"]) .motion-live-grid.is-overlay{opacity:.30}
 
 /* Malha que acende perto do cursor. Mesmo passo (44px) e mesma cor da malha
    que o body::before ja desenha em motion-system.css. */

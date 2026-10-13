@@ -33,12 +33,32 @@ const BADGE_SELECTOR = ".icon-btn b, .counter";
 const KNOWN_REVEAL = ".card, .action-card, .metric, .health-item, .ops-cockpit-lane, .ops-incident";
 
 // Cards das outras abas, que motion-system.tsx nao conhece.
+// Componentes identificados nas diferentes rotas do Dashboard. A lista e
+// intencionalmente explicita: evita animar botoes e formularios por engano.
 const EXTRA_REVEAL = [
-  ".mr-card", ".voc-card", ".funnel-card", ".cp-card", ".aiw-card", ".mc-creative-card",
-  ".aii-budget-card", ".person-card", ".evidence-card", ".detail-card", ".system-update-card",
-  ".rv2-panel", ".rv2-kpi", ".cp-kpi", ".cd-kpi", ".lc-kpi", ".cfc-kpi", ".cc-kpi", ".cc-stat",
-  ".c360-metric", ".aih-metric",
+  // Campanhas, criacao, leads e relatorios
+  ".tc-section", ".tc-metric", ".tc-tab-body", ".cb-card", ".cb-plan-section",
+  ".cb-guide-section", ".lc-kpi", ".mr-card", ".wr-client",
+  // Operacao, financeiro, onboarding e atendimento
+  ".cb-panel", ".cb-banner", ".finance-panel", ".fr-card",
+  ".lo-card", ".lo-meeting-row", ".lw-list", ".ob-card",
+  ".ob-assignment-card", ".ob-sla-section", ".of-card", ".op-card",
+  ".oo-client", ".oh-card", ".oh-section", ".nh-kpis", ".nh-list",
+  ".learning-card", ".dn-card", ".voc-card", ".funnel-card",
+  // Comercial, Meta, inteligencia e ferramentas
+  ".cp-card", ".cp-report-card", ".cp-week-card", ".ma-metric",
+  ".ma-window-summary", ".mp-card", ".mp-focus-summary",
+  ".rv2-panel", ".rv2-kpi", ".rv2-risk-panel", ".rv2-creative-card",
+  ".aih-metric", ".aih-section", ".ai-context-card",
+  // Outros componentes que ja recebem movimento no Dashboard
+  ".aiw-card", ".mc-creative-card", ".aii-budget-card",
+  ".person-card", ".evidence-card", ".detail-card", ".system-update-card",
+  ".cp-kpi", ".cd-kpi", ".cfc-kpi", ".cc-kpi", ".cc-stat", ".c360-metric",
 ].join(",");
+
+// Garante uma entrada sutil mesmo nas abas que usam componentes proprios sem
+// nenhum dos seletores acima. Novos paineis sao observados na navegacao SPA.
+const PAGE_REVEAL = "main, [role='main'], [role='tabpanel']";
 
 const RISE: Keyframe[] = [
   { opacity: 0, transform: "translate3d(0, 22px, 0) scale(.975)", filter: "blur(5px)" },
@@ -152,9 +172,9 @@ export default function MotionLive() {
           background.height = h;
         }
         const t = ms / 1000;
-        // Por cima do conteudo a luz tinge os cards: fica bem mais fraca e nunca
-        // passa do equivalente ao nivel medio.
-        const gain = overlay ? Math.min(GAIN[level], GAIN.medio) * 0.4 : GAIN[level];
+      // Sobre fundos proprios a luz fica suave, mas cada intensidade continua
+      // diferente (inclusive Forte), sem depender da transparencia da pagina.
+      const gain = overlay ? GAIN[level] * 0.4 : GAIN[level];
         bg.clearRect(0, 0, w, h);
         bg.globalCompositeOperation = "lighter";
         for (const b of BLOBS) {
@@ -169,8 +189,8 @@ export default function MotionLive() {
         }
       }
 
-      // Pulsos de luz correndo pelas linhas da malha. So quando o fundo fica
-      // atras do conteudo; por cima do texto eles atrapalhariam a leitura.
+      // Pulsos de luz pelas linhas da malha: discretos tambem sobre telas
+      // opacas, com quantidade e intensidade reduzidas.
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
       const fxWidth = Math.round(viewWidth * ratio);
       const fxHeight = Math.round(viewHeight * ratio);
@@ -180,10 +200,13 @@ export default function MotionLive() {
       }
       fx.setTransform(ratio, 0, 0, ratio, 0, 0);
       fx.clearRect(0, 0, viewWidth, viewHeight);
-      if (!overlay) {
-        const wanted = PULSES[level];
+      {
+        // Em telas opacas, os pulsos continuam presentes, porem em menor
+        // quantidade e opacidade para nao disputar atencao com o conteudo.
+        const wanted = overlay ? Math.ceil(PULSES[level] / 3) : PULSES[level];
         while (pulses.length < wanted) pulses.push(spawnPulse({} as Pulse));
         pulses.length = wanted;
+        fx.globalAlpha = overlay ? 0.26 : 1;
         fx.lineWidth = 1;
         for (const pulse of pulses) {
           pulse.pos += pulse.dir * pulse.speed * dt;
@@ -213,6 +236,7 @@ export default function MotionLive() {
           fx.arc(x1, y1, 1.4, 0, Math.PI * 2);
           fx.fill();
         }
+        fx.globalAlpha = 1;
       }
 
       frame = window.requestAnimationFrame(draw);
@@ -290,6 +314,7 @@ export default function MotionLive() {
 
     const pending = new WeakSet<Element>();
     const revealed = new WeakSet<Element>();
+    const rootsRevealed = new WeakSet<Element>();
     const reveal = (el: Element, delay = 0) => {
       if (revealed.has(el) || !(el instanceof HTMLElement)) return;
       revealed.add(el);
@@ -320,6 +345,17 @@ export default function MotionLive() {
     };
     const register = (scope: Element) => {
       let index = 0;
+      // Entrada leve da superficie principal em qualquer rota ou tab interna,
+      // mesmo se o modulo nao usar classes de card reconhecidas.
+      matchesIn(scope, PAGE_REVEAL).forEach((el) => {
+        if (!(el instanceof HTMLElement) || rootsRevealed.has(el)) return;
+        rootsRevealed.add(el);
+        if (!motionOn) return;
+        el.animate(
+          [{ opacity: 0.94, filter: "blur(1.5px)" }, { opacity: 1, filter: "blur(0)" }],
+          { duration: 390, easing: EASE, fill: "backwards" },
+        );
+      });
       // Cards novos (outras abas): entram agora se estiverem na tela.
       matchesIn(scope, EXTRA_REVEAL).forEach((el) => {
         if (revealed.has(el) || pending.has(el)) return;
