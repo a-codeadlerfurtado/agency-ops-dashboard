@@ -124,6 +124,15 @@ export default function Dashboard() {
   const [opsQuestion, setOpsQuestion] = useState("");
   const [selected, setSelected] = useState<Row | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  // Contexto de tela para a Jarvis: publica so o UUID do cliente aberto no
+  // drawer. O worker valida contra a lista permitida do usuario e so usa quando
+  // a frase aponta para a tela ("ele", "esse cliente"). Ver worker/jarvis/screen-context.ts.
+  useEffect(() => {
+    const aberto = selected && !(selected as any).error && !(selected as any).carregando ? ((selected as any).client || selected) : null;
+    const id = String(aberto?.client_id ?? "").trim();
+    (window as any).__jarvisTela = { client_id: id || null };
+    return () => { (window as any).__jarvisTela = null; };
+  }, [selected]);
   const [lifecycleFilter, setLifecycleFilter] = useState("ACTIVE");
   const [campaignFilter, setCampaignFilter] = useState("ACTIVE");
   const [commandOpen, setCommandOpen] = useState(false);

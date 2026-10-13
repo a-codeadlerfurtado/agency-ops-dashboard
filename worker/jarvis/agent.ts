@@ -14,6 +14,7 @@ import { identidade, sanitizarResposta } from "./identity";
 import { avaliarChamada, filtrarCatalogo, sanitizarContextoFinanceiro } from "./finance-guard";
 import { resolverClienteMencionado, contarClientesAtivos, resolverResponsavelMencionado, contarClientesAtivosPorResponsavel, normalizarTranscricaoOperacional, type ClientePermitido } from "./memory";
 import { tentarFastPath } from "./fast-path";
+import { resolverClienteDaTela } from "./screen-context";
 import { carregarMidiaClienteDia } from "./state";
 import { contextoDeVocabulario } from "./intent";
 import {
@@ -264,6 +265,8 @@ export type EntradaChat = {
   conversation_id?: string | null;
   message?: string;
   client_id?: string | null;
+  /** Cliente aberto na tela. So vale se a frase apontar para a tela e o usuario puder ve-lo. */
+  screen_client_id?: string | null;
   voice?: boolean;
 };
 
@@ -288,7 +291,10 @@ export async function rodarAgente(
   // Sem esta etapa, uma conversa ja vinculada a um cliente nunca trocava para
   // outro: o workspace prioriza o client_id persistido.
   const clientesPermitidos = await estagio("clients_allowed", () => carregarClientesPermitidos(eu, jwt, env)).catch(() => [] as ClientePermitido[]);
-  const mencionado = resolverClienteMencionado(mensagem, clientesPermitidos);
+  // Nome citado ganha; sem nome, "ele" / "esse cliente" resolve para o cliente
+  // aberto na tela -- validado contra a lista permitida, nunca aceito direto.
+  const mencionado = resolverClienteMencionado(mensagem, clientesPermitidos)
+    ?? resolverClienteDaTela(mensagem, entrada.screen_client_id, clientesPermitidos);
   const clientIdPreferido = String(entrada.client_id ?? mencionado?.client_id ?? "").trim() || null;
 
   // conversations/create SAIU do caminho critico.

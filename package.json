@@ -9,7 +9,7 @@
     "start": "vinext start",
     "typecheck": "tsc --noEmit",
     "test:capacity": "node --test shared/capacity/capacity.test.ts",
-    "test:jarvis": "node --test worker/jarvis/guards.test.ts",
+    "test:jarvis": "node --test worker/jarvis/guards.test.ts app/jarvis-speech.test.ts",
     "test:home-policy": "node scripts/check-home-overview-policy.mjs",
     "test:relato-policy": "node scripts/check-relato-call-policy.mjs",
     "test:adler-warning-policy": "node scripts/check-adler-warning-policy.mjs",

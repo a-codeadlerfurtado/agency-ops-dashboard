@@ -18,6 +18,7 @@ import { RESPOSTA_BLOQUEIO, avaliarPergunta, temContextoDeMidia } from "./financ
 import { ehSaudacao, respostaSaudacao } from "./smalltalk";
 import { resolverClienteMencionado } from "./memory";
 import { carregarMidiaClienteDia } from "./state";
+import { idDeTela, referenciaClienteDaTela } from "./screen-context";
 import type { EnvJarvis } from "./tools";
 
 const MAX_JSON_BYTES = 64 * 1024;
@@ -68,17 +69,24 @@ function detectarMidiaObjetiva(mensagem: string): { metric: "leads" | "spend" | 
   return { metric, date: dataBrasilia(rotulo === "ontem" ? -1 : 0), rotulo };
 }
 
-async function consultarMidiaObjetiva(mensagem: string, date: string, jwt: string, env: EnvJarvis): Promise<any | null> {
+async function consultarMidiaObjetiva(mensagem: string, date: string, jwt: string, env: EnvJarvis, telaId: string | null = null): Promise<any | null> {
   // Se o warm-lite terminou enquanto o usuario falava, resolve o cliente no KV e
   // consulta o snapshot por UUID. Evita a resolucao fuzzy no banco no caminho quente.
   let sub = ""; try { const b=jwt.split(".")[1].replace(/-/g,"+").replace(/_/g,"/"); sub=String(JSON.parse(atob(b))?.sub ?? ""); } catch {}
   if (sub && env.JARVIS_CACHE) {
     const clientes = await env.JARVIS_CACHE.get(`jarvis:clientes:v2:${sub}`, "json").catch(() => null);
     if (Array.isArray(clientes)) {
-      const cliente = resolverClienteMencionado(mensagem, clientes as any[]);
+      // Nome citado ganha da tela. A tela so entra quando a frase aponta para ela
+      // ("ele", "esse cliente") e o UUID esta na lista permitida deste usuario.
+      const cliente = resolverClienteMencionado(mensagem, clientes as any[])
+        ?? (telaId ? (clientes as any[]).find((c) => String(c?.client_id ?? "").toLowerCase() === telaId) ?? null : null);
       if (cliente?.client_id) { const direto = await carregarMidiaClienteDia(cliente.client_id, date, jwt, env).catch(() => null); if (direto?.ok) return direto; }
     }
   }
+  // Frase que aponta para a tela nao tem nome para a RPC resolver por texto:
+  // mandar "ele" para a busca fuzzy devolveria no_data. Deixa o agente tratar,
+  // que carrega a lista permitida e aplica o mesmo contexto de tela.
+  if (telaId) return { adiar: true };
   const r = await fetch("https://bfzdetibfcwihfkltbkp.supabase.co/rest/v1/rpc/jarvis_direct_media_query_snapshot", {
     method: "POST",
     headers: {
@@ -261,7 +269,8 @@ export async function rotearJarvis(request: Request, env: EnvJarvis & { JARVIS_S
   // "quantos leads o Caio Montenegro teve ontem?".
   const midiaObjetiva = detectarMidiaObjetiva(mensagem);
   if (midiaObjetiva) {
-    const snap = await consultarMidiaObjetiva(mensagem, midiaObjetiva.date, jwt, env);
+    const telaId = referenciaClienteDaTela(mensagem) ? idDeTela(corpo.screen_client_id) : null;
+    const snap = await consultarMidiaObjetiva(mensagem, midiaObjetiva.date, jwt, env, telaId);
     if (snap?.ok === true) {
       const nome = String(snap.display_name ?? "O cliente");
       let texto = "";
@@ -322,6 +331,7 @@ export async function rotearJarvis(request: Request, env: EnvJarvis & { JARVIS_S
           conversation_id: (corpo.conversation_id as string) ?? null,
           message: mensagem,
           client_id: (corpo.client_id as string) ?? null,
+          screen_client_id: idDeTela(corpo.screen_client_id),
           voice: corpo.voice === true,
         },
         jwt, env, canal, undefined, undefined,
