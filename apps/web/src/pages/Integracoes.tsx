@@ -523,8 +523,22 @@ function Conexao({
                     className="btn" disabled={salvando || !tokenPagina.trim()}
                     onClick={() => mexer(async () => {
                       await atualizarFonte(fonte.id, { tokenDaPagina: tokenPagina.trim() });
+
+                      // Token novo e assinatura leadgen sao uma unica operacao:
+                      // salvar sem reassinar deixaria a tela verde com lead sem chegar.
+                      const nonce = await prepararTeste(fonte.id);
+                      const resp = await fetch(
+                        `${BASE}/v1/meta/testar?n=${encodeURIComponent(nonce)}`,
+                        { method: "POST" }
+                      );
+                      const corpo = await resp.json().catch(() => ({})) as {
+                        erro?: string; aviso?: string;
+                      };
+                      if (!resp.ok) throw new Error(corpo.erro ?? "Falha ao renovar webhook da Meta.");
+                      if (corpo.aviso) throw new Error(corpo.aviso);
+
                       setTokenPagina("");
-                      avisar("ok", "Token de pagina salvo.");
+                      avisar("ok", "Token salvo, webhook renovado e leitura de leads validada.");
                     })}
                   >
                     Salvar

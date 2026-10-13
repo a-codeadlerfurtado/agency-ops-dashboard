@@ -6,6 +6,10 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
+  // Lead Ads entra instantaneamente pelo webhook. Este cron de 1 minuto e
+  // apenas uma rede de seguranca contra evento que a Meta deixe de entregar.
+  "triggers": { "crons": ["* * * * *"] },
+
   // SLA sem cron (spec 32): o Workflow dorme o tempo do SLA e so acorda uma
   // vez, por lead. Nao ha varredura periodica competindo por CPU com os
   // outros projetos que rodam nesta conta.

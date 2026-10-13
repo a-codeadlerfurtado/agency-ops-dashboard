@@ -1,4 +1,4 @@
-import { ingerir, json, tokenDoRequest, webhookDoApp } from "./rotas/ingest";
+import { ingerir, json, reconciliarMeta, tokenDoRequest, webhookDoApp } from "./rotas/ingest";
 import {
   assinarPagina, callbackOAuth, listarPaginas, verificarWebhookDoApp, type EnvMeta,
 } from "./rotas/meta-oauth";
@@ -24,6 +24,10 @@ export default {
     // O CORS entra num lugar so, na saida. Espalhar cabecalho por rota
     // garantiria esquecer de alguma -- foi assim que este bug nasceu.
     return comCors(await rotear(req, env), req, env);
+  },
+
+  async scheduled(_controller: ScheduledController, env: EnvComLimite, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(reconciliarMeta(env));
   },
 } satisfies ExportedHandler<EnvComLimite>;
 

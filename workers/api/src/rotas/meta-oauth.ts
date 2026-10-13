@@ -131,6 +131,16 @@ export async function callbackOAuth(url: URL, env: EnvMeta): Promise<Response> {
       p_paginas: paginas,
     });
 
+    // Se alguma dessas paginas ja alimentava o CRM, renovar o token tambem
+    // renova a assinatura leadgen. Assim trocar token/OAuth nunca deixa uma
+    // conexao aparentemente ativa mas sem notificacao em tempo real.
+    for (const pagina of paginas) {
+      const aviso = await reassinarFonteExistente(env, pagina.id, pagina.access_token);
+      if (aviso) {
+        return voltarPara(env, { meta: "erro", motivo: `${pagina.name}: ${aviso}` });
+      }
+    }
+
     return voltarPara(env, { meta: "ok", paginas: String(r?.paginas ?? paginas.length) });
   } catch (e) {
     console.error(JSON.stringify({
@@ -237,10 +247,93 @@ export async function listarPaginas(url: URL, env: EnvMeta): Promise<Response> {
       p_state: state,
       p_paginas: [{ id: p.id, name: p.name, access_token: p.access_token }],
     });
+
+    // Se esta pagina ja estava conectada, a renovacao do token reassina
+    // leadgen automaticamente e valida leitura real de formularios/leads.
+    const aviso = await reassinarFonteExistente(env, p.id, p.access_token);
+    if (aviso) {
+      return json({
+        erro: `Pagina importada, mas a conexao em tempo real nao ficou pronta: ${aviso}`,
+        pagina_salva: true,
+      }, 502);
+    }
+
     return json({ ok: true, paginas: salvo?.paginas ?? 1, nome: p.name });
   } catch (e) {
     return json({ erro: e instanceof Error ? e.message : String(e) }, 502);
   }
+}
+
+interface ResultadoAssinaturaMeta {
+  ok: boolean;
+  erro?: string;
+}
+
+async function assinarLeadgen(pageId: string, pageAccessToken: string): Promise<ResultadoAssinaturaMeta> {
+  let ultimoErro = "Falha ao assinar leadgen.";
+
+  for (let tentativa = 1; tentativa <= 3; tentativa++) {
+    try {
+      const corpoDaAssinatura = new URLSearchParams({
+        subscribed_fields: "leadgen",
+        access_token: pageAccessToken,
+      });
+      const r = await fetch(
+        `${GRAPH}/${encodeURIComponent(pageId)}/subscribed_apps`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: corpoDaAssinatura.toString(),
+        }
+      );
+      const corpo = await r.json().catch(() => ({})) as {
+        success?: boolean; error?: { message?: string };
+      };
+
+      if (r.ok && corpo.success !== false) return { ok: true };
+      ultimoErro = corpo.error?.message ?? `Meta respondeu ${r.status}`;
+      if (r.status !== 429 && r.status < 500) break;
+    } catch (e) {
+      ultimoErro = e instanceof Error ? e.message : String(e);
+    }
+
+    if (tentativa < 3) {
+      await new Promise((resolve) => setTimeout(resolve, tentativa * 250));
+    }
+  }
+
+  return { ok: false, erro: ultimoErro };
+}
+
+/**
+ * Reassina automaticamente uma pagina que ja esta conectada ao CRM.
+ * Isso roda sempre que o token da pagina e renovado pela BM/OAuth.
+ */
+async function reassinarFonteExistente(
+  env: EnvMeta,
+  pageId: string,
+  pageAccessToken: string
+): Promise<string | null> {
+  const fonte = await fonteDaPagina(env, pageId);
+  if (!fonte?.id) return null;
+
+  const assinatura = await assinarLeadgen(pageId, pageAccessToken);
+  if (!assinatura.ok) {
+    const erro = assinatura.erro ?? "Falha ao renovar webhook leadgen.";
+    await rpc(env, "marcar_assinada", { p_id: fonte.id, p_erro: erro }).catch(() => {});
+    return erro;
+  }
+
+  await rpc(env, "marcar_assinada", { p_id: fonte.id, p_erro: null });
+
+  const checagem = await checarPagina(pageId, pageAccessToken);
+  if (!checagem.ok) {
+    const erro = checagem.acao ?? "Conexao Meta incompleta.";
+    await rpc(env, "registrar_diagnostico", { p_id: fonte.id, p_erro: erro }).catch(() => {});
+    return erro;
+  }
+
+  return null;
 }
 
 /**
@@ -268,25 +361,9 @@ export async function assinarPagina(url: URL, env: EnvMeta): Promise<Response> {
   }
 
   try {
-    // Formulario, e nao JSON: a Graph aceita JSON em algumas bordas e ignora
-    // em outras, e `subscribed_apps` e das antigas. Form-encoded e o formato
-    // que a documentacao usa e o que se comporta igual em todas as versoes.
-    const corpoDaAssinatura = new URLSearchParams({
-      subscribed_fields: "leadgen",
-      access_token: fonte.page_access_token,
-    });
-
-    const r = await fetch(
-      `${GRAPH}/${encodeURIComponent(fonte.page_id)}/subscribed_apps`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: corpoDaAssinatura.toString(),
-      }
-    );
-    const corpo = await r.json() as { success?: boolean; error?: { message?: string } };
-    if (!r.ok || corpo.success === false) {
-      const msg = corpo.error?.message ?? `Meta respondeu ${r.status}`;
+    const assinatura = await assinarLeadgen(fonte.page_id, fonte.page_access_token);
+    if (!assinatura.ok) {
+      const msg = assinatura.erro ?? "Falha ao assinar leadgen.";
       await rpc(env, "marcar_assinada", { p_id: fonte.id, p_erro: msg });
       return json({ erro: msg }, 502);
     }
@@ -340,10 +417,9 @@ export function verificarWebhookDoApp(url: URL, env: EnvMeta): Response {
 export async function fonteDaPagina(
   env: EnvMeta,
   pageId: string
-): Promise<{ token_sha256: string; page_access_token: string | null } | null> {
-  try {
-    return await rpc(env, "fonte_da_pagina", { p_page_id: pageId });
-  } catch {
-    return null;
-  }
+): Promise<{ id: string; token_sha256: string; page_access_token: string | null } | null> {
+  // Erro de banco NAO e "pagina sem destino". Se o Supabase estiver
+  // indisponivel, deixamos a excecao subir para responder 5xx; assim a Meta
+  // reenvia o aviso em vez de considerarmos o lead entregue e perde-lo.
+  return rpc(env, "fonte_da_pagina", { p_page_id: pageId });
 }

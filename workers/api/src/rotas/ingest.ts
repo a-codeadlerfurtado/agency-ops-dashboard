@@ -95,7 +95,7 @@ const adaptadorMeta: Adaptador = (corpo) => {
     },
     // leadgen_id e o identificador estavel da Meta: e ele que torna o reenvio
     // do mesmo lead inofensivo (spec 64).
-    eventoExterno: texto(c.leadgen_id ?? c.lead_id ?? c.event_id),
+    eventoExterno: texto(c.leadgen_id ?? c.lead_id ?? c.event_id ?? c.id),
   };
 };
 
@@ -304,23 +304,33 @@ async function salvarLead(
   lead: LeadNormalizado,
   integracao: string
 ): Promise<Salvo> {
-  let r: RespostaIngestao;
-  try {
-    r = await rpc<RespostaIngestao>(env, "ingerir_lead", {
-      p_token_sha256: tokenSha,
-      p_full_name: lead.nome,
-      p_phone: lead.telefone ?? null,
-      p_email: lead.email ?? null,
-      p_attribution: limpar(lead.atribuicao),
-      p_external_event_id: lead.eventoExterno ?? null,
-    });
-  } catch (e) {
-    if (e instanceof ErroDeBanco && e.codigo === "42501") {
-      return { erro: "Credencial de ingestao invalida.", status: 401 };
+  let r: RespostaIngestao | null = null;
+  let ultimoErro: unknown = null;
+  for (let tentativa = 1; tentativa <= 3 && !r; tentativa++) {
+    try {
+      r = await rpc<RespostaIngestao>(env, "ingerir_lead", {
+        p_token_sha256: tokenSha,
+        p_full_name: lead.nome,
+        p_phone: lead.telefone ?? null,
+        p_email: lead.email ?? null,
+        p_attribution: limpar(lead.atribuicao),
+        p_external_event_id: lead.eventoExterno ?? null,
+      });
+    } catch (e) {
+      ultimoErro = e;
+      if (e instanceof ErroDeBanco && e.codigo === "42501") {
+        return { erro: "Credencial de ingestao invalida.", status: 401 };
+      }
+      const transitorio = !(e instanceof ErroDeBanco) || e.status === 429 || e.status >= 500;
+      if (!transitorio || tentativa === 3) break;
+      await new Promise((resolve) => setTimeout(resolve, tentativa * 250));
     }
+  }
+
+  if (!r) {
     console.error(JSON.stringify({
       evento: "ingest.falhou", integracao,
-      erro: e instanceof Error ? e.message : String(e),
+      erro: ultimoErro instanceof Error ? ultimoErro.message : String(ultimoErro),
     }));
     return { erro: "Nao foi possivel registrar o lead.", status: 502 };
   }
@@ -384,11 +394,9 @@ async function salvarLead(
 /**
  * Lote de avisos da Meta.
  *
- * Sempre responde 200, mesmo quando nao consegue montar nenhum lead. A Meta
- * reenvia o webhook em cima de qualquer status de erro e desativa a inscricao
- * depois de reenviar muito; devolver 500 aqui transformaria uma falha de
- * configuracao (token de pagina faltando) em integracao desligada. O que
- * aconteceu fica no last_error da fonte, que a tela mostra.
+ * Sucesso responde 200. Falha de leitura/gravação responde 5xx para a Meta
+ * reentregar o mesmo leadgen_id. A ingestao e idempotente, entao repetir um
+ * aviso ja salvo nao cria duplicata e evita perda silenciosa.
  */
 async function ingerirAvisosDaMeta(
   avisos: { leadgen_id?: string }[],
@@ -401,7 +409,9 @@ async function ingerirAvisosDaMeta(
     await anotarErro(env, tokenSha,
       "Chegou aviso de lead da Meta, mas falta o token de pagina para ler os dados.");
     console.warn(JSON.stringify({ evento: "meta.sem_token_de_pagina", avisos: avisos.length }));
-    return json({ ok: true, ignorados: avisos.length, motivo: "sem token de pagina" });
+    // Nao confirmar entrega quando nao conseguimos ler o lead. A Meta deve
+    // reenviar o mesmo leadgen_id; a ingestao e idempotente e nao duplica.
+    return json({ ok: false, falhas: avisos.length, motivo: "sem token de pagina" }, 503);
   }
 
   let criados = 0, duplicados = 0, falhas = 0;
@@ -410,8 +420,9 @@ async function ingerirAvisosDaMeta(
       const bruto = await buscarLead(aviso, pagina);
       if (!bruto) { falhas++; continue; }
       const lead = adaptadorMeta(bruto);
-      if (!lead.telefone && !lead.email) { falhas++; continue; }
 
+      // Lead Ads pode ter formulario sem telefone/e-mail. Nao descartamos:
+      // o leadgen_id e os campos personalizados ainda sao dados validos.
       const salvo = await salvarLead(env, tokenSha, lead, integracao);
       if ("erro" in salvo) { falhas++; continue; }
       if (salvo.r.duplicado) duplicados++; else criados++;
@@ -426,6 +437,11 @@ async function ingerirAvisosDaMeta(
     }
   }
 
+  if (falhas > 0) {
+    // Meta reentrega em status 5xx. Como leadgen_id e idempotente, os que ja
+    // salvaram viram duplicados e somente os que falharam precisam completar.
+    return json({ ok: false, criados, duplicados, falhas }, 502);
+  }
   return json({ ok: true, criados, duplicados, falhas });
 }
 
@@ -481,8 +497,9 @@ export async function webhookDoApp(req: Request, env: Env): Promise<Response> {
         const bruto = await buscarLead(aviso, fonte.page_access_token);
         if (!bruto) { falhas++; continue; }
         const lead = adaptadorMeta(bruto);
-        if (!lead.telefone && !lead.email) { falhas++; continue; }
 
+        // Nunca descartar um cadastro da Meta por ausencia de telefone/e-mail.
+        // O ID externo, respostas do formulario e atribuicao continuam uteis.
         const salvo = await salvarLead(env, fonte.token_sha256, lead, "meta");
         if ("erro" in salvo) { falhas++; continue; }
         if (salvo.r.duplicado) duplicados++; else criados++;
@@ -496,6 +513,90 @@ export async function webhookDoApp(req: Request, env: Env): Promise<Response> {
   console.log(JSON.stringify({
     evento: "meta.webhook_app", criados, duplicados, falhas, semDestino,
   }));
-  // 200 sempre: erro faz a Meta reenviar e acabar desligando a inscricao
+  // Falha transitoria NAO pode receber 200: isso faria a Meta considerar
+  // o aviso entregue e nos perderiamos o lead. A reentrega e segura porque
+  // ingerir_lead trava/duplica por leadgen_id.
+  if (falhas > 0) {
+    return json({ ok: false, criados, duplicados, falhas, semDestino }, 502);
+  }
   return json({ ok: true, criados, duplicados, falhas, semDestino });
+}
+
+
+type FonteMetaReconciliacao = {
+  id: string;
+  tenant_id: string;
+  token_sha256: string;
+  page_id: string;
+  page_access_token: string;
+};
+
+type FormMetaRecente = {
+  id?: string;
+  status?: string;
+  leads?: { data?: Record<string, unknown>[] };
+};
+
+/**
+ * Rede de seguranca do webhook Meta.
+ * O caminho normal continua sendo instantaneo por /v1/meta/webhook.
+ * Este reconciliador apenas recupera avisos que a Meta nao entregou.
+ */
+export async function reconciliarMeta(env: Env): Promise<void> {
+  const fontes = await rpc<FonteMetaReconciliacao[]>(env, "fontes_meta_para_reconciliar", {});
+  const desde = Date.now() - 10 * 60_000;
+  let criados = 0;
+  let duplicados = 0;
+  let falhas = 0;
+  for (const fonte of fontes) {
+    try {
+      const fields = [
+        "id", "status",
+        "leads.limit(10){id,created_time,form_id,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,field_data}",
+      ].join(",");
+      const u = new URL(`https://graph.facebook.com/v26.0/${encodeURIComponent(fonte.page_id)}/leadgen_forms`);
+      u.searchParams.set("fields", fields);
+      u.searchParams.set("limit", "100");
+      u.searchParams.set("access_token", fonte.page_access_token);
+
+      const resposta = await fetch(u, { headers: { accept: "application/json" } });
+      const corpo = await resposta.json().catch(() => ({})) as {
+        data?: FormMetaRecente[];
+        error?: { message?: string };
+      };
+      if (!resposta.ok) throw new Error(corpo.error?.message ?? `Graph respondeu ${resposta.status}`);
+
+      for (const form of corpo.data ?? []) {
+        if (form.status !== "ACTIVE") continue;
+        for (const bruto of form.leads?.data ?? []) {
+          const created = Date.parse(String(bruto.created_time ?? ""));
+          if (!Number.isFinite(created) || created < desde) continue;
+          const lead = adaptadorMeta(bruto);
+          const salvo = await salvarLead(env, fonte.token_sha256, lead, "meta-reconcile");
+          if ("erro" in salvo) {
+            falhas++;
+            continue;
+          }
+          if (salvo.r.duplicado) duplicados++;
+          else criados++;
+        }
+      }
+    } catch (e) {
+      falhas++;
+      console.error(JSON.stringify({
+        evento: "meta.reconcile_falhou",
+        tenant_id: fonte.tenant_id,
+        page_id: fonte.page_id,
+        erro: e instanceof Error ? e.message : String(e),
+      }));
+    }
+  }
+
+  console.log(JSON.stringify({
+    evento: "meta.reconcile",
+    fontes: fontes.length,
+    criados,
+    duplicados,
+    falhas,
+  }));
 }

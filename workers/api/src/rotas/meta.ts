@@ -62,21 +62,33 @@ export async function buscarLead(
   const url = `${GRAPH}/${encodeURIComponent(aviso.leadgen_id!)}` +
     `?fields=${CAMPOS}&access_token=${encodeURIComponent(tokenDaPagina)}`;
 
-  const r = await fetch(url, { headers: { accept: "application/json" } });
-  const corpo = (await r.json().catch(() => null)) as Record<string, unknown> | null;
+  let ultimoErro = "Falha desconhecida na Graph.";
+  for (let tentativa = 1; tentativa <= 3; tentativa++) {
+    try {
+      const r = await fetch(url, { headers: { accept: "application/json" } });
+      const corpo = (await r.json().catch(() => null)) as Record<string, unknown> | null;
 
-  if (!r.ok || !corpo) {
-    const erro = (corpo?.error as { message?: string } | undefined)?.message;
-    throw new Error(erro ?? `Graph respondeu ${r.status}`);
+      if (r.ok && corpo) {
+        return {
+          ...corpo,
+          leadgen_id: aviso.leadgen_id,
+          form_id: corpo.form_id ?? aviso.form_id,
+          page_id: aviso.page_id,
+        };
+      }
+
+      const erro = (corpo?.error as { message?: string } | undefined)?.message;
+      ultimoErro = erro ?? `Graph respondeu ${r.status}`;
+      if (r.status !== 429 && r.status < 500) throw new Error(ultimoErro);
+    } catch (e) {
+      ultimoErro = e instanceof Error ? e.message : String(e);
+      if (tentativa === 3) break;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, tentativa * 250));
   }
 
-  // o id do formulario as vezes so vem no aviso; o adaptador le os dois
-  return {
-    ...corpo,
-    leadgen_id: aviso.leadgen_id,
-    form_id: corpo.form_id ?? aviso.form_id,
-    page_id: aviso.page_id,
-  };
+  throw new Error(ultimoErro);
 }
 
 export async function tokenDaPagina(env: Env, tokenSha: string): Promise<string | null> {
