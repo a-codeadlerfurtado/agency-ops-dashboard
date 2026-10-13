@@ -1754,7 +1754,7 @@ Deno.serve(async (req: Request) => {
     if (!saved?.enabled || !saved.recipient) return reply({ error: "make_delivery_not_requested" }, 409);
     if (saved.status === "READY" && saved.scenario_id)
       return reply({ ok: true, status: "READY", scenario_id: saved.scenario_id, reused: true });
-    if (saved.scenario_id || saved.hook_id)
+    if (saved.scenario_id || saved.hook_id || saved.data_store_id)
       return reply({ error: "make_delivery_manual_recovery_required",
         scenario_id: saved.scenario_id || null }, 409);
     const { data: clientRow } = await ops.from("clients")
@@ -1847,8 +1847,13 @@ Deno.serve(async (req: Request) => {
     } catch (err) {
       const next = { ...saved, status: "ERROR",
         error: clean((err as Error).message, 140),
+        failed_at: new Date().toISOString(),
+        // IDs ficam preenchidos somente quando a limpeza automática falhou;
+        // aí a retentativa pelo histórico exige conferência manual no Make.
         scenario_id: (err as any).scenarioId || null,
-        hook_id: (err as any).hookId || null };
+        hook_id: (err as any).hookId || null,
+        data_store_id: (err as any).dataStoreId || null,
+        cleanup: (err as any).cleanup || null };
       await ops.from("campaign_build_requests").update({
         request_metadata: { ...row.request_metadata, make_delivery: next },
       }).eq("id", requestId).eq("status", "CREATED");
