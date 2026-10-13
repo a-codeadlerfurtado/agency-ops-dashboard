@@ -49,7 +49,7 @@ Deno.serve(async req=>{
  const secret=typeof setting?.value==='string'?setting.value:'';
  if(settingError||!secret||!safeEqual(secret,req.headers.get('x-semantic-worker-key')||''))return reply({ok:false,error:'unauthorized'},401);
  const body=await req.json().catch(()=>({}));const key=Deno.env.get('OPENAI_API_KEY')||'';
- if(body.action==='health')return reply({ok:true,version:'1.0.0',openai_configured:!!key,audio:true,image:true,video_audio:true,video_visual:false});
+ if(body.action==='health')return reply({ok:true,version:'1.1.0',openai_configured:!!key,audio:true,image:true,video_audio:true,video_visual:true,video_visual_mode:'EXTERNAL_SAMPLED_FRAMES'});
  if(body.action==='provider_health'){if(!key)return reply({ok:false,error:'openai_key_missing'},503);const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{authorization:'Bearer '+key,'content-type':'application/json'},body:JSON.stringify({model:'gpt-4o-mini',messages:[{role:'user',content:'Reply OK'}],max_tokens:2}),signal:AbortSignal.timeout(15000)});return r.ok?reply({ok:true,provider_available:true}):reply({ok:false,provider_available:false,error:(await providerFailure(r,'provider')).message},r.status);}
  if(!key)return reply({ok:false,error:'openai_key_missing'},503);
  const {data:locked,error:le}=await ops.rpc('acquire_worker_runtime_lock',{p_worker:'WHATSAPP_MEDIA_WORKER',p_lease_seconds:240});
@@ -76,11 +76,15 @@ Deno.serve(async req=>{
     const {error:saveError}=await ops.from('whatsapp_media_context').update({storage_path:storagePath,bytes:data.length,mime_type:mime}).eq('message_row_id',row.message_row_id);if(saveError)throw failure('archive_metadata_failed');
    }
    if((row.media_type==='audio'&&Number(row.duration_seconds)>900)||(row.media_type==='video'&&Number(row.duration_seconds)>300))throw failure('duration_needs_review');
+   if(row.media_type==='video'){
+    patch={status:row.visual_status==='DONE'?'DONE':'PARTIAL',coverage:row.visual_status==='DONE'?row.coverage:'VIDEO_ARCHIVED_PENDING_VISUAL_ANALYSIS',last_error:row.visual_status==='DONE'?null:'video_visual_pending',processed_at:new Date().toISOString()};
+   }else{
    let transcript=row.transcript||'';
    if(row.media_type!=='image'&&!transcript){transcript=await transcribe(data,mime,key);const {error}=await ops.from('whatsapp_media_context').update({transcript,model:'gpt-4o-mini-transcribe'}).eq('message_row_id',row.message_row_id);if(error)throw failure('transcript_save_failed');}
    const analysis=await interpret(data,mime,row.media_type,transcript,key,message.caption||'');
    const coverage=row.media_type==='video'?'AUDIO_ONLY_NO_VISUAL_ANALYSIS':row.media_type==='audio'?'AUDIO_TRANSCRIPT_AND_SUMMARY':'IMAGE_OCR_AND_DESCRIPTION';
    patch={status:row.media_type==='video'?'PARTIAL':'DONE',transcript,description:row.media_type==='image'?String(analysis.description||''):null,extracted_text:row.media_type==='image'?String(analysis.extracted_text||''):null,summary:String(analysis.summary||''),interpretation:analysis,coverage,model:row.media_type==='image'?'gpt-4o-mini':'gpt-4o-mini-transcribe + gpt-4o-mini',last_error:row.media_type==='video'?'video_visual_not_analyzed':null,processed_at:new Date().toISOString()};
+   }
   }catch(e){const error=e instanceof Error?e.message:'processing_failed';const unavailable=/download_http_(404|410)|message_missing/.test(error);const review=/exceeds_25mb|duration_needs_review|unsupported_mime|client_binding_changed|host_not_allowed/.test(error);patch={status:unavailable?'UNAVAILABLE':review||row.attempts>=5?'REVIEW':'RETRY',last_error:error,next_attempt_at:new Date(Date.now()+Math.min(3600000,(/_http_429/.test(error)?300000:30000)*2**row.attempts)).toISOString()};}
   const {error:ue}=await ops.from('whatsapp_media_context').update({...patch,locked_at:null,updated_at:new Date().toISOString()}).eq('message_row_id',row.message_row_id);
   if(ue)throw failure('result_save_failed');results.push({message_row_id:row.message_row_id,status:patch.status,error:patch.last_error});
