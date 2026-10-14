@@ -7,7 +7,7 @@ import ts from "typescript";
 const path = "supabase/functions/agency-ops-campaign-builder-api/index.ts";
 const source = fs.readFileSync(path, "utf8");
 const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-const names = new Set(["geoQueryPlan", "stateFromSuffix", "foldText", "buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink", "successMetadata", "mediaDimensions", "creativeOrientation", "creativeBaseName", "pairCreatives", "placementCreativeSpec", "adUnitsSummary", "unpairedForVision", "parseVisionPairs", "hintsFromStored", "agreedVisionPairs"]);
+const names = new Set(["resolveMakeFacebookConnection", "clean", "geoQueryPlan", "stateFromSuffix", "foldText", "buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink", "successMetadata", "mediaDimensions", "creativeOrientation", "creativeBaseName", "pairCreatives", "placementCreativeSpec", "adUnitsSummary", "unpairedForVision", "parseVisionPairs", "hintsFromStored", "agreedVisionPairs"]);
 const declarations = ast.statements.filter(s => ts.isFunctionDeclaration(s) && names.has(s.name?.text)).map(s => s.getText(ast));
 assert.equal(declarations.length, names.size, "All payload/guard functions must exist");
 const consts = ast.statements.filter(s => ts.isVariableStatement(s) && s.declarationList.declarations.some(d => d.name.getText(ast) === "BR_STATES")).map(s => s.getText(ast));
@@ -15,9 +15,11 @@ assert.equal(consts.length, 1, "BR_STATES table must exist");
 const js = ts.transpileModule([...consts, ...declarations].join("\n"), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
 }).outputText;
-const ctx = vm.createContext({ URL, String, Uint8Array, Map });
-vm.runInContext(js + "\nthis.builder = { geoQueryPlan, buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs };", ctx);
-const { geoQueryPlan, buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs } = ctx.builder;
+let fakeEnv = {};
+const ctx = vm.createContext({ URL, String, Uint8Array, Map, Object,
+  Deno: { env: { get: (k) => fakeEnv[k] } } });
+vm.runInContext(js + "\nthis.builder = { resolveMakeFacebookConnection, geoQueryPlan, buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs };", ctx);
+const { resolveMakeFacebookConnection, geoQueryPlan, buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs } = ctx.builder;
 const p = {
   campaign: { objective: "OUTCOME_LEADS" },
   adset: {
@@ -178,6 +180,26 @@ assert.deepEqual(geo("Santos, Praia Grande").attempts, [{ q: "Santos, Praia Gran
 assert.deepEqual(geo("Caraguatatuba").attempts, [{ q: "Caraguatatuba", state: null }]);
 assert.deepEqual(geo("   ").attempts, []);
 assert.match(source, /error: "geo_unresolved"/);
+
+// A conexao Facebook Lead Ads segue o GT responsavel pelo cliente: cada GT
+// autoriza a propria conexao no Make. Ordem: GT -> __default__ -> env.
+const fbOps = (value) => ({ from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: value === undefined ? null : { value } }) }) }) }) });
+const fbMap = { "Felipe Oliveira": 4851809, __default__: 4769961 };
+assert.deepEqual(JSON.parse(JSON.stringify(await resolveMakeFacebookConnection(fbOps(fbMap), "Felipe Oliveira"))),
+  { id: 4851809, source: "GT", gt: "Felipe Oliveira" });
+assert.equal((await resolveMakeFacebookConnection(fbOps(fbMap), "Yuri Melo")).source, "DEFAULT");
+assert.equal((await resolveMakeFacebookConnection(fbOps(fbMap), "")).id, 4769961);
+assert.equal(await resolveMakeFacebookConnection(fbOps({}), "Yuri Melo"), null);
+assert.equal(await resolveMakeFacebookConnection(fbOps(undefined), "Yuri Melo"), null);
+assert.equal(await resolveMakeFacebookConnection(fbOps({ "Yuri Melo": 0 }), "Yuri Melo"), null);
+assert.equal(await resolveMakeFacebookConnection(fbOps({ "Yuri Melo": "abc" }), "Yuri Melo"), null);
+fakeEnv = { MAKE_FB_LEADS_CONNECTION_ID: "4302326" };
+assert.equal((await resolveMakeFacebookConnection(fbOps({}), "Yuri Melo")).source, "ENV");
+assert.equal((await resolveMakeFacebookConnection(fbOps({ "Yuri Melo": 4869515 }), "Yuri Melo")).id, 4869515);
+fakeEnv = {};
+// Sem conexao do GT, nada e criado na Meta nem no Make.
+assert.match(source, /error: "make_fb_connection_missing"/);
+assert.equal(source.split('error: "make_fb_connection_missing"').length - 1, 2);
 console.log("Campaign Builder create regression guard: OK (feed+story pairing, name first, AI fallback) (lead form, site, targeting, budget, ownership, duplicate guard)");
 
 await import("./check-campaign-builder-make.mjs");

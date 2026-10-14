@@ -173,6 +173,31 @@ async function resolveNcPageToken(systemToken: string, pageId: string): Promise<
   return page ? clean(page.access_token, 3000) || null : null;
 }
 
+/**
+ * Conexao Facebook Lead Ads usada para criar o webhook no Make.
+ * Cada GT autoriza a propria conexao na conta do Make, entao a conexao segue o
+ * GT responsavel pelo cliente (agency_ops.clients.gt_owner). O mapa fica em
+ * automation_settings.MAKE_FB_LEADS_CONNECTIONS: { "<GT>": <id>, "__default__": <id> }.
+ * Ordem: GT do cliente -> __default__ -> variavel de ambiente (compatibilidade).
+ */
+async function resolveMakeFacebookConnection(ops: any, gtOwner: unknown) {
+  const { data } = await ops.from("automation_settings").select("value")
+    .eq("key", "MAKE_FB_LEADS_CONNECTIONS").maybeSingle();
+  const raw = data?.value;
+  const map: Row = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  const owner = clean(gtOwner, 120);
+  const candidates: Array<[string, unknown]> = [
+    ["GT", owner ? map[owner] : null],
+    ["DEFAULT", map.__default__],
+    ["ENV", Deno.env.get("MAKE_FB_LEADS_CONNECTION_ID")],
+  ];
+  for (const [source, value] of candidates) {
+    const id = Number(value);
+    if (Number.isInteger(id) && id > 0) return { id, source, gt: owner };
+  }
+  return null;
+}
+
 async function resolveWriteToken(db: any, accountId: string) {
   const candidates = await tokenCandidates(db);
   if (!candidates.length) return { error: "meta_token_missing" as const };
@@ -1242,10 +1267,19 @@ Deno.serve(async (req: Request) => {
       (typeof plannerVaultKey === "string" && plannerVaultKey.trim()) || Deno.env.get("OPENAI_API_KEY")
     );
     const { data: makeVaultKey } = await ops.rpc("get_secret", { p_name: "MAKE_API_TOKEN" });
-    const makeReady = Boolean(
+    const makeTokenReady = Boolean(
       clean(Deno.env.get("MAKE_API_TOKEN"), 4000) ||
       (typeof makeVaultKey === "string" && makeVaultKey.trim())
-    ) && Number(Deno.env.get("MAKE_FB_LEADS_CONNECTION_ID")) > 0;
+    );
+    // Basta UMA conexao configurada para a tela liberar a opcao; a conexao do
+    // GT daquele cliente e resolvida (e cobrada) na hora de criar.
+    const { data: fbMapRow } = await ops.from("automation_settings").select("value")
+      .eq("key", "MAKE_FB_LEADS_CONNECTIONS").maybeSingle();
+    const fbMap = fbMapRow?.value && typeof fbMapRow.value === "object" && !Array.isArray(fbMapRow.value)
+      ? fbMapRow.value as Row : {};
+    const anyFbConnection = Object.values(fbMap).some((value) => Number(value) > 0) ||
+      Number(Deno.env.get("MAKE_FB_LEADS_CONNECTION_ID")) > 0;
+    const makeReady = makeTokenReady && anyFbConnection;
     return reply({
       ok: true,
       profile: { person, role, is_adler: isAdler },
@@ -1788,11 +1822,13 @@ Deno.serve(async (req: Request) => {
     const { data: makeVaultKey } = await ops.rpc("get_secret", { p_name: "MAKE_API_TOKEN" });
     const makeToken = clean(Deno.env.get("MAKE_API_TOKEN"), 4000) ||
       (typeof makeVaultKey === "string" ? makeVaultKey.trim() : "");
-    const facebookConnectionId = Number(Deno.env.get("MAKE_FB_LEADS_CONNECTION_ID") || 0);
     const zapiConnectionId = Number(Deno.env.get("MAKE_ZAPI_ADMIN_CONNECTION_ID") || 4651755);
     const teamId = Number(Deno.env.get("MAKE_TEAM_ID") || 600315);
-    if (!makeToken || !Number.isInteger(facebookConnectionId) || facebookConnectionId <= 0)
-      return reply({ error: "make_delivery_not_configured" }, 503);
+    if (!makeToken) return reply({ error: "make_delivery_not_configured" }, 503);
+    const facebook = await resolveMakeFacebookConnection(ops, clientRow.gt_owner);
+    if (!facebook) return reply({ error: "make_fb_connection_missing",
+      gt: clean(clientRow.gt_owner, 120) || null }, 503);
+    const facebookConnectionId = facebook.id;
     let lastFailure = "make_form_fields_unavailable";
     let candidateForm: Row | null = null;
     for (const tk of await tokenCandidates(db)) {
@@ -1836,6 +1872,8 @@ Deno.serve(async (req: Request) => {
       });
       const next = { ...saved, status: "READY", scenario_id: configured.scenarioId,
         hook_id: configured.hookId, data_store_id: configured.dataStoreId || null,
+        facebook_connection_id: facebookConnectionId,
+        facebook_connection_source: facebook.source,
         configured_at: new Date().toISOString() };
       const { error: saveErr } = await ops.from("campaign_build_requests")
         .update({ request_metadata: { ...row.request_metadata, make_delivery: next } })
@@ -1936,8 +1974,12 @@ Deno.serve(async (req: Request) => {
       const { data: makeVaultKey } = await ops.rpc("get_secret", { p_name: "MAKE_API_TOKEN" });
       const hasToken = Boolean(clean(Deno.env.get("MAKE_API_TOKEN"), 4000) ||
         (typeof makeVaultKey === "string" && makeVaultKey.trim()));
-      if (!hasToken || Number(Deno.env.get("MAKE_FB_LEADS_CONNECTION_ID")) <= 0)
-        return reply({ error: "make_delivery_not_configured" }, 503);
+      if (!hasToken) return reply({ error: "make_delivery_not_configured" }, 503);
+      // Conexao do GT conferida ANTES de criar qualquer coisa na Meta: sem ela a
+      // automacao nao teria como ser configurada depois.
+      if (!await resolveMakeFacebookConnection(ops, clientRow.gt_owner))
+        return reply({ error: "make_fb_connection_missing",
+          gt: clean(clientRow.gt_owner, 120) || null }, 503);
     }
     if (overrides) {
       if (clean(overrides.campaign_name, 120)) plan.campaign.name = clean(overrides.campaign_name, 120);
