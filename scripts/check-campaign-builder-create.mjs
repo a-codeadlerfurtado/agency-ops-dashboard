@@ -7,7 +7,7 @@ import ts from "typescript";
 const path = "supabase/functions/agency-ops-campaign-builder-api/index.ts";
 const source = fs.readFileSync(path, "utf8");
 const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
-const names = new Set(["resolveMakeFacebookConnection", "clean", "geoQueryPlan", "stateFromSuffix", "foldText", "buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink", "successMetadata", "mediaDimensions", "creativeOrientation", "creativeBaseName", "pairCreatives", "placementCreativeSpec", "adUnitsSummary", "unpairedForVision", "parseVisionPairs", "hintsFromStored", "agreedVisionPairs"]);
+const names = new Set(["leadFormQuestions", "resolveMakeFacebookConnection", "clean", "geoQueryPlan", "stateFromSuffix", "foldText", "buildTargeting", "adsetFields", "creativeSpec", "campaignFields", "safeRetryEligible", "externalLeadLink", "successMetadata", "mediaDimensions", "creativeOrientation", "creativeBaseName", "pairCreatives", "placementCreativeSpec", "adUnitsSummary", "unpairedForVision", "parseVisionPairs", "hintsFromStored", "agreedVisionPairs"]);
 const declarations = ast.statements.filter(s => ts.isFunctionDeclaration(s) && names.has(s.name?.text)).map(s => s.getText(ast));
 assert.equal(declarations.length, names.size, "All payload/guard functions must exist");
 const consts = ast.statements.filter(s => ts.isVariableStatement(s) && s.declarationList.declarations.some(d => d.name.getText(ast) === "BR_STATES")).map(s => s.getText(ast));
@@ -18,8 +18,8 @@ const js = ts.transpileModule([...consts, ...declarations].join("\n"), {
 let fakeEnv = {};
 const ctx = vm.createContext({ URL, String, Uint8Array, Map, Object,
   Deno: { env: { get: (k) => fakeEnv[k] } } });
-vm.runInContext(js + "\nthis.builder = { resolveMakeFacebookConnection, geoQueryPlan, buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs };", ctx);
-const { resolveMakeFacebookConnection, geoQueryPlan, buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs } = ctx.builder;
+vm.runInContext(js + "\nthis.builder = { leadFormQuestions, resolveMakeFacebookConnection, geoQueryPlan, buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs };", ctx);
+const { leadFormQuestions, resolveMakeFacebookConnection, geoQueryPlan, buildTargeting, adsetFields, creativeSpec, campaignFields, safeRetryEligible, externalLeadLink, successMetadata, mediaDimensions, creativeOrientation, creativeBaseName, pairCreatives, placementCreativeSpec, adUnitsSummary, unpairedForVision, parseVisionPairs, hintsFromStored, agreedVisionPairs } = ctx.builder;
 const p = {
   campaign: { objective: "OUTCOME_LEADS" },
   adset: {
@@ -206,6 +206,18 @@ assert.match(source, /error: "make_fb_connection_missing"/);
 // ambiente com <= ou < abre esse buraco de novo; use Number.isInteger + > 0.
 assert.doesNotMatch(source, /Number\(Deno\.env\.get\([^)]*\)\)\s*<=?\s*\d/);
 assert.equal(source.split('error: "make_fb_connection_missing"').length - 1, 2);
+
+// A Graph API devolve as perguntas do formulario como lista simples. Ler so
+// questions.data travava a entrega em make_form_questions_missing com o
+// formulario cheio (producao, 14/10/2026).
+const q = [{ key: "full_name" }, { key: "phone_number" }];
+assert.equal(leadFormQuestions(q).length, 2);
+assert.equal(leadFormQuestions({ data: q }).length, 2);
+assert.equal(leadFormQuestions(undefined).length, 0);
+assert.equal(leadFormQuestions(null).length, 0);
+assert.equal(leadFormQuestions({}).length, 0);
+assert.equal(leadFormQuestions({ data: "nao e lista" }).length, 0);
+assert.doesNotMatch(source, /questions\?\.data/);
 console.log("Campaign Builder create regression guard: OK (feed+story pairing, name first, AI fallback) (lead form, site, targeting, budget, ownership, duplicate guard)");
 
 await import("./check-campaign-builder-make.mjs");

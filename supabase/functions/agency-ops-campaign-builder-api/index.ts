@@ -174,6 +174,19 @@ async function resolveNcPageToken(systemToken: string, pageId: string): Promise<
 }
 
 /**
+ * Perguntas de um formulario instantaneo lidas da Graph API.
+ * O node do formulario devolve "questions" como lista simples; algumas
+ * leituras devolvem {data:[...]}. Ler so questions.data deixava a entrega
+ * travada em make_form_questions_missing mesmo com o formulario cheio
+ * (reproduzido em producao em 14/10/2026 com um formulario de 6 perguntas).
+ */
+function leadFormQuestions(raw: unknown): Row[] {
+  if (Array.isArray(raw)) return raw as Row[];
+  const data = (raw as Row)?.data;
+  return Array.isArray(data) ? data as Row[] : [];
+}
+
+/**
  * Conexao Facebook Lead Ads usada para criar o webhook no Make.
  * Cada GT autoriza a propria conexao na conta do Make, entao a conexao segue o
  * GT responsavel pelo cliente (agency_ops.clients.gt_owner). O mapa fica em
@@ -1845,8 +1858,10 @@ Deno.serve(async (req: Request) => {
       } catch (err) { lastFailure = clean((err as Error).message, 150); }
     }
     if (!candidateForm) return reply({ error: "make_delivery_form_unavailable", detail: lastFailure }, 409);
-    const questions = (candidateForm.questions?.data || []) as Row[];
-    if (!Array.isArray(questions) || questions.length < 3)
+    const questions = leadFormQuestions(candidateForm.questions);
+    // Nome e telefone sao o minimo real da mensagem; o e-mail deixou de ser
+    // obrigatorio quando passou a ser opcional em buildMakeLeadMessage.
+    if (questions.length < 2)
       return reply({ error: "make_form_questions_missing" }, 409);
     const mapped: LeadQuestion[] = questions.map((q: Row) => ({
       key: clean(q.key, 180), label: clean(q.label || q.key, 180),
