@@ -22,7 +22,29 @@ export const TENURE_LABEL: Record<string, string> = { ate_1m: "Até 1 mês", m1_
 // Azul da marca primeiro; os demais sao os tons semanticos ja' usados no painel.
 export const CHART_COLORS = ["#3e92dc", "#31d49b", "#f7c95c", "#a98bff"];
 
-export function PortfolioChart({ series, kind, unit }: { series: Array<{ label: string; values: number[] }>; kind: "line" | "bar"; unit?: string }) {
+// Completa lacunas do calendario, sem fabricar snapshots de meses ausentes.
+export function completeMonthlyKeys(rows: Row[]): string[] {
+  const valid = [...new Set(rows.map((row) => String(row.month_key || "")).filter((key) => /^\d{4}-(0[1-9]|1[0-2])$/.test(key)))].sort();
+  if (!valid.length) return [];
+  const cursor = new Date(`${valid[0]}-01T00:00:00Z`);
+  const latest = valid[valid.length - 1];
+  const months: string[] = [];
+  for (let i = 0; i < 120; i++) {
+    const key = cursor.toISOString().slice(0, 7);
+    if (key > latest) break;
+    months.push(key);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return months.reverse();
+}
+
+function monthLabel(key: string) {
+  const date = new Date(`${key}-01T00:00:00Z`);
+  const label = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" }).format(date);
+  return label.replace(" de ", "/").replace(/^./, (letter) => letter.toUpperCase());
+}
+
+export function PortfolioChart({ series, kind, unit }: { series: Array<{ label: string; values: Array<number | null> }>; kind: "line" | "bar"; unit?: string }) {
   const ref = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const canvas = ref.current; if (!canvas) return;
@@ -32,7 +54,7 @@ export function PortfolioChart({ series, kind, unit }: { series: Array<{ label: 
     if (!w || !h) return;
     canvas.width = w * dpr; canvas.height = h * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, w, h);
-    const all = series.flatMap((s) => s.values).filter((v) => Number.isFinite(v));
+    const all = series.flatMap((s) => s.values).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
     const max = Math.max(1, ...all), min = Math.min(0, ...all);
     const padL = 34, padB = 18, padT = 10, padR = 8;
     const plotW = Math.max(1, w - padL - padR), plotH = Math.max(1, h - padT - padB);
@@ -48,15 +70,25 @@ export function PortfolioChart({ series, kind, unit }: { series: Array<{ label: 
       if (kind === "bar") {
         const bw = Math.max(4, plotW / Math.max(n, 1) / (series.length + 1));
         serie.values.forEach((v, i) => {
+          if (v === null || !Number.isFinite(v)) return;
           const bx = px(i, n) - (series.length * bw) / 2 + si * bw;
           ctx.fillStyle = color; ctx.globalAlpha = 0.85;
           ctx.fillRect(bx, py(v), bw - 1, padT + plotH - py(v)); ctx.globalAlpha = 1;
         });
       } else {
         ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.beginPath();
-        serie.values.forEach((v, i) => { const a = px(i, n), b = py(v); if (i) ctx.lineTo(a, b); else ctx.moveTo(a, b); });
+        let connected = false;
+        serie.values.forEach((v, i) => {
+          if (v === null || !Number.isFinite(v)) { connected = false; return; }
+          const a = px(i, n), b = py(v);
+          if (connected) ctx.lineTo(a, b); else ctx.moveTo(a, b);
+          connected = true;
+        });
         ctx.stroke(); ctx.fillStyle = color;
-        serie.values.forEach((v, i) => { ctx.beginPath(); ctx.arc(px(i, n), py(v), i === n - 1 ? 3.5 : 2.2, 0, Math.PI * 2); ctx.fill(); });
+        serie.values.forEach((v, i) => {
+          if (v === null || !Number.isFinite(v)) return;
+          ctx.beginPath(); ctx.arc(px(i, n), py(v), i === n - 1 ? 3.5 : 2.2, 0, Math.PI * 2); ctx.fill();
+        });
       }
     });
   }, [series, kind]);
@@ -78,13 +110,19 @@ export function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | nu
   if (!portfolio) return <section className="workspace"><div className="card"><div className="empty">Carteira disponível apenas para perfis com acesso total.</div></div></section>;
 
   const timeline: Row[] = portfolio.timeline || [];
-  const meses = [...new Set(timeline.map((r) => r.month_key))].sort().reverse();
-  const mesAtivo = monthKey || meses[0] || "";
+  const meses = completeMonthlyKeys(timeline);
+  const disponiveis = new Set(timeline.filter((r) => r.sector === sector).map((r) => String(r.month_key)));
+  const mesAtivo = monthKey && disponiveis.has(monthKey) ? monthKey : meses.find((m) => disponiveis.has(m)) || "";
   const linha: Row = timeline.find((r) => r.month_key === mesAtivo && r.sector === sector) || {};
   const idx = meses.indexOf(mesAtivo);
+  // So ha comparacao quando existe fechamento do mes imediatamente anterior.
   const anterior: Row | null = idx >= 0 && meses[idx + 1] ? (timeline.find((r) => r.month_key === meses[idx + 1] && r.sector === sector) || null) : null;
+  const mesesSemFechamento = meses.filter((m) => !disponiveis.has(m));
   const serieAsc = meses.slice().reverse();
-  const serieDe = (campo: string, s = sector) => serieAsc.map((m) => Number(timeline.find((r) => r.month_key === m && r.sector === s)?.[campo] ?? 0));
+  const serieDe = (campo: string, s = sector) => serieAsc.map((m) => {
+    const value = timeline.find((r) => r.month_key === m && r.sector === s)?.[campo];
+    return value === undefined || value === null ? null : Number(value);
+  });
 
   const clientes: Row[] = portfolio.clients || [];
   const doSetor = clientes.filter((c) => c.sector === sector);
@@ -217,13 +255,14 @@ export function PortfolioCenter({ portfolio, openClient }: { portfolio: Row | nu
         <div><b>Indicadores Gerais</b><small>Selecione o mês e o setor para comparar a evolução da carteira.</small></div>
         <div className="pf-controls">
           <select className="control" value={mesAtivo} onChange={(e) => setMonthKey(e.target.value)}>
-            {meses.map((m) => { const r = timeline.find((x) => x.month_key === m);
-              return <option key={m} value={m}>{r?.label || m}{r?.origem === "ao_vivo" ? " — atual" : r?.quality === "estimated" ? " — reconstruído" : ""}</option>; })}
+            {meses.map((m) => { const r = timeline.find((x) => x.month_key === m && x.sector === sector);
+              return <option key={m} value={m} disabled={!r}>{r?.label || monthLabel(m)}{!r ? " — sem fechamento" : r.origem === "ao_vivo" ? " — atual" : r.quality === "estimated" ? " — reconstruído" : ""}</option>; })}
           </select>
           <div className="pf-tabs">{["marketing", "ia"].map((s) =>
             <button key={s} className={sector === s ? "active" : ""} onClick={() => setSector(s)}>{SECTOR_LABEL[s]}</button>)}</div>
         </div>
       </div>
+      {mesesSemFechamento.length > 0 && <p className="pf-quality q-medium">Histórico incompleto: {mesesSemFechamento.map(monthLabel).join(", ")} sem fechamento validado. Comparativos que dependem desses meses ficam suspensos.</p>}
       <p className={`pf-quality q-${linha.quality || "high"}`}>{text(linha.quality_label)} · {text(linha.quality_detail)}</p>
       <div className="grid pf-kpis">
         <Kpi label="Clientes ativos" valor={formatNumber(linha.active_clients, 0)} hint={`clientes de ${SECTOR_LABEL[sector]}`} campo="active_clients" />
