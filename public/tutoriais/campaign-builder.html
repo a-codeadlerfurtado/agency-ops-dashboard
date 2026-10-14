@@ -1,0 +1,758 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="Treinamento interno do Campaign Builder para gestores de tráfego e CS da Leonardo Imobi.">
+<link rel="icon" href="/brand/leonardo-imobi.svg" type="image/svg+xml">
+<style>
+  html{color-scheme:dark}
+  *{box-sizing:border-box}
+  body{margin:0}
+  img{max-width:100%}
+  [hidden]{display:none!important}
+</style>
+<title>Campaign Builder Treinamento</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
+
+<style>
+/* Palco fixo de 1920x1080 escalado para a janela; slides escuros e claros alternando por ato. */
+:root{
+  --abyss:#040F22; --ink:#071C3D; --ink-2:#0C2A55;
+  --paper:#F6F7F9; --paper-2:#E9EDF3;
+  --sand:#FD6801; --sand-d:#C04E00;
+  --teal:#03549B; --teal-d:#03549B; --teal-hi:#5AA2EA;
+  --mist:#8A9BB5;
+  --t-dark:#F6F7F9; --t-light:#0A1C3A;
+  --m-dark:#A9B6CC; --m-light:#4A5A75;
+  --l-dark:rgba(138,155,181,.22); --l-light:rgba(7,28,61,.13);
+  --f-display:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-body:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --ease-out:cubic-bezier(.16,1,.3,1);
+  --scale:1;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--abyss);color:var(--t-dark);font-family:var(--f-body);
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;overflow:hidden}
+
+#stage{position:fixed;left:50%;top:50%;width:1920px;height:1080px;
+  transform-origin:50% 50%;transform:translate(-50%,-50%) scale(var(--scale))}
+html.mobile #stage{position:static;width:100%;height:auto;transform:none;left:auto;top:auto}
+
+.slide{position:absolute;inset:0;width:1920px;height:1080px;display:flex;flex-direction:column;
+  padding:84px 104px 56px;opacity:0;visibility:hidden;overflow:hidden;overscroll-behavior:contain}
+.slide.is-active{opacity:1;visibility:visible}
+html.motion .slide{transition:opacity .42s var(--ease-out)}
+.slide.dark{background:var(--ink);color:var(--t-dark);--tx:var(--t-dark);--mx:var(--m-dark);--ln:var(--l-dark);--acc:var(--sand);--acc2:var(--teal-hi);--panel:rgba(12,42,85,.52)}
+.slide.light{background:var(--paper);color:var(--t-light);--tx:var(--t-light);--mx:var(--m-light);--ln:var(--l-light);--acc:var(--teal-d);--acc2:var(--sand-d);--panel:#fff}
+.slide.dark.cover{background:
+  radial-gradient(70% 90% at 82% 12%, rgba(3,84,155,.55), transparent 60%),
+  radial-gradient(60% 70% at 10% 88%, rgba(253,104,1,.18), transparent 62%), var(--abyss)}
+.slide.closing{background:
+  radial-gradient(60% 80% at 20% 10%, rgba(3,84,155,.42), transparent 62%), var(--abyss)}
+
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:48px;margin-bottom:34px}
+.kicker{font-size:14px;letter-spacing:.22em;text-transform:uppercase;color:var(--acc);font-weight:600}
+.title{margin:10px 0 0;font-family:var(--f-display);font-weight:300;font-size:60px;line-height:1.06;
+  letter-spacing:-.022em;text-wrap:balance;max-width:21ch}
+.title b{font-weight:600}
+.sub{margin:18px 0 0;font-size:21px;line-height:1.5;color:var(--mx);max-width:74ch}
+.body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center}
+.foot{display:flex;justify-content:space-between;align-items:flex-end;gap:40px;font-size:14px;
+  color:var(--mx);padding:16px 300px 0 220px;border-top:1px solid var(--ln);margin-top:28px}
+.foot-l,.foot-r{display:flex;align-items:center;gap:22px}
+.ftitle{font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:var(--mx)}
+.num{font-variant-numeric:tabular-nums;letter-spacing:.12em;white-space:nowrap;font-weight:500}
+
+/* logo oficial */
+.li-logo{display:inline-flex;align-items:center;gap:.7em;color:var(--tx)}
+.li-badge{display:block;width:1.9em;height:1.9em;display:grid;place-items:center}
+.li-badge svg{width:46%;height:auto;display:block}
+.li-word{display:grid;line-height:1;text-align:left}
+.li-word b{font-weight:600;letter-spacing:.11em;text-transform:uppercase;font-size:.95em}
+.li-word i{font-style:normal;font-weight:500;letter-spacing:.42em;text-transform:uppercase;
+  font-size:.5em;color:var(--mx);margin-top:.7em}
+.li-logo.lg{font-size:1.35em}
+
+.acts{display:flex;align-items:center;gap:10px;font-size:13px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--mx)}
+.acts i{width:22px;height:3px;border-radius:2px;background:var(--ln);display:block}
+.acts i.on{background:var(--acc)}
+.acts span{margin-left:8px}
+
+/* blocos */
+.grid{display:grid;gap:22px}
+.g2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.g3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.g4{grid-template-columns:repeat(4,minmax(0,1fr))}
+.card{background:var(--panel);border:1px solid var(--ln);border-radius:14px;padding:28px;min-width:0}
+.card h3{margin:0 0 10px;font-size:25px;font-weight:600;letter-spacing:-.01em}
+.card p{margin:0;font-size:17px;line-height:1.55;color:var(--mx)}
+.card .tagn{font-size:13px;letter-spacing:.2em;text-transform:uppercase;color:var(--acc);
+  font-weight:600;display:block;margin-bottom:12px}
+
+.big{font-family:var(--f-display);font-weight:700;letter-spacing:-.03em;line-height:1;
+  font-variant-numeric:tabular-nums}
+.stat .v{font-size:84px}
+.stat .v em{font-style:normal;color:var(--acc)}
+.stat .k{display:block;margin-top:14px;font-size:14px;letter-spacing:.14em;text-transform:uppercase;color:var(--mx)}
+
+.bars{display:flex;flex-direction:column;gap:28px}
+.bar-row{display:grid;grid-template-columns:160px 1fr;gap:26px;align-items:center}
+.bar-lab{font-size:15px;letter-spacing:.16em;text-transform:uppercase;color:var(--mx);font-weight:600}
+.bar{height:64px;border-radius:10px;background:rgba(138,155,181,.14);display:flex;overflow:hidden}
+.seg{height:100%;display:flex;align-items:center;padding-inline:18px;font-size:16px;font-weight:600;
+  white-space:nowrap;overflow:hidden;width:0}
+html.motion .is-active .seg{transition:width 1.1s var(--ease-out) .25s}
+.s1{background:#2E7FD1;color:#04152c}.s2{background:#1E5FA8;color:#dbe8f8}.s3{background:#123F76;color:#dbe8f8}
+.sNow{background:linear-gradient(90deg,var(--sand),#ff9c4f);color:#2b1000}
+.bar-note{font-size:15px;color:var(--mx);margin-top:10px;letter-spacing:.04em}
+
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.3fr);gap:56px;align-items:center}
+.showcase{display:flex;flex-direction:column;gap:18px;align-items:center}
+.showcase .shot{width:fit-content;max-width:100%}
+.showcase .shot img{display:block;max-height:580px;width:auto;max-width:100%;margin:0 auto}
+.showcase .shotcap{text-align:center;margin-top:0;font-size:13px}
+.showcase .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:40px;width:100%}
+.showcase .stepline{grid-template-columns:52px 1fr;gap:16px}
+.showcase .stepline b{font-size:28px}
+.showcase .stepline h3{font-size:21px;margin-bottom:4px}
+.showcase .stepline p{font-size:15.5px;line-height:1.45}
+.slide[data-shots] .title{font-size:44px}
+.slide[data-shots] .head{margin-bottom:16px}
+.slide[data-shots] .body{justify-content:flex-start}
+html.mobile .showcase .shot img{max-height:none}
+html.mobile .showcase .steps{grid-template-columns:1fr;gap:22px}
+.shot{border-radius:14px;overflow:hidden;border:1px solid var(--ln);background:#06152c;
+  box-shadow:0 30px 70px rgba(2,8,20,.45);min-width:0}
+.shot img{display:block;width:100%;height:auto}
+.shotcap{font-size:14px;color:var(--mx);margin-top:12px;letter-spacing:.04em}
+
+.steps{display:flex;flex-direction:column;gap:24px}
+.stepline{display:grid;grid-template-columns:62px 1fr;gap:22px;align-items:start}
+.stepline b{font-family:var(--f-display);font-size:34px;font-weight:300;color:var(--acc);line-height:1}
+.stepline h3{margin:0 0 6px;font-size:24px;font-weight:600}
+.stepline p{margin:0;font-size:17px;line-height:1.5;color:var(--mx)}
+
+.check{background:var(--panel);border:1px solid var(--ln);border-radius:14px;padding:26px}
+.check h3{margin:0 0 14px;font-size:22px;font-weight:600}
+.check li{list-style:none;display:flex;gap:14px;align-items:flex-start;padding:10px 0;
+  border-top:1px solid var(--ln);font-size:16.5px;line-height:1.45;color:var(--mx)}
+.check li:first-child{border-top:0}
+.check ul{margin:0;padding:0}
+.check i{flex:0 0 20px;width:20px;height:20px;border:1.5px solid var(--acc);border-radius:5px;margin-top:2px}
+
+.rules{display:flex;flex-direction:column}
+.rule{display:grid;grid-template-columns:92px 1fr;gap:26px;padding:20px 0;border-top:1px solid var(--ln);align-items:start}
+.rule:first-child{border-top:0}
+.rule b{font-size:14px;letter-spacing:.16em;color:var(--acc);font-weight:600;padding-top:6px}
+.rule p{margin:0;font-size:19px;line-height:1.5}
+.quote{font-family:var(--f-display);font-weight:300;font-size:44px;line-height:1.2;letter-spacing:-.02em;
+  max-width:26ch;border-left:4px solid var(--acc);padding-left:34px}
+
+.flow{width:100%;height:auto;display:block}
+.dash{stroke-dasharray:9 13}
+html.motion .is-active .dash{animation:flow 1.6s linear infinite}
+@keyframes flow{to{stroke-dashoffset:-44}}
+
+
+/* cromo */
+.progress{position:fixed;left:0;top:0;height:3px;width:100%;z-index:30;background:rgba(138,155,181,.14)}
+.progress i{display:block;height:100%;width:calc(var(--p,0) * 100%);
+  background:linear-gradient(90deg,var(--teal),var(--sand));transition:width .35s var(--ease-out)}
+.hud,.hint{transition:opacity .3s ease}
+body.idle .hud,body.idle .hint{opacity:0;pointer-events:none}
+body.hinted .hint{opacity:0;pointer-events:none}
+.hud{position:fixed;z-index:31;right:max(18px,env(safe-area-inset-right,0px));
+  bottom:calc(18px + env(safe-area-inset-bottom,0px));display:flex;align-items:center;gap:10px}
+.hud button{all:unset;cursor:pointer;width:42px;height:42px;display:grid;place-items:center;border-radius:11px;
+  background:rgba(7,28,61,.82);border:1px solid rgba(138,155,181,.28);color:#F6F7F9;font-size:17px;
+  backdrop-filter:blur(8px);transition:background .2s,border-color .2s}
+.hud button:hover{background:rgba(3,84,155,.6);border-color:rgba(253,104,1,.6)}
+.hud button:focus-visible{outline:2px solid var(--sand);outline-offset:3px}
+.hud .ctr{font-size:13px;letter-spacing:.14em;color:#A9B6CC;font-variant-numeric:tabular-nums;
+  background:rgba(7,28,61,.82);border:1px solid rgba(138,155,181,.28);border-radius:11px;padding:0 14px;height:42px;
+  display:grid;place-items:center;backdrop-filter:blur(8px)}
+
+.notes-panel{position:fixed;z-index:40;left:50%;bottom:calc(76px + env(safe-area-inset-bottom,0px));
+  transform:translateX(-50%);width:min(880px,calc(100vw - 32px));max-height:42vh;overflow:auto;
+  padding:22px 26px;border-radius:16px;background:rgba(4,15,34,.95);border:1px solid rgba(253,104,1,.45);
+  color:var(--t-dark);font-size:16px;line-height:1.55;box-shadow:0 20px 60px rgba(0,0,0,.5)}
+.notes-panel h4{margin:0 0 8px;font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--sand)}
+
+#overview{position:fixed;inset:0;z-index:50;background:rgba(4,15,34,.97);overflow:auto;
+  padding:calc(28px + env(safe-area-inset-top,0px)) max(20px,env(safe-area-inset-left,0px)) 28px}
+#overview .ogrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:14px;max-width:1300px;margin:0 auto}
+#overview button{all:unset;cursor:pointer;border:1px solid rgba(138,155,181,.26);border-radius:10px;padding:14px;
+  background:rgba(7,28,61,.6);color:#F6F7F9;display:grid;gap:7px}
+#overview button:hover{border-color:var(--sand)}
+#overview .on{font-size:12px;letter-spacing:.16em;color:var(--sand)}
+#overview .ot{font-size:15px;line-height:1.3;color:#DCE6F4}
+#overview h3{max-width:1300px;margin:0 auto 18px;font-size:14px;letter-spacing:.2em;text-transform:uppercase;color:#A9B6CC}
+
+.hint{position:fixed;z-index:31;left:max(18px,env(safe-area-inset-left,0px));
+  bottom:calc(18px + env(safe-area-inset-bottom,0px));font-size:12px;letter-spacing:.12em;
+  text-transform:uppercase;color:rgba(169,182,204,.6)}
+
+/* celular */
+html.mobile body{overflow:auto}
+html.mobile .slide{position:static;width:100%;height:auto;min-height:0;opacity:1;visibility:visible;overflow:visible;
+  padding:40px max(16px,env(safe-area-inset-left,0px));border-bottom:1px solid rgba(138,155,181,.18)}
+html.mobile .title{font-size:34px}
+html.mobile .sub{font-size:17px}
+html.mobile .g4,html.mobile .g3,html.mobile .g2{grid-template-columns:1fr}
+html.mobile .split{grid-template-columns:1fr;gap:26px}
+html.mobile .bar-row{grid-template-columns:1fr;gap:10px}
+html.mobile .stat .v{font-size:54px}
+html.mobile .quote{font-size:27px;padding-left:20px}
+html.mobile .hud,html.mobile .hint,html.mobile .progress{display:none}
+html.mobile .card h3{font-size:21px}
+html.mobile .seg{font-size:13px;padding-inline:10px}
+html.mobile .rule{grid-template-columns:1fr;gap:6px}
+html.mobile .foot{padding:14px 0 0}
+html.mobile .stepline b{font-size:26px}
+
+
+/* ---------- motion ---------- */
+/* atmosfera: orbes que derivam atrás do conteúdo de cada slide */
+.slide::before{content:"";position:absolute;inset:-12%;z-index:0;pointer-events:none;opacity:0}
+.slide>*{position:relative;z-index:1}
+.slide.dark::before{
+  background:
+    radial-gradient(34% 40% at 16% 24%, rgba(3,84,155,.50), transparent 64%),
+    radial-gradient(28% 34% at 86% 22%, rgba(253,104,1,.16), transparent 62%),
+    radial-gradient(36% 38% at 74% 84%, rgba(3,84,155,.34), transparent 66%)}
+.slide.light::before{
+  background:
+    radial-gradient(34% 40% at 14% 22%, rgba(3,84,155,.13), transparent 64%),
+    radial-gradient(30% 34% at 88% 80%, rgba(253,104,1,.10), transparent 62%)}
+html.motion .slide.is-active::before{opacity:1;animation:orb 26s ease-in-out infinite alternate;
+  transition:opacity 1.1s ease}
+@keyframes orb{
+  0%{transform:translate3d(0,0,0) scale(1)}
+  50%{transform:translate3d(-2.4%,1.6%,0) scale(1.07)}
+  100%{transform:translate3d(2.4%,-1.6%,0) scale(1.03)}
+}
+
+/* entrada do slide inteiro */
+html.motion .slide{transform:scale(.988) translateY(12px)}
+html.motion .slide.is-active{transform:none;
+  transition:opacity .45s var(--ease-out),transform .62s var(--ease-out)}
+
+/* entradas escalonadas, agora com escala */
+html.motion .slide .anim{opacity:0;transform:translateY(22px) scale(.985)}
+html.motion .slide.is-active .anim{opacity:1;transform:none;
+  transition:opacity .62s var(--ease-out),transform .68s var(--ease-out);
+  transition-delay:calc(var(--d,0) * 1ms)}
+
+/* risco que cresce sob o título */
+.title{position:relative}
+.title::after{content:"";position:absolute;left:0;bottom:-18px;height:3px;width:0;border-radius:2px;
+  background:linear-gradient(90deg,var(--acc),transparent)}
+html.motion .slide.is-active .title::after{width:148px;transition:width .9s var(--ease-out) .35s}
+
+/* o print entra com um brilho que atravessa */
+.shot{position:relative;overflow:hidden}
+.shot::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(104deg,transparent 36%,rgba(255,255,255,.18) 50%,transparent 64%);
+  transform:translateX(-120%)}
+html.motion .slide.is-active .shot::after{animation:sheen 1.5s var(--ease-out) .55s 1}
+@keyframes sheen{to{transform:translateX(120%)}}
+html.motion .slide .shot img{transform:scale(1.035)}
+html.motion .slide.is-active .shot img{transform:none;transition:transform 1.5s var(--ease-out) .18s}
+
+/* as marcas de ato preenchem em sequência */
+html.motion .slide.is-active .acts i.on{animation:actin .5s var(--ease-out) backwards}
+.acts i:nth-of-type(1){animation-delay:.18s}.acts i:nth-of-type(2){animation-delay:.27s}
+.acts i:nth-of-type(3){animation-delay:.36s}.acts i:nth-of-type(4){animation-delay:.45s}
+.acts i:nth-of-type(5){animation-delay:.54s}
+@keyframes actin{from{transform:scaleX(0);opacity:0}to{transform:scaleX(1);opacity:1}}
+.acts i{transform-origin:left center}
+
+/* brilho que corre dentro das barras */
+.seg{position:relative;overflow:hidden}
+.seg::after{content:"";position:absolute;inset:0;
+  background:linear-gradient(100deg,transparent 40%,rgba(255,255,255,.26) 50%,transparent 60%);
+  transform:translateX(-100%)}
+html.motion .is-active .seg::after{animation:sheen 1.8s var(--ease-out) 1.2s 1}
+
+/* nós do diagrama pulsando */
+html.motion .is-active .flow circle{animation:nodepulse 2.8s ease-in-out infinite}
+.flow g g:nth-of-type(2) circle{animation-delay:.25s}
+.flow g g:nth-of-type(3) circle{animation-delay:.5s}
+.flow g g:nth-of-type(4) circle{animation-delay:.75s}
+.flow g g:nth-of-type(5) circle{animation-delay:1s}
+@keyframes nodepulse{0%,100%{opacity:1}50%{opacity:.72}}
+
+/* número grande sobe ao entrar */
+html.motion .slide.is-active .stat .v{animation:popin .7s var(--ease-out) backwards;animation-delay:calc(var(--d,0) * 1ms + 120ms)}
+@keyframes popin{from{opacity:0;transform:translateY(14px) scale(.94)}to{opacity:1;transform:none}}
+
+@media (prefers-reduced-motion:reduce){
+  html.motion .slide,html.motion .slide.is-active,
+  html.motion .slide .anim,html.motion .slide.is-active .anim,
+  html.motion .slide .shot img,html.motion .slide.is-active .shot img{transform:none!important;transition:none!important}
+  html.motion .slide.is-active::before,.shot::after,.seg::after,
+  html.motion .is-active .flow circle,html.motion .slide.is-active .stat .v,
+  html.motion .slide.is-active .acts i.on{animation:none!important}
+  html.motion .slide.is-active .title::after{transition:none;width:148px}
+}
+
+@media (prefers-reduced-motion:reduce){ .dash{animation:none!important} }
+</style>
+
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="li-mark" viewBox="0 0 276 390"><rect x="6.5" y="6.5" width="263" height="252" fill="none" stroke="currentColor" stroke-width="13"/><rect x="0" y="252" width="13" height="138" fill="currentColor"/><polygon points="68,223 276,247 276,253 68,253" fill="currentColor"/><polygon points="0,377 208,343 208,390 0,390" fill="currentColor"/></symbol></svg>
+
+<div class="progress"><i></i></div>
+
+<div id="stage">
+
+<section class="slide dark cover" data-act="1" data-title="Capa" data-notes="Abertura. Deixa claro que é treinamento interno e que a regra número um é: a máquina monta, o GT revisa.">
+  <div class="head"><span class="li-logo lg" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></div>
+  <div class="body">
+    <p class="kicker anim">Treinamento interno · Gestores de tráfego e CS</p>
+    <h1 class="title anim" style="--d:90;font-size:104px;max-width:16ch">Campaign <b>Builder</b></h1>
+    <p class="sub anim" style="--d:180;font-size:28px;color:var(--t-dark);max-width:34ch">Você para de montar campanha.<br>Passa a <b style="color:var(--sand);font-weight:600">pensar</b> campanha.</p>
+  </div>
+  <div class="foot"><span class="foot-l"><span>14 de outubro de 2026</span><span>Edge Function v30 · em produção</span></span><span class="foot-r"><span class="num"></span></span></div>
+</section>
+
+<section class="slide dark" data-act="1" data-title="O que este treinamento entrega" data-notes="Três promessas. Não prometa que a ferramenta pensa pelo GT, o oposto é o ponto.">
+  <div class="head"><div><p class="kicker">Ato I · O problema</p><h2 class="title">O que você sai sabendo <b>daqui</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="grid g3">
+      <div class="card anim"><span class="tagn">01</span><h3>Por que ele existe</h3><p>Qual gargalo o Campaign Builder resolve e o que a agência espera que você faça com o tempo que sobra.</p></div>
+      <div class="card anim" style="--d:110"><span class="tagn">02</span><h3>Como usar</h3><p>O caminho completo, tela por tela, do cliente selecionado até o lead caindo no WhatsApp do corretor.</p></div>
+      <div class="card anim" style="--d:220"><span class="tagn">03</span><h3>O que conferir</h3><p>O checklist de revisão obrigatória e as travas que impedem que uma campanha errada entre no ar.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="1" data-title="Como era antes" data-notes="Números do próprio time: 20 a 25 minutos na Meta, 10 a 15 no Make, 10 no formulário.">
+  <div class="head"><div><p class="kicker">Ato I · O problema</p><h2 class="title">Quarenta e cinco minutos por campanha, <b>em três sistemas</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="bars">
+      <div class="bar-row anim">
+        <div class="bar-lab">Antes</div>
+        <div>
+          <div class="bar"><div class="seg s1" data-w="48">Meta · 20 a 25 min</div><div class="seg s2" data-w="30">Make · 10 a 15 min</div><div class="seg s3" data-w="22">Formulário · 10 min</div></div>
+          <p class="bar-note">45 a 50 minutos de montagem, toda vez, para qualquer cliente.</p>
+        </div>
+      </div>
+      <div class="bar-row anim" style="--d:160">
+        <div class="bar-lab">Agora</div>
+        <div>
+          <div class="bar"><div class="seg sNow" data-w="5">2 min</div></div>
+          <p class="bar-note">O sistema monta os três de uma vez. Sobra tempo, e sobra responsabilidade.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark" data-act="1" data-title="O custo real" data-notes="O ponto emocional da apresentação: o tempo bom estava sendo gasto na parte burra do trabalho.">
+  <div class="body">
+    <p class="kicker anim">Ato I · O problema</p>
+    <p class="quote anim" style="--d:120;margin-top:26px">O gargalo nunca foi a inteligência do gestor. Era o tempo que a inteligência dele passava preenchendo formulário.</p>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="2" data-title="A proposta" data-notes="A frase central do treinamento. Repita essa em voz alta.">
+  <div class="head"><div><p class="kicker">Ato II · A proposta</p><h2 class="title">O tempo não sumiu. Ele <b>mudou de lugar</b>.</h2><p class="sub">O Campaign Builder não existe para você trabalhar menos. Existe para o seu trabalho sair da montagem e ir para onde ele vale dinheiro.</p></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="grid g2">
+      <div class="card anim"><span class="tagn">Sai de</span><h3>Montagem</h3><p>Criar campanha, criar conjunto, subir criativo, montar formulário, montar cenário no Make, ligar o Z-API e conferir se o lead cai no lugar certo. Trabalho necessário, repetitivo, e que não diferencia a agência em nada.</p></div>
+      <div class="card anim" style="--d:130"><span class="tagn">Entra em</span><h3>Estudo e segmentação</h3><p>Entender o produto, estudar o mercado daquela cidade, definir o público ideal, escolher idade e raio com critério, pensar o ângulo do criativo. É aqui que uma campanha que performa se separa de uma campanha que só existe.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark" data-act="2" data-title="A contrapartida" data-notes="Deixe explícito: quem aceita o padrão da IA sem analisar não está usando a ferramenta, está terceirizando a decisão.">
+  <div class="head"><div><p class="kicker">Ato II · A proposta</p><h2 class="title">A criação é automática. A <b>revisão é obrigatória</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="grid g3">
+      <div class="card anim"><span class="tagn">Regra</span><h3>Tudo nasce pausado</h3><p>Justamente para te dar tempo de conferir. Nenhuma campanha entra no ar por conta própria.</p></div>
+      <div class="card anim" style="--d:110"><span class="tagn">Regra</span><h3>Cinco minutos de revisão</h3><p>Você ganhou quarenta. Devolve cinco conferindo item por item antes de pedir ativação.</p></div>
+      <div class="card anim" style="--d:220"><span class="tagn">Regra</span><h3>O critério é seu</h3><p>Aceitar o público sugerido sem análise não é usar a ferramenta. É terceirizar a decisão.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="2" data-title="O que ele faz" data-notes="Quatro pernas. Nenhuma é opcional, é um fluxo só.">
+  <div class="head"><div><p class="kicker">Ato II · A proposta</p><h2 class="title">Quatro coisas, em <b>um clique só</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="grid g4">
+      <div class="card anim"><span class="tagn">01</span><h3>Plano por IA</h3><p>Você descreve em uma frase. Volta nome, objetivo, orçamento, cidade, público, texto, título e chamada. Tudo editável.</p></div>
+      <div class="card anim" style="--d:100"><span class="tagn">02</span><h3>Campanha na Meta</h3><p>Campanha, conjunto, criativo e anúncio na conta do cliente, com feed e story pareados no mesmo anúncio.</p></div>
+      <div class="card anim" style="--d:200"><span class="tagn">03</span><h3>Formulário nativo</h3><p>Publicado na Página do cliente com as perguntas de qualificação sugeridas para aquele imóvel.</p></div>
+      <div class="card anim" style="--d:300"><span class="tagn">04</span><h3>Entrega do lead</h3><p>Cenário no Make, webhook e Z-API criados sozinhos. O lead chega no WhatsApp do corretor em segundos.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark" data-act="3" data-title="Passo 1 e 2" data-shots="1" data-notes="Se algum selo de acesso aparecer vermelho, pare. Resolver acesso é pré-requisito.">
+  <div class="head"><div><p class="kicker">Ato III · Como usar</p><h2 class="title">Cliente, acesso e <b>criativos</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="showcase">
+      <div class="shot anim"><img src="/tutoriais/campaign-builder/cliente.jpg" alt="Cliente NC Imóveis selecionado com selos de acesso confirmado e dois criativos anexados" width="1400" height="665"></div>
+      <p class="shotcap">Tela real · NC Imóveis · 14/10/2026</p>
+      <div class="steps"><div class="stepline anim" style="--d:260"><b>01</b><div><h3>Abra Criar Campanha</h3><p>Criar com IA para descrever em texto livre, ou Configuração guiada para preencher na mão. Os dois caem no mesmo preview.</p></div></div>
+        <div class="stepline anim" style="--d:370"><b>02</b><div><h3>Escolha o cliente</h3><p>O sistema confere na hora o acesso à conta de anúncios e à Página. Os dois selos verdes precisam aparecer. Depois suba o criativo de feed e o de story.</p></div></div></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="3" data-title="Passo 3 e 4" data-shots="1" data-notes="O passo 4 é onde o estudo de público entra. Nada foi criado na Meta ainda.">
+  <div class="head"><div><p class="kicker">Ato III · Como usar</p><h2 class="title">O pedido, e o plano que <b>volta editável</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="showcase">
+      <div class="shot anim"><img src="/tutoriais/campaign-builder/plano.jpg" alt="Plano gerado com campanha, conjunto, orçamento diário e localização" width="1400" height="665"></div>
+      <p class="shotcap">Plano gerado pela IA, antes de qualquer criação</p>
+      <div class="steps"><div class="stepline anim" style="--d:260"><b>03</b><div><h3>Escreva o pedido</h3><p>Produto, cidade, destino e orçamento diário. Uma frase resolve. Quanto mais específico o produto e a cidade, melhor o plano.</p></div></div>
+        <div class="stepline anim" style="--d:370"><b>04</b><div><h3>Revise o plano</h3><p>Aqui nada foi criado na Meta ainda. Nome, objetivo, orçamento, destino, cidade e faixa etária estão abertos. É neste ponto que o seu estudo de público entra.</p></div></div></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark" data-act="3" data-title="Passo 5 e 6" data-shots="1" data-notes="Reforce: publicar formulário não cria nem ativa campanha. E o número do corretor é conferido dígito por dígito.">
+  <div class="head"><div><p class="kicker">Ato III · Como usar</p><h2 class="title">Formulário e <b>destino do lead</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="showcase">
+      <div class="shot anim"><img src="/tutoriais/campaign-builder/roleta.jpg" alt="Modo de entrega em roleta com dois corretores cadastrados" width="1400" height="665"></div>
+      <p class="shotcap">Roleta configurada com dois corretores</p>
+      <div class="steps"><div class="stepline anim" style="--d:260"><b>05</b><div><h3>Monte o formulário</h3><p>A IA sugere as perguntas de qualificação. Troque o que quiser, preencha privacidade e agradecimento, e marque a autorização para publicar na Página do cliente.</p></div></div>
+        <div class="stepline anim" style="--d:370"><b>06</b><div><h3>Defina a entrega</h3><p>WhatsApp único quando só uma pessoa atende, roleta quando o cliente tem time. Número sempre no formato 55 mais DDD mais número.</p></div></div></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="3" data-title="Passo 7 e 8" data-shots="1" data-notes="Anotar o ID da campanha e o número do cenário do Make no registro do cliente. É por eles que se investiga depois.">
+  <div class="head"><div><p class="kicker">Ato III · Como usar</p><h2 class="title">Criar pausada, e <b>guardar os IDs</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="showcase">
+      <div class="shot anim"><img src="/tutoriais/campaign-builder/criado.jpg" alt="Confirmação de campanha criada e pausada com os IDs reais e o cenário do Make" width="1400" height="665"></div>
+      <p class="shotcap">Campanha, conjunto, anúncio e automação, no mesmo clique</p>
+      <div class="steps"><div class="stepline anim" style="--d:260"><b>07</b><div><h3>Criar pausada</h3><p>Esse é o padrão e continua sendo. Criar ativa só em caso combinado com o cliente e com investimento aprovado.</p></div></div>
+        <div class="stepline anim" style="--d:370"><b>08</b><div><h3>Confira a confirmação</h3><p>Ela traz os IDs reais de campanha, conjunto e anúncio, e o número do cenário criado no Make. Anote no registro do cliente.</p></div></div></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark" data-act="4" data-title="Checklist de revisão" data-notes="Esse slide é o que o GT fotografa. Vale imprimir e colar na mesa.">
+  <div class="head"><div><p class="kicker">Ato IV · Revisão e segurança</p><h2 class="title">O checklist antes de pedir <b>ativação</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="grid g4">
+      <div class="check anim"><h3>Público</h3><ul>
+        <li><i></i><span>A cidade resolveu certo, não caiu para Brasil inteiro</span></li>
+        <li><i></i><span>O raio faz sentido para o imóvel e a cidade</span></li>
+        <li><i></i><span>Faixa etária condiz com o público real</span></li>
+        <li><i></i><span>Você estudou o público antes de aceitar o padrão</span></li></ul></div>
+      <div class="check anim" style="--d:100"><h3>Orçamento</h3><ul>
+        <li><i></i><span>Valor diário bate com o contratado</span></li>
+        <li><i></i><span>O aviso de mínimo foi conferido</span></li>
+        <li><i></i><span>Início e fim conferem com o combinado</span></li></ul></div>
+      <div class="check anim" style="--d:200"><h3>Criativo</h3><ul>
+        <li><i></i><span>Feed e story pareados no anúncio certo</span></li>
+        <li><i></i><span>Texto e título sem erro e sem promessa indevida</span></li>
+        <li><i></i><span>Chamada coerente com o destino</span></li>
+        <li><i></i><span>Nome da campanha no padrão da casa</span></li></ul></div>
+      <div class="check anim" style="--d:300"><h3>Lead</h3><ul>
+        <li><i></i><span>Perguntas de qualificação fazem sentido</span></li>
+        <li><i></i><span>Privacidade e agradecimento válidos</span></li>
+        <li><i></i><span>Número do corretor conferido dígito por dígito</span></li>
+        <li><i></i><span>Entrega em READY, nunca PENDING ou ERROR</span></li></ul></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="4" data-title="Travas de segurança" data-notes="Essas quatro estão no código, não dependem de alguém lembrar.">
+  <div class="head"><div><p class="kicker">Ato IV · Revisão e segurança</p><h2 class="title">Por que dá para usar <b>sem medo de queimar verba</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="grid g2">
+      <div class="card anim"><span class="tagn">Trava 01</span><h3>Tudo nasce pausado</h3><p>Campanha, conjunto e anúncio são criados em PAUSED. Nenhum gasto começa pela criação. Ativar é ação separada, com confirmação própria.</p></div>
+      <div class="card anim" style="--d:100"><span class="tagn">Trava 02</span><h3>Cidade que não resolve, trava tudo</h3><p>Se a localização não resolver, o sistema recusa a criação em vez de mirar o Brasil inteiro. O pedido fica como rascunho e avisa qual cidade falhou.</p></div>
+      <div class="card anim" style="--d:200"><span class="tagn">Trava 03</span><h3>Não duplica automação</h3><p>Formulário que já tem automação ativa é reaproveitado. Com destinatário diferente, o sistema recusa, para não existirem dois fluxos brigando pelo mesmo lead.</p></div>
+      <div class="card anim" style="--d:300"><span class="tagn">Trava 04</span><h3>Falhou no meio, limpa atrás</h3><p>Se o provisionamento do Make quebrar na metade, o sistema apaga o que criou. Não fica cenário órfão consumindo operação.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark" data-act="5" data-title="O caminho do lead" data-notes="Para o CS: decore esses cinco pontos. É por eles que se investiga quando um corretor diz que não recebeu.">
+  <div class="head"><div><p class="kicker">Ato V · Operação</p><h2 class="title">O caminho do lead, <b>do formulário ao WhatsApp</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <svg class="flow anim" viewBox="0 0 1640 300" role="img" aria-label="Fluxo do lead em cinco etapas: formulário na Meta, webhook no Make, Data Store com a vez do corretor, envio pelo Z-API e chegada no WhatsApp">
+      <defs><linearGradient id="fl" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#5AA2EA"/><stop offset="1" stop-color="#FD6801"/></linearGradient></defs>
+      <line x1="130" y1="130" x2="1510" y2="130" stroke="rgba(138,155,181,.25)" stroke-width="3"/>
+      <line x1="130" y1="130" x2="1510" y2="130" stroke="url(#fl)" stroke-width="4" class="dash"/>
+      <g font-family="Inter, system-ui, sans-serif" text-anchor="middle">
+        <g><circle cx="130" cy="130" r="34" fill="#0C2A55" stroke="#5AA2EA" stroke-width="2.5"/><text x="130" y="139" fill="#F6F7F9" font-size="22" font-weight="600">1</text><text x="130" y="200" fill="#F6F7F9" font-size="21" font-weight="600">Formulário</text><text x="130" y="228" fill="#A9B6CC" font-size="17">na Meta</text></g>
+        <g><circle cx="475" cy="130" r="34" fill="#0C2A55" stroke="#5AA2EA" stroke-width="2.5"/><text x="475" y="139" fill="#F6F7F9" font-size="22" font-weight="600">2</text><text x="475" y="200" fill="#F6F7F9" font-size="21" font-weight="600">Webhook</text><text x="475" y="228" fill="#A9B6CC" font-size="17">no Make</text></g>
+        <g><circle cx="820" cy="130" r="34" fill="#0C2A55" stroke="#5AA2EA" stroke-width="2.5"/><text x="820" y="139" fill="#F6F7F9" font-size="22" font-weight="600">3</text><text x="820" y="200" fill="#F6F7F9" font-size="21" font-weight="600">Data Store</text><text x="820" y="228" fill="#A9B6CC" font-size="17">de quem é a vez</text></g>
+        <g><circle cx="1165" cy="130" r="34" fill="#0C2A55" stroke="#FD6801" stroke-width="2.5"/><text x="1165" y="139" fill="#F6F7F9" font-size="22" font-weight="600">4</text><text x="1165" y="200" fill="#F6F7F9" font-size="21" font-weight="600">Z-API</text><text x="1165" y="228" fill="#A9B6CC" font-size="17">dispara</text></g>
+        <g><circle cx="1510" cy="130" r="34" fill="#2B1000" stroke="#FD6801" stroke-width="3"/><text x="1510" y="139" fill="#FD6801" font-size="22" font-weight="600">5</text><text x="1510" y="200" fill="#FD6801" font-size="21" font-weight="600">WhatsApp</text><text x="1510" y="228" fill="#A9B6CC" font-size="17">do corretor</text></g>
+        <text x="820" y="48" fill="#A9B6CC" font-size="16" letter-spacing="3">MEDIDO NA AUDITORIA DE 14/10: TRÊS SEGUNDOS DA PONTA À PONTA</text>
+      </g>
+    </svg>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="5" data-title="A roleta e a mensagem" data-shots="1" data-notes="Mostre a mensagem real. O corretor abre o WhatsApp já sabendo com quem vai falar.">
+  <div class="head"><div><p class="kicker">Ato V · Operação</p><h2 class="title">Um lead por vez, <b>na ordem</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="showcase">
+      <div class="shot anim"><img src="/tutoriais/campaign-builder/whatsapp.jpg" alt="Mensagem real entregue no WhatsApp do corretor com os dados do lead" width="1500" height="843"></div>
+      <p class="shotcap">Mensagem real entregue em 14/10 às 12:35</p>
+      <div class="steps"><div class="stepline anim" style="--d:260"><b>A</b><div><h3>Como a vez é decidida</h3><p>O sistema guarda num Data Store exclusivo da campanha quem pegou o último lead. O próximo vai para o seguinte da fila. Com dois corretores alterna um e um, com três roda de três em três.</p></div></div>
+        <div class="stepline anim" style="--d:370"><b>B</b><div><h3>O que o corretor recebe</h3><p>Nome, telefone, e-mail e todas as respostas das perguntas de qualificação, com o empreendimento no cabeçalho.</p></div></div>
+        <div class="stepline anim" style="--d:480"><b>C</b><div><h3>Quando alguém não recebe</h3><p>Peça o ID da campanha ao GT. Com ele achamos o cenário no Make e a execução. Entrega em PENDING ou ERROR significa automação não configurada.</p></div></div></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark" data-act="5" data-title="A prova" data-notes="Números reais da auditoria. Se perguntarem, foi testado em produção com lead real.">
+  <div class="head"><div><p class="kicker">Ato V · Operação</p><h2 class="title">Testado de ponta a ponta antes de <b>chegar em você</b>.</h2><p class="sub">Auditoria de 14 de outubro, em produção, com lead real saindo da Meta e chegando no WhatsApp.</p></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="grid g4">
+      <div class="card stat anim"><div class="v big" data-count="10">10</div><span class="k">leads de teste roteados</span></div>
+      <div class="card stat anim" style="--d:100"><div class="v big"><em data-count="100" data-suffix="%">100%</em></div><span class="k">acerto na ordem da roleta</span></div>
+      <div class="card stat anim" style="--d:200"><div class="v big" data-count="5">5</div><span class="k">defeitos achados e corrigidos</span></div>
+      <div class="card stat anim" style="--d:300"><div class="v big"><em data-count="3" data-suffix="s">3s</em></div><span class="k">do lead ao WhatsApp</span></div>
+    </div>
+    <div class="grid g2" style="margin-top:26px">
+      <div class="card anim" style="--d:360"><span class="tagn">Roleta</span><h3>Com dois e com três corretores</h3><p>Quatro leads consecutivos com dois corretores alternaram na ordem certa. Seis leads com três rodaram o ciclo completo duas vezes, sem nenhum fora de lugar.</p></div>
+      <div class="card anim" style="--d:430"><span class="tagn">Automações existentes</span><h3>Nada do que já rodava foi tocado</h3><p>Os cenários reais do time continuaram intactos. Os únicos criados foram os do teste, todos desativados no fim, e todas as campanhas de teste ficaram pausadas.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="5" data-title="O combinado" data-notes="Leia as cinco em voz alta e peça concordância do time.">
+  <div class="head"><div><p class="kicker">Ato V · Operação</p><h2 class="title">Como a gente usa isso <b>a partir de agora</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="rules">
+      <div class="rule anim"><b>REGRA 1</b><p>Sempre criar pausada. Ativar só com investimento aprovado e depois da revisão completa.</p></div>
+      <div class="rule anim" style="--d:90"><b>REGRA 2</b><p>O tempo economizado vai para estudo de mercado e segmentação, e isso precisa aparecer no plano da campanha.</p></div>
+      <div class="rule anim" style="--d:180"><b>REGRA 3</b><p>Conferir o número do corretor dígito por dígito antes de criar. Lead no número errado é lead perdido e cliente irritado.</p></div>
+      <div class="rule anim" style="--d:270"><b>REGRA 4</b><p>Anotar o ID da campanha e o número do cenário do Make no registro do cliente.</p></div>
+      <div class="rule anim" style="--d:360"><b>REGRA 5</b><p>Se a entrega não ficar READY, não ativar. Lead entrando sem automação pronta é lead parado.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark closing" data-act="5" data-title="Fechamento" data-notes="Fecha com a frase. A ferramenta tira o repetitivo, o critério continua sendo do gestor.">
+  <div class="body">
+    <p class="kicker anim">Campaign Builder</p>
+    <p class="quote anim" style="--d:120;margin-top:26px;font-size:54px">A ferramenta tira o trabalho repetitivo das suas mãos. O critério continua sendo seu.</p>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="li-logo lg" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span><span class="foot-r"><span class="num"></span></span></div>
+</section>
+
+</div>
+
+<div class="hud">
+  <button id="btn-grid" type="button" title="Visão geral (G)" aria-label="Visão geral">▦</button>
+  <button id="btn-notes" type="button" title="Notas do apresentador (N)" aria-label="Notas">✎</button>
+  <button id="btn-prev" type="button" title="Anterior" aria-label="Slide anterior">←</button>
+  <span class="ctr" id="ctr">1 / 1</span>
+  <button id="btn-next" type="button" title="Próximo" aria-label="Próximo slide">→</button>
+</div>
+<div class="hint">Setas para navegar · G visão geral · N notas</div>
+
+<div class="notes-panel" id="notes-panel" hidden aria-label="Notas do apresentador"><h4>Nota do apresentador</h4><p id="notes-text"></p></div>
+<div id="overview" hidden><h3>Visão geral</h3><div class="ogrid" id="ogrid"></div></div>
+
+<script>
+(function(){
+  "use strict";
+  var doc = document.documentElement;
+  var slides = Array.prototype.slice.call(document.querySelectorAll("#stage > .slide"));
+  var N = slides.length;
+  var ACTS = ["O problema","A proposta","Como usar","Revisão e segurança","Operação e prova"];
+  var ROMAN = ["I","II","III","IV","V"];
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  var cur = -1;
+
+  if (!reduce) doc.classList.add("motion");
+
+  slides.forEach(function(s,i){
+    var n = String(i+1);
+    while (n.length < 2) n = "0" + n;
+    s.setAttribute("role","group");
+    s.setAttribute("aria-roledescription","slide");
+    s.setAttribute("aria-label",(i+1)+" de "+N+": "+(s.dataset.title||""));
+    Array.prototype.forEach.call(s.querySelectorAll(".num"), function(el){ el.textContent = n+" / "+N; });
+    Array.prototype.forEach.call(s.querySelectorAll(".ftitle"), function(el){ el.textContent = s.dataset.title || ""; });
+    var act = parseInt(s.dataset.act,10) || 1;
+    Array.prototype.forEach.call(s.querySelectorAll(".acts"), function(el){
+      var h = "";
+      for (var a=1; a<=5; a++) h += '<i class="'+(a<=act?"on":"")+'"></i>';
+      el.innerHTML = h + "<span>Ato "+ROMAN[act-1]+" · "+ACTS[act-1]+"</span>";
+      el.setAttribute("aria-label","Ato "+act+" de 5: "+ACTS[act-1]);
+    });
+    Array.prototype.forEach.call(s.querySelectorAll("[data-count]"), function(el){ el.dataset.final = el.textContent; });
+  });
+
+  function layout(){
+    var w = window.innerWidth, h = window.innerHeight;
+    var mobile = (w < 860 && h > w * 1.02) || w < 600;
+    doc.classList.toggle("mobile", mobile);
+    if (!mobile) doc.style.setProperty("--scale", String(Math.min(w/1920, h/1080)));
+    else doc.style.removeProperty("--scale");
+  }
+  window.addEventListener("resize", layout);
+  layout();
+
+  function runCounters(s){
+    if (reduce) return;
+    Array.prototype.forEach.call(s.querySelectorAll("[data-count]"), function(el){
+      var target = parseFloat(el.dataset.count) || 0;
+      var suf = el.dataset.suffix || "";
+      var t0 = null, dur = 1200, delay = 260;
+      if (el._raf) cancelAnimationFrame(el._raf);
+      el.textContent = "0" + suf;
+      function step(ts){
+        if (t0 === null) t0 = ts + delay;
+        var p = Math.min(1, Math.max(0, (ts - t0) / dur));
+        var e = 1 - Math.pow(1 - p, 3);
+        if (p >= 1 || !s.classList.contains("is-active")) { el.textContent = el.dataset.final; return; }
+        el.textContent = Math.round(target * e) + suf;
+        el._raf = requestAnimationFrame(step);
+      }
+      el._raf = requestAnimationFrame(step);
+    });
+  }
+  function fillBars(s){
+    Array.prototype.forEach.call(s.querySelectorAll(".seg"), function(el){
+      el.style.width = el.getAttribute("data-w") + "%";
+    });
+  }
+
+  var bar = document.querySelector(".progress");
+  var ctr = document.getElementById("ctr");
+  function go(i){
+    i = Math.max(0, Math.min(N-1, i));
+    if (i === cur) return;
+    var prev = cur;
+    cur = i;
+    slides.forEach(function(s,j){
+      var on = j === i;
+      s.classList.toggle("is-active", on);
+      s.setAttribute("aria-hidden", on ? "false" : "true");
+      if (on) s.removeAttribute("inert"); else s.setAttribute("inert","");
+    });
+    if (prev >= 0) Array.prototype.forEach.call(slides[prev].querySelectorAll("[data-count]"), function(el){
+      if (el._raf) cancelAnimationFrame(el._raf);
+      el.textContent = el.dataset.final;
+    });
+    runCounters(slides[i]);
+    fillBars(slides[i]);
+    bar.style.setProperty("--p", String((i+1)/N));
+    ctr.textContent = (i+1) + " / " + N;
+    try { history.replaceState(null, "", "#" + (i+1)); } catch(e){}
+    updateNotes();
+    slides[i].scrollTop = 0;
+  }
+
+  document.getElementById("btn-next").addEventListener("click", function(){ go(cur+1); });
+  document.getElementById("btn-prev").addEventListener("click", function(){ go(cur-1); });
+
+  /* notas */
+  var panel = document.getElementById("notes-panel");
+  var ntext = document.getElementById("notes-text");
+  var notesOn = false;
+  function updateNotes(){
+    if (!notesOn || cur < 0) return;
+    ntext.textContent = slides[cur].dataset.notes || "Sem nota para este slide.";
+  }
+  function toggleNotes(){
+    notesOn = !notesOn;
+    panel.hidden = !notesOn;
+    updateNotes();
+  }
+  document.getElementById("btn-notes").addEventListener("click", toggleNotes);
+
+  /* visão geral */
+  var ov = document.getElementById("overview");
+  var ogrid = document.getElementById("ogrid");
+  slides.forEach(function(s,i){
+    var b = document.createElement("button");
+    b.type = "button";
+    b.innerHTML = '<span class="on">'+(i+1)+' / '+N+'</span><span class="ot"></span>';
+    b.querySelector(".ot").textContent = s.dataset.title || "";
+    b.addEventListener("click", function(){ ov.hidden = true; go(i); });
+    ogrid.appendChild(b);
+  });
+  function toggleGrid(){ ov.hidden = !ov.hidden; }
+  document.getElementById("btn-grid").addEventListener("click", toggleGrid);
+
+  document.addEventListener("keydown", function(e){
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    var k = e.key;
+    if (k === "ArrowRight" || k === "PageDown" || k === " ") { e.preventDefault(); go(cur+1); }
+    else if (k === "ArrowLeft" || k === "PageUp") { e.preventDefault(); go(cur-1); }
+    else if (k === "Home") { e.preventDefault(); go(0); }
+    else if (k === "End") { e.preventDefault(); go(N-1); }
+    else if (k === "g" || k === "G") { e.preventDefault(); toggleGrid(); }
+    else if (k === "n" || k === "N") { e.preventDefault(); toggleNotes(); }
+    else if (k === "Escape") { ov.hidden = true; }
+  });
+
+  /* toque */
+  var tx = 0, ty = 0;
+  document.addEventListener("touchstart", function(e){
+    if (!e.touches[0]) return;
+    tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+  }, {passive:true});
+  document.addEventListener("touchend", function(e){
+    if (doc.classList.contains("mobile") || !e.changedTouches[0]) return;
+    var dx = e.changedTouches[0].clientX - tx, dy = e.changedTouches[0].clientY - ty;
+    if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.6) go(cur + (dx < 0 ? 1 : -1));
+  }, {passive:true});
+
+  /* esconde os controles quando ninguém mexe */
+  var idleT = null;
+  function wake(){
+    document.body.classList.remove("idle");
+    if (idleT) clearTimeout(idleT);
+    idleT = setTimeout(function(){ document.body.classList.add("idle"); }, 2800);
+  }
+  ["mousemove","mousedown","keydown","touchstart","wheel"].forEach(function(ev){
+    document.addEventListener(ev, wake, {passive:true});
+  });
+  wake();
+  setTimeout(function(){ document.body.classList.add("hinted"); }, 7000);
+
+  var start = parseInt((location.hash || "").replace("#",""), 10);
+  go(isFinite(start) && start >= 1 ? start - 1 : 0);
+  /* no celular tudo fica visível e empilhado */
+  if (doc.classList.contains("mobile")) {
+    slides.forEach(function(s){ s.classList.add("is-active"); s.removeAttribute("inert"); s.setAttribute("aria-hidden","false"); fillBars(s); });
+  }
+})();
+</script>
+
+</body>
+</html>

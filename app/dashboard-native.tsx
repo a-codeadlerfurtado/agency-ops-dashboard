@@ -2059,9 +2059,13 @@ function ProfileMenu({preferences,profile,email,settings,openWalletManagement,ca
   const pending = preferences?.my_access_request?.status === "PENDING";
   const [asking, setAsking] = useState(false);
   async function ask() { setAsking(true); try { await requestAccess(); } finally { setAsking(false); } }
+  // Treinamento interno das ferramentas. Em aba nova de propósito: o time
+  // costuma abrir o tutorial ao lado da tela que está operando, e trocar a
+  // aba atual faria perder o rascunho de campanha em andamento.
+  function openTutorials() { close(); window.open("/tutoriais", "_blank", "noopener,noreferrer"); }
   return <div ref={dialogRef as React.RefObject<HTMLDivElement>} role="dialog" aria-modal="true" aria-label="Menu do perfil" className="profile-menu"><div className="profile-card"><span className="avatar">{initials(name)}</span><div><b>{text(name)}</b><small>{text(preferences.role||"Colaborador")}</small></div></div>
     {showRequest && <button className="request-access" disabled={pending || asking} onClick={ask}>{pending ? "Solicitação enviada — aguardando Adler" : asking ? "Enviando…" : "Solicitar acesso completo"}</button>}
-    {canManageWallets && <button className="wallet-management-entry" onClick={openWalletManagement}>Gestão de carteiras</button>}<NoteBox token={token} clients={clients} /><button onClick={settings}>Meu perfil</button><button onClick={settings}>Configurações</button><button onClick={settings}>Preferências</button><button onClick={close}>Notificações</button><button className="muted" onClick={() => signOut()}>Sair</button></div>;
+    {canManageWallets && <button className="wallet-management-entry" onClick={openWalletManagement}>Gestão de carteiras</button>}<NoteBox token={token} clients={clients} /><button onClick={settings}>Meu perfil</button><button onClick={settings}>Configurações</button><button onClick={settings}>Preferências</button><button className="tutorials-entry" onClick={openTutorials}>Tutoriais</button><button onClick={close}>Notificações</button><button className="muted" onClick={() => signOut()}>Sair</button></div>;
 }
 
 function NotificationCenter({items,close,refresh,openClient,openWork,token,pendingRequests,canDecide,decide}:{items:Row[];close:()=>void;refresh:()=>Promise<void>;openClient:(id:string)=>void;openWork:(id:string)=>void;token:string;pendingRequests:Row[];canDecide:boolean;decide:(id:string,decision:"APPROVED"|"DENIED")=>Promise<void>}) {
