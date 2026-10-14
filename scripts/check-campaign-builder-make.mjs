@@ -6,7 +6,7 @@ const source=fs.readFileSync("supabase/functions/agency-ops-campaign-builder-api
 const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
 const exports={};
 const calls=[];
-let storedBlueprint=null,occupied=false,failScenario=false;
+let storedBlueprint=null,occupied=false,failScenario=false,blueprintShape="wrapped";
 const fakeFetch=async (url,init={})=>{
  const u=new URL(url),path=u.pathname.replace("/api/v2","");
  const body=init.body?JSON.parse(init.body):null;
@@ -20,7 +20,7 @@ const fakeFetch=async (url,init={})=>{
  else if(path==="/data-stores/550/data") payload={key:"roleta"};
  else if(path==="/scenarios"&&init.method==="POST"){if(failScenario) return {ok:false,status:400,json:async()=>({code:"IM005",message:"bad"})};storedBlueprint=JSON.parse(body.blueprint);payload={scenario:{id:994}};}
  else if(init.method==="DELETE") payload={};
- else if(path==="/scenarios/994/blueprint") payload={blueprint:storedBlueprint};
+ else if(path==="/scenarios/994/blueprint") payload=blueprintShape==="wrapped"?{code:"200",response:{blueprint:storedBlueprint,scheduling:{type:"immediately"},version:1}}:{blueprint:storedBlueprint};
  else if(path==="/scenarios/994/start") payload={scenario:{id:994,isActive:true}};
  else if(path==="/scenarios/994") payload={scenario:{id:994,isActive:true}};
  else throw Error("Unexpected mock Make request: "+path+" "+(init.method||"GET"));
@@ -79,6 +79,12 @@ assert.equal(router.routes[1].flow[0].filter.conditions[0][0].b,"0");
 assert.equal(router.routes[2].flow[0].filter.conditions[0][0].b,"1");
 assert.equal(router.routes[2].flow[1].mapper.data.ultimo_corretor,"2");
 assert.ok(calls.some(c=>c.path==="/data-stores/550/data"&&c.body.data.ultimo_corretor==="2"));
+// O endpoint responde {code, response:{blueprint}}; o formato antigo e aceito
+// por tolerancia. As duas formas tem de passar na verificacao.
+blueprintShape="flat";
+const planoB=await provisionMakeLeads(base);
+assert.equal(planoB.scenarioId,994);
+blueprintShape="wrapped";
 calls.length=0;
 failScenario=true;
 await assert.rejects(()=>provisionMakeLeads({...base,recipients:[

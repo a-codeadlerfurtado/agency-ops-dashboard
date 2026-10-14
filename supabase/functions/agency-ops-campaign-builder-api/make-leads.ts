@@ -146,7 +146,11 @@ export async function provisionMakeLeads(i:MakeProvisionInput) {
     scenarioId=Number(created?.scenario?.id||0);
     if (!scenarioId) throw new Error("make_scenario_create_unverified");
     const fetched=await requestMake(i.token,"/scenarios/"+scenarioId+"/blueprint");
-    const raw=fetched?.blueprint;
+    // GET /scenarios/{id}/blueprint responde {code, response:{blueprint,...}}.
+    // Lendo fetched.blueprint direto vinha undefined, a verificacao acusava
+    // divergencia e a limpeza derrubava o cenario recem-criado: a automacao
+    // nunca conseguia ficar pronta (reproduzido em 14/10/2026).
+    const raw=fetched?.response?.blueprint ?? fetched?.blueprint;
     const saved=typeof raw==="string"?JSON.parse(raw):raw;
     const fb=saved?.flow?.find((m:any)=>m.module==="facebook-lead-ads:NewLeadMultiple");
     const receivers=recipients.length===1
