@@ -20,6 +20,7 @@ function ProfileMenu({ preferences, openSettings, close }: { preferences: Row; o
     <button onClick={openSettings}>Meu perfil</button>
     <button onClick={openSettings}>Configurações</button>
     <button onClick={openSettings}>Preferências</button>
+    <button className="tutorials-entry" onClick={() => { close(); window.open("/tutoriais", "_blank", "noopener,noreferrer"); }}>Tutoriais</button>
     <button className="muted" onClick={() => supabase.auth.signOut({ scope: "local" })}>Sair</button>
   </div>;
 }
