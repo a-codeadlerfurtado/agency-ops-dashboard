@@ -52,6 +52,13 @@ const base={token:"fake-token",teamId:600315,pageId:"12345678901",formId:"123456
 calls.length=0;
 const single=await provisionMakeLeads(base);
 assert.equal(single.scenarioId,994);
+// O trigger tem de pedir field_data a Meta, senao o bundle nao traz `data`
+// e a mensagem chega em branco (como nos cenarios 4656349 e 4856012).
+const trigger=storedBlueprint.flow.find(m=>m.module==="facebook-lead-ads:NewLeadMultiple");
+assert.ok(trigger.parameters.fields.includes("field_data"));
+assert.equal(trigger.parameters.fields.length,17);
+assert.equal(trigger.parameters.v,"2");
+assert.equal(storedBlueprint.metadata.instant,true);
 assert.equal(single.recipients.length,1);
 assert.equal(storedBlueprint.flow.length,2);
 assert.equal(storedBlueprint.flow[1].mapper.phone,"5511999999999");

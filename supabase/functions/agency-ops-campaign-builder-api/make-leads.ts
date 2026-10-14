@@ -34,6 +34,13 @@ export function buildMakeLeadMessage(product: string, questions: LeadQuestion[])
   return ["NOVO LEAD - " + title, "NOME DO LEAD: " + found.name,
     "TELEFONE: " + found.phone, "EMAIL: " + (found.email || "não solicitado no formulário"), ...extras].join("\n\n");
 }
+// Campos que o módulo Facebook Lead Ads precisa pedir à Meta. Sem "field_data"
+// o bundle do trigger não traz a coleção `data`, e a mensagem chegaria com nome,
+// telefone e respostas em branco. Lista idêntica à dos cenários que já entregam
+// leads em produção (4656349 e 4856012).
+const FB_LEAD_FIELDS = ["id","ad_id","ad_name","adset_id","adset_name","campaign_id",
+  "campaign_name","created_time","custom_disclaimer_responses","field_data","form_id",
+  "home_listing","is_organic","partner_name","platform","retailer_item_id","vehicle"];
 const API = "https://us1.make.com/api/v2";
 async function requestMake(token:string,path:string,init:RequestInit={}):Promise<any> {
   const res=await fetch(API+path,{...init,headers:{"Authorization":"Token "+token,"content-type":"application/json",...(init.headers||{})}});
@@ -84,7 +91,7 @@ export async function provisionMakeLeads(i:MakeProvisionInput) {
     if(actualForm!==i.formId || (actualPage && actualPage!==i.pageId))
       throw new Error("make_hook_form_mismatch");
     const flow:any[]=[{id:1,module:"facebook-lead-ads:NewLeadMultiple",version:2,
-      parameters:{v:"2",fields:[],__IMTHOOK__:hookId},
+      parameters:{v:"2",fields:FB_LEAD_FIELDS,__IMTHOOK__:hookId},
       mapper:{},metadata:{designer:{x:0,y:0}}}];
     if(recipients.length===1){
       flow.push({id:6,module:"z-api:sendTextMessage",version:1,
@@ -127,7 +134,9 @@ export async function provisionMakeLeads(i:MakeProvisionInput) {
       flow.push({id:4,module:"builtin:BasicRouter",version:1,routes,
         metadata:{designer:{x:600,y:0}}});
     }
-    const blueprint={name,flow,metadata:{version:1,
+    // "instant" marca o cenário como disparado por webhook, como nos cenários
+    // de referência; sem isso o Make não o trata como instantâneo.
+    const blueprint={name,flow,metadata:{instant:true,version:1,
       scenario:{roundtrips:1,maxErrors:3,autoCommit:true,autoCommitTriggerLast:true,
         sequential:recipients.length>1,confidential:false,dataloss:false,dlq:false,
         freshVariables:false},designer:{orphans:[]}}};
