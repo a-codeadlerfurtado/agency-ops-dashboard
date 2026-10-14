@@ -53,6 +53,18 @@ const FAVICON =
       "</svg>",
   );
 
+/**
+ * `href` externo ao `public/tutoriais/` é de propósito: o Briefing Hub já tem
+ * uma apresentação própria, servida pela rota `/briefing-hub-demo`, que é o
+ * portal real do cliente com dados fictícios injetados pela Edge Function
+ * `briefing-hub-presentation`. Refazer aquilo como deck aqui criaria uma
+ * segunda cópia para divergir da primeira — que é exatamente o problema
+ * documentado no topo de `app/briefing-hub-demo/route.ts`. Então o cartão
+ * aponta para lá.
+ *
+ * Por isso `formato`: os decks se navegam por slide, o Briefing Hub se navega
+ * clicando. Dizer isso no cartão evita que alguém abra esperando setas.
+ */
 type Tutorial = {
   nome: string;
   para: string;
@@ -60,21 +72,75 @@ type Tutorial = {
   href: string;
   duracao: string;
   publico: string;
+  formato: "deck" | "ambiente";
 };
 
-const TUTORIAIS: Tutorial[] = [
+type Grupo = { titulo: string; nota: string; itens: Tutorial[] };
+
+const GRUPOS: Grupo[] = [
   {
-    nome: "Campaign Builder",
-    para: "Criar campanha, formulário e entrega do lead em um clique",
-    texto:
-      "Por que a ferramenta existe, o caminho completo tela por tela, o checklist de " +
-      "revisão obrigatória antes de ativar, e o que o CS precisa saber sobre a roleta " +
-      "de corretores e a entrega no WhatsApp.",
-    href: "/tutoriais/campaign-builder.html",
-    duracao: "18 telas",
-    publico: "Gestores de tráfego e CS",
+    titulo: "Gestão de tráfego",
+    nota: "Quem monta e cuida de campanha.",
+    itens: [
+      {
+        nome: "Campaign Builder",
+        para: "Criar campanha, formulário e entrega do lead em um clique",
+        texto:
+          "Por que a ferramenta existe, o caminho completo tela por tela, o checklist de " +
+          "revisão obrigatória antes de ativar, e o que o CS precisa saber sobre a roleta " +
+          "de corretores e a entrega no WhatsApp.",
+        href: "/tutoriais/campaign-builder.html",
+        duracao: "18 telas",
+        publico: "GT e CS",
+        formato: "deck",
+      },
+      {
+        nome: "CPL Guard",
+        para: "O freio automático quando o custo por lead dispara",
+        texto:
+          "O que a regra faz e o que ela não faz, de onde sai o CPL ideal de cada cliente, " +
+          "por que o limite é 2x no anúncio e 3x no conjunto, como ler o aviso que chega no " +
+          "WhatsApp e o que fazer nos primeiros minutos depois dele.",
+        href: "/tutoriais/cpl-guard.html",
+        duracao: "11 telas",
+        publico: "GT e Adler",
+        formato: "deck",
+      },
+    ],
+  },
+  {
+    titulo: "Customer Success",
+    nota: "Quem fala com o cliente e responde pela entrega.",
+    itens: [
+      {
+        nome: "Conferência de Leads e relatórios",
+        para: "A conferência diária, o relatório semanal e o mensal",
+        texto:
+          "Como ler a conferência do dia, o que cada divergência quer de você, por que um " +
+          "lead sem campanha conciliada não é o mesmo que lead perdido, e o passo a passo " +
+          "de fechar o relatório semanal e o mensal sem retrabalho.",
+        href: "/tutoriais/conferencia-leads.html",
+        duracao: "12 telas",
+        publico: "CS e GT",
+        formato: "deck",
+      },
+      {
+        nome: "Briefing Hub",
+        para: "O portal que o cliente usa para preencher produto e persona",
+        texto:
+          "A mesma apresentação que já roda no Briefing Hub: o portal de verdade, com " +
+          "dados de exemplo, para você clicar à vontade. Serve para treinar o atendimento " +
+          "e para mostrar ao cliente como preencher antes de liberar o acesso dele.",
+        href: "/briefing-hub-demo",
+        duracao: "ambiente navegável",
+        publico: "CS e comercial",
+        formato: "ambiente",
+      },
+    ],
   },
 ];
+
+const TOTAL = GRUPOS.reduce((n, g) => n + g.itens.length, 0);
 
 function escapar(valor: string) {
   return valor
@@ -85,21 +151,37 @@ function escapar(valor: string) {
 }
 
 function cartao(item: Tutorial) {
+  const externo = !item.href.startsWith("/tutoriais/");
+  const selo = item.formato === "ambiente" ? "Ambiente" : "Apresentação";
+  const abrir =
+    item.formato === "ambiente" ? "Abrir ambiente →" : "Abrir apresentação →";
   return `
-  <a class="cartao" href="${escapar(item.href)}" target="_blank" rel="noopener">
+  <a class="cartao${externo ? " externo" : ""}" href="${escapar(item.href)}" target="_blank" rel="noopener">
     <span class="marca" aria-hidden="true">${MARCA_SVG}</span>
     <span class="corpo">
       <strong>${escapar(item.nome)}</strong>
       <small>${escapar(item.para)}</small>
       <p>${escapar(item.texto)}</p>
-      <span class="meta">${escapar(item.publico)} · ${escapar(item.duracao)}</span>
-      <span class="abrir">Abrir apresentação →</span>
+      <span class="meta">
+        <span class="selo">${escapar(selo)}</span>
+        ${escapar(item.publico)} · ${escapar(item.duracao)}
+      </span>
+      <span class="abrir">${escapar(abrir)}</span>
     </span>
   </a>`;
 }
 
+function secao(g: Grupo) {
+  return `
+  <section class="grupo">
+    <h2>${escapar(g.titulo)} <span class="qtd">${g.itens.length}</span></h2>
+    <p class="nota">${escapar(g.nota)}</p>
+    ${g.itens.map(cartao).join("")}
+  </section>`;
+}
+
 function pagina() {
-  const cartoes = TUTORIAIS.map(cartao).join("");
+  const secoes = GRUPOS.map(secao).join("");
   return `<!doctype html>
 <html lang="pt-BR">
 <head>
@@ -132,6 +214,15 @@ function pagina() {
   h1{font-size:26px;margin:6px 0 4px;font-weight:650;letter-spacing:-.01em}
   .sub{color:var(--muted);margin:0 0 22px;font-size:14px}
 
+  .grupo{margin:0 0 30px}
+  .grupo h2{font-size:12px;letter-spacing:.15em;text-transform:uppercase;
+            color:var(--texto);font-weight:700;margin:0 0 3px;
+            display:flex;align-items:center;gap:8px}
+  .grupo .qtd{font-size:10px;letter-spacing:0;color:var(--laranja);
+              border:1px solid var(--line);border-radius:999px;
+              padding:1px 7px;font-weight:700}
+  .grupo .nota{margin:0 0 13px;color:var(--muted);font-size:12.5px}
+
   .cartao{display:flex;gap:16px;padding:18px;margin-bottom:12px;
           border:1px solid var(--line);border-radius:16px;background:var(--marinho);
           text-decoration:none;color:inherit;
@@ -148,8 +239,17 @@ function pagina() {
   .corpo strong{font-size:16px;display:block}
   .corpo small{color:var(--muted);font-size:12px;display:block;margin-top:2px}
   .corpo p{margin:9px 0 0;color:var(--muted);font-size:13px}
-  .meta{display:block;margin-top:10px;font-size:11px;letter-spacing:.14em;
+  .meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+        margin-top:10px;font-size:11px;letter-spacing:.14em;
         text-transform:uppercase;color:var(--azul);font-weight:600}
+  .selo{letter-spacing:.1em;color:var(--texto);background:rgba(253,104,1,.14);
+        border:1px solid rgba(253,104,1,.4);border-radius:999px;padding:2px 8px;
+        font-size:10px}
+  /* O Briefing Hub sai da pasta dos decks: a borda tracejada avisa que o
+     destino é outra parte do sistema, não um deck deste conjunto. */
+  .cartao.externo{border-style:dashed}
+  .cartao.externo .selo{background:rgba(3,84,155,.18);
+                        border-color:rgba(3,84,155,.5)}
   .abrir{display:inline-block;margin-top:9px;font-size:13px;color:var(--laranja);font-weight:600}
 
   footer{margin-top:20px;color:var(--muted);font-size:12px;line-height:1.6}
@@ -163,11 +263,13 @@ function pagina() {
     <span class="nome">Leonardo Imobi</span>
   </div>
   <h1>Tutoriais</h1>
-  <p class="sub">Treinamento interno das ferramentas da operação. Abre em tela cheia, navega pelas setas.</p>
-  ${cartoes}
+  <p class="sub">Treinamento interno das ferramentas da operação. ${TOTAL} materiais, agrupados por quem usa. As apresentações abrem em tela cheia e navegam pelas setas; o ambiente do Briefing Hub se navega clicando.</p>
+  ${secoes}
   <footer>
-    As telas que aparecem nos tutoriais são de campanhas de teste, criadas e pausadas
-    para esse fim. Nenhuma delas é campanha de cliente em veiculação.
+    As telas que aparecem nas apresentações são de campanhas de teste, criadas e
+    pausadas para esse fim. Nenhuma delas é campanha de cliente em veiculação. O
+    ambiente do Briefing Hub é o portal real rodando com dados fictícios: nada do
+    que você digitar ali chega a um cliente.
   </footer>
 </main>
 </body>

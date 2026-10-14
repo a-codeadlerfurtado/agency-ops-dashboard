@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow">
+<title>CPL Guard</title>
+<meta name="description" content="Treinamento interno do CPL Guard para gestores de tráfego da Leonardo Imobi.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap">
+<link rel="stylesheet" href="/tutoriais/deck.css">
+<style>
+  html{color-scheme:dark}*{box-sizing:border-box}body{margin:0}img{max-width:100%}[hidden]{display:none!important}
+  .zap{max-width:760px;margin:0 auto;border-radius:18px;background:#06583f;border:1px solid #18926e;
+       padding:22px 24px;font-size:17px;line-height:1.55;color:#ecf6f1;white-space:pre-wrap}
+  .zap b{color:#fff}
+  .zap .hora{display:block;text-align:right;font-size:14px;color:#9ccdb8;margin-top:12px}
+  .fonte{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:18px;margin-top:10px}
+  .fonte .passo{border:1px solid var(--ln);border-radius:14px;padding:22px;background:var(--panel);position:relative}
+  .fonte .passo b{display:block;font-size:13px;letter-spacing:.18em;text-transform:uppercase;color:var(--acc);margin-bottom:10px}
+  .fonte .passo h3{margin:0 0 8px;font-size:23px;font-weight:600}
+  .fonte .passo p{margin:0;font-size:16px;color:var(--mx);line-height:1.5}
+  .fonte .passo::after{content:"→";position:absolute;right:-16px;top:50%;transform:translateY(-50%);
+                       color:var(--mx);font-size:20px}
+  .fonte .passo:last-child::after{content:none}
+  .gatilho{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:26px}
+  .gatilho .g{border:1px solid var(--ln);border-radius:16px;padding:30px;background:var(--panel);text-align:center}
+  .gatilho .g em{font-style:normal;display:block;font-size:92px;font-weight:700;line-height:1;
+                 letter-spacing:-.03em;color:var(--acc);font-variant-numeric:tabular-nums}
+  .gatilho .g strong{display:block;margin-top:14px;font-size:24px;font-weight:600}
+  .gatilho .g span{display:block;margin-top:10px;font-size:17px;color:var(--mx);line-height:1.5}
+  html.mobile .fonte,html.mobile .gatilho{grid-template-columns:1fr}
+  html.mobile .fonte .passo::after{content:none}
+  html.mobile .zap{font-size:14px;padding:16px}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="li-mark" viewBox="0 0 276 390"><rect x="6.5" y="6.5" width="263" height="252" fill="none" stroke="currentColor" stroke-width="13"/><rect x="0" y="252" width="13" height="138" fill="currentColor"/><polygon points="68,223 276,247 276,253 68,253" fill="currentColor"/><polygon points="0,377 208,343 208,390 0,390" fill="currentColor"/></symbol></svg>
+
+<div class="progress"><i></i></div>
+
+<div id="stage">
+
+<section class="slide dark cover" data-act="1" data-title="Capa" data-notes="Abre dizendo que a ferramenta não substitui o gestor, ela compra tempo de reação.">
+  <div class="head"><span class="li-logo lg" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></div>
+  <div class="body">
+    <p class="kicker anim">Treinamento interno · Gestores de tráfego</p>
+    <h1 class="title cover-title anim" style="--d:90">CPL <b>Guard</b></h1>
+    <p class="sub cover-sub anim" style="--d:180">Anúncio que queima verba sem lead é pausado <b style="color:var(--sand);font-weight:600">em até 30 minutos</b>, de madrugada inclusive.</p>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span></span></div>
+</section>
+
+<section class="slide dark" data-act="1" data-title="O que ele faz" data-notes="Deixe claro que a execução é regra nativa da Meta, não script nosso. Isso importa porque funciona mesmo se o nosso sistema cair.">
+  <div class="head"><div><p class="kicker">Ato I · O que é</p><h2 class="title">Uma regra que olha a conta <b>de meia em meia hora</b>.</h2><p class="sub">Não é relatório nem alerta para você decidir depois. É pausa, feita por regra nativa da Meta, com aviso em seguida.</p></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="grid g3">
+      <div class="card anim"><span class="tagn">Onde roda</span><h3>Dentro da Meta</h3><p>É uma regra agendada criada na própria conta de anúncios, com o prefixo <code>[Imobi Guard]</code> no nome. Roda a cada 30 minutos, independente do nosso dashboard estar no ar.</p></div>
+      <div class="card anim" style="--d:110"><span class="tagn">O que faz</span><h3>Pausa e avisa</h3><p>Pausa o anúncio ou o conjunto que estourou o limite sem nenhum resultado, e dispara o aviso para o GT responsável e para o Adler.</p></div>
+      <div class="card anim" style="--d:220"><span class="tagn">O que não faz</span><h3>Não reativa, não ajusta</h3><p>Ele não liga nada de volta, não mexe em orçamento e não troca público. A decisão do que fazer depois continua sendo sua.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="1" data-title="Por que existe" data-notes="O custo real não é o dinheiro de um dia, é a conversa com o cliente no fim do mês.">
+  <div class="body">
+    <p class="kicker anim">Ato I · O que é</p>
+    <p class="quote anim" style="--d:120">Anúncio ruim não avisa que é ruim. Ele só gasta, em silêncio, até alguém abrir o Gerenciador.</p>
+    <p class="sub anim" style="--d:240" >Um anúncio que roda a noite inteira sem lead custa duas coisas. O dinheiro do dia, que é o menor problema, e a conversa de fechamento de mês com o cliente, que é o maior.</p>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark" data-act="2" data-title="Os dois gatilhos" data-notes="Dois multiplicadores diferentes porque conjunto tem mais anúncios dentro e merece mais corda.">
+  <div class="head"><div><p class="kicker">Ato II · A regra</p><h2 class="title">Dois gatilhos, <b>no gasto do dia</b>.</h2><p class="sub">Em ambos a condição é a mesma: gastou acima do limite hoje e não gerou nenhum resultado.</p></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="gatilho">
+      <div class="g anim"><em>2x</em><strong>Anúncio</strong><span>Gastou duas vezes o CPL ideal hoje, zero lead. Pausa só aquele anúncio, o resto do conjunto continua.</span></div>
+      <div class="g anim" style="--d:140"><em>3x</em><strong>Conjunto</strong><span>Gastou três vezes o CPL ideal hoje, zero lead. Pausa o conjunto inteiro, porque o problema ali é de público, não de criativo.</span></div>
+    </div>
+    <p class="callout anim" style="--d:280">Existe um piso de R$ 20. Com CPL ideal muito baixo, o limite nunca cai abaixo disso, para não pausar anúncio que mal começou a rodar.</p>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="2" data-title="De onde vem o CPL ideal" data-notes="Ponto mais importante do deck para o GT: se o ticket médio do cliente está errado, o limite inteiro fica errado.">
+  <div class="head"><div><p class="kicker">Ato II · A regra</p><h2 class="title">De onde sai o <b>CPL ideal</b>.</h2><p class="sub">Três fontes, em cascata. A primeira que existir é a que vale.</p></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="fonte">
+      <div class="passo anim"><b>Primeiro</b><h3>Definido na mão</h3><p>Se alguém gravou um CPL manual para o cliente, é esse. Serve para produto fora da curva, onde ticket médio não representa.</p></div>
+      <div class="passo anim" style="--d:120"><b>Senão</b><h3>Pelo ticket médio</h3><p>Calculado a partir do ticket médio cadastrado do cliente. É o caminho normal, e é por isso que ticket médio errado estraga a regra.</p></div>
+      <div class="passo anim" style="--d:240"><b>Senão</b><h3>Histórico de 30 dias</h3><p>CPL médio do próprio cliente nos últimos 30 dias, exigindo pelo menos cinco resultados no período para não virar média de nada.</p></div>
+    </div>
+    <p class="callout anim" style="--d:360">Cliente sem nenhuma das três fontes não entra no Guard. A regra fica como <b>sem alvo</b> e nada é pausado.</p>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark" data-act="2" data-title="O que ele nunca pausa" data-notes="Se alguém reclamar que uma campanha de alcance não é protegida, é de propósito.">
+  <div class="head"><div><p class="kicker">Ato II · A regra</p><h2 class="title">O que ele <b>nunca</b> pausa.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="grid g2">
+      <div class="card anim"><span class="tagn">Fora do escopo</span><h3>Campanha que não é de lead</h3><p>Só entra campanha com objetivo de cadastro, mensagem ou engajamento, e conjunto otimizado para lead, conversa ou conversão. Alcance, tráfego e vídeo não são tocados, porque neles zero lead não é defeito.</p></div>
+      <div class="card anim" style="--d:110"><span class="tagn">Abaixo do piso</span><h3>Gasto pequeno</h3><p>Nada é pausado antes de R$ 20 no dia, mesmo que o CPL ideal seja de R$ 5. Um anúncio precisa de volume mínimo antes de ser julgado.</p></div>
+      <div class="card anim" style="--d:220"><span class="tagn">Com resultado</span><h3>Qualquer lead salva</h3><p>Um único resultado no dia já tira o anúncio da mira, por mais caro que esteja. O Guard existe contra o zero, não contra o caro.</p></div>
+      <div class="card anim" style="--d:330"><span class="tagn">Sem acesso</span><h3>Conta que não administramos</h3><p>Sem permissão de regras na conta, a regra fica marcada como sem acesso e nada acontece. Vale conferir isso no onboarding de cliente novo.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark" data-act="3" data-title="A mensagem no WhatsApp" data-notes="Mostre que a mensagem já traz a leitura operacional, para o GT não precisar abrir o Gerenciador só para entender o que aconteceu.">
+  <div class="head"><div><p class="kicker">Ato III · O aviso</p><h2 class="title">Você descobre <b>no WhatsApp</b>, com a leitura pronta.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="zap anim">⛔ <b>Pausa automática por CPL</b> | NC Imóveis
+GT: Felipe Oliveira
+
+<b>Anúncio:</b> [NC] [MARTIM PRAIA] [FORMS] [VENDA]
+Conjunto: [LEADS] Caraguatatuba
+Campanha: [LEADS] AP Martim Praia
+Gastou R$ 64,10 hoje sem nenhum lead. Limite: 2x o CPL ideal de R$ 29,52 (pelo ticket médio).
+
+<b>Leitura operacional:</b>
+• CTR de 0,74%, abaixo da média do cliente
+• Frequência 1,32 com alcance baixo, criativo ainda não saturou
+• Conjunto saiu do aprendizado sem resultado
+
+<b>Primeiro passo:</b> conferir o criativo antes do público<span class="hora">16:30 ✓✓</span></div>
+    <p class="muted anim" style="--d:200;margin-top:16px;font-size:16px">A leitura operacional é gerada na hora, a partir da entrega real do dia. Ela é um ponto de partida, não um laudo.</p>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="3" data-title="O aviso na tela" data-notes="Explique a diferença entre Ciente e Alertar GT. O Alertar GT é do Adler, não do GT.">
+  <div class="head"><div><p class="kicker">Ato III · O aviso</p><h2 class="title">E o aviso <b>toma a sua tela</b> no dash.</h2><p class="sub">De propósito. Pausa por CPL é coisa que não pode ficar numa listinha de notificações para ser vista no dia seguinte.</p></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="grid g2">
+      <div class="card anim"><span class="tagn">Botão do GT</span><h3>Ciente</h3><p>Você viu, entendeu e vai tratar. O aviso sai da sua tela e fica registrado. Não reativa nada e não avisa mais ninguém.</p></div>
+      <div class="card anim" style="--d:120"><span class="tagn">Botão do Adler</span><h3>Alertar GT</h3><p>Quando o Adler vê a pausa antes do GT, esse botão reabre o aviso na tela do GT responsável e tira da dele. É escalonamento, não cobrança.</p></div>
+    </div>
+    <p class="callout anim" style="--d:240">Marcar Ciente sem olhar o Gerenciador é pior que não marcar. O registro diz que alguém tratou.</p>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark" data-act="4" data-title="O que fazer quando pausar" data-notes="Essa é a tela que o GT vai consultar na prática. Vale fotografar.">
+  <div class="head"><div><p class="kicker">Ato IV · O que fazer</p><h2 class="title">Pausou. <b>Agora o quê?</b></h2><p class="sub">Nessa ordem, porque a causa mais provável está em cima.</p></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="steps">
+      <div class="stepline anim"><b>01</b><div><h3>Leia a leitura operacional antes de abrir a Meta</h3><p>Ela já aponta CTR, frequência e estágio de aprendizado. Em boa parte dos casos resolve o diagnóstico sem você abrir o Gerenciador.</p></div></div>
+      <div class="stepline anim" style="--d:110"><b>02</b><div><h3>Decida se o problema é criativo ou público</h3><p>CTR baixo com alcance alto é criativo. CTR normal sem lead é formulário ou oferta. Conjunto inteiro pausado é quase sempre público.</p></div></div>
+      <div class="stepline anim" style="--d:220"><b>03</b><div><h3>Corrija antes de reativar</h3><p>Reativar o mesmo anúncio sem mudar nada faz ele ser pausado de novo no mesmo dia, e aí você queimou o dobro.</p></div></div>
+      <div class="stepline anim" style="--d:330"><b>04</b><div><h3>Marque Ciente</h3><p>Depois de tratar, não antes. O registro é o que diz ao Adler que alguém olhou.</p></div></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide light" data-act="4" data-title="Quando você discorda" data-notes="Importante: discordar é legítimo e tem caminho. O que não pode é desligar a regra na surdina.">
+  <div class="head"><div><p class="kicker">Ato IV · O que fazer</p><h2 class="title">Quando você acha que a pausa <b>foi errada</b>.</h2></div><span class="acts"></span></div>
+  <div class="body">
+    <div class="grid g3">
+      <div class="card anim"><span class="tagn">Pode</span><h3>Reativar com motivo</h3><p>Se o anúncio é novo, se o dia teve um evento fora da curva ou se o lead entrou por fora da Meta, reative e registre o motivo na nota do cliente.</p></div>
+      <div class="card anim" style="--d:110"><span class="tagn">Pode</span><h3>Pedir ajuste do CPL ideal</h3><p>Se a pausa foi errada porque o ticket médio do cliente está desatualizado, o conserto é no ticket médio, não na regra. Avise o Adler.</p></div>
+      <div class="card anim" style="--d:220"><span class="tagn">Não pode</span><h3>Apagar ou editar a regra na Meta</h3><p>A regra <code>[Imobi Guard]</code> é gerenciada pelo sistema. Mexer nela na mão quebra a sincronização e a proteção some sem ninguém perceber.</p></div>
+    </div>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="ftitle"></span></span><span class="foot-r"><span class="num"></span><span class="li-logo" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span></div>
+</section>
+
+<section class="slide dark closing" data-act="4" data-title="Fechamento" data-notes="Fecha com a ideia de que o Guard é piso, não teto.">
+  <div class="body">
+    <p class="kicker anim">CPL Guard</p>
+    <p class="quote closing-quote anim" style="--d:120">O Guard é o piso, não o teto. Ele impede o desastre de madrugada. Quem faz a campanha performar continua sendo você.</p>
+  </div>
+  <div class="foot"><span class="foot-l"><span class="li-logo lg" role="img" aria-label="Leonardo Imobi"><span class="li-badge" aria-hidden="true"><svg viewBox="0 0 276 390"><use href="#li-mark"/></svg></span><span class="li-word" aria-hidden="true"><b>Leonardo Imobi</b><i>Growth Imobiliário</i></span></span></span><span class="foot-r"><span class="num"></span></span></div>
+</section>
+
+</div>
+
+<div class="hud">
+  <button id="btn-grid" type="button" title="Visão geral (G)" aria-label="Visão geral">▦</button>
+  <button id="btn-notes" type="button" title="Notas do apresentador (N)" aria-label="Notas">✎</button>
+  <button id="btn-prev" type="button" title="Anterior" aria-label="Slide anterior">←</button>
+  <span class="ctr" id="ctr">1 / 1</span>
+  <button id="btn-next" type="button" title="Próximo" aria-label="Próximo slide">→</button>
+</div>
+<div class="hint">Setas para navegar · G visão geral · N notas</div>
+
+<div class="notes-panel" id="notes-panel" hidden aria-label="Notas do apresentador"><h4>Nota do apresentador</h4><p id="notes-text"></p></div>
+<div id="overview" hidden><h3>Visão geral</h3><div class="ogrid" id="ogrid"></div></div>
+
+<script>window.DECK_ATOS=["O que é","A regra","O aviso","O que fazer"];</script>
+<script src="/tutoriais/deck.js" defer></script>
+</body>
+</html>
