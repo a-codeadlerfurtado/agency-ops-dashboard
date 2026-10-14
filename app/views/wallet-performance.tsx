@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { authenticatedFetch, formatDay, formatNumber, SUPABASE_URL, text } from "../shared";
 import type { Row } from "../shared";
-import { BAND_LABEL, PortfolioChart, SECTOR_LABEL, TENURE_LABEL } from "./portfolio";
+import { BAND_LABEL, completeMonthlyKeys, PortfolioChart, SECTOR_LABEL, TENURE_LABEL } from "./portfolio";
 
 const WALLET_API = `${SUPABASE_URL}/functions/v1/agency-ops-wallet-performance-api`;
 
@@ -53,14 +53,18 @@ export function WalletPerformanceCenter() {
   if (!wallet) return <section className="card section"><div className="empty">Nenhuma carteira cadastrada.</div></section>;
   const portfolio: Row = wallet.portfolio || {};
   const timeline: Row[] = portfolio.timeline || [];
-  const months = [...new Set(timeline.map((r) => String(r.month_key)))].sort().reverse();
-  const activeMonth = monthKey && months.includes(monthKey) ? monthKey : months[0] || "";
+  const months = completeMonthlyKeys(timeline);
+  const availableMonths = new Set(timeline.filter((r) => r.sector === sector).map((r) => String(r.month_key)));
+  const activeMonth = monthKey && availableMonths.has(monthKey) ? monthKey : months.find((m) => availableMonths.has(m)) || "";
   const row: Row = timeline.find((r) => r.month_key === activeMonth && r.sector === sector) || {};
   const monthIndex = months.indexOf(activeMonth);
   const previousKey = monthIndex >= 0 ? months[monthIndex + 1] : null;
   const previous: Row | null = previousKey ? timeline.find((r) => r.month_key === previousKey && r.sector === sector) || null : null;
   const asc = months.slice().reverse();
-  const series = (field: string, wantedSector = sector) => asc.map((m) => Number(timeline.find((r) => r.month_key === m && r.sector === wantedSector)?.[field] ?? 0));
+  const series = (field: string, wantedSector = sector) => asc.map((m) => {
+    const value = timeline.find((r) => r.month_key === m && r.sector === wantedSector)?.[field];
+    return value === undefined || value === null ? null : Number(value);
+  });
   const total = Number(row.active_clients || 0);
   const pct = (v: unknown) => total ? `${((Number(v || 0) / total) * 100).toFixed(1)}% da carteira` : "0% da carteira";
   const status: Row = portfolio.status_summary || {};
@@ -119,7 +123,7 @@ export function WalletPerformanceCenter() {
 
     <section className="card pf-block">
       <div className="pf-block-head"><div><b>Indicadores Gerais</b><small>Carteira {text(wallet.carteira)} · {text(wallet.gt_owner)}</small></div><div className="pf-controls">
-        <select className="control" value={activeMonth} onChange={(e) => setMonthKey(e.target.value)}>{months.map((m) => { const r = timeline.find((x) => x.month_key === m); return <option key={m} value={m}>{r?.label || m}{r?.origem === "ao_vivo" ? " — atual" : " — reconstruído"}</option>; })}</select>
+        <select className="control" value={activeMonth} onChange={(e) => setMonthKey(e.target.value)}>{months.map((m) => { const r = timeline.find((x) => x.month_key === m && x.sector === sector); return <option key={m} value={m} disabled={!r}>{r?.label || m}{!r ? " — sem fechamento" : r.origem === "ao_vivo" ? " — atual" : " — reconstruído"}</option>; })}</select>
         <div className="pf-tabs">{["marketing", "ia"].map((s) => <button type="button" key={s} className={sector === s ? "active" : ""} onClick={() => setSector(s)}>{SECTOR_LABEL[s]}</button>)}</div>
       </div></div>
       <p className={`pf-quality q-${row.quality || "high"}`}>{text(row.quality_label)} · {text(row.quality_detail)}</p>

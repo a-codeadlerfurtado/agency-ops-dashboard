@@ -26,6 +26,7 @@ export default function DashboardRouter() {
   // SIGNED_IN/TOKEN_REFRESHED) para a MESMA sessao que o getSession do boot ja
   // entregou. Sem esta guarda, cada evento reabre a rota em "loading".
   const resolvedKeyRef = useRef<string | null>(null);
+  const resolvingKeyRef = useRef<string | null>(null);
   // Gate VISUAL do Jarvis, resolvido aqui e uma vez so.
   // O router acabou de provar o papel via loadProfileLite; mandar o JarvisVoice
   // perguntar de novo em /api/jarvis/access -> identificarUsuario -> profile-lite
@@ -33,10 +34,12 @@ export default function DashboardRouter() {
   // seguranca real continua nas rotas /api/jarvis/*, que nao mudaram.
   const [jarvisAllowed, setJarvisAllowed] = useState(false);
 
-  const chaveDaSessao = (s: Session | null) => (s ? `${s.user.id}:${s.access_token}` : null);
+  // A identidade define a rota; a renovacao do JWT nao pode desmontar a tela.
+  const chaveDaSessao = (s: Session | null) => (s ? s.user.id : null);
 
   const resolveRoute = useCallback(async (current: Session | null) => {
     const requestId = ++routeRequest.current;
+    resolvingKeyRef.current = chaveDaSessao(current);
     setSession(current);
 
     if (!current) {
@@ -45,6 +48,7 @@ export default function DashboardRouter() {
       // quem saiu -- visual apenas, mas confuso e desnecessario.
       limparPerfilEmCache();
       resolvedKeyRef.current = null;
+      resolvingKeyRef.current = null;
       setJarvisAllowed(false);
       setRoute("native");
       setAuthReady(true);
@@ -93,7 +97,10 @@ export default function DashboardRouter() {
       // nunca fica preso em validacao infinita.
       if (!cache) setRoute("error");
     } finally {
-      if (requestId === routeRequest.current) setAuthReady(true);
+      if (requestId === routeRequest.current) {
+        resolvingKeyRef.current = null;
+        setAuthReady(true);
+      }
     }
   }, []);
 
@@ -164,7 +171,12 @@ export default function DashboardRouter() {
       // segundo resolveRoute, que jogava a tela de volta para "Validando
       // perfil..." e descartava o primeiro pelo guarda de requestId. Quando o
       // segundo tambem nao conseguia concluir, a validacao ficava eterna.
-      if (chaveDaSessao(current) === resolvedKeyRef.current) return;
+      const identity = chaveDaSessao(current);
+      if (identity === resolvedKeyRef.current || identity === resolvingKeyRef.current) {
+        // Atualiza somente o token para os componentes; nao remonta o Dashboard.
+        setSession((previous) => previous?.access_token === current.access_token ? previous : current);
+        return;
+      }
       scheduleRoute(current);
     });
 
