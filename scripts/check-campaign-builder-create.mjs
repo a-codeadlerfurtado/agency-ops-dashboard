@@ -199,6 +199,12 @@ assert.equal((await resolveMakeFacebookConnection(fbOps({ "Yuri Melo": 4869515 }
 fakeEnv = {};
 // Sem conexao do GT, nada e criado na Meta nem no Make.
 assert.match(source, /error: "make_fb_connection_missing"/);
+// Em 14/10 a producao (v28) criou campanha com entrega via Make sem conexao
+// configurada: a guarda era `Number(Deno.env.get(...)) <= 0` e, com a variavel
+// ausente, Number(undefined) e NaN — toda comparacao com NaN e false, entao a
+// guarda nunca disparava (fail-open). Comparar o valor de uma variavel de
+// ambiente com <= ou < abre esse buraco de novo; use Number.isInteger + > 0.
+assert.doesNotMatch(source, /Number\(Deno\.env\.get\([^)]*\)\)\s*<=?\s*\d/);
 assert.equal(source.split('error: "make_fb_connection_missing"').length - 1, 2);
 console.log("Campaign Builder create regression guard: OK (feed+story pairing, name first, AI fallback) (lead form, site, targeting, budget, ownership, duplicate guard)");
 
