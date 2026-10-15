@@ -37,6 +37,15 @@ assert.equal(adset.daily_budget, "1000");
 assert.equal(adset.destination_type, "ON_AD");
 assert.equal(adset.optimization_goal, "LEAD_GENERATION");
 assert.deepEqual(JSON.parse(adset.promoted_object), { page_id: "132141753324688" });
+const whatsappPlan = structuredClone(p);
+whatsappPlan.adset.destination = { type: "WHATSAPP", url: null, lead_form_id: null };
+const whatsappPage = "771086922748543";
+const whatsappAdset = adsetFields(whatsappPlan, "120123456789000", target, false, whatsappPage);
+assert.equal(whatsappAdset.status, "PAUSED");
+assert.equal(whatsappAdset.destination_type, "WHATSAPP");
+assert.equal(whatsappAdset.optimization_goal, "CONVERSATIONS");
+assert.deepEqual(JSON.parse(whatsappAdset.promoted_object), { page_id: whatsappPage },
+  "WhatsApp ad sets must reference this client's Meta Page");
 const creative = creativeSpec(p, "132141753324688", "1717171717171", "abcd1234", null, "https://www.ncimoveis.com/");
 assert.equal(creative.instagram_user_id, "1717171717171");
 assert.equal(creative.link_data.link, "https://www.ncimoveis.com/");
