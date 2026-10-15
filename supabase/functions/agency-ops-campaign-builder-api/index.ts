@@ -1533,7 +1533,8 @@ Deno.serve(async (req: Request) => {
       if (plan.adset.destination.type === "LEAD_FORM" && !plan.adset.destination.lead_form_id) warnings.push("Destino formulário nativo exige o ID do formulário (crie na página do cliente e informe no pedido).");
     }
     if (plan.adset.daily_budget_brl <= 0) warnings.push("Orçamento diário não definido no pedido.");
-    if (geo.unresolved.length) warnings.push(`Localizações não encontradas na Meta: ${geo.unresolved.join(", ")}.`);
+    if (geo.unresolved.length) warnings.push(`Localizações ambíguas ou não encontradas na Meta: ${geo.unresolved.join(", ")}. Informe a cidade e UF antes de criar.`);
+    if (geoConflicts(geo.resolved)) warnings.push("Localizações conflitantes: uma região estadual contém municípios selecionados. Use somente cidades ou ajuste a região.");
     if (assets.minimum_ad_budget && plan.adset.daily_budget_brl > 0) {
       const monthly = plan.adset.daily_budget_brl * 30.4;
       if (monthly < Number(assets.minimum_ad_budget)) warnings.push(`Orçamento mensal estimado (R$ ${Math.round(monthly)}) abaixo do mínimo contratado (R$ ${assets.minimum_ad_budget}).`);
@@ -1602,7 +1603,7 @@ Deno.serve(async (req: Request) => {
       assets: { account_id: assets.account_id, page_id: assets.page_id, instagram_id: assets.instagram_id },
       ad_units: !boostValid && creativeValid ? adUnitsSummary(creatives, pairingHints) : [],
       mode: boostValid ? "BOOST" : "NEW",
-      can_execute: Boolean(assets.account_id && plan.adset.daily_budget_brl > 0 && (boostValid
+      can_execute: Boolean(!geo.unresolved.length && !geoConflicts(geo.resolved) && assets.account_id && plan.adset.daily_budget_brl > 0 && (boostValid
         ? (boost?.source === "INSTAGRAM" ? assets.instagram_id : assets.page_id)
         : (assets.page_id && creativeValid &&
           !(plan.adset.destination.type === "SITE" && !plan.adset.destination.url) &&
@@ -2254,9 +2255,15 @@ Deno.serve(async (req: Request) => {
     // Sem este bloqueio o conjunto seria criado para o Brasil inteiro.
     const requestedCities = Array.isArray(plan.adset?.geo?.cities)
       ? plan.adset.geo.cities.map((c: unknown) => clean(c, 120)).filter(Boolean) : [];
-    if (requestedCities.length && !(Array.isArray(plan.geo_resolved) && plan.geo_resolved.length))
-      return reply({ error: "geo_unresolved", cities: requestedCities,
-        detail: "Nenhuma das cidades informadas foi reconhecida pela Meta. Corrija as cidades (ex.: \"Caraguatatuba; São Sebastião\") e gere o plano de novo." }, 409);
+    const geoRows: Row[] = Array.isArray(plan.geo_resolved) ? plan.geo_resolved : [];
+    const missingGeo: string[] = Array.isArray(row.request_metadata?.geo_unresolved)
+      ? row.request_metadata.geo_unresolved : [];
+    if (requestedCities.length && (!geoRows.length || missingGeo.length))
+      return reply({ error: "geo_unresolved", cities: missingGeo.length ? missingGeo : requestedCities,
+        detail: "Nem todas as cidades foram validadas. Informe cidade e UF antes de criar." }, 409);
+    if (geoConflicts(geoRows))
+      return reply({ error: "geo_conflict", detail:
+        "Regiao estadual e cidades abrangidas por ela conflitam. Retome e revise a segmentacao." }, 409);
 
     // Nunca consumir o rascunho por falta de acesso: o cliente pode liberar
     // a conta na Meta e clicar novamente, sem subir os criativos outra vez.
