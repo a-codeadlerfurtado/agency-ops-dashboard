@@ -1656,13 +1656,45 @@ Deno.serve(async (req: Request) => {
       if (exists.some((present) => !present)) return reply({ error: "creative_missing",
         detail: "Um ou mais arquivos do rascunho não estão mais disponíveis." }, 409);
     }
+    // Reavaliar localidades ao recuperar uma tentativa falha: chaves Geo da Meta
+    // podem apontar para cidade de outra UF ou para um estado inteiro.
+    // Nenhum criativo ou formulario e alterado.
+    let repairedPlan: Row = row.plan as Row;
+    let repairedWarnings: string[] = Array.isArray(row.plan_warnings) ? [...row.plan_warnings] : [];
+    let repairedMetadata: Row = row.request_metadata || {};
+    let repairedPlanHash = row.plan_hash;
+    const previousCities = Array.isArray(repairedPlan?.adset?.geo?.cities)
+      ? repairedPlan.adset.geo.cities.map((c: unknown) => clean(c, 120)).filter(Boolean) : [];
+    if (recoverableFailure && previousCities.length) {
+      const tokens = await tokenCandidates(db);
+      if (!tokens.length) return reply({ error: "geo_recheck_unavailable",
+        detail: "Sem acesso de leitura a Meta. O rascunho e os criativos foram preservados." }, 503);
+      const revised = await resolveGeo(tokens[0].token, previousCities);
+      if (revised.unresolved.length) return reply({ error: "geo_unresolved",
+        cities: revised.unresolved,
+        detail: "A Meta nao confirmou cidade e UF. Especifique o estado (ex.: Praia Grande, SP)." }, 409);
+      if (geoConflicts(revised.resolved)) return reply({ error: "geo_conflict",
+        detail: "Uma regiao inclui cidades selecionadas. Corrija o publico antes de criar." }, 409);
+      const planBody = { ...repairedPlan };
+      delete planBody.geo_resolved;
+      repairedPlan = { ...planBody, geo_resolved: revised.resolved };
+      repairedWarnings = repairedWarnings.filter((w) => !/localiza|geogr[aá]fic/i.test(w));
+      repairedWarnings.push("Localidades revalidadas na Meta. Revise as cidades antes de criar.");
+      repairedMetadata = { ...repairedMetadata, geo_unresolved: [],
+        geo_repaired_at: new Date().toISOString() };
+      repairedPlanHash = await sha256(JSON.stringify({
+        actor: user.id, client: row.client_id, plan: planBody, geo: revised.resolved,
+        creatives: creatives.map((c: Row) => c.path),
+      }));
+    }
     const expiresAt = new Date(Date.now() + DRAFT_TTL_MS).toISOString();
     const { data: renewed, error: saveError } = await ops.from("campaign_build_requests")
       .update({
         expires_at: expiresAt,
         ...(recoverableFailure ? {
+          plan: repairedPlan, plan_hash: repairedPlanHash, plan_warnings: repairedWarnings,
           status: "DRAFTED", error: null, executed_at: null,
-          request_metadata: { ...(row.request_metadata || {}),
+          request_metadata: { ...repairedMetadata,
             safe_retry_count: Number(row.request_metadata?.safe_retry_count || 0) + 1,
             safe_retry_at: new Date().toISOString(),
             safe_retry_original_error: String(row.error || "").slice(0, 160),
@@ -1673,13 +1705,13 @@ Deno.serve(async (req: Request) => {
       .select("id").maybeSingle();
     if (saveError) return reply({ error: "query_failed" }, 500);
     if (!renewed?.id) return reply({ error: "request_not_draft" }, 409);
-    return reply({ ok: true, request_id: requestId, plan: row.plan, prompt: row.prompt,
+    return reply({ ok: true, request_id: requestId, plan: repairedPlan, prompt: row.prompt,
       client: { id: clientRow.id, display_name: clientRow.display_name },
       mode: row.request_metadata?.mode === "BOOST" ? "BOOST" : "NEW",
-      creatives, warnings: row.plan_warnings || [], expires_at: expiresAt,
+      creatives, warnings: repairedWarnings, expires_at: expiresAt,
       ad_units: row.request_metadata?.mode === "BOOST" ? [] : adUnitsSummary(creatives.map((c) => ({ ...c, orientation: c.orientation || creativeOrientation(c) })), hintsFromStored(creatives, row.request_metadata?.pairing_hints)),
       // Preserva o formulario selecionado no plano; nao troca pelo ultimo formulario criado incidentalmente.
-      existing_form_id: numericId(row.plan?.adset?.destination?.lead_form_id) || numericId(row.request_metadata?.created_lead_form_id),
+      existing_form_id: numericId(repairedPlan?.adset?.destination?.lead_form_id) || numericId(row.request_metadata?.created_lead_form_id),
       resumed_failed_token_attempt: recoverableFailure,
       assets: { account_id: assets.account_id, page_id: assets.page_id,
         instagram_id: assets.instagram_id } });
