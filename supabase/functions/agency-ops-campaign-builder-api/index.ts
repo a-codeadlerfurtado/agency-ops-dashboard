@@ -613,6 +613,7 @@ function adsetFields(plan: Row, campaignId: string, targeting: Row, boostMode: b
   } else if (dest.type === "WHATSAPP") {
     fields.optimization_goal = "CONVERSATIONS";
     fields.destination_type = "WHATSAPP";
+    fields.promoted_object = JSON.stringify({ page_id: pageId });
   } else if (dest.type === "LEAD_FORM") {
     fields.optimization_goal = "LEAD_GENERATION";
     fields.destination_type = "ON_AD";
