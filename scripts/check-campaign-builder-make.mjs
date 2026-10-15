@@ -79,6 +79,18 @@ assert.equal(router.routes[1].flow[0].filter.conditions[0][0].b,"0");
 assert.equal(router.routes[2].flow[0].filter.conditions[0][0].b,"1");
 assert.equal(router.routes[2].flow[1].mapper.data.ultimo_corretor,"2");
 assert.ok(calls.some(c=>c.path==="/data-stores/550/data"&&c.body.data.ultimo_corretor==="2"));
+// Make-only filtra pelo ID da campanha antes de enviar ou alterar o estado da roleta.
+const campaignId="98765432100";
+await provisionMakeLeads({...base,campaignId});
+assert.deepEqual(storedBlueprint.flow[1].filter.conditions[0][0],
+  {a:"{{1.campaign_id}}",b:campaignId,o:"text:equal"});
+await provisionMakeLeads({...base,campaignId,recipients:[
+  {name:"Corretor Um",phone:"5511999999999"},
+  {name:"Corretor Dois",phone:"5521999999999"}
+]});
+assert.equal(storedBlueprint.flow[1].module,"datastore:GetRecord");
+assert.deepEqual(storedBlueprint.flow[1].filter.conditions[0][0],
+  {a:"{{1.campaign_id}}",b:campaignId,o:"text:equal"});
 // O endpoint responde {code, response:{blueprint}}; o formato antigo e aceito
 // por tolerancia. As duas formas tem de passar na verificacao.
 blueprintShape="flat";
