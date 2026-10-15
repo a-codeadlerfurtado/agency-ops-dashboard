@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
 import LeadFormComposer from "./lead-form-composer";
+import MakeOnlyPanel from "./make-only-panel";
 
 const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
@@ -155,7 +156,7 @@ export default function CampaignCreatePage() {
   const [clientName, setClientName] = useState("");
   const [metaAccess, setMetaAccess] = useState<Row | null>(null);
   const [metaAccessCheckNonce, setMetaAccessCheckNonce] = useState(0);
-  const [mode, setMode] = useState<"NOVA" | "TURBINAR">("NOVA");
+  const [mode, setMode] = useState<"NOVA" | "TURBINAR" | "MAKE_ONLY">("NOVA");
   const [posts, setPosts] = useState<Row | null>(null);
   const [postsLoading, setPostsLoading] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Row | null>(null);
@@ -635,11 +636,11 @@ export default function CampaignCreatePage() {
       <div className="cb-shell">
         <header className="cb-head">
           <h1>Criar Campanha</h1>
-          <p>Crie campanhas descrevendo um pedido para a IA ou escolhendo opções na Configuração guiada. Você revisa o plano antes de criar e tudo permanece <b>pausado</b> na conta do cliente.</p>
+          <p>Crie campanhas pela IA ou configuração guiada, turbine publicações e crie somente o Make para uma campanha e formulário existentes.</p>
         </header>
 
         {bootError && <div className="cb-error">{bootError}</div>}
-        {boot && boot.planner_configured === false && (
+        {boot && mode !== "MAKE_ONLY" && boot.planner_configured === false && (
           <div className="cb-error">
             A IA do Campaign Builder ainda não está configurada: falta a secret OPENAI_API_KEY no Supabase.
             Nenhuma imagem será enviada enquanto o planejador estiver indisponível.
@@ -677,6 +678,7 @@ export default function CampaignCreatePage() {
           <div className="cb-mode">
             <button className={mode === "NOVA" ? "active" : ""} onClick={() => { setMode("NOVA"); resetFlow(); }}>Campanha nova</button>
             <button className={mode === "TURBINAR" ? "active" : ""} onClick={() => { setMode("TURBINAR"); resetFlow(); }}>Turbinar publicação</button>
+            <button className={mode === "MAKE_ONLY" ? "active" : ""} onClick={() => { setMode("MAKE_ONLY"); resetFlow(); }}>Criar somente Make</button>
           </div>
 
           {mode==="NOVA"&&<div className="cb-methods" role="group" aria-label="Forma de configurar campanha">
@@ -784,19 +786,20 @@ export default function CampaignCreatePage() {
                   </div>
                 )}
               </div>
-            ) : (
+            ) : mode === "TURBINAR" ? (
               <div className="cb-field">
                 <label>Publicação selecionada</label>
                 <span className="cb-hint">{selectedPost ? `${selectedPost.source === "INSTAGRAM" ? "Instagram" : "Facebook"} · ${(selectedPost.caption || "(sem legenda)").slice(0, 70)}` : "Escolha uma publicação abaixo."}</span>
               </div>
-            )}
-            {(mode==="TURBINAR"||method==="PROMPT")&&<div className="cb-field full">
+            ) : null}
+            {(mode==="TURBINAR"||(mode==="NOVA"&&method==="PROMPT"))&&<div className="cb-field full">
               <label>Pedido para a IA</label>
               <textarea value={prompt} onChange={(ev)=>{setPrompt(ev.target.value);resetFlow();}}
                 placeholder='Ex.: campanha de leads no litoral norte, R$ 20/dia, formulário instantâneo, com meus criativos.'/>
             </div>}
           </div>
 
+          {mode==="MAKE_ONLY"&&<MakeOnlyPanel key={clientName} clientName={clientName} available={Boolean(boot?.make_delivery_available)} api={api} />}
           {mode==="NOVA"&&method==="GUIDED"&&<div className="cb-guided">
             <section className="cb-guide-section">
               <h3>1. Objetivo e produto</h3>
@@ -862,12 +865,12 @@ export default function CampaignCreatePage() {
               )}
             </div>
           )}
-          <div className="cb-actions" style={{ marginTop: 12 }}>
+          {mode !== "MAKE_ONLY" && <div className="cb-actions" style={{ marginTop: 12 }}>
             <button className="cb-btn primary" disabled={!clientName || (mode==="TURBINAR"||method==="PROMPT" ? prompt.trim().length<15 : false) || drafting || boot?.planner_configured===false || (mode==="TURBINAR" && !selectedPost)} onClick={generate}>
               {drafting ? (uploadProgress || "Gerando plano…") : draft ? "Gerar de novo" : "Gerar plano"}
             </button>
             {draft && <button className="cb-btn ghost" onClick={discard}>Descartar rascunho</button>}
-          </div>
+          </div>}
           {draftError && <div className="cb-error" style={{ marginTop: 12 }}>{draftError}</div>}
 
           {draft && plan && (
