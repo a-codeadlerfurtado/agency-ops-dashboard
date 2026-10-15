@@ -502,12 +502,12 @@ function geoConflicts(resolved: Row[]) {
     geoState(region.name) === geoState(city.region)));
 }
 async function resolveGeo(token: string, cities: string[]) {
-  type Choice = { query: string; hits: Row[] };
+  type Choice = { query: string; hits: Row[]; explicitState: boolean };
   const choices: Choice[] = [];
   const unresolved: string[] = [];
   const add = async (query: string, state: string | null) => {
     const hits = await searchGeo(token, query, state);
-    if (hits.length) choices.push({query, hits});
+    if (hits.length) choices.push({query, hits, explicitState: Boolean(state)});
     else unresolved.push(state ? query + ", " + state : query);
   };
   for (const city of cities.slice(0, 10)) {
@@ -519,7 +519,7 @@ async function resolveGeo(token: string, cities: string[]) {
         if (hits.length) break;
       } catch { /* Meta pode recusar esta consulta */ }
     }
-    if (hits.length) choices.push({ query: city, hits });
+    if (hits.length) choices.push({ query: city, hits, explicitState: Boolean(stateFromSuffix(city)) });
     else if (plan.parts.length) {
       for (const part of plan.parts) {
         try { await add(part, null); } catch { unresolved.push(part); }
@@ -537,22 +537,23 @@ async function resolveGeo(token: string, cities: string[]) {
     const state = geoState(hit.region);
     if (state) stateCounts.set(state, (stateCounts.get(state) || 0) + 1);
   }
-  // Inferir UF so quando ha pelo menos duas cidades concordantes e
-  // nenhuma cidade de outra UF. Em caso de duvida, nao anunciar no lugar errado.
-  const stateHint = stateCounts.size === 1 && Math.max(...stateCounts.values()) >= 2
-    ? [...stateCounts.keys()][0] : null;
+  // A UF dominante precisa de pelo menos 2 municipios e mais da metade
+  // das referencias. Um resultado isolado de outra UF nao valida o destino.
+  const rankedStates = [...stateCounts.entries()].sort((a,b) => b[1] - a[1]);
+  const dominant = rankedStates[0];
+  const stateHint = dominant && dominant[1] >= 2 &&
+    dominant[1] > forcedCities.length / 2 ? dominant[0] : null;
   const resolved: Row[] = [];
   const seen = new Set<string>();
-  for (const {query, hits} of choices) {
+  for (const {query, hits, explicitState} of choices) {
     const candidates = hits.some((h) => h.type === "city")
       ? hits.filter((h) => h.type === "city") : hits;
     const unique = [...new Map(candidates.map((h) => [String(h.key), h])).values()];
     let selected: Row | undefined;
-    if (stateHint && unique.some((h) => h.type === "city")) {
+    if (!explicitState && stateHint && unique.some((h) => h.type === "city")) {
       const local = unique.filter((h) => h.type === "city" && geoState(h.region) === stateHint);
       if (local.length === 1) selected = local[0];
     } else if (unique.length === 1) selected = unique[0];
-    if (!selected && !stateHint && unique.length === 1) selected = unique[0];
     if (!selected) {
       unresolved.push(query);
       continue;
