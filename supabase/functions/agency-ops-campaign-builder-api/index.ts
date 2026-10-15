@@ -470,56 +470,98 @@ function geoQueryPlan(raw: string): GeoQueryPlan {
     const base = text.replace(/\s*(?:,|-|–|\/|\()\s*[^,()\-–/]+?\s*\)?\s*$/u, "").trim();
     if (base.length >= 3) attempts.push({ q: base, state: state.name });
   }
-  attempts.push({ q: text, state: null });
+  // Sufixo estadual explicito nunca pode cair na busca sem restricao:
+  // "Praia Grande, SP" nao deve virar "Praia Grande, SC".
+  if (!state) attempts.push({ q: text, state: null });
   const parts = !state && text.includes(",")
     ? text.split(",").map((p) => p.trim()).filter((p) => p.length >= 3) : [];
   return { attempts, parts: parts.length > 1 ? parts : [] };
 }
-async function searchGeo(token: string, q: string, state: string | null): Promise<Row | null> {
+// A Meta pode devolver a regiao "Sao Paulo" antes da cidade "Sao Paulo",
+// ou "Praia Grande" em SC antes da cidade homonima em SP. Nunca aceitar
+// cegamente o primeiro resultado de adgeolocation.
+async function searchGeo(token: string, q: string, state: string | null): Promise<Row[]> {
   const body = await metaJson(graphUrl("search", {
-    type: "adgeolocation",
-    q,
+    type: "adgeolocation", q,
     location_types: JSON.stringify(["city", "region", "geo_market"]),
-    country_code: "BR",
-    limit: "5",
-    access_token: token,
+    country_code: "BR", limit: "50", access_token: token,
   }));
-  const hits: Row[] = (body?.data || []).filter((h: Row) => h?.key);
-  const hit = state
-    ? hits.find((h) => foldText(String(h.region || "")).includes(foldText(state)))
-    : hits[0];
-  return hit?.key ? hit : null;
+  const matches: Row[] = (body?.data || []).filter((hit: Row) =>
+    hit?.key && foldText(String(hit.name || "")) === foldText(q) &&
+    (!hit.country_code || String(hit.country_code).toUpperCase() === "BR"));
+  return state ? matches.filter((hit) =>
+    foldText(String(hit.region || "")).includes(foldText(state))) : matches;
+}
+function geoState(region: unknown) {
+  return foldText(String(region || "")).replace(/\s*\(state\)\s*$/, "").trim();
+}
+function geoConflicts(resolved: Row[]) {
+  const regions = resolved.filter((g) => g.type === "region");
+  const cities = resolved.filter((g) => g.type === "city");
+  return regions.some((region) => cities.some((city) =>
+    geoState(region.name) === geoState(city.region)));
 }
 async function resolveGeo(token: string, cities: string[]) {
-  const resolved: Row[] = [];
+  type Choice = { query: string; hits: Row[] };
+  const choices: Choice[] = [];
   const unresolved: string[] = [];
-  const seen = new Set<string>();
-  const push = (query: string, hit: Row) => {
-    if (seen.has(String(hit.key))) return;
-    seen.add(String(hit.key));
-    resolved.push({ query, key: hit.key, name: hit.name, type: hit.type, region: hit.region || null });
+  const add = async (query: string, state: string | null) => {
+    const hits = await searchGeo(token, query, state);
+    if (hits.length) choices.push({query, hits});
+    else unresolved.push(state ? query + ", " + state : query);
   };
   for (const city of cities.slice(0, 10)) {
     const plan = geoQueryPlan(city);
-    let found = false;
+    let hits: Row[] = [];
     for (const attempt of plan.attempts) {
       try {
-        const hit = await searchGeo(token, attempt.q, attempt.state);
-        if (hit) { push(city, hit); found = true; break; }
-      } catch { /* tenta a próxima forma */ }
+        hits = await searchGeo(token, attempt.q, attempt.state);
+        if (hits.length) break;
+      } catch { /* Meta pode recusar esta consulta */ }
     }
-    if (!found && plan.parts.length) {
-      const missing: string[] = [];
+    if (hits.length) choices.push({ query: city, hits });
+    else if (plan.parts.length) {
       for (const part of plan.parts) {
-        try {
-          const hit = await searchGeo(token, part, null);
-          if (hit) { push(part, hit); found = true; } else missing.push(part);
-        } catch { missing.push(part); }
+        try { await add(part, null); } catch { unresolved.push(part); }
       }
-      if (missing.length) unresolved.push(...missing);
+    } else unresolved.push(city);
+  }
+  // Apenas cidades sem homonimas definem o contexto geografico.
+  const forcedCities = choices.map(({hits}) => {
+    const exactCities = hits.filter((h) => h.type === "city");
+    const unique = [...new Map(exactCities.map((h) => [String(h.key), h])).values()];
+    return unique.length === 1 ? unique[0] : null;
+  }).filter((h): h is Row => Boolean(h));
+  const stateCounts = new Map<string, number>();
+  for (const hit of forcedCities) {
+    const state = geoState(hit.region);
+    if (state) stateCounts.set(state, (stateCounts.get(state) || 0) + 1);
+  }
+  // Inferir UF so quando ha pelo menos duas cidades concordantes e
+  // nenhuma cidade de outra UF. Em caso de duvida, nao anunciar no lugar errado.
+  const stateHint = stateCounts.size === 1 && Math.max(...stateCounts.values()) >= 2
+    ? [...stateCounts.keys()][0] : null;
+  const resolved: Row[] = [];
+  const seen = new Set<string>();
+  for (const {query, hits} of choices) {
+    const candidates = hits.some((h) => h.type === "city")
+      ? hits.filter((h) => h.type === "city") : hits;
+    const unique = [...new Map(candidates.map((h) => [String(h.key), h])).values()];
+    let selected: Row | undefined;
+    if (stateHint && unique.some((h) => h.type === "city")) {
+      const local = unique.filter((h) => h.type === "city" && geoState(h.region) === stateHint);
+      if (local.length === 1) selected = local[0];
+    } else if (unique.length === 1) selected = unique[0];
+    if (!selected && !stateHint && unique.length === 1) selected = unique[0];
+    if (!selected) {
+      unresolved.push(query);
       continue;
     }
-    if (!found) unresolved.push(city);
+    const id = String(selected.key);
+    if (seen.has(id)) continue;
+    seen.add(id);
+    resolved.push({ query, key:id, name:selected.name, type:selected.type,
+      region:selected.region || null });
   }
   return { resolved, unresolved };
 }
