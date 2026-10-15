@@ -1132,6 +1132,41 @@ Deno.serve(async (req: Request) => {
       diagnostics: isAdler ? diagnostics : undefined });
   }
 
+  // --- LIST_MAKE_CAMPAIGNS ---
+  // Read-only: campaigns in the client's OWN configured Meta ad account.
+  if (action === "LIST_MAKE_CAMPAIGNS") {
+    const scoped = await loadScopedClient(clean(body?.client_name, 160));
+    if ("error" in scoped) return scoped.error;
+    const assets = await loadAssets(scoped.client.id);
+    const accountId = numericId(assets.account_id);
+    if (!accountId || !numericId(assets.page_id))
+      return reply({ error: "assets_missing" }, 409);
+    let reason = "meta_campaign_list_unavailable";
+    for (const candidate of await tokenCandidates(db)) {
+      try {
+        const all: Row[] = [];
+        let after = "";
+        for (let i = 0; i < 10; i++) {
+          const params: Record<string,string> = {
+            fields: "id,name,objective,status,effective_status,account_id",
+            limit: "100", access_token: candidate.token,
+          };
+          if (after) params.after = after;
+          const response = await metaJson(graphUrl(`act_${accountId}/campaigns`, params));
+          all.push(...(Array.isArray(response?.data) ? response.data : []));
+          after = clean(response?.paging?.cursors?.after, 500);
+          if (!response?.paging?.next || !after) break;
+        }
+        return reply({ ok: true, account_id: accountId, campaigns: all
+          .filter((c: Row) => numericId(c.id) && numericId(c.account_id || accountId) === accountId &&
+            ["OUTCOME_LEADS", "LEAD_GENERATION"].includes(clean(c.objective,40)))
+          .map((c: Row) => ({ id: numericId(c.id), name: clean(c.name, 160),
+            status: clean(c.effective_status || c.status, 40) })) });
+      } catch (err) { reason = clean((err as Error).message, 160); }
+    }
+    return reply({ error: "meta_campaign_list_unavailable", detail: reason }, 403);
+  }
+
   // --- LIST_LEAD_FORMS ---
   // Lists only forms from this client's configured Facebook Page.
   if (action === "LIST_LEAD_FORMS") {
@@ -1928,6 +1963,150 @@ Deno.serve(async (req: Request) => {
       }).eq("id", requestId).eq("status", "CREATED");
       return reply({ error: "make_delivery_provision_failed", detail: next.error,
         scenario_id: next.scenario_id }, 502);
+    }
+  }
+
+  // --- CREATE_MAKE_ONLY ---
+  // Standalone Facebook Lead Ads -> Make -> Z-API route for an EXISTING campaign.
+  // No Meta campaign/ad/adset is created, mutated, paused or activated here.
+  if (action === "CREATE_MAKE_ONLY") {
+    if (clean(body?.confirmation,30) !== "CRIAR MAKE")
+      return reply({ error: "make_confirmation_required" }, 400);
+    const scoped = await loadScopedClient(clean(body?.client_name,160));
+    if ("error" in scoped) return scoped.error;
+    const clientRow = scoped.client;
+    const assets = await loadAssets(clientRow.id);
+    const accountId = numericId(assets.account_id);
+    const pageId = numericId(assets.page_id);
+    const campaignId = numericId(body?.campaign_id);
+    const formId = numericId(body?.form_id);
+    if (!accountId || !pageId) return reply({ error: "assets_missing" }, 409);
+    if (!campaignId || !formId) return reply({ error: "make_campaign_form_required" }, 400);
+    const product = clean(body?.product,110);
+    if (product.length < 3) return reply({ error: "make_product_required" }, 400);
+    const deliveryMode = body?.delivery_mode === "ROUND_ROBIN" ? "ROUND_ROBIN" : "SINGLE";
+    let recipients: Array<{name:string;phone:string}> = [];
+    let recipient = "";
+    try {
+      if (deliveryMode === "ROUND_ROBIN") {
+        const raw = body?.recipients;
+        if (!Array.isArray(raw) || raw.length < 2 || raw.length > 25)
+          return reply({ error: "make_roleta_recipients_invalid" }, 400);
+        recipients = raw.map((r: Row) => ({
+          name: clean(r?.name,80), phone: normalizeWhatsAppRecipient(r?.phone),
+        }));
+        if (recipients.some((r) => r.name.length < 2) ||
+            new Set(recipients.map((r) => r.phone)).size !== recipients.length)
+          return reply({ error: "make_roleta_recipients_invalid" }, 400);
+        recipient = recipients[0].phone;
+      } else {
+        recipient = normalizeWhatsAppRecipient(body?.recipient_phone);
+        recipients = [{ name: "Destinatário", phone: recipient }];
+      }
+    } catch {
+      return reply({ error: "make_recipient_invalid" }, 400);
+    }
+    const { data: knownRoute, error: routeLookupError } = await ops
+      .from("campaign_make_routes").select("*")
+      .eq("page_id", pageId).eq("form_id", formId).maybeSingle();
+    if (routeLookupError) return reply({ error: "make_route_lookup_failed" }, 500);
+    if (knownRoute) {
+      const identical = knownRoute.client_id === clientRow.id &&
+        numericId(knownRoute.campaign_id) === campaignId &&
+        knownRoute.product === product && knownRoute.delivery_mode === deliveryMode &&
+        JSON.stringify(knownRoute.recipients) === JSON.stringify(recipients);
+      if (knownRoute.status === "READY" && identical && knownRoute.scenario_id)
+        return reply({ ok: true, status: "READY", reused: true,
+          campaign_id: campaignId, form_id: formId, scenario_id: knownRoute.scenario_id });
+      return reply({ error: knownRoute.status === "PROVISIONING" ?
+        "make_delivery_already_processing" : "make_delivery_form_already_routed",
+        scenario_id: knownRoute.scenario_id || null }, 409);
+    }
+    // Existing Builder requests use the same trigger; never create a second one.
+    const { data: legacy, error: legacyError } = await ops.from("campaign_build_requests")
+      .select("id,request_metadata").eq("client_id",clientRow.id).eq("status","CREATED")
+      .filter("request_metadata->make_delivery->>page_id","eq",pageId)
+      .filter("request_metadata->make_delivery->>form_id","eq",formId)
+      .limit(50);
+    if (legacyError) return reply({ error: "make_route_lookup_failed" }, 500);
+    if ((legacy || []).some((r:Row) => ["READY","PROVISIONING"].includes(
+      clean(r.request_metadata?.make_delivery?.status,30))))
+      return reply({ error: "make_delivery_form_already_routed" }, 409);
+    const { data: makeVaultKey } = await ops.rpc("get_secret", { p_name: "MAKE_API_TOKEN" });
+    const makeToken = clean(Deno.env.get("MAKE_API_TOKEN"),4000) ||
+      (typeof makeVaultKey === "string" ? makeVaultKey.trim() : "");
+    if (!makeToken) return reply({ error: "make_delivery_not_configured" }, 503);
+    const facebook = await resolveMakeFacebookConnection(ops, clientRow.gt_owner);
+    if (!facebook) return reply({ error: "make_fb_connection_missing" }, 503);
+    const zapiConnectionId = Number(Deno.env.get("MAKE_ZAPI_ADMIN_CONNECTION_ID") || 4651755);
+    const teamId = Number(Deno.env.get("MAKE_TEAM_ID") || 600315);
+    let campaign: Row | null = null;
+    let activeForm: Row | null = null;
+    let lastFailure = "meta_campaign_form_unavailable";
+    for (const candidate of await tokenCandidates(db)) {
+      try {
+        const existing = await metaJson(graphUrl(campaignId, {
+          fields: "id,name,account_id,objective,status", access_token: candidate.token,
+        }));
+        if (numericId(existing?.id) !== campaignId ||
+            numericId(existing?.account_id) !== accountId ||
+            !["OUTCOME_LEADS","LEAD_GENERATION"].includes(clean(existing?.objective,40)))
+          return reply({ error: "make_campaign_client_mismatch" }, 409);
+        const pageToken = await resolveNcPageToken(candidate.token,pageId);
+        const form = await metaJson(graphUrl(formId, {
+          fields: "id,page_id,status,questions", access_token: pageToken || candidate.token,
+        }));
+        if (numericId(form?.id) !== formId || numericId(form?.page_id) !== pageId ||
+            clean(form?.status,30).toUpperCase() !== "ACTIVE")
+          return reply({ error: "make_delivery_form_unavailable" }, 409);
+        campaign = existing;
+        activeForm = form;
+        break;
+      } catch (err) { lastFailure = clean((err as Error).message,160); }
+    }
+    if (!campaign || !activeForm)
+      return reply({ error: "make_campaign_form_unavailable", detail: lastFailure }, 403);
+    const questions = leadFormQuestions(activeForm.questions);
+    if (questions.length < 2) return reply({ error: "make_form_questions_missing" }, 409);
+    const mapped: LeadQuestion[] = questions.map((q: Row) => ({
+      key: clean(q.key,180), label: clean(q.label || q.key,180),
+      type: clean(q.type,40),
+    }));
+    const { data: inserted, error: insertError } = await ops.from("campaign_make_routes")
+      .insert({ client_id:clientRow.id,actor_user_id:user.id,
+        campaign_id:campaignId,campaign_name:clean(campaign.name,160),
+        account_id:accountId,page_id:pageId,form_id:formId,product,
+        delivery_mode:deliveryMode,recipient,recipients,status:"PROVISIONING" })
+      .select("id").single();
+    if (insertError || !inserted?.id)
+      return reply({ error: "make_delivery_already_processing" }, 409);
+    try {
+      const configured = await provisionMakeLeads({
+        token: makeToken, teamId, facebookConnectionId: facebook.id,
+        zapiConnectionId, clientName:clientRow.display_name, product,
+        pageId,formId,campaignId,requestId:inserted.id,recipient,
+        recipients:deliveryMode === "ROUND_ROBIN" ? recipients : undefined,
+        questions:mapped,
+      });
+      const { error: saveError } = await ops.from("campaign_make_routes")
+        .update({ status:"READY", scenario_id:configured.scenarioId,
+          hook_id:configured.hookId,data_store_id:configured.dataStoreId || null,
+          updated_at:new Date().toISOString() })
+        .eq("id",inserted.id).eq("status","PROVISIONING");
+      if (saveError) return reply({ error: "make_delivery_audit_failed",
+        scenario_id:configured.scenarioId }, 502);
+      return reply({ ok:true,status:"READY",campaign_id:campaignId,
+        campaign_name:clean(campaign.name,160),form_id:formId,
+        scenario_id:configured.scenarioId,recipient,mode:deliveryMode });
+    } catch (err) {
+      const e=err as Error & {scenarioId?:number;hookId?:number;dataStoreId?:number};
+      await ops.from("campaign_make_routes").update({
+        status:"ERROR",last_error:clean(e.message,160),
+        scenario_id:e.scenarioId || null,hook_id:e.hookId || null,
+        data_store_id:e.dataStoreId || null,updated_at:new Date().toISOString(),
+      }).eq("id",inserted.id);
+      return reply({ error:"make_delivery_provision_failed",
+        detail:clean(e.message,160),scenario_id:e.scenarioId || null },502);
     }
   }
 
