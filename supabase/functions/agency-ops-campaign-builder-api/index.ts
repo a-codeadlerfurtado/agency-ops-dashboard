@@ -156,21 +156,37 @@ async function tokenCandidates(db: any): Promise<TokenCandidate[]> {
 
 
 /**
- * Resolve a Page-scoped credential only for NC Imóveis.
+ * Resolve a Page-scoped credential for any Page assigned to the system user.
  * Meta leadgen_forms requires a Page token, not a system-user token.
+ * (Antes so resolvia a Pagina da NC, fixa no codigo; as demais Paginas
+ * caiam em "acesso Meta negado" mesmo com Anuncios + Leads atribuidos.)
  * Never return, log, or persist this derived credential.
  */
 async function resolveNcPageToken(systemToken: string, pageId: string): Promise<string | null> {
-  if (pageId !== "132141753324688") return null;
-  const pages = await metaJson(graphUrl("me/accounts", {
-    fields: "id,tasks,access_token", limit: "100", access_token: systemToken,
-  }));
-  const page = (pages?.data || []).find((item: Row) =>
-    numericId(item?.id) === pageId &&
-    Array.isArray(item?.tasks) && item.tasks.includes("MANAGE_LEADS") &&
-    item.tasks.includes("ADVERTISE")
-  );
-  return page ? clean(page.access_token, 3000) || null : null;
+  const id = numericId(pageId);
+  if (!id) return null;
+  // 1) Leitura direta do no da Pagina (funciona quando a Pagina esta atribuida).
+  try {
+    const direct = await metaJson(graphUrl(id, { fields: "id,access_token", access_token: systemToken }));
+    const tk = clean(direct?.access_token, 3000);
+    if (tk) return tk;
+  } catch { /* cai para a listagem */ }
+  // 2) Listagem paginada de me/accounts (o usuario do sistema tem mais de 100 Paginas).
+  let after = "";
+  for (let i = 0; i < 10; i++) {
+    const params: Record<string, string> = { fields: "id,tasks,access_token", limit: "100", access_token: systemToken };
+    if (after) params.after = after;
+    const pages = await metaJson(graphUrl("me/accounts", params));
+    const page = (pages?.data || []).find((item: Row) =>
+      numericId(item?.id) === id &&
+      Array.isArray(item?.tasks) && item.tasks.includes("MANAGE_LEADS") &&
+      item.tasks.includes("ADVERTISE")
+    );
+    if (page) return clean(page.access_token, 3000) || null;
+    after = clean(pages?.paging?.cursors?.after, 500);
+    if (!pages?.paging?.next || !after) break;
+  }
+  return null;
 }
 
 /**
