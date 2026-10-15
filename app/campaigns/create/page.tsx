@@ -124,7 +124,9 @@ const errorMessages: Record<string, string> = {
   currency_mismatch: "A moeda da conta Meta nao corresponde ao orcamento em reais.",
   meta_account_not_active: "A conta de anuncios nao esta ativa na Meta.",
   activation_failed: "Falha ao ativar. Verifique a auditoria e os status reais na Meta.",
-  geo_unresolved: "A Meta não reconheceu nenhuma das cidades informadas. Corrija as cidades (ex.: \"Caraguatatuba; São Sebastião\") e gere o plano de novo. Nada foi criado.",
+  geo_unresolved: "A Meta não confirmou uma ou mais cidades. Informe o nome e a UF (ex.: Praia Grande, SP) e confira o público antes de criar.",
+  geo_conflict: "O público contém uma região estadual e municípios dentro dela. Revise a localização antes de criar.",
+  geo_recheck_unavailable: "Não foi possível revalidar as cidades na Meta. O rascunho e os criativos foram preservados.",
   lead_form_external_link_missing: "Anúncios de formulário precisam de um link externo. Cadastre o site na Página do cliente ou informe a URL do site no preview.",
   make_delivery_not_configured: "Entrega via Make indisponível: a credencial do Make ainda não está configurada no servidor.",
   make_fb_connection_missing: "Não há conexão do Facebook Lead Ads cadastrada para o GT responsável por este cliente. A gestão precisa vincular a conexão do Make desse GT antes de usar a entrega automática.",
@@ -484,7 +486,9 @@ export default function CampaignCreatePage() {
       setOverrides(body.existing_form_id ? { lead_form_id: String(body.existing_form_id) } : {});
       setConfirmWord(""); setResult(null); setDraftError("");
       setHistoryNotice(body.resumed_failed_token_attempt
-        ? "Tentativa recuperada com segurança, com o formulário e os criativos preservados. Revise o plano e clique em Criar campanha."
+        ? (body.plan?.adset?.destination?.type === "LEAD_FORM"
+          ? "Tentativa recuperada: cidades revalidadas, formulário e criativos preservados. Revise o público antes de criar."
+          : "Tentativa recuperada: cidades revalidadas e criativos preservados. Revise o público antes de criar.")
         : "Rascunho retomado para revisão. Confira o plano e clique em Criar campanha; ela é criada pausada por padrão.");
       window.scrollTo({ top: 0, behavior: "smooth" });
       await loadBoot();
@@ -890,7 +894,9 @@ export default function CampaignCreatePage() {
                 </div>
                 <div className="cb-kv" style={{ marginTop: 10 }}>
                   <span>Destino</span><b>{destinationLabel[plan.adset?.destination?.type] || plan.adset?.destination?.type}</b>
-                  <span>Localização</span><b>{(plan.geo_resolved || []).length ? (plan.geo_resolved || []).map((g: Row) => g.name).join(", ") : "Brasil (ampla)"}{plan.adset?.geo?.radius_km ? ` · raio ${plan.adset.geo.radius_km} km` : ""}</b>
+                  <span>Localização</span><b>{(plan.geo_resolved || []).length ? (plan.geo_resolved || []).map((g: Row) => g.type === "city"
+                           ? `${g.name} (${g.region || "UF não informada"})`
+                           : `${g.name} (região)`).join(", ") : "Brasil (ampla)"}{plan.adset?.geo?.radius_km ? ` · raio ${plan.adset.geo.radius_km} km` : ""}</b>
                   <span>Idade</span><b>{plan.adset?.age_min} a {plan.adset?.age_max} anos{plan.adset?.genders !== "all" ? ` · ${plan.adset?.genders === "male" ? "homens" : "mulheres"}` : ""}</b>
                   <span>Início</span><b>{plan.adset?.start === "NOW" ? "Imediato (pausada até você ativar)" : plan.adset?.start}{plan.adset?.end ? ` · termina ${plan.adset.end}` : ""}</b>
                 </div>
@@ -1129,7 +1135,8 @@ export default function CampaignCreatePage() {
                         <button type="button" disabled={Boolean(resumingId) || historyDiscardBusy}
                           onClick={() => void resumeFromHistory(h)}>
                           {resumingId === h.id ? "Retomando…" :
-                            recoverableFailure ? "Retomar tentativa com formulário salvo" :
+                            recoverableFailure ? (h.plan?.adset?.destination?.type === "LEAD_FORM"
+                              ? "Retomar com formulário e criativos salvos" : "Retomar com criativos salvos") :
                               "Retomar / Criar na Meta (pausada)"}
                         </button>
                       )}
