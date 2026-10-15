@@ -54,16 +54,12 @@ const FAVICON =
   );
 
 /**
- * `href` externo ao `public/tutoriais/` é de propósito: o Briefing Hub já tem
- * uma apresentação própria, servida pela rota `/briefing-hub-demo`, que é o
- * portal real do cliente com dados fictícios injetados pela Edge Function
- * `briefing-hub-presentation`. Refazer aquilo como deck aqui criaria uma
- * segunda cópia para divergir da primeira — que é exatamente o problema
- * documentado no topo de `app/briefing-hub-demo/route.ts`. Então o cartão
- * aponta para lá.
+ * O Briefing Hub já tem um tutorial oficial publicado em /tutorial/ no
+ * Worker agency-briefing-hub, que é o mesmo conteúdo incorporado à aba
+ * "Tutorial" do portal. O cartão abre esse material diretamente, sem passar
+ * pela demonstração /briefing-hub-demo e sem duplicar o tutorial no dashboard.
  *
- * Por isso `formato`: os decks se navegam por slide, o Briefing Hub se navega
- * clicando. Dizer isso no cartão evita que alguém abra esperando setas.
+ * Por isso `formato` diferencia o tutorial externo dos decks com slides.
  */
 type Tutorial = {
   nome: string;
@@ -72,7 +68,7 @@ type Tutorial = {
   href: string;
   duracao: string;
   publico: string;
-  formato: "deck" | "ambiente";
+  formato: "deck" | "tutorial";
 };
 
 type Grupo = { titulo: string; nota: string; itens: Tutorial[] };
@@ -126,15 +122,14 @@ const GRUPOS: Grupo[] = [
       },
       {
         nome: "Briefing Hub",
-        para: "O portal que o cliente usa para preencher produto e persona",
+        para: "Como usar o Briefing Hub: tutorial oficial do portal",
         texto:
-          "A mesma apresentação que já roda no Briefing Hub: o portal de verdade, com " +
-          "dados de exemplo, para você clicar à vontade. Serve para treinar o atendimento " +
-          "e para mostrar ao cliente como preencher antes de liberar o acesso dele.",
-        href: "/briefing-hub-demo",
-        duracao: "ambiente navegável",
+          "Acesse diretamente o conteúdo da aba Tutorial do Briefing Hub, com o " +
+          "passo a passo de uso da ferramenta. Não abre a demonstração do portal.",
+        href: "https://agency-briefing-hub.lakassessoriadigital.workers.dev/tutorial/",
+        duracao: "tutorial guiado",
         publico: "CS e comercial",
-        formato: "ambiente",
+        formato: "tutorial",
       },
     ],
   },
@@ -152,9 +147,9 @@ function escapar(valor: string) {
 
 function cartao(item: Tutorial) {
   const externo = !item.href.startsWith("/tutoriais/");
-  const selo = item.formato === "ambiente" ? "Ambiente" : "Apresentação";
+  const selo = item.formato === "tutorial" ? "Tutorial" : "Apresentação";
   const abrir =
-    item.formato === "ambiente" ? "Abrir ambiente →" : "Abrir apresentação →";
+    item.formato === "tutorial" ? "Abrir tutorial →" : "Abrir apresentação →";
   return `
   <a class="cartao${externo ? " externo" : ""}" href="${escapar(item.href)}" target="_blank" rel="noopener">
     <span class="marca" aria-hidden="true">${MARCA_SVG}</span>
@@ -245,8 +240,7 @@ function pagina() {
   .selo{letter-spacing:.1em;color:var(--texto);background:rgba(253,104,1,.14);
         border:1px solid rgba(253,104,1,.4);border-radius:999px;padding:2px 8px;
         font-size:10px}
-  /* O Briefing Hub sai da pasta dos decks: a borda tracejada avisa que o
-     destino é outra parte do sistema, não um deck deste conjunto. */
+  /* O tutorial do Briefing Hub é hospedado no portal original, não no dashboard. */
   .cartao.externo{border-style:dashed}
   .cartao.externo .selo{background:rgba(3,84,155,.18);
                         border-color:rgba(3,84,155,.5)}
@@ -263,13 +257,13 @@ function pagina() {
     <span class="nome">Leonardo Imobi</span>
   </div>
   <h1>Tutoriais</h1>
-  <p class="sub">Treinamento interno das ferramentas da operação. ${TOTAL} materiais, agrupados por quem usa. As apresentações abrem em tela cheia e navegam pelas setas; o ambiente do Briefing Hub se navega clicando.</p>
+  <p class="sub">Treinamento interno das ferramentas da operação. ${TOTAL} materiais, agrupados por quem usa. As apresentações abrem em tela cheia e navegam pelas setas; o tutorial do Briefing Hub tem navegação própria.</p>
   ${secoes}
   <footer>
     As telas que aparecem nas apresentações são de campanhas de teste, criadas e
-    pausadas para esse fim. Nenhuma delas é campanha de cliente em veiculação. O
-    ambiente do Briefing Hub é o portal real rodando com dados fictícios: nada do
-    que você digitar ali chega a um cliente.
+    pausadas para esse fim. Nenhuma delas é campanha de cliente em veiculação.
+    O material do Briefing Hub é o tutorial oficial da aba Tutorial do portal,
+    aberto diretamente no site de origem.
   </footer>
 </main>
 </body>
