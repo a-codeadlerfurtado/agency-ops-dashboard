@@ -205,7 +205,8 @@ assert.match(source, /error: "make_fb_connection_missing"/);
 // guarda nunca disparava (fail-open). Comparar o valor de uma variavel de
 // ambiente com <= ou < abre esse buraco de novo; use Number.isInteger + > 0.
 assert.doesNotMatch(source, /Number\(Deno\.env\.get\([^)]*\)\)\s*<=?\s*\d/);
-assert.equal(source.split('error: "make_fb_connection_missing"').length - 1, 2);
+// Guarda de conexão: pré-execução, configuração após criar e Make-only.
+assert.equal(source.split('error: "make_fb_connection_missing"').length - 1, 3);
 
 // A Graph API devolve as perguntas do formulario como lista simples. Ler so
 // questions.data travava a entrega em make_form_questions_missing com o
