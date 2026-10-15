@@ -51,7 +51,7 @@ async function requestMake(token:string,path:string,init:RequestInit={}):Promise
 export type MakeProvisionInput={token:string;pageId:string;formId:string;recipient:string;
   teamId:number;facebookConnectionId:number;zapiConnectionId:number;
   clientName:string;product:string;requestId:string;questions:LeadQuestion[];
-  recipients?:Array<{name:string;phone:string}>;};
+  recipients?:Array<{name:string;phone:string}>;campaignId?:string;};
 export async function provisionMakeLeads(i:MakeProvisionInput) {
   const recipients=Array.isArray(i.recipients) && i.recipients.length>0
     ? i.recipients.map((r)=>({name:String(r.name||"").trim().slice(0,80),
@@ -134,6 +134,14 @@ export async function provisionMakeLeads(i:MakeProvisionInput) {
       flow.push({id:4,module:"builtin:BasicRouter",version:1,routes,
         metadata:{designer:{x:600,y:0}}});
     }
+    // An existing campaign can share a Meta form with another campaign.
+    // Filter the trigger BEFORE any sending or round-robin state mutation.
+    if(i.campaignId){
+      if(!/^\d{5,30}$/.test(i.campaignId))throw new Error("make_campaign_invalid");
+      if(!flow[1])throw new Error("make_campaign_filter_missing");
+      flow[1].filter={name:"Somente campanha Meta "+i.campaignId,
+        conditions:[[{a:"{{1.campaign_id}}",b:i.campaignId,o:"text:equal"}]]};
+    }
     // "instant" marca o cenário como disparado por webhook, como nos cenários
     // de referência; sem isso o Make não o trata como instantâneo.
     const blueprint={name,flow,metadata:{instant:true,version:1,
@@ -157,6 +165,11 @@ export async function provisionMakeLeads(i:MakeProvisionInput) {
       ? saved?.flow?.filter((m:any)=>m.module==="z-api:sendTextMessage")
       : saved?.flow?.find((m:any)=>m.module==="builtin:BasicRouter")?.routes
         ?.flatMap((r:any)=>r.flow.filter((m:any)=>m.module==="z-api:sendTextMessage"));
+    const campaignGate=i.campaignId
+      ? saved?.flow?.[1]?.filter?.conditions?.[0]?.[0] : null;
+    if(i.campaignId && (campaignGate?.a!=="{{1.campaign_id}}" ||
+        campaignGate?.b!==i.campaignId || campaignGate?.o!=="text:equal"))
+      throw new Error("make_campaign_filter_unverified");
     if(Number(fb?.parameters?.__IMTHOOK__)!==hookId ||
        !Array.isArray(receivers)||receivers.length!==recipients.length||
        receivers.some((m:any,j:number)=>
