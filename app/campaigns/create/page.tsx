@@ -95,7 +95,9 @@ const errorMessages: Record<string, string> = {
   draft_incomplete: "Este rascunho contém dados incompletos. Gere um novo plano válido antes de criar.",
   assets_changed: "A conta de anúncios ou Página do cliente mudou desde a criação do rascunho. Gere outro plano.",
   request_already_executed: "Este pedido já foi criado na Meta. Não é possível executá-lo novamente.",
-  request_not_resumable: "Essa tentativa não é segura para retomar automaticamente. Gere um plano novo para evitar anúncios duplicados.",
+  request_not_resumable: "A tentativa não pode ser retomada automaticamente porque pode haver objetos na Meta. Confira os IDs no histórico antes de fazer outra campanha.",
+  request_not_draft: "Esta tentativa já saiu do estado de rascunho. Não clique novamente em Criar: use Retomar tentativa para recuperar os criativos e revalidar o plano antes de tentar de novo.",
+  request_not_found: "Esta tentativa não foi encontrada no servidor. Atualize Últimos pedidos antes de continuar.",
   assets_missing: "Conta de anúncio ou Página não cadastradas em Ativos Meta.",
   creative_missing: "Anexe o criativo antes de criar.",
   budget_missing: "Defina o orçamento diário antes de criar.",
@@ -171,6 +173,7 @@ export default function CampaignCreatePage() {
   const [drafting, setDrafting] = useState(false);
   const [draft, setDraft] = useState<Row | null>(null);
   const [draftError, setDraftError] = useState("");
+  const [recoverRequestId, setRecoverRequestId] = useState<string | null>(null);
   const [historyDiscardId, setHistoryDiscardId] = useState<string | null>(null);
   const [historyDiscardBusy, setHistoryDiscardBusy] = useState(false);
   const [historyError, setHistoryError] = useState("");
@@ -255,10 +258,10 @@ export default function CampaignCreatePage() {
 
   const changeGuided=(key:keyof Guided,value:string)=>{
     setGuided((old)=>({...old,[key]:value,...(key==="objective"?{destination:value==="OUTCOME_TRAFFIC"?"SITE":"LEAD_FORM"}:{})}));
-    setDraft(null);setDraftError("");setOverrides({});setConfirmWord("");setResult(null);
+    setDraft(null);setDraftError("");setRecoverRequestId(null);setOverrides({});setConfirmWord("");setResult(null);
   };
   const resetFlow = () => {
-    setDraft(null); setDraftError(""); setOverrides({}); setConfirmWord(""); setResult(null);
+    setDraft(null); setDraftError(""); setRecoverRequestId(null); setOverrides({}); setConfirmWord(""); setResult(null);
     setCreationStatus("PAUSED");
     setMakeDelivery(false);
     setMakeRecipient("");
@@ -292,7 +295,7 @@ export default function CampaignCreatePage() {
       if(validation){setDraftError(validation);return;}
     }else if(effectivePrompt.length<15){setDraftError("Descreva a campanha em uma frase completa.");return;}
     if (mode === "TURBINAR" && !selectedPost) { setDraftError("Escolha a publicação que vai turbinar."); return; }
-    setDrafting(true); setDraftError(""); setDraft(null); setResult(null); setOverrides({}); setConfirmWord("");
+    setDrafting(true); setDraftError(""); setRecoverRequestId(null); setDraft(null); setResult(null); setOverrides({}); setConfirmWord("");
     try {
       let creativePayloads = creatives;
       if (mode === "NOVA" && files.length > 10) {
@@ -396,7 +399,7 @@ export default function CampaignCreatePage() {
     }
     setExecuting(true); setDraftError(""); setExecutionStep("Criando campanha, conjunto e anúncios na Meta...");
     try {
-      const { ok, body } = await api({ action: "EXECUTE", request_id: draft.request_id, confirmation: "CRIAR",
+      const { ok, body, status } = await api({ action: "EXECUTE", request_id: draft.request_id, confirmation: "CRIAR",
         overrides: { ...overrides, make_delivery: makeDelivery ? {
           enabled: true, mode: makeDeliveryMode,
           product: makeProductName,
@@ -404,7 +407,14 @@ export default function CampaignCreatePage() {
           recipients: makeDeliveryMode === "ROUND_ROBIN" ? roletaRecipients : [],
         } : null } });
       if (!ok) {
-        setDraftError(friendlyError(body, "A criação falhou. Nenhuma campanha foi ativada.") +
+        // Requests FAILED cannot be submitted as DRAFTED again. RESUME_DRAFT
+        // verifies the author, completed rollback, and absence of Meta objects.
+        const recoverableResponse = (body?.error === "request_not_draft" && body?.status === "FAILED") ||
+          (body?.error === "execution_failed" && Number(body?.meta_code) === 100 &&
+            body?.rollback_incomplete === false);
+        setRecoverRequestId(recoverableResponse ? String(draft.request_id) : null);
+        const fallback = `Falha ao criar (HTTP ${status}). Nenhuma ativação foi confirmada.`;
+        setDraftError(friendlyError(body, fallback) +
           (body?.detail ? ` Detalhe Meta: ${String(body.detail).slice(0, 230)}.` : "") +
           (body?.stage ? ` Etapa: ${body.stage}.` : "") +
           (body?.meta_code ? ` Código: ${body.meta_code}.` : "") +
@@ -412,6 +422,7 @@ export default function CampaignCreatePage() {
         await loadBoot();
         return;
       }
+      setRecoverRequestId(null);
       if (makeDelivery) {
         setExecutionStep("Campanha pausada. Configurando Facebook Lead Ads e Z-API no Make...");
         const automation = await api({ action: "CONFIGURE_MAKE_DELIVERY", request_id: draft.request_id });
@@ -439,7 +450,7 @@ export default function CampaignCreatePage() {
       } else {
         setResult({ ...body, desired_status: "PAUSED", campaign_status: "PAUSED" });
       }
-      setDraft(null); setPrompt(""); setFiles([]); setCreatives([]); setConfirmWord(""); setCreationStatus("PAUSED");
+      setDraft(null); setRecoverRequestId(null); setPrompt(""); setFiles([]); setCreatives([]); setConfirmWord(""); setCreationStatus("PAUSED");
       setMakeDelivery(false); setMakeRecipient(""); setMakeProduct("");
       setMakeDeliveryMode("SINGLE"); setMakeRecipients([{ name: "", phone: "" }, { name: "", phone: "" }]);
       if (fileRef.current) fileRef.current.value = "";
@@ -482,7 +493,7 @@ export default function CampaignCreatePage() {
       setFiles([]);
       setCreatives(body.creatives || []);
       if (fileRef.current) fileRef.current.value = "";
-      setDraft(body);
+      setDraft(body); setRecoverRequestId(null);
       setOverrides(body.existing_form_id ? { lead_form_id: String(body.existing_form_id) } : {});
       setConfirmWord(""); setResult(null); setDraftError("");
       setHistoryNotice(body.resumed_failed_token_attempt
@@ -552,6 +563,13 @@ export default function CampaignCreatePage() {
     }
   };
 
+  const previousDraftStatus = (boot?.history || []).find((item: Row) => item.id === draft?.request_id);
+  const eligibleForRecovery = previousDraftStatus?.status === "FAILED" &&
+    previousDraftStatus.safe_retry_eligible === true &&
+    !previousDraftStatus.created_campaign_id &&
+    !previousDraftStatus.created_adset_id && !previousDraftStatus.created_ad_id;
+  const needsDraftRecovery = Boolean(draft?.request_id &&
+    (recoverRequestId === String(draft.request_id) || eligibleForRecovery));
   const plan = draft?.plan as Row | undefined;
   const ov = (key: string, fallback: unknown) => (overrides[key] != null && overrides[key] !== "" ? overrides[key] : fallback ?? "");
   const setOv = (key: string, value: string) => setOverrides((prev: Row) => ({ ...prev, [key]: value }));
@@ -875,7 +893,16 @@ export default function CampaignCreatePage() {
             </button>
             {draft && <button className="cb-btn ghost" onClick={discard}>Descartar rascunho</button>}
           </div>}
-          {draftError && <div className="cb-error" style={{ marginTop: 12 }}>{draftError}</div>}
+          {draftError && <div className="cb-error" role="alert" style={{ marginTop: 12 }}>{draftError}</div>}
+          {needsDraftRecovery && draft?.request_id && (
+            <div className="cb-field" style={{ marginTop: 12 }}>
+              <p className="cb-hint">Este pedido já falhou e precisa ser retomado com verificação de rollback. Os criativos do pedido original serão preservados.</p>
+              <button type="button" className="cb-btn primary" disabled={Boolean(resumingId) || executing || drafting}
+                onClick={() => void resumeFromHistory({ id: draft.request_id, client_name: clientName })}>
+                {resumingId ? "Verificando e recuperando…" : "Retomar tentativa com criativos salvos"}
+              </button>
+            </div>
+          )}
 
           {draft && plan && (
             <>
@@ -1076,8 +1103,8 @@ export default function CampaignCreatePage() {
                   {creationStatus === "ACTIVE" ? " Ao confirmar, você autoriza o início da veiculação e os gastos previstos." : " A campanha será criada e permanecerá desativada."}
                 </p>
                 <div className="cb-confirm">
-                  <button type="button" className="cb-btn primary" disabled={executing} onClick={() => void execute()}>
-                    {executing ? (executionStep || "Processando na Meta…") : creationStatus === "ACTIVE" ? "Criar campanha ativa" : "Criar campanha pausada"}
+                  <button type="button" className="cb-btn primary" disabled={executing || needsDraftRecovery} onClick={() => void execute()}>
+                    {needsDraftRecovery ? "Retome a tentativa antes de criar" : executing ? (executionStep || "Processando na Meta…") : creationStatus === "ACTIVE" ? "Criar campanha ativa" : "Criar campanha pausada"}
                   </button>
                 </div>
               </div>
