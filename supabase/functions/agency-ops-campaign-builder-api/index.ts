@@ -568,11 +568,19 @@ async function resolveGeo(token: string, cities: string[]) {
 }
 
 function buildTargeting(plan: Row, geoResolved: Row[]) {
+  // Advantage+ Audience only permits 65+ as a hard upper-age bound.
+  // If the GT/AI explicitly selected a narrower band, or a restricted gender,
+  // use original audience targeting so the agreed limits remain strict.
+  // Never silently broaden a 25–60 audience to 25–65+.
+  const ageMin = Number(plan.adset.age_min);
+  const ageMax = Number(plan.adset.age_max);
+  const restrictedAudience = ageMax < 65 || ageMin > 25 ||
+    plan.adset.genders === "male" || plan.adset.genders === "female";
   const targeting: Row = {
-    age_min: plan.adset.age_min,
-    age_max: plan.adset.age_max,
+    age_min: ageMin,
+    age_max: ageMax,
     geo_locations: { location_types: ["home", "recent"] },
-    targeting_automation: { advantage_audience: 1 },
+    targeting_automation: { advantage_audience: restrictedAudience ? 0 : 1 },
   };
   if (plan.adset.genders === "male") targeting.genders = [1];
   if (plan.adset.genders === "female") targeting.genders = [2];
