@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createClient, type Session } from "@supabase/supabase-js";
 import LeadFormComposer from "./lead-form-composer";
 import MakeOnlyPanel from "./make-only-panel";
+import PortfolioAuditPanel from "./portfolio-audit-panel";
 
 const SUPABASE_URL = "https://bfzdetibfcwihfkltbkp.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_mHdRMLiKvTHqB7q9tAnq2A_64VOrwU7";
@@ -1215,6 +1216,8 @@ export default function CampaignCreatePage() {
             })}
           </div>
         </section>
+
+        {boot?.profile?.is_adler && <PortfolioAuditPanel api={api} />}
       </div>
     </main>
   );
