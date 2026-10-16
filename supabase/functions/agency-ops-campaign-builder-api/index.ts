@@ -1184,6 +1184,85 @@ Deno.serve(async (req: Request) => {
       diagnostics: isAdler ? diagnostics : undefined });
   }
 
+  // --- AUDIT_META_PORTFOLIO (ADMIN, READ-ONLY) ---
+  // Verifica por lote clientes ACTIVE/ONBOARDING. NUNCA cria campanhas,
+  // grava tokens nem registra credenciais, e nunca confunde cadastro com acesso.
+  if (action === "AUDIT_META_PORTFOLIO") {
+    if (!isAdler) return reply({ error: "forbidden" }, 403);
+    const rawOffset = Number(body?.offset);
+    const offset = Number.isSafeInteger(rawOffset) && rawOffset >= 0
+      ? Math.min(rawOffset, 10000) : 0;
+    const limit = 5; // custo limitado: Meta pode exigir tokens de mais de 100 Paginas
+    const { data: clients, count, error: listError } = await ops.from("clients")
+      .select("id,display_name,lifecycle,gt_owner", { count: "exact" })
+      .in("lifecycle", ["ACTIVE", "ONBOARDING"])
+      .order("display_name").order("id")
+      .range(offset, offset + limit - 1);
+    if (listError) return reply({ error: "portfolio_audit_clients_unavailable" }, 503);
+    const candidates = await tokenCandidates(db);
+    const allowed = await Promise.all(candidates.map(async (candidate) => ({
+      credential: candidate.token,
+      adsManagement: await adsManagementGranted(candidate.token).catch(() => false),
+    })));
+    const results: Row[] = [];
+    for (const client of clients || []) {
+      const assets = await loadAssets(client.id);
+      const pageId = numericId(assets.page_id);
+      const accountId = numericId(assets.account_id);
+      const flags: string[] = [];
+      if (!pageId) flags.push("MISSING_PAGE");
+      if (!accountId) flags.push(assets.account_ambiguous ? "AMBIGUOUS_AD_ACCOUNT" : "MISSING_AD_ACCOUNT");
+      if (!clean(client.gt_owner, 120)) flags.push("MISSING_GT");
+      let pageAccess = false, accountAccess = false, ready = false;
+      let inactive = false, writableToken = false;
+      if (pageId && accountId && allowed.length) {
+        for (const candidate of allowed) {
+          if (!candidate.adsManagement) continue;
+          writableToken = true;
+          const checks = await Promise.allSettled([
+            (async () => {
+              const pageCredential = await resolveNcPageToken(candidate.credential, pageId);
+              return await metaJson(graphUrl(`${pageId}/leadgen_forms`, {
+                fields: "id", limit: "1", access_token: pageCredential || candidate.credential,
+              }));
+            })(),
+            metaJson(graphUrl(`act_${accountId}`, {
+              fields: "id,account_status,currency", access_token: candidate.credential,
+            })),
+          ]);
+          const validPage = checks[0].status === "fulfilled";
+          const validAccount = checks[1].status === "fulfilled" &&
+            numericId(checks[1].value?.id) === accountId;
+          const activeAccount = validAccount && Number(checks[1].value?.account_status) === 1;
+          pageAccess ||= validPage;
+          accountAccess ||= activeAccount;
+          inactive ||= validAccount && !activeAccount;
+          if (validPage && activeAccount) { ready = true; break; }
+        }
+        if (!writableToken) flags.push("ADS_MANAGEMENT_MISSING");
+        else {
+          if (!pageAccess) flags.push("PAGE_ACCESS_NOT_CONFIRMED");
+          if (!accountAccess) flags.push(inactive ? "ACCOUNT_INACTIVE" : "ACCOUNT_ACCESS_NOT_CONFIRMED");
+        }
+      } else if (!allowed.length) flags.push("META_CREDENTIAL_MISSING");
+      // Only non-secret statuses. Meta access can change at any time.
+      results.push({
+        client_id: client.id, client_name: client.display_name,
+        lifecycle: client.lifecycle, gt: clean(client.gt_owner,120) || null,
+        account_id: accountId || null, page_id: pageId || null,
+        status: ready ? "META_ACCESS_CONFIRMED" : "NEEDS_ATTENTION",
+        account_access: accountAccess, page_access: pageAccess,
+        issues: flags,
+      });
+    }
+    const nextOffset = offset + results.length;
+    return reply({ ok: true, read_only: true, verified_at: new Date().toISOString(),
+      offset, total: Number(count || 0),
+      next_offset: nextOffset < Number(count || 0) ? nextOffset : null,
+      results,
+      note: "Acesso de leitura e ads_management confirmado nao garante aprovacao de campanhas futuras." });
+  }
+
   // --- LIST_MAKE_CAMPAIGNS ---
   // Read-only: campaigns in the client's OWN configured Meta ad account.
   if (action === "LIST_MAKE_CAMPAIGNS") {
