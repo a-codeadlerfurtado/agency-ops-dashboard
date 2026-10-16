@@ -31,6 +31,26 @@ const p = {
 };
 const target = buildTargeting(p, []);
 assert.deepEqual(Array.from(JSON.parse(JSON.stringify(target.geo_locations.countries))), ["BR"]);
+assert.equal(target.targeting_automation.advantage_audience, 1,
+  "25–65 should remain eligible for Advantage+ Audience");
+const restrictedAge = structuredClone(p);
+restrictedAge.adset.age_min = 25;
+restrictedAge.adset.age_max = 60;
+const ageTarget = buildTargeting(restrictedAge, []);
+assert.equal(ageTarget.age_min, 25);
+assert.equal(ageTarget.age_max, 60);
+assert.equal(ageTarget.targeting_automation.advantage_audience, 0,
+  "Age cap under 65 must switch to original audience, not silently broaden");
+const higherMinimum = structuredClone(p);
+higherMinimum.adset.age_min = 30;
+assert.equal(buildTargeting(higherMinimum, []).targeting_automation.advantage_audience, 0);
+const explicitGender = structuredClone(p);
+explicitGender.adset.genders = "female";
+assert.equal(buildTargeting(explicitGender, []).targeting_automation.advantage_audience, 0);
+assert.deepEqual(Array.from(buildTargeting(explicitGender, []).genders), [2]);
+const defaultAudience = structuredClone(p);
+defaultAudience.adset.age_min = 18;
+assert.equal(buildTargeting(defaultAudience, []).targeting_automation.advantage_audience, 1);
 const adset = adsetFields(p, "120123456789000", target, false, "132141753324688");
 assert.equal(adset.status, "PAUSED");
 assert.equal(adset.daily_budget, "1000");
