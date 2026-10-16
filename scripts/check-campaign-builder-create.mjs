@@ -107,6 +107,15 @@ assert.match(source, /\.eq\("status", "DRAFTED"\)\.select\("id"\)\.maybeSingle\(
 assert.match(source, /rollback_incomplete/);
 assert.ok(source.indexOf("// Overrides limitados") < source.indexOf("const finalBudget"), "Budget must be checked after overrides");
 
+// Failed attempts must not appear to be fresh drafts on the frontend.
+const campaignUi = fs.readFileSync("app/campaigns/create/page.tsx", "utf8");
+assert.match(campaignUi, /request_not_draft: "Esta tentativa/);
+assert.match(campaignUi, /body\?\.error === "request_not_draft" && body\?\.status === "FAILED"/);
+assert.match(campaignUi, /needsDraftRecovery \? "Retome a tentativa antes de criar"/);
+assert.match(campaignUi, /onClick=\{\(\) => void resumeFromHistory\(\{ id: draft\.request_id, client_name: clientName \}\)\}/);
+assert.match(campaignUi, /setRecoverRequestId\(null\)/);
+assert.match(campaignUi, /disabled=\{executing \|\| needsDraftRecovery\}/);
+
 // --- feed x story ---
 const be32 = (n) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
 const png = (w, h) => new Uint8Array([0x89, 0x50, 0x4e, 0x47, 13, 10, 26, 10, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, ...be32(w), ...be32(h), 8, 6, 0, 0, 0]);
