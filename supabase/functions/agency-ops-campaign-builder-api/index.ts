@@ -10,6 +10,8 @@
 //   DRAFT            -> prompt -> plano estruturado (preview), grava DRAFTED
 //   EXECUTE          -> cria as entidades pausadas na Meta a partir do plano
 //   DISCARD          -> descarta um rascunho
+//   INSPECT_CAMPAIGN -> leitura de campanha existente / conferencia de pedido / testes de QA
+//   (QA)             -> envelope "qa" em DRAFT, somente admin: nome [QA CAMPAIGN BUILDER], sem Make, nunca ativavel
 // GET ?health=1      -> healthcheck
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -17,7 +19,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 import { normalizeWhatsAppRecipient, provisionMakeLeads, type LeadQuestion } from "./make-leads.ts";
 
 const SERVICE = "agency-ops-campaign-builder-api";
-const SERVICE_VERSION = "v1.3.0";
+const SERVICE_VERSION = "v1.4.0";
 // Marketing API v26.0 e a versao vigente para novas operacoes em outubro de 2026.
 const GRAPH = "v26.0";
 const BUCKET = "agency-ai-private";
@@ -26,6 +28,33 @@ const MAX_FILE_MB = 25;
 const MAX_CREATIVES = 10;
 const DRAFT_RATE_PER_HOUR = 30;
 const EXECUTE_RATE_PER_HOUR = 10;
+// Homologacao (QA): somente o perfil admin, com nome padronizado, sempre
+// pausado, sem Make e sem ativacao. Limites proprios, para nao travar a
+// operacao normal e para permitir percorrer a carteira inteira em lotes.
+const QA_PREFIX = "[QA CAMPAIGN BUILDER]";
+const QA_DRAFT_RATE_PER_HOUR = 120;
+const QA_EXECUTE_RATE_PER_HOUR = 60;
+
+// Meta ad account_status (Marketing API, AdAccount.account_status).
+const ACCOUNT_STATUS_LABEL: Record<number, string> = {
+  1: "ACTIVE", 2: "DISABLED", 3: "UNSETTLED", 7: "PENDING_RISK_REVIEW",
+  8: "PENDING_SETTLEMENT", 9: "IN_GRACE_PERIOD", 100: "PENDING_CLOSURE",
+  101: "CLOSED", 201: "ANY_ACTIVE", 202: "ANY_CLOSED",
+};
+function accountStatusLabel(value: unknown) {
+  const n = Number(value);
+  return ACCOUNT_STATUS_LABEL[n] || (Number.isFinite(n) ? `STATUS_${n}` : "UNKNOWN");
+}
+
+/** Validates the QA envelope sent by the admin runner. Returns null when absent or invalid. */
+function qaEnvelope(raw: unknown): { run_id: string; idempotency_key: string } | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const runId = clean((raw as Row).run_id, 60);
+  const key = clean((raw as Row).idempotency_key, 160);
+  if (!/^qa-\d{8}-[a-z0-9-]{1,40}$/i.test(runId)) return null;
+  if (!key.startsWith(`${runId}:`) || !/^[\w:.-]{10,160}$/.test(key)) return null;
+  return { run_id: runId, idempotency_key: key };
+}
 
 const ALLOWED_ORIGINS = new Set([
   "https://agency-ops-dashboard.lakassessoriadigital.workers.dev",
@@ -996,15 +1025,17 @@ Deno.serve(async (req: Request) => {
       ops.from("client_integrations").select("external_id,external_name,is_primary,meta_ad_account_id").eq("client_id", clientId).eq("system", "META_BM"),
       ops.from("client_private_commercial_terms").select("minimum_ad_budget").eq("client_id", clientId).maybeSingle(),
     ]);
-    let accountId = numericId(assets?.meta_ad_account_id);
-    if (!accountId) {
-      const rows = integrations || [];
-      const primary = rows.find((r: Row) => r.is_primary) || (rows.length === 1 ? rows[0] : null);
-      accountId = numericId(primary?.meta_ad_account_id || primary?.external_id);
-    }
+    const rows = integrations || [];
+    const primary = rows.find((r: Row) => r.is_primary) || (rows.length === 1 ? rows[0] : null);
+    const integrationAccount = numericId(primary?.meta_ad_account_id || primary?.external_id);
+    const registeredAccount = numericId(assets?.meta_ad_account_id);
+    // Duas fontes apontando contas diferentes: nunca escolher automaticamente.
+    const accountConflict = Boolean(registeredAccount && integrationAccount && registeredAccount !== integrationAccount);
+    const accountId = accountConflict ? "" : (registeredAccount || integrationAccount);
     return {
       account_id: accountId || null,
-      account_ambiguous: !accountId && (integrations || []).length > 1,
+      account_conflict: accountConflict ? { meta_assets: registeredAccount, integration: integrationAccount } : null,
+      account_ambiguous: !accountId && !accountConflict && rows.length > 1,
       page_id: numericId(assets?.meta_page_id) || null,
       instagram_id: numericId(assets?.meta_instagram_id) || null,
       pixel_id: numericId(assets?.meta_pixel_dataset_id) || null,
@@ -1012,11 +1043,15 @@ Deno.serve(async (req: Request) => {
     };
   };
 
-  const rateLimited = async (statuses: string[], limit: number) => {
+  // QA e operacao normal tem contadores separados: a homologacao nunca
+  // consome a cota do GT e a cota de QA so existe para o perfil admin.
+  const rateLimited = async (statuses: string[], limit: number, qa = false) => {
     const oneHourAgo = new Date(Date.now() - 36e5).toISOString();
-    const { count } = await ops.from("campaign_build_requests")
+    let query = ops.from("campaign_build_requests")
       .select("id", { count: "exact", head: true })
       .eq("actor_user_id", user.id).in("status", statuses).gte("created_at", oneHourAgo);
+    query = qa ? query.not("request_metadata->qa", "is", null) : query.is("request_metadata->qa", null);
+    const { count } = await query;
     return Number(count || 0) >= limit;
   };
 
@@ -1127,6 +1162,7 @@ Deno.serve(async (req: Request) => {
       reason: "Nenhuma credencial Meta disponível." });
     let pageAccess = false, accountAccess = false, sameToken = false;
     let pageError = "", accountError = "";
+    let accountStatus = NaN, accountCurrency = "";
     const diagnostics: Row[] = [];
     for (const candidate of tokens) {
       let page = false, account = false;
@@ -1155,14 +1191,26 @@ Deno.serve(async (req: Request) => {
           }));
         })() : Promise.reject(new Error("Página não cadastrada")),
         accountId ? metaJson(graphUrl(`act_${accountId}`, {
-          fields: "id,name", access_token: candidate.token,
-        })) : Promise.reject(new Error("Conta de anúncio não cadastrada")),
+          fields: "id,name,account_status,disable_reason,currency", access_token: candidate.token,
+        })) : Promise.reject(new Error(assets.account_conflict
+          ? "Conta de anúncio divergente entre Ativos Meta e a integração"
+          : "Conta de anúncio não cadastrada")),
       ]);
       if (pageResult.status === "fulfilled") page = pageAccess = true;
       else pageError = clean((pageResult.reason as Error)?.message,160);
-      if (accountResult.status === "fulfilled" && adsWritable) account = accountAccess = true;
+      // Ler a conta nao basta: precisa estar ACTIVE (1) e em BRL para o Builder criar.
+      if (accountResult.status === "fulfilled") {
+        accountStatus = Number(accountResult.value?.account_status);
+        accountCurrency = clean(accountResult.value?.currency, 8).toUpperCase();
+      }
+      const accountUsable = accountResult.status === "fulfilled" && accountStatus === 1 && accountCurrency === "BRL";
+      if (accountUsable && adsWritable) account = accountAccess = true;
       else accountError = !adsWritable ? "Token sem permissao ads_management para criar campanhas." :
-        clean((accountResult as PromiseRejectedResult).reason?.message,160);
+        accountResult.status === "fulfilled"
+          ? (accountStatus !== 1
+            ? `Conta acessivel, mas com status ${accountStatusLabel(accountStatus)} (${accountStatus}) na Meta. Criacao bloqueada.`
+            : `Moeda da conta ${accountCurrency || "desconhecida"}; o Builder trabalha em BRL.`)
+          : clean((accountResult as PromiseRejectedResult).reason?.message,160);
       if (isAdler) diagnostics.push({
         source: candidate.source, actor, permissions: granted,
         page_access: page, account_access: account,
@@ -1178,6 +1226,10 @@ Deno.serve(async (req: Request) => {
       if (page && account) { sameToken = true; break; }
     }
     return reply({ ok: true, page_id: pageId, account_id: accountId,
+      account_conflict: assets.account_conflict || null,
+      account_status: Number.isFinite(accountStatus) ? accountStatus : null,
+      account_status_label: Number.isFinite(accountStatus) ? accountStatusLabel(accountStatus) : null,
+      account_currency: accountCurrency || null,
       page_access: pageAccess, account_access: accountAccess,
       ready: sameToken, page_error: pageAccess ? null : pageError,
       account_error: accountAccess ? null : accountError,
@@ -1211,7 +1263,8 @@ Deno.serve(async (req: Request) => {
       const accountId = numericId(assets.account_id);
       const flags: string[] = [];
       if (!pageId) flags.push("MISSING_PAGE");
-      if (!accountId) flags.push(assets.account_ambiguous ? "AMBIGUOUS_AD_ACCOUNT" : "MISSING_AD_ACCOUNT");
+      if (!accountId) flags.push(assets.account_conflict ? "AD_ACCOUNT_CONFLICT" :
+        assets.account_ambiguous ? "AMBIGUOUS_AD_ACCOUNT" : "MISSING_AD_ACCOUNT");
       if (!clean(client.gt_owner, 120)) flags.push("MISSING_GT");
       let pageAccess = false, accountAccess = false, ready = false;
       let inactive = false, writableToken = false;
@@ -1296,6 +1349,122 @@ Deno.serve(async (req: Request) => {
       } catch (err) { reason = clean((err as Error).message, 160); }
     }
     return reply({ error: "meta_campaign_list_unavailable", detail: reason }, 403);
+  }
+
+  // --- INSPECT_CAMPAIGN (READ-ONLY) ---
+  // Le uma campanha existente da conta DESTE cliente: conjuntos, anuncios,
+  // criativos, status reais e gasto. Com request_id confere o pedido do
+  // Builder contra a Meta (verificacao independente, sem confiar no POST).
+  // Com find_qa lista as campanhas de homologacao ja existentes na conta.
+  // Nunca grava nada na Meta.
+  if (action === "INSPECT_CAMPAIGN") {
+    const scoped = await loadScopedClient(clean(body?.client_name, 160));
+    if ("error" in scoped) return scoped.error;
+    const assets = await loadAssets(scoped.client.id);
+    const accountId = numericId(assets.account_id);
+    if (!accountId) return reply({ error: assets.account_conflict ? "account_conflict" : "assets_missing",
+      account_conflict: assets.account_conflict || null }, 409);
+    const resolved = await resolveWriteToken(db, accountId);
+    if ("error" in resolved && resolved.error) return reply({ error: resolved.error, account_id: accountId }, 403);
+    const token = (resolved as any).candidate.token as string;
+    const account = (resolved as any).account as Row;
+    const accountInfo = { id: accountId, name: clean(account?.name, 160) || null,
+      status: Number(account?.account_status), status_label: accountStatusLabel(account?.account_status),
+      currency: clean(account?.currency, 8) || null };
+
+    if (body?.find_qa === true) {
+      const found: Row[] = [];
+      let after = "";
+      for (let i = 0; i < 5; i++) {
+        const params: Record<string, string> = {
+          fields: "id,name,status,effective_status,created_time", limit: "100", access_token: token,
+          filtering: JSON.stringify([{ field: "name", operator: "CONTAIN", value: QA_PREFIX }]),
+        };
+        if (after) params.after = after;
+        const page = await metaJson(graphUrl(`act_${accountId}/campaigns`, params)).catch((err) => ({ error: err }));
+        if ((page as Row).error) return reply({ error: "meta_read_failed",
+          detail: clean(((page as Row).error as Error)?.message, 200) }, 502);
+        found.push(...(((page as Row).data || []) as Row[]));
+        after = clean((page as Row)?.paging?.cursors?.after, 500);
+        if (!(page as Row)?.paging?.next || !after) break;
+      }
+      return reply({ ok: true, read_only: true, account: accountInfo, qa_campaigns: found.map((c: Row) => ({
+        id: numericId(c.id), name: clean(c.name, 160), status: clean(c.status, 30),
+        effective_status: clean(c.effective_status, 40), created_time: c.created_time || null })) });
+    }
+
+    let campaignId = numericId(body?.campaign_id);
+    let requestRow: Row | null = null;
+    const requestId = clean(body?.request_id, 60);
+    if (requestId) {
+      const { data } = await ops.from("campaign_build_requests").select("*").eq("id", requestId).maybeSingle();
+      if (!data || data.client_id !== scoped.client.id) return reply({ error: "request_not_found" }, 404);
+      requestRow = data;
+      campaignId = numericId(data.created_campaign_id);
+    }
+    if (!campaignId) return reply({ error: "campaign_required" }, 400);
+    try {
+      const campaign = await metaJson(graphUrl(campaignId, {
+        fields: "id,name,account_id,objective,status,effective_status,created_time", access_token: token }));
+      if (numericId(campaign?.account_id) !== accountId)
+        return reply({ error: "campaign_client_mismatch", account_id: accountId }, 409);
+      const [adsets, ads, insights] = await Promise.all([
+        metaJson(graphUrl(`${campaignId}/adsets`, { fields: "id,name,campaign_id,status,effective_status,daily_budget", limit: "50", access_token: token })),
+        metaJson(graphUrl(`${campaignId}/ads`, { fields: "id,name,adset_id,status,effective_status,creative{id}", limit: "100", access_token: token })),
+        metaJson(graphUrl(`${campaignId}/insights`, { fields: "spend,impressions", date_preset: "maximum", access_token: token }))
+          .catch(() => null),
+      ]);
+      const adRows: Row[] = ads?.data || [];
+      const creativeIds = [...new Set(adRows.map((a: Row) => numericId(a?.creative?.id)).filter(Boolean))].slice(0, 20) as string[];
+      const creatives = await Promise.all(creativeIds.map(async (id) => {
+        try {
+          const c = await metaJson(graphUrl(id, { fields: "id,name,account_id,object_story_spec,asset_feed_spec", access_token: token }));
+          return { id, exists: numericId(c?.id) === id, name: clean(c?.name, 160),
+            page_id: numericId(c?.object_story_spec?.page_id) || null };
+        } catch (err) { return { id, exists: false, error: clean((err as Error)?.message, 160) }; }
+      }));
+      const spend = Number(insights?.data?.[0]?.spend || 0);
+      const impressions = Number(insights?.data?.[0]?.impressions || 0);
+      const out: Row = {
+        ok: true, read_only: true, account: accountInfo,
+        campaign: { id: numericId(campaign.id), name: clean(campaign.name, 160), objective: clean(campaign.objective, 40),
+          status: clean(campaign.status, 30), effective_status: clean(campaign.effective_status, 40), created_time: campaign.created_time || null },
+        adsets: (adsets?.data || []).map((s: Row) => ({ id: numericId(s.id), name: clean(s.name, 160),
+          campaign_id: numericId(s.campaign_id), status: clean(s.status, 30), effective_status: clean(s.effective_status, 40),
+          daily_budget_brl: Number(s.daily_budget || 0) / 100 })),
+        ads: adRows.map((a: Row) => ({ id: numericId(a.id), name: clean(a.name, 160), adset_id: numericId(a.adset_id),
+          status: clean(a.status, 30), effective_status: clean(a.effective_status, 40), creative_id: numericId(a?.creative?.id) || null })),
+        creatives, delivery: { spend_brl: spend, impressions, insights_available: Boolean(insights) },
+        paging_truncated: Boolean(adsets?.paging?.next || ads?.paging?.next),
+      };
+      if (requestRow) {
+        const expectedAds = (Array.isArray(requestRow.request_metadata?.created_ad_ids) ? requestRow.request_metadata.created_ad_ids : [requestRow.created_ad_id])
+          .map((v: unknown) => numericId(v)).filter(Boolean) as string[];
+        const expectedCreatives = (Array.isArray(requestRow.request_metadata?.created_creative_ids) ? requestRow.request_metadata.created_creative_ids : [requestRow.created_creative_id])
+          .map((v: unknown) => numericId(v)).filter(Boolean) as string[];
+        const liveAdIds = out.ads.map((a: Row) => a.id);
+        const statuses = [out.campaign.status, ...out.adsets.map((s: Row) => s.status), ...out.ads.map((a: Row) => a.status)];
+        const checks = {
+          campaign_in_client_account: true,
+          single_adset_matches: out.adsets.length === 1 && out.adsets[0].id === numericId(requestRow.created_adset_id),
+          ads_match_request: expectedAds.length > 0 && liveAdIds.length === expectedAds.length && expectedAds.every((id) => liveAdIds.includes(id)),
+          ads_linked_to_adset: out.ads.every((a: Row) => a.adset_id === numericId(requestRow!.created_adset_id)),
+          creatives_exist: expectedCreatives.length > 0 && expectedCreatives.every((id) => creatives.some((c: Row) => c.id === id && c.exists)),
+          creatives_on_client_page: creatives.every((c: Row) => !c.page_id || c.page_id === numericId(requestRow!.meta_page_id)),
+          all_paused: statuses.every((s) => s === "PAUSED"),
+          no_delivery: spend === 0 && impressions === 0,
+          db_ids_match: numericId(requestRow.meta_ad_account_id) === accountId && requestRow.status === "CREATED",
+        };
+        out.request = { id: requestRow.id, status: requestRow.status, qa: requestRow.request_metadata?.qa || null };
+        out.checks = checks;
+        out.verified = Object.values(checks).every(Boolean) && !out.paging_truncated;
+        out.verified_at = new Date().toISOString();
+      }
+      return reply(out);
+    } catch (err) {
+      return reply({ error: "meta_read_failed", detail: clean((err as Error)?.message, 200),
+        meta_code: (err as any)?.metaCode ?? null }, 502);
+    }
   }
 
   // --- LIST_LEAD_FORMS ---
@@ -1442,16 +1611,18 @@ Deno.serve(async (req: Request) => {
     }
     const clientsOut = scoped.map((c: Row) => {
       const assets = assetMap.get(c.id) as Row | undefined;
-      let accountId = numericId(assets?.meta_ad_account_id);
-      if (!accountId) {
-        const rows = integrationMap.get(c.id) || [];
-        const primary = rows.find((r: Row) => r.is_primary) || (rows.length === 1 ? rows[0] : null);
-        accountId = numericId(primary?.meta_ad_account_id || primary?.external_id);
-      }
+      // Mesma regra do loadAssets: contas divergentes nao contam como cadastradas.
+      const rows = integrationMap.get(c.id) || [];
+      const primary = rows.find((r: Row) => r.is_primary) || (rows.length === 1 ? rows[0] : null);
+      const integrationAccount = numericId(primary?.meta_ad_account_id || primary?.external_id);
+      const registeredAccount = numericId(assets?.meta_ad_account_id);
+      const accountConflict = Boolean(registeredAccount && integrationAccount && registeredAccount !== integrationAccount);
+      const accountId = accountConflict ? "" : (registeredAccount || integrationAccount);
       return {
         id: c.id,
         display_name: c.display_name,
         lifecycle: c.lifecycle,
+        account_conflict: accountConflict,
         has_ad_account: Boolean(accountId),
         has_page: Boolean(numericId(assets?.meta_page_id)),
       };
@@ -1501,10 +1672,32 @@ Deno.serve(async (req: Request) => {
     const clientName = clean(body?.client_name, 160);
     const prompt = clean(body?.prompt, 4000);
     if (!clientName || prompt.length < 15) return reply({ error: "prompt_too_short" }, 400);
-    if (await rateLimited(["DRAFTED", "EXECUTING", "CREATED", "FAILED", "DISCARDED"], DRAFT_RATE_PER_HOUR)) return reply({ error: "rate_limited" }, 429);
+    // Envelope de homologacao: somente admin, somente modo guiado, sem turbinar.
+    const qa = body?.qa != null ? qaEnvelope(body.qa) : null;
+    if (body?.qa != null && (!qa || !isAdler)) return reply({ error: "qa_forbidden" }, 403);
+    if (qa && (body?.guided == null || body?.boost)) return reply({ error: "qa_requires_guided" }, 400);
+    if (await rateLimited(["DRAFTED", "EXECUTING", "CREATED", "FAILED", "DISCARDED"],
+      qa ? QA_DRAFT_RATE_PER_HOUR : DRAFT_RATE_PER_HOUR, Boolean(qa))) return reply({ error: "rate_limited" }, 429);
     const scoped = await loadScopedClient(clientName);
     if ("error" in scoped) return scoped.error;
     const assets = await loadAssets(scoped.client.id);
+    if (qa) {
+      // Idempotencia persistente por cliente + rodada: um retry nunca duplica.
+      const { data: previous, error: previousError } = await ops.from("campaign_build_requests")
+        .select("id,status,error,expires_at,created_campaign_id,created_adset_id,created_ad_id,request_metadata")
+        .eq("client_id", scoped.client.id)
+        .eq("request_metadata->qa->>idempotency_key", qa.idempotency_key)
+        .order("created_at", { ascending: false }).limit(5);
+      if (previousError) return reply({ error: "query_failed" }, 500);
+      // Rascunho expirado nunca chegou a Meta (EXECUTE recusa rascunho vencido).
+      const liveDraft = (r: Row) => r.status === "DRAFTED" &&
+        !(r.expires_at && new Date(r.expires_at).getTime() < Date.now());
+      const blocking = (previous || []).find((r: Row) =>
+        liveDraft(r) || ["EXECUTING", "CREATED"].includes(r.status) ||
+        (r.status === "FAILED" && !safeRetryEligible(r)));
+      if (blocking) return reply({ error: "qa_already_exists", request_id: blocking.id,
+        status: blocking.status, campaign_id: blocking.created_campaign_id || null }, 409);
+    }
 
     const inputs = Array.isArray(body?.creatives)
       ? body.creatives : (body?.creative ? [body.creative] : []);
@@ -1602,6 +1795,13 @@ Deno.serve(async (req: Request) => {
       if(guided.headline)plan.ad.headline=guided.headline;
       plan.ad.cta=guided.destination==="LEAD_FORM"?"SIGN_UP":guided.destination==="WHATSAPP"?"WHATSAPP_MESSAGE":"LEARN_MORE";
     }
+    if (qa) {
+      // Todo objeto de QA carrega o prefixo: campanha, conjunto e anuncio.
+      if (!clean(guided?.name, 120).startsWith(QA_PREFIX)) return reply({ error: "qa_name_required", prefix: QA_PREFIX }, 400);
+      plan.campaign.name = clean(guided?.name, 120);
+      plan.adset.name = `${QA_PREFIX} conjunto`.slice(0, 120);
+      plan.ad.name = `${QA_PREFIX} anuncio`.slice(0, 120);
+    }
     // Resolve geolocalização com o token de leitura/escrita disponível
     let geo: { resolved: Row[]; unresolved: string[] } = { resolved: [], unresolved: plan.adset.geo.cities };
     const tokens = await tokenCandidates(db);
@@ -1610,7 +1810,9 @@ Deno.serve(async (req: Request) => {
     }
 
     const warnings: string[] = [];
-    if (!assets.account_id) warnings.push(assets.account_ambiguous ? "Cliente tem mais de uma conta de anúncio e nenhuma marcada como principal. Ajuste em Ativos Meta." : "Cliente sem conta de anúncio cadastrada. Preencha em Ativos Meta.");
+    if (!assets.account_id) warnings.push(assets.account_conflict
+      ? `Conta de anúncio divergente: Ativos Meta aponta ${assets.account_conflict.meta_assets} e a integração aponta ${assets.account_conflict.integration}. Confirme a conta correta antes de criar.`
+      : assets.account_ambiguous ? "Cliente tem mais de uma conta de anúncio e nenhuma marcada como principal. Ajuste em Ativos Meta." : "Cliente sem conta de anúncio cadastrada. Preencha em Ativos Meta.");
     if (boostValid) {
       if (boost?.source === "INSTAGRAM" && !assets.instagram_id) warnings.push("Turbinar publicação do Instagram exige o Instagram cadastrado em Ativos Meta.");
       if (boost?.source === "FACEBOOK" && !assets.page_id) warnings.push("Turbinar publicação do Facebook exige a Página cadastrada em Ativos Meta.");
@@ -1677,7 +1879,8 @@ Deno.serve(async (req: Request) => {
       creative_type: !boostValid && creativeValid ? creative?.type : null,
       creative_file_name: !boostValid && creativeValid ? creative?.file_name : null,
       expires_at: expiresAt,
-      request_metadata: { source: "CAMPAIGN_BUILDER_V2", input_mode: guided ? "GUIDED" : "PROMPT", mode: boostValid ? "BOOST" : "NEW", model: planned.model, instagram_id: assets.instagram_id, pixel_id: assets.pixel_id, geo_unresolved: geo.unresolved, creatives: !boostValid && creativeValid ? creatives : [], pairing_hints: pairingStored, pairing_ai: pairingAi },
+      request_metadata: { ...(qa ? { qa: { ...qa, requested_by: person, requested_at: new Date().toISOString() } } : {}),
+        source: "CAMPAIGN_BUILDER_V2", input_mode: guided ? "GUIDED" : "PROMPT", mode: boostValid ? "BOOST" : "NEW", model: planned.model, instagram_id: assets.instagram_id, pixel_id: assets.pixel_id, geo_unresolved: geo.unresolved, creatives: !boostValid && creativeValid ? creatives : [], pairing_hints: pairingStored, pairing_ai: pairingAi },
     }).select("id").single();
     if (insertError || !inserted?.id) return reply({ error: "audit_store_failed" }, 500);
 
@@ -1822,6 +2025,9 @@ Deno.serve(async (req: Request) => {
     if (row.actor_user_id !== user.id && !isAdler && role !== "MGMT")
       return reply({ error: "forbidden" }, 403);
     if (row.status !== "CREATED") return reply({ error: "campaign_not_created" }, 409);
+    // Objetos de homologacao nunca podem ser ativados (regra absoluta: sem gasto).
+    if (row.request_metadata?.qa || clean(row.plan?.campaign?.name, 120).startsWith(QA_PREFIX))
+      return reply({ error: "qa_activation_forbidden" }, 409);
     if (row.request_metadata?.make_delivery?.enabled &&
         row.request_metadata.make_delivery.status !== "READY") {
       return reply({ error: "make_delivery_not_ready" }, 409);
@@ -2279,13 +2485,19 @@ Deno.serve(async (req: Request) => {
     const requestId = clean(body?.request_id, 60);
     if (!requestId) return reply({ error: "request_required" }, 400);
     if (clean(body?.confirmation, 20).toUpperCase() !== "CRIAR") return reply({ error: "confirmation_required" }, 400);
-    if (await rateLimited(["EXECUTING", "CREATED", "FAILED"], EXECUTE_RATE_PER_HOUR)) return reply({ error: "rate_limited" }, 429);
 
     const { data: row } = await ops.from("campaign_build_requests").select("*").eq("id", requestId).maybeSingle();
     if (!row) return reply({ error: "request_not_found" }, 404);
     if (row.actor_user_id !== user.id) return reply({ error: "forbidden" }, 403);
+    const qaRun = row.request_metadata?.qa ? qaEnvelope(row.request_metadata.qa) : null;
+    if (row.request_metadata?.qa && (!qaRun || !isAdler)) return reply({ error: "qa_forbidden" }, 403);
+    if (await rateLimited(["EXECUTING", "CREATED", "FAILED"],
+      qaRun ? QA_EXECUTE_RATE_PER_HOUR : EXECUTE_RATE_PER_HOUR, Boolean(qaRun))) return reply({ error: "rate_limited" }, 429);
     if (row.status !== "DRAFTED") return reply({ error: "request_not_draft", status: row.status }, 409);
     if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) return reply({ error: "draft_expired" }, 409);
+    // QA: nada de ajustes no preview nem de Make; o nome padronizado e obrigatorio.
+    if (qaRun && (body?.overrides != null || !clean(row.plan?.campaign?.name, 120).startsWith(QA_PREFIX)))
+      return reply({ error: "qa_overrides_forbidden" }, 409);
 
     // escopo revalidado pelo client_id do rascunho, não pelo nome:
     const { data: clientRow } = await ops.from("clients").select("id,display_name,gt_owner,lifecycle").eq("id", row.client_id).maybeSingle();
@@ -2314,6 +2526,12 @@ Deno.serve(async (req: Request) => {
     const pageId = numericId(row.meta_page_id);
     const instagramId = numericId(row.request_metadata?.instagram_id) || null;
     if (!accountId) return reply({ error: "assets_missing" }, 409);
+    // Os Ativos Meta podem ter mudado depois do rascunho: nunca criar na conta antiga.
+    const currentAssets = await loadAssets(row.client_id);
+    if (numericId(currentAssets.account_id) !== accountId ||
+        (pageId && numericId(currentAssets.page_id) !== pageId))
+      return reply({ error: "assets_changed", account_id: accountId,
+        current_account_id: currentAssets.account_id, account_conflict: currentAssets.account_conflict || null }, 409);
     if (boostMode) {
       if (plan.boost.source === "INSTAGRAM" && !instagramId) return reply({ error: "assets_missing" }, 409);
       if (plan.boost.source === "FACEBOOK" && !pageId) return reply({ error: "assets_missing" }, 409);
@@ -2394,7 +2612,8 @@ Deno.serve(async (req: Request) => {
 
     const account = (resolved as any).account as Row;
     if (Number(account?.account_status) !== 1)
-      return reply({ error: "meta_account_not_active", account_id: accountId }, 409);
+      return reply({ error: "meta_account_not_active", account_id: accountId,
+        account_status: Number(account?.account_status), account_status_label: accountStatusLabel(account?.account_status) }, 409);
     if (clean(account?.currency, 8).toUpperCase() !== "BRL")
       return reply({ error: "currency_mismatch", account_currency: clean(account?.currency, 8) }, 409);
     // Verifica formulario e propriedade ANTES de criar a campanha na Meta.
@@ -2665,12 +2884,21 @@ Deno.serve(async (req: Request) => {
           clean(adsetCheck?.status, 20).toUpperCase() !== "PAUSED")
         return await fail("verification_adset", new Error("Conjunto nao confirmado na Meta."), created);
       for (const adId of created.ad_ids) {
-        const adCheck = await metaJson(graphUrl(adId, { fields: "id,adset_id,status", access_token: token }));
+        const adCheck = await metaJson(graphUrl(adId, { fields: "id,adset_id,status,creative{id}", access_token: token }));
         if (numericId(adCheck?.id) !== numericId(adId) ||
             numericId(adCheck?.adset_id) !== numericId(created.adset_id) ||
             clean(adCheck?.status, 20).toUpperCase() !== "PAUSED") {
           return await fail("verification_ads", new Error(`Anúncio ${adId} não está pausado.`), created);
         }
+        // O anuncio precisa apontar para um criativo criado neste pedido.
+        if (!created.creative_ids.includes(numericId(adCheck?.creative?.id)))
+          return await fail("verification_creative", new Error(`Anúncio ${adId} sem criativo deste pedido.`), created);
+      }
+      for (const creativeId of created.creative_ids) {
+        const creativeCheck = await metaJson(graphUrl(creativeId, { fields: "id,account_id", access_token: token }));
+        if (numericId(creativeCheck?.id) !== numericId(creativeId) ||
+            (creativeCheck?.account_id && numericId(creativeCheck.account_id) !== accountId))
+          return await fail("verification_creative", new Error(`Criativo ${creativeId} não confirmado na conta.`), created);
       }
 
       const { data: savedRequest, error: createdSaveError } = await ops.from("campaign_build_requests").update({

@@ -126,6 +126,10 @@ const errorMessages: Record<string, string> = {
   campaign_state_not_toggleable: "A campanha, conjunto ou algum anuncio nao permite ativacao.",
   currency_mismatch: "A moeda da conta Meta nao corresponde ao orcamento em reais.",
   meta_account_not_active: "A conta de anuncios nao esta ativa na Meta.",
+  assets_changed: "A conta de anúncio ou a Página deste cliente mudou (ou ficou divergente) depois do rascunho. Confira Ativos Meta e gere o plano de novo.",
+  qa_activation_forbidden: "Campanhas de homologação (QA) nunca podem ser ativadas.",
+  qa_forbidden: "Somente o perfil admin pode rodar a homologação.",
+  qa_already_exists: "Já existe um teste de homologação para este cliente nesta rodada.",
   activation_failed: "Falha ao ativar. Verifique a auditoria e os status reais na Meta.",
   geo_unresolved: "A Meta não confirmou uma ou mais cidades. Informe o nome e a UF (ex.: Praia Grande, SP) e confira o público antes de criar.",
   geo_conflict: "O público contém uma região estadual e municípios dentro dela. Revise a localização antes de criar.",
@@ -240,6 +244,11 @@ export default function CampaignCreatePage() {
         account_access: ok && body?.account_access === true,
         page_access: ok && body?.page_access === true,
         ready: ok && body?.ready === true,
+        account_id: ok ? (body?.account_id || null) : null,
+        account_error: ok ? (body?.account_error || null) : null,
+        page_error: ok ? (body?.page_error || null) : null,
+        account_status_label: ok ? (body?.account_status_label || null) : null,
+        account_conflict: ok ? (body?.account_conflict || null) : null,
         diagnostics: Array.isArray(body?.diagnostics) ? body.diagnostics : [],
         error: !ok ? friendlyError(body, "Não foi possível verificar o acesso Meta.") : null,
       });
@@ -727,7 +736,11 @@ export default function CampaignCreatePage() {
                     <span className={`cb-pill ${!selectedClient.has_ad_account ? "bad" :
                       metaAccess?.client_name === clientName && !metaAccess.checking ?
                         (metaAccess.account_access ? "ok" : "bad") : "muted"}`}>
-                      {!selectedClient.has_ad_account ? "Sem conta de anúncio" :
+                      {selectedClient.account_conflict ? "Conta de anúncio divergente: confirme em Ativos Meta" :
+                        !selectedClient.has_ad_account ? "Sem conta de anúncio" :
+                        metaAccess?.client_name === clientName && !metaAccess.checking && !metaAccess.account_access &&
+                          metaAccess.account_status_label && metaAccess.account_status_label !== "ACTIVE" ?
+                          `Conta: status ${metaAccess.account_status_label} na Meta` :
                         metaAccess?.client_name !== clientName || metaAccess.checking ? "Conta: verificando acesso" :
                         metaAccess.account_access ? "Conta de anúncio: acesso confirmado" : "Conta: acesso Meta negado"}
                     </span>
@@ -745,14 +758,14 @@ export default function CampaignCreatePage() {
                     <div className="cb-error" role="alert" style={{ marginTop: 8 }}>
                       {metaAccess.page_access && !metaAccess.account_access ? (
                         <>
-                          <b>Conta de anúncios sem autorização de criação.</b> A Página da NC já está autorizada.
-                          Falta conceder à credencial da agência acesso para gerenciar campanhas na conta <b>385332010919725</b>.
-                          No portfólio <b>BM NC Imóveis - Litoral</b>, abra {" "}
+                          <b>Conta de anúncios sem autorização de criação.</b> A Página deste cliente já está autorizada.
+                          {metaAccess.account_error ? <> Motivo informado pela Meta: <b>{String(metaAccess.account_error).slice(0, 200)}</b>.</> : null}
+                          {" "}No portfólio do cliente, abra {" "}
                           <a href="https://business.facebook.com/settings" target="_blank" rel="noopener noreferrer"
                             style={{ color: "#ffcfaf", textDecoration: "underline" }}>Configurações do negócio</a>,
-                          entre em Contas de anúncios, selecione a conta da NC e verifique o compartilhamento com a empresa parceira Leonardo Imobi,
-                          com permissão para gerenciar campanhas. No portfólio da agência, confira em Usuários do sistema se
-                          <b> Conversions API System User</b> possui essa conta atribuída para administrar anúncios.
+                          entre em Contas de anúncios, selecione a conta <b>{metaAccess.account_id || "do cliente"}</b> e verifique o compartilhamento
+                          com a empresa parceira Leonardo Imobi, com permissão para gerenciar campanhas. No portfólio da agência, confira em
+                          Usuários do sistema se o usuário do Builder possui essa conta atribuída para administrar anúncios.
                         </>
                       ) : (
                         <>
@@ -760,6 +773,8 @@ export default function CampaignCreatePage() {
                           <a href="https://business.facebook.com/settings" target="_blank" rel="noopener noreferrer"
                             style={{ color: "#ffcfaf", textDecoration: "underline" }}>Configurações do negócio</a>
                           {" "}e conceda à empresa parceira as permissões de anúncios e, para formulários, leads.
+                          {metaAccess.account_error ? <div style={{ marginTop: 6 }}>Conta de anúncios: {String(metaAccess.account_error).slice(0, 200)}</div> : null}
+                          {metaAccess.page_error ? <div style={{ marginTop: 6 }}>Página: {String(metaAccess.page_error).slice(0, 200)}</div> : null}
                         </>
                       )}
                       <div style={{ marginTop: 10 }}>
